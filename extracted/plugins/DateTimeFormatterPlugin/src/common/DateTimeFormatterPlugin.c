@@ -34,7 +34,7 @@ getModuleName(void);
 EXPORT(sqInt)
 initialiseModule(void);
 EXPORT(sqInt)
-primitiveCountry(void);
+primitiveCompileThenFormat(void);
 EXPORT(sqInt)
 setInterpreter(struct VirtualMachine *anInterpreter);
 static sqInt sqAssert(sqInt aBool);
