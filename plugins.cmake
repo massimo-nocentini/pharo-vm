@@ -228,6 +228,7 @@ else()
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/include/win
+        /usr/local/include/
     )
     
     file(GLOB DateTimeFormatterPlugin_SOURCES
