@@ -242,6 +242,8 @@ if(OSX)
 	target_link_libraries(DateTimeFormatterPlugin PRIVATE "-framework CoreFoundation")
 elseif(UNIX)
     target_link_libraries(DateTimeFormatterPlugin PRIVATE "-ldatetimeformatter")
+else()
+    target_link_libraries(DateTimeFormatterPlugin PRIVATE "-llua54")
 endif()
 
 #
