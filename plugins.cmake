@@ -199,6 +199,52 @@ if(OSX)
 endif()
 
 #
+# DateTimeFormatterPlugin
+#
+
+message(STATUS "Adding plugin: DateTimeFormatterPlugin")
+
+if(OSX)
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/include/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/include/osx
+    )
+    
+    file(GLOB DateTimeFormatterPlugin_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/src/common/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/src/osx/*.c   
+    )
+elseif(UNIX)
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/include/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/include/unix
+    )
+    
+    file(GLOB DateTimeFormatterPlugin_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/src/common/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/src/unix/*.c   
+    )    
+else()
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/include/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/include/win
+    )
+    
+    file(GLOB DateTimeFormatterPlugin_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/src/common/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/src/win/*.c   
+    )    
+endif()
+
+addLibraryWithRPATH(DateTimeFormatterPlugin ${DateTimeFormatterPlugin_SOURCES})
+
+if(OSX)
+	target_link_libraries(DateTimeFormatterPlugin PRIVATE "-framework CoreFoundation")
+elseif(UNIX)
+    target_link_libraries(DateTimeFormatterPlugin PRIVATE "-ldatetimeformatter")
+endif()
+
+#
 # SqueakSSL
 #
 
