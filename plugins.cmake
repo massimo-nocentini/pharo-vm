@@ -239,11 +239,11 @@ endif()
 addLibraryWithRPATH(DateTimeFormatterPlugin ${DateTimeFormatterPlugin_SOURCES})
 
 if(OSX)
-	target_link_libraries(DateTimeFormatterPlugin PRIVATE "-framework CoreFoundation")
+	target_link_libraries(DateTimeFormatterPlugin PRIVATE "-ldatetimeformatter")
 elseif(UNIX)
     target_link_libraries(DateTimeFormatterPlugin PRIVATE "-ldatetimeformatter")
 else()
-    target_link_libraries(DateTimeFormatterPlugin PRIVATE "-llua54")
+    target_link_libraries(DateTimeFormatterPlugin PRIVATE "-ldatetimeformatter")
 endif()
 
 #
