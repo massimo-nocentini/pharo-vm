@@ -244,7 +244,7 @@ if(OSX)
 elseif(UNIX)
     target_link_libraries(DateTimeFormatterPlugin PRIVATE "-ldatetimeformatter")
 else()
-    target_link_libraries(DateTimeFormatterPlugin PRIVATE "-ldatetimeformatter")
+    target_link_libraries(DateTimeFormatterPlugin PRIVATE "-L/usr/local/lib -ldatetimeformatter")
 endif()
 
 #
