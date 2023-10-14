@@ -100,6 +100,8 @@ primitiveCompileThenFormat(void)
 	// printf("FAILED: %d\n", failed);
 	assert(!failed);
 
+	free_buffer(B);
+
 	int l = strlen(strbuffer);
 	sqInt oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), l);
 
