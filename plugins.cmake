@@ -247,6 +247,57 @@ else()
     target_link_libraries(DateTimeFormatterPlugin PRIVATE "-L/usr/local/lib -ldatetimeformatter")
 endif()
 
+
+#
+# LuaPlugin
+#
+
+message(STATUS "Adding plugin: LuaPlugin")
+
+if(OSX)
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/LuaPlugin/include/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/LuaPlugin/include/osx
+    )
+    
+    file(GLOB LuaPlugin_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/LuaPlugin/src/common/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/LuaPlugin/src/osx/*.c   
+    )
+elseif(UNIX)
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/LuaPlugin/include/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/LuaPlugin/include/unix
+    )
+    
+    file(GLOB LuaPlugin_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/LuaPlugin/src/common/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/LuaPlugin/src/unix/*.c   
+    )    
+else()
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/LuaPlugin/include/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/LuaPlugin/include/win
+        /usr/local/include/
+    )
+    
+    file(GLOB LuaPlugin_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/LuaPlugin/src/common/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/LuaPlugin/src/win/*.c   
+    )    
+endif()
+
+addLibraryWithRPATH(LuaPlugin ${LuaPlugin_SOURCES})
+
+if(OSX)
+	target_link_libraries(LuaPlugin PRIVATE "-llua")
+elseif(UNIX)
+    target_link_libraries(LuaPlugin PRIVATE "-llua")
+else()
+    target_link_libraries(LuaPlugin PRIVATE "-L/usr/local/lib -llua54")
+endif()
+
+
 #
 # SqueakSSL
 #
