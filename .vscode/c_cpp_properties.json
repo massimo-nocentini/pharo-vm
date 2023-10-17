@@ -4,7 +4,7 @@
             "name": "Linux",
             "includePath": [
                 "${workspaceFolder}/**",
-                "extracted/vm/include/common/pharovm"
+                "extracted/vm/include/common/"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/clang",

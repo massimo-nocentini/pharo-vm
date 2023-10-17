@@ -12,6 +12,30 @@
 				"reveal": "always",
 				"panel": "new"
 			}
+		},
+		{
+			"label": "Prepare compilation",
+			"type": "shell",
+			"linux": {
+				"command": "cmake -S . -B build -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE"
+			},
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "new"
+			}
+		},
+		{
+			"label": "(Hard) Clean build",
+			"type": "shell",
+			"linux": {
+				"command": "rm -rf build"
+			},
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "new"
+			}
 		}
 	]
 }
