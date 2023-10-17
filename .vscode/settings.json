@@ -1,0 +1,11 @@
+{
+    "files.associations": {
+        "sqplatformspecific.h": "c",
+        "localeplugin.h": "c",
+        "sqvirtualmachine.h": "c",
+        "datetimeformatter.h": "c",
+        "lua.h": "c",
+        "pthreadedffi.h": "c",
+        "macros.h": "c"
+    }
+}

@@ -129,14 +129,11 @@ primitive_lua_pushinteger(void)
 EXPORT(sqInt)
 primitive_lua_tostring(void)
 {
-	sqInt sq_value;
+	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(1)));
 
-	sq_value = interpreterProxy->stackValue(1);
-	lua_State *L = (lua_State *)(readAddress(sq_value));
+	sqInt sq_value = interpreterProxy->stackIntegerValue(0);
 
-	sq_value = interpreterProxy->stackIntegerValue(0);
-
-	int l;
+	size_t l;
 	const char *str = lua_tolstring(L, sq_value, &l);
 
 	sqInt oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), l);
