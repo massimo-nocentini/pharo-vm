@@ -6,6 +6,7 @@
         "datetimeformatter.h": "c",
         "lua.h": "c",
         "pthreadedffi.h": "c",
-        "macros.h": "c"
+        "macros.h": "c",
+        "sqmemoryaccess.h": "c"
     }
 }
