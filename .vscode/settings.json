@@ -7,6 +7,9 @@
         "lua.h": "c",
         "pthreadedffi.h": "c",
         "macros.h": "c",
-        "sqmemoryaccess.h": "c"
+        "sqmemoryaccess.h": "c",
+        "pharo.h": "c",
+        "worker.h": "c",
+        "config.h": "c"
     }
 }

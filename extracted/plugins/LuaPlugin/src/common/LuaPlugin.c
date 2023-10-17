@@ -1,7 +1,6 @@
 
 static char __buildInfo[] = "LuaPlugin VMMaker.oscog-eem.2495 uuid: fcbf4c90-4c50-4ff3-8690-0edfded4f9c4 " __DATE__;
 
-#include "config.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,10 +13,12 @@ static char __buildInfo[] = "LuaPlugin VMMaker.oscog-eem.2495 uuid: fcbf4c90-4c5
 #define EXPORT(returnType) returnType
 
 /* Do not include the entire sq.h file but just those parts needed. */
-#include "sqConfig.h"			/* Configuration options */
-#include "sqVirtualMachine.h"	/*  The virtual machine proxy definition */
-#include "sqPlatformSpecific.h" /* Platform specific definitions */
-#include "pharo.h"
+#include "pharovm/pharo.h"
+// #include "sqConfig.h"			/* Configuration options */
+// #include "sqVirtualMachine.h"	/*  The virtual machine proxy definition */
+// #include "sqPlatformSpecific.h" /* Platform specific definitions */
+
+
 
 #define true 1
 #define false 0
@@ -28,7 +29,7 @@ static char __buildInfo[] = "LuaPlugin VMMaker.oscog-eem.2495 uuid: fcbf4c90-4c5
 #endif
 
 #include "LuaPlugin.h"
-#include "sqMemoryAccess.h"
+// #include "sqMemoryAccess.h"
 
 /*** Function Prototypes ***/
 EXPORT(const char *)
@@ -40,6 +41,7 @@ initialiseModule(void);
 EXPORT(sqInt)
 setInterpreter(struct VirtualMachine *anInterpreter);
 static sqInt sqAssert(sqInt aBool);
+
 
 struct VirtualMachine *interpreterProxy;
 static const char *moduleName =

@@ -76,7 +76,7 @@ sqInt freeModuleHandle(void *module);
 void *getModuleSymbol(void *module, const char *symbol);
 
 void *getHandler(sqInt anExternalObject);
-void *readAddress(sqInt anExternalAddress);
+EXPORT(void *) readAddress(sqInt anExternalAddress);
 
 EXPORT(int) isVMRunOnWorkerThread();
 void setMaxStacksToPrint(sqInt anInteger);
