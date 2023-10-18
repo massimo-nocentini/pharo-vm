@@ -12,13 +12,11 @@ static char __buildInfo[] = "LuaPlugin VMMaker.oscog-eem.2495 uuid: fcbf4c90-4c5
 /* Default EXPORT macro that does nothing (see comment in sq.h): */
 #define EXPORT(returnType) returnType
 
-/* Do not include the entire sq.h file but just those parts needed. */
 #include "pharovm/pharo.h"
 // #include "sqConfig.h"			/* Configuration options */
 // #include "sqVirtualMachine.h"	/*  The virtual machine proxy definition */
 // #include "sqPlatformSpecific.h" /* Platform specific definitions */
-
-
+// #include "sqMemoryAccess.h"
 
 #define true 1
 #define false 0
@@ -29,7 +27,6 @@ static char __buildInfo[] = "LuaPlugin VMMaker.oscog-eem.2495 uuid: fcbf4c90-4c5
 #endif
 
 #include "LuaPlugin.h"
-// #include "sqMemoryAccess.h"
 
 /*** Function Prototypes ***/
 EXPORT(const char *)
@@ -41,7 +38,6 @@ initialiseModule(void);
 EXPORT(sqInt)
 setInterpreter(struct VirtualMachine *anInterpreter);
 static sqInt sqAssert(sqInt aBool);
-
 
 struct VirtualMachine *interpreterProxy;
 static const char *moduleName =
@@ -219,6 +215,86 @@ primitive_lua_pushboolean(void)
 	if (!(interpreterProxy->failed()))
 	{
 		interpreterProxy->pop(2);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_strtok_r(void)
+{
+	sqInt oop;
+	int length;
+
+	char *orig = (char *)(interpreterProxy->firstIndexableField(interpreterProxy->stackValue(2)));
+	char *delimiters = (char *)(interpreterProxy->firstIndexableField(interpreterProxy->stackValue(1)));
+	sqInt include_empty_lines = interpreterProxy->booleanValueOf(interpreterProxy->stackValue(0));
+
+	length = strlen(orig);
+	char *str = (char *)malloc(sizeof(char) * length + 1);
+
+	char *del = strcpy(str, orig);
+
+	// auxiliary pointers for tokens and followers.
+	char *pch = NULL;
+	char *ptr = str;
+
+	int lines = 0;
+
+	sqInt *buffer = (sqInt *)malloc(sizeof(sqInt) * length);
+
+	while ((pch = strtok_r(str, delimiters, &str)) != NULL)
+	{
+		while (include_empty_lines && ptr != pch)
+		{
+			oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), 0);
+			// strcpy(interpreterProxy->firstIndexableField(oop), "");
+			*((char *)interpreterProxy->firstIndexableField(oop)) = '\0';
+			buffer[lines] = oop;
+
+			lines++;
+			ptr += 1;
+		}
+
+		length = strlen(pch);
+		oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), length);
+		strcpy(interpreterProxy->firstIndexableField(oop), pch);
+		buffer[lines] = oop;
+
+		lines++;
+		ptr = str;
+	}
+
+	while (include_empty_lines && *ptr != '\0')
+	{
+		oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), 0);
+		// strcpy(interpreterProxy->firstIndexableField(oop), "");
+		*((char *)interpreterProxy->firstIndexableField(oop)) = '\0';
+		buffer[lines] = oop;
+
+		lines++;
+		ptr += 1;
+	}
+
+	if (lines == 1)
+	{
+		length = strlen(str);
+		oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), length);
+		strcpy(interpreterProxy->firstIndexableField(oop), str);
+		buffer[lines] = oop;
+		lines++;
+	}
+
+	oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classArray(), lines);
+
+	memcpy(interpreterProxy->firstIndexableField(oop), buffer, sizeof(sqInt) * lines);
+
+	free(del);
+	free(buffer);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(4, oop);
 	}
 
 	return null;

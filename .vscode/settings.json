@@ -10,6 +10,7 @@
         "sqmemoryaccess.h": "c",
         "pharo.h": "c",
         "worker.h": "c",
-        "config.h": "c"
+        "config.h": "c",
+        "string.h": "c"
     }
 }
