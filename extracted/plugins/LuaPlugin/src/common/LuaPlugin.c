@@ -226,14 +226,14 @@ primitive_strtok_r(void)
 	sqInt oop;
 	int length;
 
-	char *orig = (char *)(interpreterProxy->firstIndexableField(interpreterProxy->stackValue(2)));
+	char *orig = (char *)(interpreterProxy->firstIndexableField(interpreterProxy->stackObjectValue(2)));	// the receiver, indeed.
 	char *delimiters = (char *)(interpreterProxy->firstIndexableField(interpreterProxy->stackValue(1)));
 	sqInt include_empty_lines = interpreterProxy->booleanValueOf(interpreterProxy->stackValue(0));
 
 	length = strlen(orig);
 	char *str = (char *)malloc(sizeof(char) * length + 1);
 
-	char *del = strcpy(str, orig);
+	char *del = strcpy(str, orig);	// take a reference to the start of `str` in order to free it later; btw, `str` will be moved forward.
 
 	// auxiliary pointers for tokens and followers.
 	char *pch = NULL;
@@ -249,7 +249,7 @@ primitive_strtok_r(void)
 		{
 			oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), 0);
 			// strcpy(interpreterProxy->firstIndexableField(oop), "");
-			*((char *)interpreterProxy->firstIndexableField(oop)) = '\0';
+			*((char *)(interpreterProxy->firstIndexableField(oop))) = '\0';
 			buffer[lines] = oop;
 
 			lines++;
@@ -269,7 +269,7 @@ primitive_strtok_r(void)
 	{
 		oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), 0);
 		// strcpy(interpreterProxy->firstIndexableField(oop), "");
-		*((char *)interpreterProxy->firstIndexableField(oop)) = '\0';
+		*((char *)(interpreterProxy->firstIndexableField(oop))) = '\0';
 		buffer[lines] = oop;
 
 		lines++;
@@ -294,7 +294,7 @@ primitive_strtok_r(void)
 
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->popthenPush(4, oop);
+		interpreterProxy->popthenPush(3, oop);
 	}
 
 	return null;
