@@ -86,13 +86,8 @@ primitive_luaL_newstate(void)
 EXPORT(sqInt)
 primitive_lua_pushstring(void)
 {
-	sqInt sq_value;
-
-	sq_value = interpreterProxy->stackValue(1);
-	lua_State *L = (lua_State *)(readAddress(sq_value));
-
-	sq_value = interpreterProxy->stackValue(0);
-	char *str = (char *)(interpreterProxy->firstIndexableField(sq_value));
+	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(1)));
+	char *str = (char *)(interpreterProxy->firstIndexableField(interpreterProxy->stackValue(0)));
 
 	lua_pushstring(L, str);
 
@@ -107,12 +102,9 @@ primitive_lua_pushstring(void)
 EXPORT(sqInt)
 primitive_lua_pushinteger(void)
 {
-	sqInt sq_value;
+	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(1)));
 
-	sq_value = interpreterProxy->stackValue(1);
-	lua_State *L = (lua_State *)(readAddress(sq_value));
-
-	sq_value = interpreterProxy->stackIntegerValue(0);
+	sqInt sq_value = interpreterProxy->stackIntegerValue(0);
 
 	lua_pushinteger(L, sq_value);
 
@@ -136,7 +128,7 @@ primitive_lua_tostring(void)
 
 	sqInt oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), l);
 
-	strncpy(interpreterProxy->firstIndexableField(oop), str, l);
+	strcpy(interpreterProxy->firstIndexableField(oop), str);
 
 	if (!(interpreterProxy->failed()))
 	{
@@ -149,12 +141,9 @@ primitive_lua_tostring(void)
 EXPORT(sqInt)
 primitive_lua_pop(void)
 {
-	sqInt sq_value;
+	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(1)));
 
-	sq_value = interpreterProxy->stackValue(1);
-	lua_State *L = (lua_State *)(readAddress(sq_value));
-
-	sq_value = interpreterProxy->stackIntegerValue(0);
+	sqInt sq_value = interpreterProxy->stackIntegerValue(0);
 
 	lua_pop(L, sq_value);
 
@@ -221,19 +210,94 @@ primitive_lua_pushboolean(void)
 }
 
 EXPORT(sqInt)
+primitive_decasteljau(void)
+{
+	sqInt designpoints = interpreterProxy->stackValue(2);
+	sqInt controlpoints = interpreterProxy->stackValue(1);
+	sqInt parameterDomain = interpreterProxy->stackValue(0);
+
+	sqInt qPoint, hPoint;
+
+	sqInt designpoints_length = interpreterProxy->stSizeOf(designpoints);
+	sqInt domain_length = interpreterProxy->stSizeOf(parameterDomain);
+
+	// printf("design point size %d, parameter domain size %d\n", designpoints_length, domain_length);
+
+	//  sqInt aSequenceableOfPoints = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classArray(), designpoints_length);
+
+	double h, u, t, x, y, h1, qx, qy;
+
+	for (int j = 1; j <= domain_length; j++)
+	{
+		// memcpy(interpreterProxy->firstIndexableField(aSequenceableOfPoints),
+		// 	   interpreterProxy->firstIndexableField(designpoints),
+		// 	   sizeof(sqInt) * designpoints_length);
+
+		t = interpreterProxy->floatValueOf(interpreterProxy->stObjectat(parameterDomain, j));
+
+		h = 1.0;
+		u = h - t;
+
+		qPoint = interpreterProxy->stObjectat(designpoints, 1);
+		qx = interpreterProxy->fetchFloatofObject(0, qPoint);
+		qy = interpreterProxy->fetchFloatofObject(1, qPoint);
+
+		// printf("design point (%f, %f) for param %f (%dith)\n", qx, qy, t, j);
+
+		for (int k = 1; k < designpoints_length; k++)
+		{
+			h *= fma(t, (double)designpoints_length, (-t) * (double)k);
+			h /= fma(u, k, h);
+
+			hPoint = interpreterProxy->stObjectat(designpoints, k + 1);
+
+			x = interpreterProxy->fetchFloatofObject(0, hPoint) * h;
+			y = interpreterProxy->fetchFloatofObject(1, hPoint) * h;
+
+			h1 = 1.0 - h;
+			qx = fma(qx, h1, x);
+			qy = fma(qy, h1, y);
+
+			// interpreterProxy->storePointerofObjectwithValue(0, interpreterProxy->floatObjectOf(x), qPoint);
+			// interpreterProxy->storePointerofObjectwithValue(1, interpreterProxy->floatObjectOf(y), qPoint);
+
+			// qPoint = interpreterProxy->makePointwithxValueyValue(interpreterProxy->floatObjectOf(x), interpreterProxy->floatObjectOf(y));
+			// printf("intermediate (%f, %f) for param %f (%dith)\n", qx, qy, t, j);
+		}
+
+		qPoint = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classPoint(), 0);
+		interpreterProxy->storePointerofObjectwithValue(0, qPoint, interpreterProxy->floatObjectOf(qx));
+		interpreterProxy->storePointerofObjectwithValue(1, qPoint, interpreterProxy->floatObjectOf(qy));
+
+		interpreterProxy->stObjectatput(controlpoints, j, qPoint);
+
+		// printf("finished (%f, %f) for param %f (%dith)\n", qx, qy, t, j);
+	}
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3);
+	}
+
+	// printf("finished\n");
+
+	return null;
+}
+
+EXPORT(sqInt)
 primitive_strtok_r(void)
 {
 	sqInt oop;
 	int length;
 
-	char *orig = (char *)(interpreterProxy->firstIndexableField(interpreterProxy->stackObjectValue(2)));	// the receiver, indeed.
+	char *orig = (char *)(interpreterProxy->firstIndexableField(interpreterProxy->stackValue(2))); // the receiver, indeed.
 	char *delimiters = (char *)(interpreterProxy->firstIndexableField(interpreterProxy->stackValue(1)));
 	sqInt include_empty_lines = interpreterProxy->booleanValueOf(interpreterProxy->stackValue(0));
 
 	length = strlen(orig);
 	char *str = (char *)malloc(sizeof(char) * length + 1);
 
-	char *del = strcpy(str, orig);	// take a reference to the start of `str` in order to free it later; btw, `str` will be moved forward.
+	char *del = strcpy(str, orig); // take a reference to the start of `str` in order to free it later; btw, `str` will be moved forward.
 
 	// auxiliary pointers for tokens and followers.
 	char *pch = NULL;
