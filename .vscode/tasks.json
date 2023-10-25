@@ -5,7 +5,10 @@
 			"label": "Compile target install",
 			"type": "shell",
 			"linux": {
-				"command": "cmake --build build --target install"
+				"command": [
+					"cmake --build build --target install &&",
+					"rm -rf build/build/dist/lib/libss*"
+				]
 			},
 			"group": "build",
 			"presentation": {
