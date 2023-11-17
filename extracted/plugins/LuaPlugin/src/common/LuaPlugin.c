@@ -210,6 +210,63 @@ primitive_lua_pushboolean(void)
 }
 
 EXPORT(sqInt)
+primitive_lua_compare(void)
+{
+	sqInt a, b, op;
+
+	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(3)));
+	a = interpreterProxy->stackIntegerValue(2);
+	b = interpreterProxy->stackIntegerValue(1);
+	op = interpreterProxy->stackIntegerValue(0);
+
+	int cmp = lua_compare(L, a, b, op);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(5);
+		interpreterProxy->pushInteger(cmp);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_luaL_loadstring(void)
+{
+
+	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(1)));
+	char *str = (char *)(interpreterProxy->firstIndexableField(interpreterProxy->stackValue(0)));
+
+	int ret = luaL_loadstring(L, str);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3);
+		interpreterProxy->pushInteger(ret);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_luaL_dostring(void)
+{
+
+	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(1)));
+	char *str = (char *)(interpreterProxy->firstIndexableField(interpreterProxy->stackValue(0)));
+
+	int ret = luaL_dostring(L, str);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3);
+		interpreterProxy->pushInteger(ret);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
 primitive_decasteljau(void)
 {
 	sqInt designpoints = interpreterProxy->stackValue(2);
