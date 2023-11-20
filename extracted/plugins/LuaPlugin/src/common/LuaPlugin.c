@@ -285,6 +285,25 @@ primitive_lua_copy(void)
 }
 
 EXPORT(sqInt)
+primitive_lua_getfield(void)
+{
+
+	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(2)));
+	sqInt idx = interpreterProxy->stackIntegerValue(1);
+	char *k = (char *)(interpreterProxy->firstIndexableField(interpreterProxy->stackValue(0)));
+
+	int type = lua_getfield(L, idx, k);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(4);
+		interpreterProxy->pushInteger(type);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
 primitive_decasteljau(void)
 {
 	sqInt designpoints = interpreterProxy->stackValue(2);
