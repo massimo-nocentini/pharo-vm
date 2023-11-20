@@ -66,6 +66,12 @@ initialiseModule(void)
 	return true;
 }
 
+lua_State *lua_StateFor(sqInt oop)
+{
+
+	return (lua_State *)(readAddress(oop));
+}
+
 EXPORT(sqInt)
 primitive_luaL_newstate(void)
 {
@@ -86,7 +92,7 @@ primitive_luaL_newstate(void)
 EXPORT(sqInt)
 primitive_lua_pushstring(void)
 {
-	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(1)));
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
 	char *str = interpreterProxy->cStringOrNullFor(interpreterProxy->stackValue(0));
 
 	lua_pushstring(L, str);
@@ -104,7 +110,7 @@ primitive_lua_pushstring(void)
 EXPORT(sqInt)
 primitive_lua_pushinteger(void)
 {
-	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(1)));
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
 
 	sqInt sq_value = interpreterProxy->stackIntegerValue(0);
 
@@ -121,7 +127,7 @@ primitive_lua_pushinteger(void)
 EXPORT(sqInt)
 primitive_lua_tostring(void)
 {
-	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(1)));
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
 
 	sqInt sq_value = interpreterProxy->stackIntegerValue(0);
 
@@ -143,7 +149,7 @@ primitive_lua_tostring(void)
 EXPORT(sqInt)
 primitive_lua_pop(void)
 {
-	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(1)));
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
 
 	sqInt sq_value = interpreterProxy->stackIntegerValue(0);
 
@@ -161,7 +167,7 @@ EXPORT(sqInt)
 primitive_lua_pushvalue(void)
 {
 
-	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(1)));
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
 	sqInt sq_value = interpreterProxy->stackIntegerValue(0);
 
 	lua_pushvalue(L, sq_value);
@@ -179,7 +185,7 @@ primitive_lua_pcall(void)
 {
 	sqInt n, r, f;
 
-	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(3)));
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(3));
 	n = interpreterProxy->stackIntegerValue(2);
 	r = interpreterProxy->stackIntegerValue(1);
 	f = interpreterProxy->stackIntegerValue(0);
@@ -198,7 +204,7 @@ primitive_lua_pcall(void)
 EXPORT(sqInt)
 primitive_lua_pushboolean(void)
 {
-	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(1)));
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
 	sqInt b = interpreterProxy->booleanValueOf(interpreterProxy->stackValue(0));
 
 	lua_pushboolean(L, b);
@@ -216,7 +222,7 @@ primitive_lua_compare(void)
 {
 	sqInt a, b, op;
 
-	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(3)));
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(3));
 	a = interpreterProxy->stackIntegerValue(2);
 	b = interpreterProxy->stackIntegerValue(1);
 	op = interpreterProxy->stackIntegerValue(0);
@@ -236,7 +242,7 @@ EXPORT(sqInt)
 primitive_luaL_loadstring(void)
 {
 
-	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(1)));
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
 	char *str = interpreterProxy->cStringOrNullFor(interpreterProxy->stackValue(0));
 
 	int ret = luaL_loadstring(L, str);
@@ -256,7 +262,7 @@ EXPORT(sqInt)
 primitive_luaL_dostring(void)
 {
 
-	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(1)));
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
 	char *str = interpreterProxy->cStringOrNullFor(interpreterProxy->stackValue(0));
 
 	int ret = luaL_dostring(L, str);
@@ -276,7 +282,7 @@ EXPORT(sqInt)
 primitive_lua_copy(void)
 {
 
-	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(2)));
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(2));
 	sqInt fromidx = interpreterProxy->stackIntegerValue(1);
 	sqInt toidx = interpreterProxy->stackIntegerValue(0);
 
@@ -294,7 +300,7 @@ EXPORT(sqInt)
 primitive_lua_getfield(void)
 {
 
-	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(2)));
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(2));
 	sqInt idx = interpreterProxy->stackIntegerValue(1);
 	char *k = interpreterProxy->cStringOrNullFor(interpreterProxy->stackValue(0));
 
@@ -315,7 +321,7 @@ EXPORT(sqInt)
 primitive_lua_geti(void)
 {
 
-	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(2)));
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(2));
 	sqInt idx = interpreterProxy->stackIntegerValue(1);
 	sqInt i = interpreterProxy->stackIntegerValue(0);
 
@@ -334,12 +340,30 @@ EXPORT(sqInt)
 primitive_lua_getglobal(void)
 {
 
-	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(1)));
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
 	char *name = interpreterProxy->cStringOrNullFor(interpreterProxy->stackValue(0));
 
 	int type = lua_getglobal(L, name);
 
 	free(name);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3);
+		interpreterProxy->pushInteger(type);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_gettable(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	sqInt idx = interpreterProxy->stackIntegerValue(0);
+
+	int type = lua_gettable(L, idx);
 
 	if (!(interpreterProxy->failed()))
 	{
