@@ -72,6 +72,16 @@ lua_State *lua_StateFor(sqInt oop)
 	return (lua_State *)(readAddress(oop));
 }
 
+char *checked_cStringOrNullFor(sqInt oop, int *should_free)
+{
+	char *str = (char *)interpreterProxy->firstIndexableField(oop);
+	sqInt size = interpreterProxy->stSizeOf(oop);
+
+	*should_free = str[size] != '\0';
+
+	return *should_free ? interpreterProxy->cStringOrNullFor(oop) : str;
+}
+
 EXPORT(sqInt)
 primitive_luaL_newstate(void)
 {
@@ -93,11 +103,13 @@ EXPORT(sqInt)
 primitive_lua_pushstring(void)
 {
 	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
-	char *str = interpreterProxy->cStringOrNullFor(interpreterProxy->stackValue(0));
+	int should_free;
+	char *str = checked_cStringOrNullFor(interpreterProxy->stackValue(0), &should_free);
 
 	lua_pushstring(L, str);
 
-	free(str);
+	if (should_free)
+		free(str);
 
 	if (!(interpreterProxy->failed()))
 	{
@@ -243,11 +255,13 @@ primitive_luaL_loadstring(void)
 {
 
 	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
-	char *str = interpreterProxy->cStringOrNullFor(interpreterProxy->stackValue(0));
+	int should_free;
+	char *str = checked_cStringOrNullFor(interpreterProxy->stackValue(0), &should_free);
 
 	int ret = luaL_loadstring(L, str);
 
-	free(str);
+	if (should_free)
+		free(str);
 
 	if (!(interpreterProxy->failed()))
 	{
@@ -263,11 +277,13 @@ primitive_luaL_dostring(void)
 {
 
 	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
-	char *str = interpreterProxy->cStringOrNullFor(interpreterProxy->stackValue(0));
+	int should_free;
+	char *str = checked_cStringOrNullFor(interpreterProxy->stackValue(0), &should_free);
 
 	int ret = luaL_dostring(L, str);
 
-	free(str);
+	if (should_free)
+		free(str);
 
 	if (!(interpreterProxy->failed()))
 	{
@@ -302,11 +318,13 @@ primitive_lua_getfield(void)
 
 	lua_State *L = lua_StateFor(interpreterProxy->stackValue(2));
 	sqInt idx = interpreterProxy->stackIntegerValue(1);
-	char *k = interpreterProxy->cStringOrNullFor(interpreterProxy->stackValue(0));
+	int should_free;
+	char *k = checked_cStringOrNullFor(interpreterProxy->stackValue(0), &should_free);
 
 	int type = lua_getfield(L, idx, k);
 
-	free(k);
+	if (should_free)
+		free(k);
 
 	if (!(interpreterProxy->failed()))
 	{
@@ -341,11 +359,13 @@ primitive_lua_getglobal(void)
 {
 
 	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
-	char *name = interpreterProxy->cStringOrNullFor(interpreterProxy->stackValue(0));
+	int should_free;
+	char *name = checked_cStringOrNullFor(interpreterProxy->stackValue(0), &should_free);
 
 	int type = lua_getglobal(L, name);
 
-	free(name);
+	if (should_free)
+		free(name);
 
 	if (!(interpreterProxy->failed()))
 	{
@@ -408,7 +428,6 @@ primitive_lua_len(void)
 
 	return null;
 }
-
 
 EXPORT(sqInt)
 primitive_lua_next(void)
