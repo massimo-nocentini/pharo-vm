@@ -76,17 +76,17 @@ primitiveCompileThenFormat(void)
 	sqInt sq_value;
 
 	sq_value = interpreterProxy->stackValue(5);
-	char *pattern = (char *)interpreterProxy->firstIndexableField(sq_value);
+	char *pattern = (char *)interpreterProxy->cStringOrNullFor(sq_value);
 
 	sqInt timer = interpreterProxy->stackIntegerValue(4);
 
 	sq_value = interpreterProxy->stackValue(3);
-	char *locale = (char *)interpreterProxy->firstIndexableField(sq_value);
+	char *locale = (char *)interpreterProxy->cStringOrNullFor(sq_value);
 
 	sqInt offset = interpreterProxy->stackIntegerValue(2);
 
 	sq_value = interpreterProxy->stackValue(1);
-	char *timezone = (char *)interpreterProxy->firstIndexableField(sq_value);
+	char *timezone = (char *)interpreterProxy->cStringOrNullFor(sq_value);
 
 	sqInt local = interpreterProxy->booleanValueOf(interpreterProxy->stackValue(0));
 
@@ -107,6 +107,10 @@ primitiveCompileThenFormat(void)
 
 	strncpy(interpreterProxy->firstIndexableField(oop), strbuffer, l);
 
+	free(pattern);
+	free(locale);
+	free(timezone);
+
 	if (!(interpreterProxy->failed()))
 	{
 		interpreterProxy->popthenPush(7, oop);
@@ -115,40 +119,6 @@ primitiveCompileThenFormat(void)
 	return null;
 }
 
-/*
-
-primitiveCountry(void)
-{
-	sqInt oop, array, idx;
-
-	char *buffer = "Hello from C";
-
-	idx = 0;
-	array = interpreterProxy->stackValue(0);
-	// interpreterProxy->checkFailed();
-
-	idx = 1;
-	oop = interpreterProxy->stObjectat(array, 1);
-
-	char *string = (char *)interpreterProxy->firstIndexableField(oop);
-	// interpreterProxy->checkFailed();
-	printf("RECEIVED %d: %s\n", interpreterProxy->stSizeOf(array), string);
-
-	// oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), strlen(buffer));
-	// sqLocGetCountryInto(firstIndexableField(oop));
-	char *str = (char *)interpreterProxy->firstIndexableField(oop);
-
-	// memcpy(str, buffer, strlen(buffer));
-	if (!(interpreterProxy->failed()))
-	{
-		// printf("pushed\n");
-		interpreterProxy->popthenPush(2, oop);
-	}
-	// printf("Completed\n");
-	return null;
-}
-
-*/
 
 /*	Note: This is coded so that it can be run in Squeak. */
 
