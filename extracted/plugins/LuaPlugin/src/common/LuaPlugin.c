@@ -267,6 +267,24 @@ primitive_luaL_dostring(void)
 }
 
 EXPORT(sqInt)
+primitive_lua_copy(void)
+{
+
+	lua_State *L = (lua_State *)(readAddress(interpreterProxy->stackValue(2)));
+	sqInt fromidx = interpreterProxy->stackIntegerValue(1);
+	sqInt toidx = interpreterProxy->stackIntegerValue(0);
+
+	lua_copy(L, fromidx, toidx);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
 primitive_decasteljau(void)
 {
 	sqInt designpoints = interpreterProxy->stackValue(2);
