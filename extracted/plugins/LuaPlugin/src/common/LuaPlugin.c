@@ -375,6 +375,60 @@ primitive_lua_gettable(void)
 }
 
 EXPORT(sqInt)
+primitive_lua_isinteger(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	sqInt idx = interpreterProxy->stackIntegerValue(0);
+
+	int is = lua_isinteger(L, idx);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3);
+		interpreterProxy->pushInteger(is);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_len(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	sqInt idx = interpreterProxy->stackIntegerValue(0);
+
+	lua_len(L, idx);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(2);
+	}
+
+	return null;
+}
+
+
+EXPORT(sqInt)
+primitive_lua_next(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	sqInt idx = interpreterProxy->stackIntegerValue(0);
+
+	int is = lua_next(L, idx);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3);
+		interpreterProxy->pushInteger(is);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
 primitive_decasteljau(void)
 {
 	sqInt designpoints = interpreterProxy->stackValue(2);
