@@ -217,7 +217,7 @@ EXPORT(sqInt)
 primitive_lua_pushboolean(void)
 {
 	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
-	sqInt b = interpreterProxy->booleanValueOf(interpreterProxy->stackValue(0));
+	sqInt b = interpreterProxy->stackIntegerValue(interpreterProxy->stackValue(0));
 
 	lua_pushboolean(L, b);
 
@@ -442,6 +442,142 @@ primitive_lua_next(void)
 	{
 		interpreterProxy->pop(3);
 		interpreterProxy->pushInteger(is);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_pushcclosure(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(2));
+	lua_CFunction fn = (lua_CFunction)readAddress(interpreterProxy->stackValue(1));
+	sqInt n = interpreterProxy->stackIntegerValue(0);
+
+	lua_pushcclosure(L, fn, n);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_pushcfunction(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	lua_CFunction fn = (lua_CFunction)readAddress(interpreterProxy->stackValue(0));
+
+	lua_pushcfunction(L, fn);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(2); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_pushnumber(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	lua_Number n = interpreterProxy->stackFloatValue(0);
+
+	lua_pushnumber(L, n);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(2); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_register(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(2));
+	int should_free;
+	char *name = checked_cStringOrNullFor(interpreterProxy->stackValue(1), &should_free);
+
+	lua_CFunction fn = (lua_CFunction)readAddress(interpreterProxy->stackValue(0));
+
+	lua_register(L, name, fn);
+
+	if (should_free)
+		free(name);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_setfield(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(2));
+	sqInt idx = interpreterProxy->stackIntegerValue(1);
+	int should_free;
+	char *k = checked_cStringOrNullFor(interpreterProxy->stackValue(0), &should_free);
+
+	lua_setfield(L, idx, k);
+
+	if (should_free)
+		free(k);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_seti(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(2));
+	sqInt idx = interpreterProxy->stackIntegerValue(1);
+	sqInt i = interpreterProxy->stackIntegerValue(0);
+
+	lua_seti(L, idx, i);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_setglobal(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	int should_free;
+	char *name = checked_cStringOrNullFor(interpreterProxy->stackValue(0), &should_free);
+
+	lua_setglobal(L, name);
+
+	if (should_free)
+		free(name);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(2); // just leave the receiver on the stack
 	}
 
 	return null;
