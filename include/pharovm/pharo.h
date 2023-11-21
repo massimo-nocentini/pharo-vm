@@ -71,11 +71,11 @@ EXPORT(int) getProcessArgumentCount();
 EXPORT(const char**) getProcessArgumentVector();
 EXPORT(const char**) getProcessEnvironmentVector();
 
-void * loadModuleHandle(const char *fileName);
-sqInt freeModuleHandle(void *module);
-void *getModuleSymbol(void *module, const char *symbol);
+EXPORT(void *) loadModuleHandle(const char *fileName);
+EXPORT(sqInt) freeModuleHandle(void *module);
+EXPORT(void *) getModuleSymbol(void *module, const char *symbol);
 
-void *getHandler(sqInt anExternalObject);
+EXPORT(void *) getHandler(sqInt anExternalObject);
 EXPORT(void *) readAddress(sqInt anExternalAddress);
 
 EXPORT(int) isVMRunOnWorkerThread();
