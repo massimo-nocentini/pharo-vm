@@ -584,6 +584,83 @@ primitive_lua_setglobal(void)
 }
 
 EXPORT(sqInt)
+primitive_lua_tointegerx(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(2));
+	sqInt idx = interpreterProxy->stackIntegerValue(1);
+
+	int *isnum = (int *)interpreterProxy->firstIndexableField(interpreterProxy->stackValue(0));
+
+	lua_Integer value = lua_tointegerx(L, idx, isnum);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(4);
+		interpreterProxy->pushInteger(value);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_tointeger(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	sqInt idx = interpreterProxy->stackIntegerValue(0);
+
+	lua_Integer value = lua_tointeger(L, idx);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(3, interpreterProxy->signed64BitIntegerFor(value));
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_toboolean(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	sqInt idx = interpreterProxy->stackIntegerValue(0);
+
+	int value = lua_toboolean(L, idx);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3);
+		interpreterProxy->pushInteger(value);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_tolstring(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(2));
+	sqInt idx = interpreterProxy->stackIntegerValue(1);
+	size_t *l = (size_t *)interpreterProxy->firstIndexableField(interpreterProxy->stackValue(0));
+
+	const char *str = lua_tolstring(L, idx, l);
+
+	sqInt oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), *l);
+
+	strncpy(interpreterProxy->firstIndexableField(oop), str, *l);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(4, oop);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
 primitive_decasteljau(void)
 {
 	sqInt designpoints = interpreterProxy->stackValue(2);
