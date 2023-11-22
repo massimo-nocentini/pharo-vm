@@ -368,3 +368,4 @@ healthchecksdb
 /stack64/generated
 
 **/.DS_Store
+pharo-vm-c-src/PharoVM-10.0.9-de76067-Linux-x86_64-c-src.tar.gz
