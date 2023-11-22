@@ -146,11 +146,9 @@ primitive_lua_tostring(void)
 
 	const char *str = lua_tostring(L, sq_value);
 
-	sqInt oop = interpreterProxy->stringForCString(str);
-
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->popthenPush(3, oop);
+		interpreterProxy->popthenPush(3, interpreterProxy->stringForCString(str));
 	}
 
 	return null;
@@ -716,15 +714,9 @@ primitive_lua_typename(void)
 
 	const char *name = lua_typename(L, idx);
 
-	int l = strlen(name);
-
-	sqInt oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), l);
-
-	strncpy(interpreterProxy->firstIndexableField(oop), name, l);
-
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->popthenPush(3, oop);
+		interpreterProxy->popthenPush(3, interpreterProxy->stringForCString(name));
 	}
 
 	return null;
@@ -771,15 +763,9 @@ primitive_luaL_typename(void)
 
 	const char *name = luaL_typename(L, idx);
 
-	int l = strlen(name);
-
-	sqInt oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), l);
-
-	strncpy(interpreterProxy->firstIndexableField(oop), name, l);
-
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->popthenPush(3, oop);
+		interpreterProxy->popthenPush(3, interpreterProxy->stringForCString(name));
 	}
 
 	return null;
