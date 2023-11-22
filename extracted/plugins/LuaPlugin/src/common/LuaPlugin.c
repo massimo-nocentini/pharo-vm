@@ -114,7 +114,7 @@ primitive_lua_pushstring(void)
 
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->pop(2);
+		interpreterProxy->pop(2); // leave the receiver on the stack.
 	}
 
 	return null;
@@ -125,13 +125,13 @@ primitive_lua_pushinteger(void)
 {
 	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
 
-	sqInt sq_value = interpreterProxy->stackIntegerValue(0);
+	lua_Integer sq_value = interpreterProxy->signed64BitValueOf(interpreterProxy->stackValue(0));
 
 	lua_pushinteger(L, sq_value);
 
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->pop(2);
+		interpreterProxy->pop(2); // leave the receiver on the stack.
 	}
 
 	return null;
@@ -144,12 +144,9 @@ primitive_lua_tostring(void)
 
 	sqInt sq_value = interpreterProxy->stackIntegerValue(0);
 
-	size_t l;
-	const char *str = lua_tolstring(L, sq_value, &l);
+	const char *str = lua_tostring(L, sq_value);
 
-	sqInt oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), l);
-
-	strncpy(interpreterProxy->firstIndexableField(oop), str, l);
+	sqInt oop = interpreterProxy->stringForCString(str);
 
 	if (!(interpreterProxy->failed()))
 	{
@@ -170,7 +167,7 @@ primitive_lua_pop(void)
 
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->pop(2);
+		interpreterProxy->pop(2); // leave the receiver on the stack.
 	}
 
 	return null;
@@ -187,7 +184,7 @@ primitive_lua_pushvalue(void)
 
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->pop(2);
+		interpreterProxy->pop(2); // leave the receiver on the stack.
 	}
 
 	return null;
@@ -218,13 +215,13 @@ EXPORT(sqInt)
 primitive_lua_pushboolean(void)
 {
 	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
-	sqInt b = interpreterProxy->stackIntegerValue(interpreterProxy->stackValue(0));
+	sqInt b = interpreterProxy->stackIntegerValue(0);
 
 	lua_pushboolean(L, b);
 
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->pop(2);
+		interpreterProxy->pop(2); // leave the receiver on the stack.
 	}
 
 	return null;
@@ -424,7 +421,7 @@ primitive_lua_len(void)
 
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->pop(2);
+		interpreterProxy->pop(2); // leave the receiver on the stack.
 	}
 
 	return null;
@@ -551,7 +548,7 @@ primitive_lua_seti(void)
 
 	lua_State *L = lua_StateFor(interpreterProxy->stackValue(2));
 	sqInt idx = interpreterProxy->stackIntegerValue(1);
-	sqInt i = interpreterProxy->stackIntegerValue(0);
+	lua_Integer i = interpreterProxy->signed64BitValueOf(interpreterProxy->stackValue(0));
 
 	lua_seti(L, idx, i);
 
@@ -597,8 +594,7 @@ primitive_lua_tointegerx(void)
 
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->pop(4);
-		interpreterProxy->pushInteger(value);
+		interpreterProxy->popthenPush(4, interpreterProxy->signed64BitIntegerFor((long)value));
 	}
 
 	return null;
@@ -615,7 +611,7 @@ primitive_lua_tointeger(void)
 
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->popthenPush(3, interpreterProxy->signed64BitIntegerFor(value));
+		interpreterProxy->popthenPush(3, interpreterProxy->signed64BitIntegerFor((long)value));
 	}
 
 	return null;
@@ -649,13 +645,9 @@ primitive_lua_tolstring(void)
 
 	const char *str = lua_tolstring(L, idx, l);
 
-	sqInt oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), *l);
-
-	strncpy(interpreterProxy->firstIndexableField(oop), str, *l);
-
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->popthenPush(4, oop);
+		interpreterProxy->popthenPush(4, interpreterProxy->stringForCString(str));
 	}
 
 	return null;
@@ -770,7 +762,6 @@ primitive_lua_close(void)
 	return null;
 }
 
-
 EXPORT(sqInt)
 primitive_luaL_typename(void)
 {
@@ -793,7 +784,6 @@ primitive_luaL_typename(void)
 
 	return null;
 }
-
 
 EXPORT(sqInt)
 primitive_lua_absindex(void)
