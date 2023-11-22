@@ -7,6 +7,7 @@ static char __buildInfo[] = "LuaPlugin VMMaker.oscog-eem.2495 uuid: fcbf4c90-4c5
 #include <string.h>
 #include <time.h>
 #include <lua.h>
+#include <lualib.h>
 #include <lauxlib.h>
 
 /* Default EXPORT macro that does nothing (see comment in sq.h): */
@@ -655,6 +656,158 @@ primitive_lua_tolstring(void)
 	if (!(interpreterProxy->failed()))
 	{
 		interpreterProxy->popthenPush(4, oop);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_tonumber(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	sqInt idx = interpreterProxy->stackIntegerValue(0);
+
+	lua_Number value = lua_tonumber(L, idx);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(3, interpreterProxy->floatObjectOf(value));
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_tonumberx(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(2));
+	sqInt idx = interpreterProxy->stackIntegerValue(1);
+
+	int *isnum = (int *)interpreterProxy->firstIndexableField(interpreterProxy->stackValue(0));
+
+	lua_Number value = lua_tonumberx(L, idx, isnum);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(4, interpreterProxy->floatObjectOf(value));
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_type(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	sqInt idx = interpreterProxy->stackIntegerValue(0);
+
+	int type = lua_type(L, idx);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3);
+		interpreterProxy->pushInteger(type);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_typename(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	sqInt idx = interpreterProxy->stackIntegerValue(0);
+
+	const char *name = lua_typename(L, idx);
+
+	int l = strlen(name);
+
+	sqInt oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), l);
+
+	strncpy(interpreterProxy->firstIndexableField(oop), name, l);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(3, oop);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_luaL_openlibs(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(0));
+
+	luaL_openlibs(L);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(1);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_close(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(0));
+
+	lua_close(L);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(1);
+	}
+
+	return null;
+}
+
+
+EXPORT(sqInt)
+primitive_luaL_typename(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	sqInt idx = interpreterProxy->stackIntegerValue(0);
+
+	const char *name = luaL_typename(L, idx);
+
+	int l = strlen(name);
+
+	sqInt oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), l);
+
+	strncpy(interpreterProxy->firstIndexableField(oop), name, l);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(3, oop);
+	}
+
+	return null;
+}
+
+
+EXPORT(sqInt)
+primitive_lua_absindex(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	sqInt idx = interpreterProxy->stackIntegerValue(0);
+
+	int j = lua_absindex(L, idx);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3);
+		interpreterProxy->pushInteger(j);
 	}
 
 	return null;

@@ -12,6 +12,8 @@
         "worker.h": "c",
         "config.h": "c",
         "string.h": "c",
-        "sstream": "c"
+        "sstream": "c",
+        "lauxlib.h": "c",
+        "lualib.h": "c"
     }
 }
