@@ -15,5 +15,6 @@
         "sstream": "c",
         "lauxlib.h": "c",
         "lualib.h": "c"
-    }
+    },
+    "cmake.configureOnOpen": false
 }

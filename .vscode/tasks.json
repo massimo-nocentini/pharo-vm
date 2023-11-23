@@ -6,8 +6,9 @@
 			"type": "shell",
 			"linux": {
 				"command": [
-					"cmake --build build --target install &&",
-					"rm -rf build/build/dist/lib/libss*"
+					"cd ../ &&",
+					"cmake --build pharo-vm-build --target install &&",
+					"rm -rf build/ pharo-vm-build/build/dist/lib/libss*"
 				]
 			},
 			"group": "build",
@@ -21,10 +22,10 @@
 			"type": "shell",
 			"linux": {
 				"command": [
-					"rm -rf pharo-vm-c-src && mkdir -p pharo-vm-c-src && cd pharo-vm-c-src &&",
-					"wget https://files.pharo.org/vm/pharo-spur64-headless/Linux-x86_64/source/PharoVM-10.0.9-de76067-Linux-x86_64-c-src.tar.gz &&",
-					"tar xfz PharoVM-10.0.9-de76067-Linux-x86_64-c-src.tar.gz && cd ../ &&",
-					"cmake -S . -B build -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DBUILD_IS_RELEASE=ON -DICEBERG_DEFAULT_REMOTE=httpsUrl #-DGENERATE_SOURCES=FALSE -DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/"
+					"cd ../ && rm -rf pharo-vm-c-src && mkdir -p pharo-vm-c-src && cd pharo-vm-c-src &&",
+					"wget https://files.pharo.org/vm/pharo-spur64-headless/Linux-x86_64/source/latest10.zip &&",
+					"unzip latest10.zip && cd ../ &&",
+					"cmake -S pharo-vm -B pharo-vm-build -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DBUILD_IS_RELEASE=ON -DICEBERG_DEFAULT_REMOTE=httpsUrl -DGENERATE_SOURCES=FALSE -DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/"
 				]
 			},
 			"group": "build",

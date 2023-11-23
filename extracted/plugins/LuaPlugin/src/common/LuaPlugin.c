@@ -592,7 +592,7 @@ primitive_lua_tointegerx(void)
 
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->popthenPush(4, interpreterProxy->signed64BitIntegerFor((long)value));
+		interpreterProxy->popthenPush(4, interpreterProxy->signed64BitIntegerFor(value));
 	}
 
 	return null;
@@ -609,7 +609,7 @@ primitive_lua_tointeger(void)
 
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->popthenPush(3, interpreterProxy->signed64BitIntegerFor((long)value));
+		interpreterProxy->popthenPush(3, interpreterProxy->signed64BitIntegerFor(value));
 	}
 
 	return null;
