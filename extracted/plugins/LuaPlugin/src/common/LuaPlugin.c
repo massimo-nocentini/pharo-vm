@@ -67,6 +67,22 @@ initialiseModule(void)
 	return true;
 }
 
+void writeAddress(sqInt anExternalAddress, void *value)
+{
+	if (!interpreterProxy->isKindOfClass(anExternalAddress, interpreterProxy->classExternalAddress()))
+	{
+		interpreterProxy->primitiveFail();
+		return;
+	}
+
+	*((void **)interpreterProxy->firstIndexableField(anExternalAddress)) = value;
+}
+
+sqInt newExternalAddress()
+{
+	return interpreterProxy->instantiateClassindexableSize(interpreterProxy->classExternalAddress(), sizeof(void *));
+}
+
 lua_State *lua_StateFor(sqInt oop)
 {
 
@@ -88,9 +104,9 @@ primitive_luaL_newstate(void)
 {
 	lua_State *L = luaL_newstate();
 
-	sqInt externalAddress = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classExternalAddress(), sizeof(void *));
+	sqInt externalAddress = newExternalAddress();
 
-	*((void **)(interpreterProxy->firstIndexableField(externalAddress))) = L;
+	writeAddress(externalAddress, L);
 
 	if (!(interpreterProxy->failed()))
 	{
@@ -1011,6 +1027,87 @@ primitive_lua_settop(void)
 	if (!(interpreterProxy->failed()))
 	{
 		interpreterProxy->pop(2); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_topointer(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	sqInt idx = interpreterProxy->stackIntegerValue(0);
+
+	void *ptr = lua_topointer(L, idx);
+
+	sqInt externalAddress = newExternalAddress();
+
+	writeAddress(externalAddress, ptr);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(3, externalAddress);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_touserdata(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	sqInt idx = interpreterProxy->stackIntegerValue(0);
+
+	void *ptr = lua_touserdata(L, idx);
+
+	sqInt externalAddress = newExternalAddress();
+
+	writeAddress(externalAddress, ptr);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(3, externalAddress);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_pushlightuserdata(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	void *ptr = readAddress(interpreterProxy->stackValue(0));
+
+	lua_pushlightuserdata(L, ptr);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(2); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_pcallk(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(5));
+	sqInt nargs = interpreterProxy->stackIntegerValue(4);
+	sqInt nresults = interpreterProxy->stackIntegerValue(3);
+	sqInt msgh = interpreterProxy->stackIntegerValue(2);
+	lua_KContext ctx = interpreterProxy->signedMachineIntegerValueOf(1);
+	sqInt k = readAddress(interpreterProxy->stackValue(0));
+
+	int retcode = lua_pcallk(L, nargs, nresults, msgh, ctx, k);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(7);
+		interpreterProxy->pushInteger(retcode);
 	}
 
 	return null;
