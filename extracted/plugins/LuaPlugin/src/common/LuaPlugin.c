@@ -915,6 +915,108 @@ primitive_lua_gettop(void)
 }
 
 EXPORT(sqInt)
+primitive_lua_isnil(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	sqInt idx = interpreterProxy->stackIntegerValue(0);
+
+	int is = lua_isnil(L, idx);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3);
+		interpreterProxy->pushInteger(is);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_newtable(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(0));
+
+	lua_newtable(L);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(1); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_pushnil(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(0));
+
+	lua_pushnil(L);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(1); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_remove(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	sqInt idx = interpreterProxy->stackIntegerValue(0);
+
+	lua_remove(L, idx);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(2); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_rotate(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(2));
+	sqInt idx = interpreterProxy->stackIntegerValue(1);
+	sqInt n = interpreterProxy->stackIntegerValue(0);
+
+	lua_rotate(L, idx, n);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_settop(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	sqInt idx = interpreterProxy->stackIntegerValue(0);
+
+	lua_settop(L, idx);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(2); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
 primitive_decasteljau(void)
 {
 	sqInt designpoints = interpreterProxy->stackValue(2);
