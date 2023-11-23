@@ -7,7 +7,7 @@
                 "include/**"
             ],
             "defines": [],
-            "compilerPath": "/usr/bin/gcc",
+            "compilerPath": "/usr/bin/clang",
             "intelliSenseMode": "linux-gcc-x64"
         }
     ],

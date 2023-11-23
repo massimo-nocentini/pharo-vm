@@ -790,6 +790,34 @@ primitive_lua_absindex(void)
 }
 
 EXPORT(sqInt)
+primitive_luaL_loadfilex(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(2));
+	int freename;
+	char *name = checked_cStringOrNullFor(interpreterProxy->stackValue(1), &freename);
+
+	int freemode;
+	char *mode = checked_cStringOrNullFor(interpreterProxy->stackValue(0), &freemode);
+
+	int retcode = luaL_loadfilex(L, name, mode);
+
+	if (freename)
+		free(name);
+
+	if (freemode)
+		free(mode);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(4);
+		interpreterProxy->pushInteger(retcode);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
 primitive_decasteljau(void)
 {
 	sqInt designpoints = interpreterProxy->stackValue(2);
