@@ -818,6 +818,103 @@ primitive_luaL_loadfilex(void)
 }
 
 EXPORT(sqInt)
+primitive_luaL_loadfile(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	int freename;
+	char *name = checked_cStringOrNullFor(interpreterProxy->stackValue(0), &freename);
+
+	int retcode = luaL_loadfile(L, name);
+
+	if (freename)
+		free(name);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3);
+		interpreterProxy->pushInteger(retcode);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_luaL_requiref(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(3));
+	int freename;
+	char *modname = checked_cStringOrNullFor(interpreterProxy->stackValue(2), &freename);
+	lua_CFunction f = readAddress(interpreterProxy->stackValue(1));
+	int glb = interpreterProxy->stackIntegerValue(0);
+
+	luaL_requiref(L, modname, f, glb);
+
+	if (freename)
+		free(modname);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(4); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_createtable(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(2));
+	sqInt narr = interpreterProxy->stackIntegerValue(1);
+	sqInt nrec = interpreterProxy->stackIntegerValue(0);
+
+	lua_createtable(L, narr, nrec);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_error(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(0));
+
+	int useless = lua_error(L);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(2);
+		interpreterProxy->pushInteger(useless);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_lua_gettop(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(0));
+
+	int top = lua_gettop(L);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(2);
+		interpreterProxy->pushInteger(top);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
 primitive_decasteljau(void)
 {
 	sqInt designpoints = interpreterProxy->stackValue(2);
