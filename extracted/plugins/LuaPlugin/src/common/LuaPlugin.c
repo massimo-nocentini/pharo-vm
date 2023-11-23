@@ -1114,6 +1114,76 @@ primitive_lua_pcallk(void)
 }
 
 EXPORT(sqInt)
+primitive_luaL_checklstring(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(2));
+	sqInt arg = interpreterProxy->stackIntegerValue(1);
+	size_t *l = interpreterProxy->firstIndexableField(interpreterProxy->stackValue(0));
+
+	const char *str = luaL_checklstring(L, arg, l);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(4, interpreterProxy->stringForCString(str));
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_luaL_checkstring(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	sqInt arg = interpreterProxy->stackIntegerValue(0);
+
+	const char *str = luaL_checkstring(L, arg);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(3, interpreterProxy->stringForCString(str));
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_luaL_checktype(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(2));
+	sqInt arg = interpreterProxy->stackIntegerValue(1);
+	sqInt t = interpreterProxy->stackIntegerValue(0);
+
+	luaL_checktype(L, arg, t);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3); // just leave the receiver on the stacks
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_luaL_checknumber(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	sqInt arg = interpreterProxy->stackIntegerValue(0);
+
+	double v = luaL_checknumber(L, arg);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(3, interpreterProxy->floatObjectOf(v)); // just leave the receiver on the stacks
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
 primitive_decasteljau(void)
 {
 	sqInt designpoints = interpreterProxy->stackValue(2);
