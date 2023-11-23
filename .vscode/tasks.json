@@ -38,7 +38,7 @@
 			"label": "(Hard) Clean build",
 			"type": "shell",
 			"linux": {
-				"command": "rm -rf build"
+				"command": "rm -rf ../pharo-vm-build ../pharo-vm-c-src"
 			},
 			"group": "build",
 			"presentation": {
