@@ -297,6 +297,55 @@ else()
     target_link_libraries(LuaPlugin PRIVATE "-L/usr/local/lib -llua54")
 endif()
 
+#
+# UtilsPlugin
+#
+
+message(STATUS "Adding plugin: UtilsPlugin")
+
+if(OSX)
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/include/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/include/osx
+    )
+    
+    file(GLOB UtilsPlugin_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/src/common/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/src/osx/*.c   
+    )
+elseif(UNIX)
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/include/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/include/unix
+    )
+    
+    file(GLOB UtilsPlugin_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/src/common/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/src/unix/*.c   
+    )    
+else()
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/include/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/include/win
+        /usr/local/include/
+    )
+    
+    file(GLOB UtilsPlugin_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/src/common/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/src/win/*.c   
+    )    
+endif()
+
+addLibraryWithRPATH(UtilsPlugin ${UtilsPlugin_SOURCES})
+
+if(OSX)
+	target_link_libraries(UtilsPlugin PRIVATE "-llua")
+elseif(UNIX)
+    target_link_libraries(UtilsPlugin PRIVATE "-llua")
+else()
+    target_link_libraries(UtilsPlugin PRIVATE "-L/usr/local/lib -llua54")
+endif()
+
 
 #
 # SqueakSSL
