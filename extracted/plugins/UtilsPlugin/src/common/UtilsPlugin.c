@@ -172,8 +172,12 @@ primitive_strtok_r(void)
 	sqInt oop;
 	int length;
 
-	char *orig = (char *)(interpreterProxy->firstIndexableField(interpreterProxy->stackValue(2))); // the receiver, indeed.
-	char *delimiters = (char *)(interpreterProxy->firstIndexableField(interpreterProxy->stackValue(1)));
+	int free_orig;
+	char *orig = checked_cStringOrNullFor(interpreterProxy->stackValue(2), &free_orig); // the receiver, indeed.
+
+	int free_delimiters;
+	char *delimiters = checked_cStringOrNullFor(interpreterProxy->stackValue(1), &free_delimiters);
+
 	sqInt include_empty_lines = interpreterProxy->booleanValueOf(interpreterProxy->stackValue(0));
 
 	length = strlen(orig);
@@ -237,6 +241,12 @@ primitive_strtok_r(void)
 
 	free(del);
 	free(buffer);
+
+	if (free_orig)
+		free(orig);
+
+	if (free_delimiters)
+		free(delimiters);
 
 	if (!(interpreterProxy->failed()))
 	{
