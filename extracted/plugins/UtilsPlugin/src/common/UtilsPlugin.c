@@ -6,9 +6,7 @@ static char __buildInfo[] = "UtilsPlugin VMMaker.oscog-eem.2495 uuid: fcbf4c90-4
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <lua.h>
-#include <lualib.h>
-#include <lauxlib.h>
+#include <timsort.h>
 
 /* Default EXPORT macro that does nothing (see comment in sq.h): */
 #define EXPORT(returnType) returnType
@@ -244,6 +242,44 @@ primitive_strtok_r(void)
 	{
 		interpreterProxy->popthenPush(3, oop);
 	}
+
+	return null;
+}
+
+int timsort_comparer(int i, int j, mergestate_t *state)
+{
+	sqInt recv = *((sqInt *)state->userdata);
+	return interpreterProxy->integerValueOf(interpreterProxy->stObjectat(recv, i)) < interpreterProxy->integerValueOf(interpreterProxy->stObjectat(recv, j));
+}
+
+EXPORT(sqInt)
+primitive_timsort(void)
+{
+	sqInt recv = interpreterProxy->stackValue(2);
+	// comparer_t comparer = readAddress(interpreterProxy->stackValue(1));
+	sqInt reverse = interpreterProxy->booleanValueOf(interpreterProxy->stackValue(0));
+
+	int length = interpreterProxy->stSizeOf(recv);
+
+	sortslice_t perm = (sortslice_t)malloc(sizeof(item_t) * length);
+
+	for (int i = 0; i < length; i++)
+		perm[i] = i + 1; // the identity permutation according to Smalltalk's one-based indexing.
+
+	sortslice_t sorting_perm = timsort(perm, length, reverse, &timsort_comparer, &recv);
+
+	sqInt sorted = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classArray(), length);
+
+	if (!(interpreterProxy->failed()))
+	{
+
+		for (int i = 0; i < length; i++)
+			interpreterProxy->stObjectatput(sorted, i + 1, interpreterProxy->stObjectat(recv, perm[i]));
+
+		interpreterProxy->popthenPush(3, sorted);
+	}
+
+	free(perm);
 
 	return null;
 }

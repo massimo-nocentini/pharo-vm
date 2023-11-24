@@ -26,7 +26,8 @@
         "variant": "c",
         "charconv": "c",
         "chrono": "c",
-        "format": "c"
+        "format": "c",
+        "string_view": "c"
     },
     "cmake.configureOnOpen": false,
     "C_Cpp.default.compilerPath": "/usr/bin/clang++-16"

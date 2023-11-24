@@ -339,11 +339,11 @@ endif()
 addLibraryWithRPATH(UtilsPlugin ${UtilsPlugin_SOURCES})
 
 if(OSX)
-	target_link_libraries(UtilsPlugin PRIVATE "-llua")
+	target_link_libraries(UtilsPlugin PRIVATE "-ltimsort")
 elseif(UNIX)
-    target_link_libraries(UtilsPlugin PRIVATE "-llua")
+    target_link_libraries(UtilsPlugin PRIVATE "-ltimsort")
 else()
-    target_link_libraries(UtilsPlugin PRIVATE "-L/usr/local/lib -llua54")
+    target_link_libraries(UtilsPlugin PRIVATE "-L/usr/local/lib -ltimsort")
 endif()
 
 
