@@ -5,7 +5,19 @@
             "includePath": [
                 "${workspaceFolder}/**",
                 "${workspaceFolder}/include/**",
-                "${workspaceFolder}/include/pharovm/**"
+                "${workspaceFolder}/include/pharovm/**",
+                "/usr/include/pango-1.0",
+                "/usr/include/harfbuzz",
+                "/usr/include/libmount",
+                "/usr/include/blkid",
+                "/usr/include/fribidi",
+                "/usr/include/cairo",
+                "/usr/include/glib-2.0",
+                "/usr/lib/x86_64-linux-gnu/glib-2.0/include",
+                "/usr/include/pixman-1",
+                "/usr/include/uuid",
+                "/usr/include/freetype2",
+                "/usr/include/libpng16"
             ],
             "defines": [],
             "intelliSenseMode": "linux-gcc-x64"

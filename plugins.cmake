@@ -348,6 +348,67 @@ endif()
 
 
 #
+# CairoGraphicsPlugin
+#
+
+message(STATUS "Adding plugin: CairoGraphicsPlugin")
+
+if(OSX)
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/osx
+    )
+    
+    file(GLOB CairoGraphicsPlugin_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/src/common/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/src/osx/*.c   
+    )
+elseif(UNIX)
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/unix
+        /usr/include/pango-1.0
+        /usr/include/harfbuzz
+        /usr/include/libmount
+        /usr/include/blkid
+        /usr/include/fribidi
+        /usr/include/cairo
+        /usr/include/glib-2.0
+        /usr/lib/x86_64-linux-gnu/glib-2.0/include
+        /usr/include/pixman-1
+        /usr/include/uuid
+        /usr/include/freetype2
+        /usr/include/libpng16
+    )
+    
+    file(GLOB CairoGraphicsPlugin_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/src/common/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/src/unix/*.c   
+    )    
+else()
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/win
+        /usr/local/include/
+    )
+    
+    file(GLOB CairoGraphicsPlugin_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/src/common/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/src/win/*.c   
+    )    
+endif()
+
+addLibraryWithRPATH(CairoGraphicsPlugin ${CairoGraphicsPlugin_SOURCES})
+
+if(OSX)
+	target_link_libraries(CairoGraphicsPlugin PRIVATE "-lpangocairo-1.0")
+elseif(UNIX)
+    target_link_libraries(CairoGraphicsPlugin PRIVATE "-lpangocairo-1.0")
+else()
+    target_link_libraries(CairoGraphicsPlugin PRIVATE "-L/usr/local/lib -lpangocairo-1.0")
+endif()
+
+#
 # SqueakSSL
 #
 
