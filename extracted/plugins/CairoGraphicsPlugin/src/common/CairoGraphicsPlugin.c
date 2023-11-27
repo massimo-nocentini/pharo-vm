@@ -111,18 +111,120 @@ primitive_pango_cairo_create_layout(void)
 }
 
 EXPORT(sqInt)
-primitive_pango_layout_set_text(void)
+primitive_pango_cairo_show_layout(void)
 {
 	cairo_t *cr = readAddress(interpreterProxy->stackValue(1));
+	PangoLayout *layout = readAddress(interpreterProxy->stackValue(0));
+
+	pango_cairo_show_layout(cr, layout);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(2); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_pango_layout_set_text(void)
+{
+	PangoLayout *layout = readAddress(interpreterProxy->stackValue(1));
 	char *text = interpreterProxy->firstIndexableField(interpreterProxy->stackValue(0));
 
 	int length = interpreterProxy->stSizeOf(interpreterProxy->stackValue(0));
 
-	pango_layout_set_text(cr, text, length);
+	pango_layout_set_text(layout, text, length);
 
 	if (!(interpreterProxy->failed()))
 	{
 		interpreterProxy->pop(2);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_pango_layout_set_markup(void)
+{
+	PangoLayout *layout = readAddress(interpreterProxy->stackValue(1));
+	char *text = interpreterProxy->firstIndexableField(interpreterProxy->stackValue(0));
+
+	int length = interpreterProxy->stSizeOf(interpreterProxy->stackValue(0));
+
+	pango_layout_set_markup(layout, text, length);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(2);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_pango_layout_set_width(void)
+{
+	PangoLayout *layout = readAddress(interpreterProxy->stackValue(1));
+	int width = interpreterProxy->stackIntegerValue(0);
+
+	pango_layout_set_width(layout, width);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(2); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_g_object_unref(void)
+{
+	void *ptr = readAddress(interpreterProxy->stackValue(0));
+
+	g_object_unref(ptr);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(1); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_pango_attr_list_new(void)
+{
+
+	PangoAttrList *attrs = pango_attr_list_new();
+
+	sqInt oop = newExternalAddress();
+
+	writeAddress(oop, attrs);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(1, oop);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_pango_attr_list_from_string(void)
+{
+
+	char *str = interpreterProxy->cStringOrNullFor(interpreterProxy->stackValue(0));
+	PangoAttrList *attrs = pango_attr_list_from_string(str);
+
+	sqInt oop = newExternalAddress();
+
+	writeAddress(oop, attrs);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(2, oop);
 	}
 
 	return null;
@@ -144,6 +246,38 @@ primitive_pango_layout_get_pixel_extents(void)
 	if (!(interpreterProxy->failed()))
 	{
 		interpreterProxy->popthenPush(2, qPoint);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_pango_layout_set_attributes(void)
+{
+	PangoLayout *layout = readAddress(interpreterProxy->stackValue(1));
+	PangoAttrList *attrs = readAddress(interpreterProxy->stackValue(0));
+
+	pango_layout_set_attributes(layout, attrs);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(2); // just leave the receiver on the stack
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_pango_attr_list_unref(void)
+{
+
+	PangoAttrList *attrs = readAddress(interpreterProxy->stackValue(0));
+
+	pango_attr_list_unref(attrs);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(1); // just leave the receiver on the stack
 	}
 
 	return null;
