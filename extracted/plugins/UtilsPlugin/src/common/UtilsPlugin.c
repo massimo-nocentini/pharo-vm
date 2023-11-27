@@ -258,35 +258,42 @@ primitive_strtok_r(void)
 
 int timsort_comparer(int i, int j, mergestate_t *state)
 {
-	sqInt recv = *((sqInt *)state->userdata);
-	return interpreterProxy->integerValueOf(interpreterProxy->stObjectat(recv, i)) < interpreterProxy->integerValueOf(interpreterProxy->stObjectat(recv, j));
+	sqInt array = *((sqInt *)state->userdata);
+
+	return interpreterProxy->floatValueOf(interpreterProxy->stObjectat(array, i)) <
+		   interpreterProxy->floatValueOf(interpreterProxy->stObjectat(array, j));
 }
 
 EXPORT(sqInt)
 primitive_timsort(void)
 {
 	sqInt recv = interpreterProxy->stackValue(2);
-	// comparer_t comparer = readAddress(interpreterProxy->stackValue(1));
+	sqInt collected = interpreterProxy->stackValue(1);
 	sqInt reverse = interpreterProxy->booleanValueOf(interpreterProxy->stackValue(0));
 
 	int length = interpreterProxy->stSizeOf(recv);
 
 	sortslice_t perm = (sortslice_t)malloc(sizeof(item_t) * length);
+	item_t item;
 
-	for (int i = 0; i < length; i++)
-		perm[i] = i + 1; // the identity permutation according to Smalltalk's one-based indexing.
+	for (int i = 0; i < length;)
+	{
+		item = i;
+		perm[item] = ++i; // the identity permutation according to Smalltalk's one-based indexing.
+	}
+	sortslice_t sorting_perm = timsort(perm, length, reverse, &timsort_comparer, &collected);
 
-	sortslice_t sorting_perm = timsort(perm, length, reverse, &timsort_comparer, &recv);
-
-	sqInt sorted = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classArray(), length);
+	// sqInt sorted = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classArray(), length);
 
 	if (!(interpreterProxy->failed()))
 	{
+		for (int i = 0; i < length;)
+		{
+			item = perm[i];
+			interpreterProxy->stObjectatput(collected, ++i, interpreterProxy->stObjectat(recv, item));
+		}
 
-		for (int i = 0; i < length; i++)
-			interpreterProxy->stObjectatput(sorted, i + 1, interpreterProxy->stObjectat(recv, perm[i]));
-
-		interpreterProxy->popthenPush(3, sorted);
+		interpreterProxy->popthenPush(3, collected);
 	}
 
 	free(perm);
