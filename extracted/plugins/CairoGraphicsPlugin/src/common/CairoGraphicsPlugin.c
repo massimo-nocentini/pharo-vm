@@ -7,6 +7,7 @@ static char __buildInfo[] = "CairoGraphicsPlugin VMMaker.oscog-eem.2495 uuid: fc
 #include <string.h>
 #include <time.h>
 #include <pango/pangocairo.h>
+#include <cairo.h>
 
 /* Default EXPORT macro that does nothing (see comment in sq.h): */
 #define EXPORT(returnType) returnType
@@ -148,9 +149,11 @@ EXPORT(sqInt)
 primitive_pango_layout_set_markup(void)
 {
 	PangoLayout *layout = readAddress(interpreterProxy->stackValue(1));
-	char *text = interpreterProxy->firstIndexableField(interpreterProxy->stackValue(0));
+	sqInt oop = interpreterProxy->stackValue(0);
 
-	int length = interpreterProxy->stSizeOf(interpreterProxy->stackValue(0));
+	char *text = interpreterProxy->firstIndexableField(oop);
+
+	int length = interpreterProxy->stSizeOf(oop);
 
 	pango_layout_set_markup(layout, text, length);
 
@@ -214,9 +217,12 @@ primitive_pango_attr_list_new(void)
 EXPORT(sqInt)
 primitive_pango_attr_list_from_string(void)
 {
-
-	char *str = interpreterProxy->cStringOrNullFor(interpreterProxy->stackValue(0));
+	int free_str;
+	char *str = checked_cStringOrNullFor(interpreterProxy->stackValue(0), &free_str);
 	PangoAttrList *attrs = pango_attr_list_from_string(str);
+
+	if (free_str)
+		free(str);
 
 	sqInt oop = newExternalAddress();
 
@@ -231,21 +237,103 @@ primitive_pango_attr_list_from_string(void)
 }
 
 EXPORT(sqInt)
+primitive_cairo_image_surface_create(void)
+{
+
+	sqInt width = interpreterProxy->stackIntegerValue(1);
+	sqInt height = interpreterProxy->stackIntegerValue(0);
+
+	cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+
+	sqInt oop = newExternalAddress();
+
+	writeAddress(oop, surface);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(3, oop);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_cairo_surface_destroy(void)
+{
+	cairo_surface_t *surface = readAddress(interpreterProxy->stackValue(0));
+
+	cairo_surface_destroy(surface);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(1); // leave the receiver on the stack.
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_cairo_create(void)
+{
+	cairo_surface_t *surface = readAddress(interpreterProxy->stackValue(0));
+
+	cairo_t *cr = cairo_create(surface);
+
+	sqInt oop = newExternalAddress();
+
+	writeAddress(oop, cr);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(2, oop);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_cairo_destroy(void)
+{
+	cairo_t *cr = readAddress(interpreterProxy->stackValue(0));
+
+	cairo_destroy(cr);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(1); // leave the receiver on the stack.
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
 primitive_pango_layout_get_pixel_extents(void)
 {
+
 	PangoLayout *pango = readAddress(interpreterProxy->stackValue(0));
+	// PangoLayout *pango = pango_cairo_create_layout(cr);
 
 	PangoRectangle ink, logical;
 
 	pango_layout_get_pixel_extents(pango, &ink, &logical);
 
+	sqInt oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classArray(), 2);
+
 	sqInt qPoint = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classPoint(), 0);
+	interpreterProxy->storePointerofObjectwithValue(0, qPoint, interpreterProxy->integerObjectOf(logical.x));
+	interpreterProxy->storePointerofObjectwithValue(1, qPoint, interpreterProxy->integerObjectOf(logical.y));
+
+	interpreterProxy->stObjectatput(oop, 1, qPoint);
+
+	qPoint = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classPoint(), 0);
 	interpreterProxy->storePointerofObjectwithValue(0, qPoint, interpreterProxy->integerObjectOf(logical.width));
 	interpreterProxy->storePointerofObjectwithValue(1, qPoint, interpreterProxy->integerObjectOf(logical.height));
 
+	interpreterProxy->stObjectatput(oop, 2, qPoint);
+
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->popthenPush(2, qPoint);
+		interpreterProxy->popthenPush(2, oop);
 	}
 
 	return null;
@@ -270,7 +358,6 @@ primitive_pango_layout_set_attributes(void)
 EXPORT(sqInt)
 primitive_pango_attr_list_unref(void)
 {
-
 	PangoAttrList *attrs = readAddress(interpreterProxy->stackValue(0));
 
 	pango_attr_list_unref(attrs);
