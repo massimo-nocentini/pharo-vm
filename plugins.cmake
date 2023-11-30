@@ -390,10 +390,11 @@ else()
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/win
         /usr/local/include/
-        /usr/x86_64-w64-mingw32/sys-root/mingw/include/pango-1.0
-        /usr/x86_64-w64-mingw32/sys-root/mingw/include/glib-2.0
-        /usr/x86_64-w64-mingw32/sys-root/mingw/lib/glib-2.0/include
-        /usr/x86_64-w64-mingw32/sys-root/mingw/include/cairo
+        /cygdrive/c/msys64/ucrt64/include/pango-1.0
+        /cygdrive/c/msys64/ucrt64/include/glib-2.0
+        /cygdrive/c/msys64/ucrt64/lib/glib-2.0/include
+        /cygdrive/c/msys64/ucrt64/include/cairo
+        /cygdrive/c/msys64/ucrt64/include/harfbuzz
     )
     
     file(GLOB CairoGraphicsPlugin_SOURCES
