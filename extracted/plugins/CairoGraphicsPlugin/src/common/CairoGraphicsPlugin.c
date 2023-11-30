@@ -362,6 +362,28 @@ primitive_pango_layout_get_pixel_size(void)
 }
 
 EXPORT(sqInt)
+primitive_pango_layout_get_ink_pixel_size(void)
+{
+
+	PangoLayout *pango = readAddress(interpreterProxy->stackValue(0));
+
+	PangoRectangle ink, logical;
+
+	pango_layout_get_pixel_extents(pango, &ink, &logical);
+
+	sqInt qPoint = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classPoint(), 0);
+	interpreterProxy->storePointerofObjectwithValue(0, qPoint, interpreterProxy->integerObjectOf(logical.width));
+	interpreterProxy->storePointerofObjectwithValue(1, qPoint, interpreterProxy->integerObjectOf(ink.height + ((logical.height - ink.height) * 0.618)));
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(2, qPoint);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
 primitive_pango_layout_set_attributes(void)
 {
 	PangoLayout *layout = readAddress(interpreterProxy->stackValue(1));
