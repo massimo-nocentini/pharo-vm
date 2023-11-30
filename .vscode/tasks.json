@@ -11,6 +11,9 @@
 					"rm -rf build/ pharo-vm-build/build/dist/lib/libss*"
 				]
 			},
+			"windows": {
+				"command": "scripts\\cygwin-build.bat"
+			},
 			"group": "build",
 			"presentation": {
 				"reveal": "always",
@@ -28,6 +31,9 @@
 					"cmake -S pharo-vm -B pharo-vm-build -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DBUILD_IS_RELEASE=ON -DICEBERG_DEFAULT_REMOTE=httpsUrl -DGENERATE_SOURCES=FALSE -DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/"
 				]
 			},
+			"windows": {
+				"command": "scripts\\cygwin-prepareCompilation.bat"
+			},
 			"group": "build",
 			"presentation": {
 				"reveal": "always",
@@ -39,6 +45,9 @@
 			"type": "shell",
 			"linux": {
 				"command": "rm -rf ../pharo-vm-build ../pharo-vm-c-src"
+			},
+			"windows": {
+				"command": "scripts\\cygwin-hardClean.bat"
 			},
 			"group": "build",
 			"presentation": {

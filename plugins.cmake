@@ -390,6 +390,10 @@ else()
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/win
         /usr/local/include/
+        /usr/include/pango-1.0
+        /usr/include/glib-2.0
+        /usr/lib/glib-2.0/include
+        /usr/include/cairo
     )
     
     file(GLOB CairoGraphicsPlugin_SOURCES
@@ -405,7 +409,7 @@ if(OSX)
 elseif(UNIX)
     target_link_libraries(CairoGraphicsPlugin PRIVATE "-lpangocairo-1.0")
 else()
-    target_link_libraries(CairoGraphicsPlugin PRIVATE "-L/usr/local/lib -lpangocairo-1.0")
+    target_link_libraries(CairoGraphicsPlugin PRIVATE "-L/usr/lib -lpango-1.0 -lpangocairo-1.0 -lglib-2.0 -lcairo-1.0 -lintl -lm")
 endif()
 
 #
