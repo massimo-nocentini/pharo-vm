@@ -390,10 +390,10 @@ else()
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/win
         /usr/local/include/
-        /usr/include/pango-1.0
-        /usr/include/glib-2.0
-        /usr/lib/glib-2.0/include
-        /usr/include/cairo
+        /usr/x86_64-w64-mingw32/sys-root/mingw/include/pango-1.0
+        /usr/x86_64-w64-mingw32/sys-root/mingw/include/glib-2.0
+        /usr/x86_64-w64-mingw32/sys-root/mingw/lib/glib-2.0/include
+        /usr/x86_64-w64-mingw32/sys-root/mingw/include/cairo
     )
     
     file(GLOB CairoGraphicsPlugin_SOURCES
@@ -409,8 +409,11 @@ if(OSX)
 elseif(UNIX)
     target_link_libraries(CairoGraphicsPlugin PRIVATE "-lpangocairo-1.0")
 else()
-    target_link_libraries(CairoGraphicsPlugin PRIVATE "-L/usr/lib -lpango-1.0 -lpangocairo-1.0 -lglib-2.0 -lcairo-1.0 -lintl -lm")
+    target_link_libraries(CairoGraphicsPlugin PRIVATE "-L/cygdrive/c/msys64/ucrt64/bin -lpango-1.0-0 -lpangocairo-1.0-0 -lglib-2.0-0 -lcairo-2 -lgobject-2.0-0")
 endif()
+
+#target_link_libraries(CairoGraphicsPlugin PRIVATE "-L/usr/x86_64-w64-mingw32/sys-root/mingw/bin -lpango-1.0-0 -lpangowin32-1.0-0 -lpangocairo-1.0-0 -lglib-2.0-0 -lcairo-2 -lgobject-2.0-0")
+
 
 #
 # SqueakSSL
