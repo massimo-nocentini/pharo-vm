@@ -1,6 +1,4 @@
 
 set -e
 
-rm -rf ../pharo-vm-build ../pharo-vm-c-src
-
-echo "Cleaned"
+rm -rf ../build ../pharo-vm-build ../pharo-vm-c-src
