@@ -414,6 +414,27 @@ primitive_pango_attr_list_unref(void)
 	return null;
 }
 
+EXPORT(sqInt)
+primitive_cairo_show_text(void)
+{
+	int free_str;
+	char *str = checked_cStringOrNullFor(interpreterProxy->stackValue(1), &free_str);
+
+	cairo_t *cr = readAddress(interpreterProxy->stackValue(0));
+
+	cairo_show_text(cr, str);
+
+	if (free_str)
+		free(str);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(2); // leave the receiver on the stack.
+	}
+
+	return null;
+}
+
 /*	Note: This is coded so that it can be run in Squeak. */
 
 /* InterpreterPlugin>>#setInterpreter: */
