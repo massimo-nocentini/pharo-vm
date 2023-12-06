@@ -552,6 +552,22 @@ primitive_cairo_scaled_font_glyph_extents(void)
 	return null;
 }
 
+EXPORT(sqInt)
+primitive_cairo_glyph_free(void)
+{
+
+	cairo_glyph_t *glyphs = readAddress(interpreterProxy->stackValue(0));
+
+	cairo_glyph_free(glyphs);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(1); // just leave the receiver on the stack.
+	}
+
+	return null;
+}
+
 /*	Note: This is coded so that it can be run in Squeak. */
 
 /* InterpreterPlugin>>#setInterpreter: */
