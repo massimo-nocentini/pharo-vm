@@ -481,6 +481,77 @@ primitive_cairo_scaled_font_extents(void)
 	return null;
 }
 
+EXPORT(sqInt)
+primitive_cairo_scaled_font_text_to_glyphs(void)
+{
+
+	char *strUtf8 = interpreterProxy->arrayValueOf(interpreterProxy->stackValue(6));
+	int len = interpreterProxy->stackIntegerValue(5);
+	cairo_scaled_font_t *scaled_font = readAddress(interpreterProxy->stackValue(4));
+	sqInt glyphsExternalAddress = interpreterProxy->stackValue(3);
+	int *numGlyphs = interpreterProxy->arrayValueOf(interpreterProxy->stackValue(2));
+	double x = interpreterProxy->stackFloatValue(1);
+	double y = interpreterProxy->stackFloatValue(0);
+
+	cairo_glyph_t *glyphs = NULL;
+	cairo_status_t status = cairo_scaled_font_text_to_glyphs(scaled_font, x, y, strUtf8, len, &glyphs, numGlyphs, NULL, NULL, NULL);
+
+	writeAddress(glyphsExternalAddress, glyphs);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(8, interpreterProxy->integerObjectOf(status));
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_cairo_memcpy_glyphs(void)
+{
+
+	const void *src = readAddress(interpreterProxy->stackValue(2));
+	void *dest = interpreterProxy->arrayValueOf(interpreterProxy->stackValue(1));
+	int n = interpreterProxy->stackIntegerValue(0);
+
+	memcpy(dest, src, n);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3); // just leave the receiver on the stack.
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_cairo_scaled_font_glyph_extents(void)
+{
+
+	cairo_scaled_font_t *scaled_font = readAddress(interpreterProxy->stackValue(3));
+	cairo_glyph_t *glyphs = readAddress(interpreterProxy->stackValue(2));
+	int n = interpreterProxy->stackIntegerValue(1);
+	double *values = interpreterProxy->arrayValueOf(interpreterProxy->stackValue(0));
+
+	cairo_text_extents_t extents;
+
+	cairo_scaled_font_glyph_extents(scaled_font, glyphs, n, &extents);
+
+	values[0] = extents.x_bearing;
+	values[1] = extents.y_bearing;
+	values[2] = extents.width;
+	values[3] = extents.height;
+	values[4] = extents.x_advance;
+	values[5] = extents.y_advance;
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(4); // just leave the receiver on the stack.
+	}
+
+	return null;
+}
+
 /*	Note: This is coded so that it can be run in Squeak. */
 
 /* InterpreterPlugin>>#setInterpreter: */
