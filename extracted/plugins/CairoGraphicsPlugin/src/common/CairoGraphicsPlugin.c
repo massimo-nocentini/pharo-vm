@@ -461,11 +461,19 @@ primitive_cairo_scaled_font_extents(void)
 {
 
 	cairo_scaled_font_t *scaled_font = readAddress(interpreterProxy->stackValue(1));
-	cairo_font_extents_t *extents = readAddress(interpreterProxy->stackValue(0));
+	double *values = interpreterProxy->arrayValueOf(interpreterProxy->stackValue(0));
 
-	cairo_scaled_font_extents(scaled_font, extents);
+	cairo_font_extents_t extents;
+	cairo_scaled_font_extents(scaled_font, &extents);
 
-		if (!(interpreterProxy->failed()))
+	values[0] = extents.ascent;
+	values[1] = extents.descent;
+	values[2] = 0.0;
+	values[3] = extents.height;
+	values[4] = extents.max_x_advance;
+	values[5] = extents.max_y_advance;
+
+	if (!(interpreterProxy->failed()))
 	{
 		interpreterProxy->pop(2); // leave the receiver on the stack.
 	}
