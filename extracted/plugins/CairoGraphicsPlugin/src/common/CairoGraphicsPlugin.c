@@ -456,6 +456,23 @@ primitive_cairo_text_path(void)
 	return null;
 }
 
+EXPORT(sqInt)
+primitive_cairo_scaled_font_extents(void)
+{
+
+	cairo_scaled_font_t *scaled_font = readAddress(interpreterProxy->stackValue(1));
+	cairo_font_extents_t *extents = readAddress(interpreterProxy->stackValue(0));
+
+	cairo_scaled_font_extents(scaled_font, extents);
+
+		if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(2); // leave the receiver on the stack.
+	}
+
+	return null;
+}
+
 /*	Note: This is coded so that it can be run in Squeak. */
 
 /* InterpreterPlugin>>#setInterpreter: */
