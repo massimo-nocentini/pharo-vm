@@ -27,7 +27,8 @@
         "charconv": "c",
         "chrono": "c",
         "format": "c",
-        "string_view": "c"
+        "string_view": "c",
+        "sq.h": "c"
     },
     "cmake.configureOnOpen": false,
     "C_Cpp.default.compilerPath": "/usr/bin/clang++-16"

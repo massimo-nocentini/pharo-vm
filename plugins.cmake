@@ -228,7 +228,7 @@ else()
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/include/win
-        /usr/local/include/
+        ${SYSTEMDRIVE}/msys64/usr/local/include
     )
     
     file(GLOB DateTimeFormatterPlugin_SOURCES
@@ -244,7 +244,7 @@ if(OSX)
 elseif(UNIX)
     target_link_libraries(DateTimeFormatterPlugin PRIVATE "-ldatetimeformatter")
 else()
-    target_link_libraries(DateTimeFormatterPlugin PRIVATE "-L/usr/local/lib -ldatetimeformatter")
+    target_link_libraries(DateTimeFormatterPlugin PRIVATE "-L${SYSTEMDRIVE}/msys64/usr/local/lib -ldatetimeformatter")
 endif()
 
 
@@ -278,7 +278,7 @@ else()
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/LuaPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/LuaPlugin/include/win
-        /usr/local/include/
+        ${SYSTEMDRIVE}/msys64/usr/local/include
     )
     
     file(GLOB LuaPlugin_SOURCES
@@ -294,7 +294,7 @@ if(OSX)
 elseif(UNIX)
     target_link_libraries(LuaPlugin PRIVATE "-llua")
 else()
-    target_link_libraries(LuaPlugin PRIVATE "-L/usr/local/lib -llua54")
+    target_link_libraries(LuaPlugin PRIVATE "-L${SYSTEMDRIVE}/msys64/usr/local/lib -llua54")
 endif()
 
 #
@@ -327,7 +327,7 @@ else()
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/include/win
-        /usr/local/include/
+        ${SYSTEMDRIVE}/msys64/usr/local/include
     )
     
     file(GLOB UtilsPlugin_SOURCES
@@ -343,7 +343,7 @@ if(OSX)
 elseif(UNIX)
     target_link_libraries(UtilsPlugin PRIVATE "-ltimsort")
 else()
-    target_link_libraries(UtilsPlugin PRIVATE "-L/usr/local/lib -ltimsort")
+    target_link_libraries(UtilsPlugin PRIVATE "-L${SYSTEMDRIVE}/msys64/usr/local/lib -ltimsort")
 endif()
 
 
@@ -389,12 +389,12 @@ else()
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/win
-        /usr/local/include/
-        /cygdrive/c/msys64/ucrt64/include/pango-1.0
-        /cygdrive/c/msys64/ucrt64/include/glib-2.0
-        /cygdrive/c/msys64/ucrt64/lib/glib-2.0/include
-        /cygdrive/c/msys64/ucrt64/include/cairo
-        /cygdrive/c/msys64/ucrt64/include/harfbuzz
+        ${SYSTEMDRIVE}/msys64/usr/local/include
+        ${SYSTEMDRIVE}/msys64/ucrt64/include/pango-1.0
+        ${SYSTEMDRIVE}/msys64/ucrt64/include/glib-2.0
+        ${SYSTEMDRIVE}/msys64/ucrt64/lib/glib-2.0/include
+        ${SYSTEMDRIVE}/msys64/ucrt64/include/cairo
+        ${SYSTEMDRIVE}/msys64/ucrt64/include/harfbuzz
     )
     
     file(GLOB CairoGraphicsPlugin_SOURCES
@@ -410,7 +410,7 @@ if(OSX)
 elseif(UNIX)
     target_link_libraries(CairoGraphicsPlugin PRIVATE "-lpangocairo-1.0 -lcairo")
 else()
-    target_link_libraries(CairoGraphicsPlugin PRIVATE "-L/cygdrive/c/msys64/ucrt64/bin -lpango-1.0-0 -lpangocairo-1.0-0 -lglib-2.0-0 -lcairo-2 -lgobject-2.0-0")
+    target_link_libraries(CairoGraphicsPlugin PRIVATE "-L${SYSTEMDRIVE}/msys64/ucrt64/bin -lpango-1.0-0 -lpangocairo-1.0-0 -lglib-2.0-0 -lcairo-2 -lgobject-2.0-0")
 endif()
 
 #target_link_libraries(CairoGraphicsPlugin PRIVATE "-L/usr/x86_64-w64-mingw32/sys-root/mingw/bin -lpango-1.0-0 -lpangowin32-1.0-0 -lpangocairo-1.0-0 -lglib-2.0-0 -lcairo-2 -lgobject-2.0-0")

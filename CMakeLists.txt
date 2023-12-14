@@ -36,6 +36,7 @@ option(PHARO_VM_IN_WORKER_THREAD			"Have support for pharo running in a differen
 option(BUILD_IS_RELEASE					"Is this a release version?"							OFF)
 option(DEPENDENCIES_FORCE_BUILD         "Force build libraries" OFF)
 option(BUILD_WITH_GRAPHVIZ              "Generate dependency graphs" ON)
+option(USE_MSYS2              "Use MSYS2 toolchain" OFF)
 
 set(APPNAME			"Pharo"         CACHE STRING                 "VM Application name")
 set(FLAVOUR			"CoInterpreter" CACHE STRING                 "The kind of VM to generate. Possible values: StackVM, CoInterpreter")
@@ -46,6 +47,13 @@ set(IMAGE_FORMAT	"SpurFormat"	CACHE STRING				 "Image Format to use in the built
 if(VERBOSE_BUILD)
     set(CMAKE_VERBOSE_MAKEFILE TRUE)
 endif(VERBOSE_BUILD)
+
+if(USE_MSYS2)
+    set(CMAKE_HOST_UNIX TRUE)
+    set(CMAKE_HOST_SYSTEM_NAME "CYGWIN")
+    unset(MSVC)
+    message(STATUS "Using MSYS2 toolchain.")
+endif(USE_MSYS2)
 
 # Extract VCS information
 include(cmake/versionExtraction.cmake)
@@ -120,6 +128,14 @@ if ((CMAKE_HOST_UNIX) AND (${CMAKE_HOST_SYSTEM_NAME} MATCHES "CYGWIN*"))
   SET(CMAKE_CXX_COMPILER ${CMAKE_TOOLCHAIN_PREFIX}-clang++)
   SET(CMAKE_RC_COMPILER ${CMAKE_TOOLCHAIN_PREFIX}-windres)
   SET(CMAKE_SYSTEM_PROCESSOR x86_64)
+
+  
+    if(USE_MSYS2)
+        SET(CMAKE_C_COMPILER   clang)
+        SET(CMAKE_CXX_COMPILER clang++)
+        SET(CMAKE_RC_COMPILER windres)
+    endif(USE_MSYS2)
+
 endif()
 
 #Set up the project
@@ -230,7 +246,7 @@ elseif(WIN)
 
 
 #    if(NOT MSVC)
-        set(COMMON_FLAGS "-fwrapv -fdeclspec -msse2 -ggdb2 -m64 -mno-rtd -mms-bitfields -momit-leaf-frame-pointer -funroll-loops -D_MT -fno-builtin-printf -fno-builtin-putchar -fno-builtin-fprintf -Wall -Wno-unused-variable -fno-optimize-sibling-calls")
+        set(COMMON_FLAGS "-fwrapv -fdeclspec -msse2 -ggdb2 -m64 -mno-rtd -mms-bitfields -momit-leaf-frame-pointer -funroll-loops -D_MT -fno-builtin-printf -fno-builtin-putchar -fno-builtin-fprintf -Wall -Wno-unused-variable -fno-optimize-sibling-calls -Wno-error=implicit-function-declaration")
 #    endif()
 
     set(OS_TYPE "Win32")
