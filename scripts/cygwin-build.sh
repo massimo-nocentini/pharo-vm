@@ -16,5 +16,5 @@ chmod +w pharo-vm-dist/*.dll    # necessary for the copyings that follows.
 cp /usr/local/lib/*.dll pharo-vm-dist/
 echo "Copied usr local dlls."
 
-cp ucrt64-gtk3/bin/*.dll pharo-vm-dist/
+cp gtk3/ucrt64/bin/*.dll pharo-vm-dist/
 echo "Copied Gtk dlls."
