@@ -1,5 +1,5 @@
 
-set -e
+export PATH=/c/msys64/usr/local/bin:/c/msys64/usr/local/lib:/c/msys64/ucrt64/bin:/c/msys64/usr/bin:$PATH
 
 cd ../
 
@@ -13,8 +13,11 @@ cp -r pharo-vm-build/build/dist pharo-vm-dist
 
 chmod +w pharo-vm-dist/*.dll    # necessary for the copyings that follows.
 
-cp /usr/local/lib/*.dll pharo-vm-dist/
+cp current-dependencies/lib/*.dll pharo-vm-dist/
 echo "Copied usr local dlls."
 
-cp gtk3/ucrt64/bin/*.dll pharo-vm-dist/
+cp ../vm-dependencies/gtk3/ucrt64/bin/*.dll pharo-vm-dist/
 echo "Copied Gtk dlls."
+
+cp ../vm-dependencies/libgit2/ucrt64/bin/*.dll pharo-vm-dist/
+echo "Copied libgit2 dlls."

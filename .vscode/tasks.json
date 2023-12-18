@@ -12,7 +12,7 @@
 				]
 			},
 			"windows": {
-				"command": "scripts\\cygwin-build.bat"
+				"command": "C:\\msys64\\usr\\bin\\bash.exe scripts\\cygwin-build.sh"
 			},
 			"group": "build",
 			"presentation": {
@@ -32,7 +32,7 @@
 				]
 			},
 			"windows": {
-				"command": "scripts\\cygwin-prepareCompilation.bat"
+				"command": "C:\\msys64\\usr\\bin\\bash.exe scripts\\cygwin-prepareCompilation.sh"
 			},
 			"group": "build",
 			"presentation": {
@@ -47,7 +47,7 @@
 				"command": "rm -rf ../pharo-vm-build ../pharo-vm-c-src"
 			},
 			"windows": {
-				"command": "scripts\\cygwin-hardClean.bat"
+				"command": "C:\\msys64\\usr\\bin\\bash.exe scripts\\cygwin-hardClean.sh"
 			},
 			"group": "build",
 			"presentation": {
