@@ -552,6 +552,35 @@ primitive_cairo_scaled_font_glyph_extents(void)
 	return null;
 }
 
+
+EXPORT(sqInt)
+primitive_cairo_scaled_font_glyph_extents_bytearray(void)
+{
+
+	cairo_scaled_font_t *scaled_font = readAddress(interpreterProxy->stackValue(3));
+	cairo_glyph_t *glyphs = interpreterProxy->arrayValueOf(interpreterProxy->stackValue(2));
+	int n = interpreterProxy->stackIntegerValue(1);
+	sqInt extentObject = interpreterProxy->stackValue(0);
+
+	cairo_text_extents_t extents;
+
+	cairo_scaled_font_glyph_extents(scaled_font, glyphs, n, &extents);
+
+	interpreterProxy->storePointerofObjectwithValue(0, extentObject, interpreterProxy->floatObjectOf(extents.x_bearing));
+	interpreterProxy->storePointerofObjectwithValue(1, extentObject, interpreterProxy->floatObjectOf(extents.y_bearing));
+	interpreterProxy->storePointerofObjectwithValue(2, extentObject, interpreterProxy->floatObjectOf(extents.width));
+	interpreterProxy->storePointerofObjectwithValue(3, extentObject, interpreterProxy->floatObjectOf(extents.height));
+	interpreterProxy->storePointerofObjectwithValue(4, extentObject, interpreterProxy->floatObjectOf(extents.x_advance));
+	interpreterProxy->storePointerofObjectwithValue(5, extentObject, interpreterProxy->floatObjectOf(extents.y_advance));
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(4); // just leave the receiver on the stack.
+	}
+
+	return null;
+}
+
 EXPORT(sqInt)
 primitive_cairo_glyph_free(void)
 {
