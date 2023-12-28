@@ -461,17 +461,17 @@ primitive_cairo_scaled_font_extents(void)
 {
 
 	cairo_scaled_font_t *scaled_font = readAddress(interpreterProxy->stackValue(1));
-	double *values = interpreterProxy->arrayValueOf(interpreterProxy->stackValue(0));
+	sqInt extentObject = interpreterProxy->stackValue(0);
 
 	cairo_font_extents_t extents;
 	cairo_scaled_font_extents(scaled_font, &extents);
 
-	values[0] = extents.ascent;
-	values[1] = extents.descent;
-	values[2] = 0.0;
-	values[3] = extents.height;
-	values[4] = extents.max_x_advance;
-	values[5] = extents.max_y_advance;
+	interpreterProxy->storePointerofObjectwithValue(0, extentObject, interpreterProxy->floatObjectOf(extents.ascent));
+	interpreterProxy->storePointerofObjectwithValue(1, extentObject, interpreterProxy->floatObjectOf(extents.descent));
+	interpreterProxy->storePointerofObjectwithValue(2, extentObject, interpreterProxy->floatObjectOf(0.0));
+	interpreterProxy->storePointerofObjectwithValue(3, extentObject, interpreterProxy->floatObjectOf(extents.height));
+	interpreterProxy->storePointerofObjectwithValue(4, extentObject, interpreterProxy->floatObjectOf(extents.max_x_advance));
+	interpreterProxy->storePointerofObjectwithValue(5, extentObject, interpreterProxy->floatObjectOf(extents.max_y_advance));
 
 	if (!(interpreterProxy->failed()))
 	{
@@ -531,18 +531,18 @@ primitive_cairo_scaled_font_glyph_extents(void)
 	cairo_scaled_font_t *scaled_font = readAddress(interpreterProxy->stackValue(3));
 	cairo_glyph_t *glyphs = readAddress(interpreterProxy->stackValue(2));
 	int n = interpreterProxy->stackIntegerValue(1);
-	double *values = interpreterProxy->arrayValueOf(interpreterProxy->stackValue(0));
+	sqInt extentObject = interpreterProxy->stackValue(0);
 
 	cairo_text_extents_t extents;
 
 	cairo_scaled_font_glyph_extents(scaled_font, glyphs, n, &extents);
 
-	values[0] = extents.x_bearing;
-	values[1] = extents.y_bearing;
-	values[2] = extents.width;
-	values[3] = extents.height;
-	values[4] = extents.x_advance;
-	values[5] = extents.y_advance;
+	interpreterProxy->storePointerofObjectwithValue(0, extentObject, interpreterProxy->floatObjectOf(extents.x_bearing));
+	interpreterProxy->storePointerofObjectwithValue(1, extentObject, interpreterProxy->floatObjectOf(extents.y_bearing));
+	interpreterProxy->storePointerofObjectwithValue(2, extentObject, interpreterProxy->floatObjectOf(extents.width));
+	interpreterProxy->storePointerofObjectwithValue(3, extentObject, interpreterProxy->floatObjectOf(extents.height));
+	interpreterProxy->storePointerofObjectwithValue(4, extentObject, interpreterProxy->floatObjectOf(extents.x_advance));
+	interpreterProxy->storePointerofObjectwithValue(5, extentObject, interpreterProxy->floatObjectOf(extents.y_advance));
 
 	if (!(interpreterProxy->failed()))
 	{
@@ -563,6 +563,37 @@ primitive_cairo_glyph_free(void)
 	if (!(interpreterProxy->failed()))
 	{
 		interpreterProxy->pop(1); // just leave the receiver on the stack.
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_cairo_scaled_font_text_extents(void)
+{
+
+	cairo_scaled_font_t *scaled_font = readAddress(interpreterProxy->stackValue(2));
+	int should_free;
+	char *utf8 = checked_cStringOrNullFor(interpreterProxy->stackValue(1), &should_free);
+	sqInt extentObject = interpreterProxy->stackValue(0);
+
+	cairo_text_extents_t extents;
+
+	cairo_scaled_font_text_extents(scaled_font, utf8, &extents);
+
+	if (should_free)
+		free(utf8);
+
+	interpreterProxy->storePointerofObjectwithValue(0, extentObject, interpreterProxy->floatObjectOf(extents.x_bearing));
+	interpreterProxy->storePointerofObjectwithValue(1, extentObject, interpreterProxy->floatObjectOf(extents.y_bearing));
+	interpreterProxy->storePointerofObjectwithValue(2, extentObject, interpreterProxy->floatObjectOf(extents.width));
+	interpreterProxy->storePointerofObjectwithValue(3, extentObject, interpreterProxy->floatObjectOf(extents.height));
+	interpreterProxy->storePointerofObjectwithValue(4, extentObject, interpreterProxy->floatObjectOf(extents.x_advance));
+	interpreterProxy->storePointerofObjectwithValue(5, extentObject, interpreterProxy->floatObjectOf(extents.y_advance));
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3); // just leave the receiver on the stack.
 	}
 
 	return null;
