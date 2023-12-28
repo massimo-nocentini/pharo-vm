@@ -466,12 +466,12 @@ primitive_cairo_scaled_font_extents(void)
 	cairo_font_extents_t extents;
 	cairo_scaled_font_extents(scaled_font, &extents);
 
-	interpreterProxy->storePointerofObjectwithValue(0, extentObject, interpreterProxy->floatObjectOf(extents.ascent));
-	interpreterProxy->storePointerofObjectwithValue(1, extentObject, interpreterProxy->floatObjectOf(extents.descent));
-	interpreterProxy->storePointerofObjectwithValue(2, extentObject, interpreterProxy->floatObjectOf(0.0));
-	interpreterProxy->storePointerofObjectwithValue(3, extentObject, interpreterProxy->floatObjectOf(extents.height));
-	interpreterProxy->storePointerofObjectwithValue(4, extentObject, interpreterProxy->floatObjectOf(extents.max_x_advance));
-	interpreterProxy->storePointerofObjectwithValue(5, extentObject, interpreterProxy->floatObjectOf(extents.max_y_advance));
+	interpreterProxy->storePointerofObjectwithValue(1, extentObject, interpreterProxy->floatObjectOf(extents.ascent));
+	interpreterProxy->storePointerofObjectwithValue(2, extentObject, interpreterProxy->floatObjectOf(extents.descent));
+	interpreterProxy->storePointerofObjectwithValue(3, extentObject, interpreterProxy->floatObjectOf(0.0));
+	interpreterProxy->storePointerofObjectwithValue(4, extentObject, interpreterProxy->floatObjectOf(extents.height));
+	interpreterProxy->storePointerofObjectwithValue(5, extentObject, interpreterProxy->floatObjectOf(extents.max_x_advance));
+	interpreterProxy->storePointerofObjectwithValue(6, extentObject, interpreterProxy->floatObjectOf(extents.max_y_advance));
 
 	if (!(interpreterProxy->failed()))
 	{
@@ -537,12 +537,12 @@ primitive_cairo_scaled_font_glyph_extents(void)
 
 	cairo_scaled_font_glyph_extents(scaled_font, glyphs, n, &extents);
 
-	interpreterProxy->storePointerofObjectwithValue(0, extentObject, interpreterProxy->floatObjectOf(extents.x_bearing));
-	interpreterProxy->storePointerofObjectwithValue(1, extentObject, interpreterProxy->floatObjectOf(extents.y_bearing));
-	interpreterProxy->storePointerofObjectwithValue(2, extentObject, interpreterProxy->floatObjectOf(extents.width));
-	interpreterProxy->storePointerofObjectwithValue(3, extentObject, interpreterProxy->floatObjectOf(extents.height));
-	interpreterProxy->storePointerofObjectwithValue(4, extentObject, interpreterProxy->floatObjectOf(extents.x_advance));
-	interpreterProxy->storePointerofObjectwithValue(5, extentObject, interpreterProxy->floatObjectOf(extents.y_advance));
+	interpreterProxy->storePointerofObjectwithValue(1, extentObject, interpreterProxy->floatObjectOf(extents.x_bearing));
+	interpreterProxy->storePointerofObjectwithValue(2, extentObject, interpreterProxy->floatObjectOf(extents.y_bearing));
+	interpreterProxy->storePointerofObjectwithValue(3, extentObject, interpreterProxy->floatObjectOf(extents.width));
+	interpreterProxy->storePointerofObjectwithValue(4, extentObject, interpreterProxy->floatObjectOf(extents.height));
+	interpreterProxy->storePointerofObjectwithValue(5, extentObject, interpreterProxy->floatObjectOf(extents.x_advance));
+	interpreterProxy->storePointerofObjectwithValue(6, extentObject, interpreterProxy->floatObjectOf(extents.y_advance));
 
 	if (!(interpreterProxy->failed()))
 	{
@@ -566,12 +566,12 @@ primitive_cairo_scaled_font_glyph_extents_bytearray(void)
 
 	cairo_scaled_font_glyph_extents(scaled_font, glyphs, n, &extents);
 
-	interpreterProxy->storePointerofObjectwithValue(0, extentObject, interpreterProxy->floatObjectOf(extents.x_bearing));
-	interpreterProxy->storePointerofObjectwithValue(1, extentObject, interpreterProxy->floatObjectOf(extents.y_bearing));
-	interpreterProxy->storePointerofObjectwithValue(2, extentObject, interpreterProxy->floatObjectOf(extents.width));
-	interpreterProxy->storePointerofObjectwithValue(3, extentObject, interpreterProxy->floatObjectOf(extents.height));
-	interpreterProxy->storePointerofObjectwithValue(4, extentObject, interpreterProxy->floatObjectOf(extents.x_advance));
-	interpreterProxy->storePointerofObjectwithValue(5, extentObject, interpreterProxy->floatObjectOf(extents.y_advance));
+	interpreterProxy->storePointerofObjectwithValue(1, extentObject, interpreterProxy->floatObjectOf(extents.x_bearing));
+	interpreterProxy->storePointerofObjectwithValue(2, extentObject, interpreterProxy->floatObjectOf(extents.y_bearing));
+	interpreterProxy->storePointerofObjectwithValue(3, extentObject, interpreterProxy->floatObjectOf(extents.width));
+	interpreterProxy->storePointerofObjectwithValue(4, extentObject, interpreterProxy->floatObjectOf(extents.height));
+	interpreterProxy->storePointerofObjectwithValue(5, extentObject, interpreterProxy->floatObjectOf(extents.x_advance));
+	interpreterProxy->storePointerofObjectwithValue(6, extentObject, interpreterProxy->floatObjectOf(extents.y_advance));
 
 	if (!(interpreterProxy->failed()))
 	{
@@ -613,12 +613,12 @@ primitive_cairo_scaled_font_text_extents(void)
 	if (should_free)
 		free(utf8);
 
-	interpreterProxy->storePointerofObjectwithValue(0, extentObject, interpreterProxy->floatObjectOf(extents.x_bearing));
-	interpreterProxy->storePointerofObjectwithValue(1, extentObject, interpreterProxy->floatObjectOf(extents.y_bearing));
-	interpreterProxy->storePointerofObjectwithValue(2, extentObject, interpreterProxy->floatObjectOf(extents.width));
-	interpreterProxy->storePointerofObjectwithValue(3, extentObject, interpreterProxy->floatObjectOf(extents.height));
-	interpreterProxy->storePointerofObjectwithValue(4, extentObject, interpreterProxy->floatObjectOf(extents.x_advance));
-	interpreterProxy->storePointerofObjectwithValue(5, extentObject, interpreterProxy->floatObjectOf(extents.y_advance));
+	interpreterProxy->storePointerofObjectwithValue(1, extentObject, interpreterProxy->floatObjectOf(extents.x_bearing));
+	interpreterProxy->storePointerofObjectwithValue(2, extentObject, interpreterProxy->floatObjectOf(extents.y_bearing));
+	interpreterProxy->storePointerofObjectwithValue(3, extentObject, interpreterProxy->floatObjectOf(extents.width));
+	interpreterProxy->storePointerofObjectwithValue(4, extentObject, interpreterProxy->floatObjectOf(extents.height));
+	interpreterProxy->storePointerofObjectwithValue(5, extentObject, interpreterProxy->floatObjectOf(extents.x_advance));
+	interpreterProxy->storePointerofObjectwithValue(6, extentObject, interpreterProxy->floatObjectOf(extents.y_advance));
 
 	if (!(interpreterProxy->failed()))
 	{
