@@ -552,7 +552,6 @@ primitive_cairo_scaled_font_glyph_extents(void)
 	return null;
 }
 
-
 EXPORT(sqInt)
 primitive_cairo_scaled_font_glyph_extents_bytearray(void)
 {
@@ -623,6 +622,34 @@ primitive_cairo_scaled_font_text_extents(void)
 	if (!(interpreterProxy->failed()))
 	{
 		interpreterProxy->pop(3); // just leave the receiver on the stack.
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_g_unichar_to_utf8(void)
+{
+
+	sqInt oop = interpreterProxy->stackValue(1); //	get the receiver.
+	gunichar c = interpreterProxy->characterValueOf(oop);
+
+	sqInt include_null_char = interpreterProxy->booleanValueOf(interpreterProxy->stackValue(0));
+
+	gchar buf[33];
+
+	gint written = g_unichar_to_utf8(c, buf);
+
+	if (include_null_char)
+		buf[written++] = '\0';
+
+	sqInt array = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classByteArray(), written);
+
+	memcpy(interpreterProxy->arrayValueOf(array), buf, written);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(2, array);
 	}
 
 	return null;
