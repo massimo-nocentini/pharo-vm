@@ -683,13 +683,13 @@ primitive_string_to_utf8(void)
 		count += written;
 	}
 
+	if (include_null_char)
+		final[count++] = '\0';
+
 	sqInt array;
 
 	if (allocateByteArray)
 	{
-		if (include_null_char)
-			final[count++] = '\0';
-			
 		array = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classByteArray(), count);
 	}
 	else
