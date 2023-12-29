@@ -659,12 +659,13 @@ EXPORT(sqInt)
 primitive_string_to_utf8(void)
 {
 
-	sqInt oop = interpreterProxy->stackValue(1); //	get the receiver, which is a string.`
-	sqInt include_null_char = interpreterProxy->booleanValueOf(interpreterProxy->stackValue(0));
+	sqInt oop = interpreterProxy->stackValue(2); //	get the receiver, which is a string.`
+	sqInt include_null_char = interpreterProxy->booleanValueOf(interpreterProxy->stackValue(1));
+	sqInt allocateByteArray = interpreterProxy->booleanValueOf(interpreterProxy->stackValue(0));
 
 	sqInt size = interpreterProxy->stSizeOf(oop);
 
-	char *final = malloc(32 * size + 1);
+	char *final = malloc(32 * size + (include_null_char ? 1 : 0));
 	int count = 0;
 
 	gchar buf[32];
@@ -678,22 +679,31 @@ primitive_string_to_utf8(void)
 
 		written = g_unichar_to_utf8(c, buf);
 
-		memcpy (final + count, buf, written);
+		memcpy(final + count, buf, written);
 		count += written;
 	}
 
-	if (include_null_char)
-		final[count++] = '\0';
+	sqInt array;
 
-	sqInt array = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classByteArray(), count);
+	if (allocateByteArray)
+	{
+		if (include_null_char)
+			final[count++] = '\0';
+			
+		array = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classByteArray(), count);
+	}
+	else
+	{
+		array = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), count);
+	}
 
-	memcpy(interpreterProxy->arrayValueOf(array), final, count);
+	memcpy(interpreterProxy->firstIndexableField(array), final, count);
 
 	free(final);
 
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->popthenPush(2, array);
+		interpreterProxy->popthenPush(3, array);
 	}
 
 	return null;
