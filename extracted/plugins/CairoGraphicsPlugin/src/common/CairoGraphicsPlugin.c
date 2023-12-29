@@ -655,6 +655,50 @@ primitive_g_unichar_to_utf8(void)
 	return null;
 }
 
+EXPORT(sqInt)
+primitive_string_to_utf8(void)
+{
+
+	sqInt oop = interpreterProxy->stackValue(1); //	get the receiver, which is a string.`
+	sqInt include_null_char = interpreterProxy->booleanValueOf(interpreterProxy->stackValue(0));
+
+	sqInt size = interpreterProxy->stSizeOf(oop);
+
+	char *final = malloc(32 * size + 1);
+	int count = 0;
+
+	gchar buf[32];
+	gint written;
+
+	sqInt c;
+
+	for (int i = 1; i <= size; i++)
+	{
+		c = interpreterProxy->characterValueOf(interpreterProxy->stObjectat(oop, i));
+
+		written = g_unichar_to_utf8(c, buf);
+
+		memcpy (final + count, buf, written);
+		count += written;
+	}
+
+	if (include_null_char)
+		final[count++] = '\0';
+
+	sqInt array = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classByteArray(), count);
+
+	memcpy(interpreterProxy->arrayValueOf(array), final, count);
+
+	free(final);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(2, array);
+	}
+
+	return null;
+}
+
 /*	Note: This is coded so that it can be run in Squeak. */
 
 /* InterpreterPlugin>>#setInterpreter: */
