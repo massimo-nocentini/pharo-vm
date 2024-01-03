@@ -735,9 +735,20 @@ primitive_fix_empty_lines_for_pango(void)
 
 	sqInt size = interpreterProxy->stSizeOf(oop);
 
-	GString *str = g_string_append_len(g_string_sized_new(size), interpreterProxy->firstIndexableField(oop), size);
+	GString *str = g_string_sized_new(size << 1 | 1); // the max case is where we have a string full of newlines.
 
-	g_string_replace(str, "\n\n", "\n \n", 0);
+	char *orig = interpreterProxy->firstIndexableField(oop);
+
+	for (int i = 0; i < size; i++)
+	{
+		if (orig[i] == '\n' && (i > 0 ? orig[i - 1] == '\n' : true))
+			str = g_string_append_c(str, ' ');
+
+		str = g_string_append_c(str, orig[i]);
+	}
+
+	if (size > 0 && orig[size - 1] == '\n')
+		str = g_string_append_c(str, ' ');
 
 	int len = str->len;
 
