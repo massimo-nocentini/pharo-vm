@@ -709,6 +709,24 @@ primitive_string_to_utf8(void)
 	return null;
 }
 
+EXPORT(sqInt)
+primitive_g_markup_escape_text(void)
+{
+
+	sqInt oop = interpreterProxy->stackValue(0); //	get the receiver, which is a string.
+	sqInt size = interpreterProxy->stSizeOf(oop);
+
+	gchar *escaped = g_markup_escape_text(interpreterProxy->firstIndexableField(oop), size);
+
+		if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(1, interpreterProxy->stringForCString(escaped));
+		g_free(escaped);
+	}
+
+	return null;
+}
+
 /*	Note: This is coded so that it can be run in Squeak. */
 
 /* InterpreterPlugin>>#setInterpreter: */
