@@ -718,10 +718,70 @@ primitive_g_markup_escape_text(void)
 
 	gchar *escaped = g_markup_escape_text(interpreterProxy->firstIndexableField(oop), size);
 
-		if (!(interpreterProxy->failed()))
+	if (!(interpreterProxy->failed()))
 	{
 		interpreterProxy->popthenPush(1, interpreterProxy->stringForCString(escaped));
 		g_free(escaped);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_fix_empty_lines_for_pango(void)
+{
+
+	sqInt oop = interpreterProxy->stackValue(0); //	get the receiver, which is a string.
+
+	sqInt size = interpreterProxy->stSizeOf(oop);
+
+	GString *str = g_string_append_len(g_string_sized_new(size), interpreterProxy->firstIndexableField(oop), size);
+
+	g_string_replace(str, "\n\n", "\n \n", 0);
+
+	int len = str->len;
+
+	gchar *steal = g_string_free_and_steal(str);
+	sqInt fixed = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), len);
+	memcpy(interpreterProxy->firstIndexableField(fixed), steal, len);
+	g_free(steal);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(1, fixed);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_replace_tabs_with_spaces(void)
+{
+
+	sqInt oop = interpreterProxy->stackValue(1); //	get the receiver, which is a string.
+	sqInt times = interpreterProxy->stackIntegerValue(0);
+
+	sqInt size = interpreterProxy->stSizeOf(oop);
+
+	GString *str = g_string_append_len(g_string_sized_new(size), interpreterProxy->firstIndexableField(oop), size);
+
+	char rep[times + 1];
+	for (int i = 0; i < times; i++)
+		rep[i] = ' ';
+	rep[times] = '\0';
+
+	g_string_replace(str, "\t", rep, 0);
+
+	int len = str->len;
+
+	gchar *steal = g_string_free_and_steal(str);
+	sqInt fixed = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), len);
+	memcpy(interpreterProxy->firstIndexableField(fixed), steal, len);
+	g_free(steal);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(2, fixed);
 	}
 
 	return null;
