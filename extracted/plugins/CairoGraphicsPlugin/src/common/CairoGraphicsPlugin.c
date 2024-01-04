@@ -731,7 +731,8 @@ EXPORT(sqInt)
 primitive_fix_empty_lines_for_pango(void)
 {
 
-	sqInt oop = interpreterProxy->stackValue(0); //	get the receiver, which is a string.
+	sqInt oop = interpreterProxy->stackValue(1); //	get the receiver, which is a string.
+	char splitter = interpreterProxy->characterValueOf(interpreterProxy->stackValue(0));
 
 	sqInt size = interpreterProxy->stSizeOf(oop);
 
@@ -741,13 +742,13 @@ primitive_fix_empty_lines_for_pango(void)
 
 	for (int i = 0; i < size; i++)
 	{
-		if (orig[i] == '\n' && (i > 0 ? orig[i - 1] == '\n' : true))
+		if (orig[i] == splitter && (i > 0 ? orig[i - 1] == splitter : true))
 			str = g_string_append_c(str, ' ');
 
 		str = g_string_append_c(str, orig[i]);
 	}
 
-	if (size > 0 && orig[size - 1] == '\n')
+	if (size > 0 && orig[size - 1] == splitter)
 		str = g_string_append_c(str, ' ');
 
 	int len = str->len;
@@ -759,7 +760,7 @@ primitive_fix_empty_lines_for_pango(void)
 
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->popthenPush(1, fixed);
+		interpreterProxy->popthenPush(2, fixed);
 	}
 
 	return null;
