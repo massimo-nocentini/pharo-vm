@@ -736,7 +736,7 @@ primitive_fix_empty_lines_for_pango(void)
 
 	sqInt size = interpreterProxy->stSizeOf(oop);
 
-	GString *str = g_string_sized_new(size << 1 | 1); // the max case is where we have a string full of newlines.
+	GString *str = g_string_sized_new((size << 1) | 1); // the max case is where we have a string full of newlines.
 
 	char *orig = interpreterProxy->firstIndexableField(oop);
 
