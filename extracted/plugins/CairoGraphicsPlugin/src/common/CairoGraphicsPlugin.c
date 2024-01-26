@@ -753,7 +753,7 @@ primitive_fix_empty_lines_for_pango(void)
 
 	int len = str->len;
 
-	gchar *steal = g_string_free_and_steal(str);
+	gchar *steal = g_string_free(str, false);
 	sqInt fixed = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), len);
 	memcpy(interpreterProxy->firstIndexableField(fixed), steal, len);
 	g_free(steal);
@@ -786,7 +786,7 @@ primitive_replace_tabs_with_spaces(void)
 
 	int len = str->len;
 
-	gchar *steal = g_string_free_and_steal(str);
+	gchar *steal = g_string_free(str, false);
 	sqInt fixed = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), len);
 	memcpy(interpreterProxy->firstIndexableField(fixed), steal, len);
 	g_free(steal);
