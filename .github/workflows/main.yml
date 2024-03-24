@@ -5,9 +5,14 @@ on:
     branches:
       - pharo-10
 jobs:
-  check-bats-version:
+  ubuntu:
+    env:
+      CC: clang
+      CXX: clang++
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: pharo-vm
       - run: sudo apt install build-essential clang
-      - run: echo "done"
+      - run: bash pharo-vm/scripts/github-ubuntu.sh
