@@ -16,3 +16,7 @@ jobs:
           path: pharo-vm
       - run: sudo apt install build-essential clang libpango1.0-dev libpangocairo-1.0-0 libpoppler-dev
       - run: bash pharo-vm/scripts/github-ubuntu.sh
+      - name: Upload release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create r${{github.run_number}} pharo-vm-ubuntu.zip
