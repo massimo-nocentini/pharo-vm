@@ -1,5 +1,5 @@
 
- wget https://www.lua.org/ftp/lua-5.4.6.tar.gz
+wget https://www.lua.org/ftp/lua-5.4.6.tar.gz
 tar xfz lua-5.4.6.tar.gz
 cd lua-5.4.6
 make "MYCFLAGS=-fPIC" linux
