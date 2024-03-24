@@ -14,5 +14,5 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: pharo-vm
-      - run: sudo apt install build-essential clang libpango-1.0-0 libpangocairo-1.0-0 libpoppler-dev
+      - run: sudo apt install build-essential clang libpango1.0-dev libpangocairo-1.0-0 libpoppler-dev
       - run: bash pharo-vm/scripts/github-ubuntu.sh
