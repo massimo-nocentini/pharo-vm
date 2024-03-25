@@ -34,6 +34,7 @@ jobs:
     steps:
       - uses: msys2/setup-msys2@v2
         with:
+          location: D:\
           update: true
           msystem: UCRT64
           install: >-
