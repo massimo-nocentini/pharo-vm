@@ -28,4 +28,4 @@ cmake --build pharo-vm-build --target install
 rm -rf build/ pharo-vm-build/build/dist/lib/{libss*,libcairo.so*,libgit2.*,libharfbuzz.so*,libfontconfig.so*} #,libbz2*,libexpat*,libffi*,libfreetype*,libpixman*,libpng*"
 
 cd pharo-vm-build/build/dist/
-zip -r ../../../pharo-vm-ubuntu.zip *
+zip -r pharo-vm-ubuntu.zip *
