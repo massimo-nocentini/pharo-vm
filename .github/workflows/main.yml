@@ -56,6 +56,7 @@ jobs:
       - name: Build Pharo VM
         run: bash pharo-vm/scripts/github-windows.sh
       - name: Upload release assets
+        shell: cmd
         run: |
           cd pharo-vm
           gh release upload r${{github.run_number}} ../pharo-vm-build/build/dist/pharo-vm-windows.zip
