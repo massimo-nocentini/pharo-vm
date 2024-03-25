@@ -25,3 +25,33 @@ jobs:
           cd pharo-vm
           gh release create r${{github.run_number}} ../fresh-images/fresh-images.zip
           gh release upload r${{github.run_number}} ../pharo-vm-build/build/dist/pharo-vm-ubuntu.zip
+  
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          msystem: UCRT64
+          install: >-
+            git
+            zip
+            unzip
+            mingw-w64-ucrt-x86_64-lua
+            mingw-w64-ucrt-x86_64-wget
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-clang
+            mingw-w64-ucrt-x86_64-cairo
+            mingw-w64-ucrt-x86_64-pango
+            mingw-w64-ucrt-x86_64-poppler
+            mingw-w64-ucrt-x86_64-libgit2
+            mingw-w64-ucrt-x86_64-libssh2
+      - name: Build Pharo VM
+        run: bash pharo-vm/scripts/github-windows.sh
+      - name: Upload release assets
+        run: |
+          cd pharo-vm
+          gh release upload r${{github.run_number}} ../pharo-vm-build/build/dist/pharo-vm-windows.zip
