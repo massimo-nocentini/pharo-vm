@@ -39,8 +39,7 @@ wget https://files.pharo.org/vm/pharo-spur64-headless/Windows-x86_64/source/Phar
 unzip PharoVM-10.1.1-32b2be55-Windows-x86_64-c-src.zip
 cd ../
 
-ls -la /ucrt64/include
-ls -la /ucrt64/lib
+ls -l /ucrt64/include/pango-1.0
 
 cmake -S pharo-vm -B pharo-vm-build -DUSE_MSYS2=TRUE -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DBUILD_IS_RELEASE=ON -DICEBERG_DEFAULT_REMOTE=httpsUrl -DGENERATE_SOURCES=FALSE -DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/
 
