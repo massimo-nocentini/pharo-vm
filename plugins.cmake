@@ -402,11 +402,11 @@ else()
         # ${SYSTEMDRIVE}/msys64/ucrt64/include/cairo
         # ${SYSTEMDRIVE}/msys64/ucrt64/include/harfbuzz
         ${CMAKE_CURRENT_SOURCE_DIR}/../current-dependencies/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../vm-dependencies/gtk3/ucrt64/include/pango-1.0
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../vm-dependencies/gtk3/ucrt64/include/glib-2.0
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../vm-dependencies/gtk3/ucrt64/lib/glib-2.0/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../vm-dependencies/gtk3/ucrt64/include/cairo
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../vm-dependencies/gtk3/ucrt64/include/harfbuzz
+        /ucrt64/include/pango-1.0
+        /ucrt64/include/glib-2.0
+        /ucrt64/lib/glib-2.0/include
+        /ucrt64/include/cairo
+        /ucrt64/include/harfbuzz
     )
     
     file(GLOB CairoGraphicsPlugin_SOURCES
@@ -422,7 +422,7 @@ if(OSX)
 elseif(UNIX)
     target_link_libraries(CairoGraphicsPlugin PRIVATE "-lpangocairo-1.0 -lcairo")
 else()
-    target_link_libraries(CairoGraphicsPlugin PRIVATE "-L${CMAKE_CURRENT_SOURCE_DIR}/../../vm-dependencies/gtk3/ucrt64/bin -lpango-1.0-0 -lpangocairo-1.0-0 -lglib-2.0-0 -lcairo-2 -lgobject-2.0-0")
+    target_link_libraries(CairoGraphicsPlugin PRIVATE "-L/ucrt64/bin -lpango-1.0-0 -lpangocairo-1.0-0 -lglib-2.0-0 -lcairo-2 -lgobject-2.0-0")
 endif()
 
 #
