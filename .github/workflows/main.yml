@@ -8,16 +8,20 @@ jobs:
     env:
       CC: clang
       CXX: clang++
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           path: pharo-vm
-      - run: sudo apt install build-essential clang libpango1.0-dev libpangocairo-1.0-0 libpoppler-dev
-      - run: bash pharo-vm/scripts/github-ubuntu.sh
+      - name: Install dependencies
+        run: sudo apt install build-essential clang libpango1.0-dev libpangocairo-1.0-0 libpoppler-dev curl
+      - name: Fetch images
+        run: bash pharo-vm/scripts/github-fetch-images.sh
+      - name: Build Pharo VM
+        run: bash pharo-vm/scripts/github-ubuntu.sh
       - name: Upload release assets
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd pharo-vm
-          gh release create r${{github.run_number}} ../pharo-vm-build/build/dist/pharo-vm-ubuntu.zip
+          gh release create r${{github.run_number}} ../fresh-images/fresh-images.zip
+          gh release upload r${{github.run_number}} ../pharo-vm-build/build/dist/pharo-vm-ubuntu.zip
