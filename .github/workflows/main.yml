@@ -18,4 +18,6 @@ jobs:
       - name: Upload release assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create r${{github.run_number}} pharo-vm-build/build/dist/pharo-vm-ubuntu.zip
+        run: |
+          cd pharo-vm
+          gh release create r${{github.run_number}} ../pharo-vm-build/build/dist/pharo-vm-ubuntu.zip
