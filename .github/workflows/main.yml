@@ -40,6 +40,7 @@ jobs:
             git
             zip
             unzip
+            mingw-w64-ucrt-x86_64-curl
             mingw-w64-ucrt-x86_64-lua
             mingw-w64-ucrt-x86_64-wget
             mingw-w64-ucrt-x86_64-toolchain
