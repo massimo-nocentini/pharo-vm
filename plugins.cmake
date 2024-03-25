@@ -402,11 +402,11 @@ else()
         # ${SYSTEMDRIVE}/msys64/ucrt64/include/cairo
         # ${SYSTEMDRIVE}/msys64/ucrt64/include/harfbuzz
         ${CMAKE_CURRENT_SOURCE_DIR}/../current-dependencies/include
-        /ucrt64/include/pango-1.0
-        /ucrt64/include/glib-2.0
-        /ucrt64/lib/glib-2.0/include
-        /ucrt64/include/cairo
-        /ucrt64/include/harfbuzz
+        ${C_INCLUDE_PATH}/pango-1.0
+        ${C_INCLUDE_PATH}/glib-2.0
+        ${C_LIB_PATH}/glib-2.0/include
+        ${C_INCLUDE_PATH}/cairo
+        ${C_INCLUDE_PATH}/harfbuzz
     )
     
     file(GLOB CairoGraphicsPlugin_SOURCES

@@ -1,6 +1,14 @@
 
 CURRENT_DIR=$(pwd)
 
+cd /ucrt64/include
+export C_INCLUDE_PATH=$(pwd)
+export C_LIB_PATH=$C_INCLUDE_PATH/../lib
+cd $CURRENT_DIR
+
+echo $C_INCLUDE_PATH
+echo $C_LIB_PATH
+
 mkdir current-dependencies
 mkdir current-dependencies/include
 mkdir current-dependencies/lib
