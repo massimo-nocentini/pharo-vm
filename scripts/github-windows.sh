@@ -9,13 +9,14 @@ wget https://www.lua.org/ftp/lua-5.4.6.tar.gz
 tar xfz lua-5.4.6.tar.gz
 cd lua-5.4.6
 mingw32-make mingw
+cd src
 cp lua.exe luac.exe lua54.dll /ucrt64/bin/
 cp ./{lua.h,lauxlib.h,luaconf.h,lualib.h} /ucrt64/include/
 cp lua54.dll /ucrt64/lib/
-cd ..
 
-cp lua-5.4.6/{lua.h,lauxlib.h,luaconf.h,lualib.h} current-dependencies/include
-cp lua-5.4.6/lua54.dll current-dependencies/lib
+cp ./{lua.h,lauxlib.h,luaconf.h,lualib.h} ${CURRENT_DIR}/current-dependencies/include
+cp lua54.dll ${CURRENT_DIR}/current-dependencies/lib
+cd ../../
 
 git clone --depth 1 https://github.com/massimo-nocentini/datetimeformatter.c.git
 cd datetimeformatter.c/src

@@ -44,6 +44,7 @@ jobs:
             mingw-w64-ucrt-x86_64-wget
             mingw-w64-ucrt-x86_64-toolchain
             mingw-w64-ucrt-x86_64-clang
+            mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-cairo
             mingw-w64-ucrt-x86_64-pango
             mingw-w64-ucrt-x86_64-poppler
