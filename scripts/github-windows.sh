@@ -53,9 +53,9 @@ cmake -S pharo-vm -B pharo-vm-build -DUSE_MSYS2=TRUE -DPHARO_DEPENDENCIES_PREFER
 
 cmake --build pharo-vm-build --target install
 
-# chmod +w pharo-vm-build/build/dist/*.dll    # necessary for the copyings that follows.
+chmod +w pharo-vm-build/build/dist/*.dll    # necessary for the copyings that follows.
 
-# cp current-dependencies/lib/*.dll pharo-vm-build/build/dist/
+cp current-dependencies/lib/*.dll pharo-vm-build/build/dist/
 
-# cd pharo-vm-build/build/dist/
-# zip -r pharo-vm-windows.zip *
+cd pharo-vm-build/build/dist/
+zip -r pharo-vm-windows.zip *
