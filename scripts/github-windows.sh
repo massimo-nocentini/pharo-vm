@@ -8,7 +8,7 @@ mkdir current-dependencies/lib
 wget https://www.lua.org/ftp/lua-5.4.6.tar.gz
 tar xfz lua-5.4.6.tar.gz
 cd lua-5.4.6
-make mingw
+mingw32-make mingw
 cp lua.exe luac.exe lua54.dll /ucrt64/bin/
 cp ./{lua.h,lauxlib.h,luaconf.h,lualib.h} /ucrt64/include/
 cp lua54.dll /ucrt64/lib/
@@ -19,14 +19,14 @@ cp lua-5.4.6/lua54.dll current-dependencies/lib
 
 git clone --depth 1 https://github.com/massimo-nocentini/datetimeformatter.c.git
 cd datetimeformatter.c/src
-make mingw
+mingw32-make mingw
 cp datetimeformatter.h ${CURRENT_DIR}/current-dependencies/include
 cp libdatetimeformatter.dll ${CURRENT_DIR}/current-dependencies/lib
 cd ../../
 
 git clone --depth 1 https://github.com/massimo-nocentini/timsort.c.git
 cd timsort.c/src
-make mingw
+mingw32-make mingw
 cp timsort.h ${CURRENT_DIR}/current-dependencies/include
 cp libtimsort.dll ${CURRENT_DIR}/current-dependencies/lib
 cd ../../
