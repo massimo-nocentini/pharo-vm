@@ -55,6 +55,11 @@ cmake --build pharo-vm-build --target install
 
 chmod +w pharo-vm-build/build/dist/*.dll    # necessary for the copyings that follows.
 
+git clone --depth 1 https://github.com/massimo-nocentini/msys2-fetcher.lua.git
+cd msys2-fetcher.lua/test
+bash pharo-extension.sh
+cd ../../
+
 cp current-dependencies/lib/*.dll pharo-vm-build/build/dist/
 
 cd pharo-vm-build/build/dist/

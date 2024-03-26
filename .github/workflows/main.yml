@@ -67,3 +67,4 @@ jobs:
         run: |
           cd pharo-vm
           gh release upload r${{github.run_number}} ../pharo-vm-build/build/dist/pharo-vm-windows.zip
+          gh release upload r${{github.run_number}} ../msys2-fetcher.lua/pharo-goodies.zip
