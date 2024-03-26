@@ -61,6 +61,7 @@ bash pharo-extension.sh
 cd ../../
 
 cp current-dependencies/lib/*.dll pharo-vm-build/build/dist/
+cp msys2-fetcher.lua/test/pharo-goodies-sandbox/temp/ucrt64/bin/*.dll pharo-vm-build/build/dist/
 
 cd pharo-vm-build/build/dist/
 zip -r pharo-vm-windows.zip *
