@@ -49,7 +49,7 @@ cd ../
 
 ls -l /ucrt64/include/pango-1.0
 
-cmake -S pharo-vm -B pharo-vm-build -DUSE_MSYS2=TRUE -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DBUILD_IS_RELEASE=ON -DICEBERG_DEFAULT_REMOTE=httpsUrl #-DGENERATE_SOURCES=FALSE -DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/
+cmake -S pharo-vm -B pharo-vm-build -DUSE_MSYS2=TRUE -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DBUILD_IS_RELEASE=ON -DICEBERG_DEFAULT_REMOTE=httpsUrl -DGENERATE_SOURCES=FALSE -DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/
 
 cmake --build pharo-vm-build --target install
 
