@@ -18,7 +18,7 @@ cd ../../
 
 mkdir pharo-vm-c-src
 cd pharo-vm-c-src
-wget https://files.pharo.org/vm/pharo-spur64-headless/Linux-x86_64/source/PharoVM-10.1.1-92bf0d3-Linux-x86_64-c-src.zip
+wget https://files.pharo.org/vm/pharo-spur64-headless/Linux-x86_64/source/PharoVM-10.2.0-f4c5e2a-Linux-x86_64-c-src.zip
 unzip PharoVM-10.1.1-92bf0d3-Linux-x86_64-c-src.zip
 cd ..
 

@@ -37,7 +37,7 @@ cd ../../
 rm -rf pharo-vm-c-src
 mkdir -p pharo-vm-c-src
 cd pharo-vm-c-src
-wget https://files.pharo.org/vm/pharo-spur64-headless/Windows-x86_64/source/PharoVM-10.1.1-92bf0d38-Windows-x86_64-c-src.zip
+wget https://files.pharo.org/vm/pharo-spur64-headless/Windows-x86_64/source/PharoVM-10.2.0-f4c5e2aa-Windows-x86_64-c-src.zip
 unzip PharoVM-10.1.1-92bf0d38-Windows-x86_64-c-src.zip
 cd ../
 
