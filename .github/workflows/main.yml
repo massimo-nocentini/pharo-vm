@@ -23,7 +23,12 @@ jobs:
       - name: Upload release assets
         run: |
           cd pharo-vm
-          gh release create r${{github.run_number}} ../fresh-images/fresh-images.zip
+          gh release create r${{github.run_number}}
+          gh release upload r${{github.run_number}} ../fresh-images/90/Pharo64-90.zip
+          gh release upload r${{github.run_number}} ../fresh-images/100/Pharo64-100.zip
+          gh release upload r${{github.run_number}} ../fresh-images/110/Pharo64-110.zip
+          gh release upload r${{github.run_number}} ../fresh-images/120/Pharo64-120.zip
+          gh release upload r${{github.run_number}} ../fresh-images/alpha/Pharo64-alpha.zip
           gh release upload r${{github.run_number}} ../pharo-vm-build/build/dist/pharo-vm-ubuntu.zip
   
   windows:
