@@ -208,6 +208,7 @@ if(OSX)
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/include/osx
+        /usr/local/include
     )
     
     file(GLOB DateTimeFormatterPlugin_SOURCES
@@ -241,7 +242,7 @@ endif()
 addLibraryWithRPATH(DateTimeFormatterPlugin ${DateTimeFormatterPlugin_SOURCES})
 
 if(OSX)
-	target_link_libraries(DateTimeFormatterPlugin PRIVATE "-ldatetimeformatter")
+	target_link_libraries(DateTimeFormatterPlugin PRIVATE "-L/usr/local/lib -ldatetimeformatter")
 elseif(UNIX)
     target_link_libraries(DateTimeFormatterPlugin PRIVATE "-ldatetimeformatter")
 else()
@@ -293,7 +294,7 @@ endif()
 addLibraryWithRPATH(LuaPlugin ${LuaPlugin_SOURCES})
 
 if(OSX)
-	target_link_libraries(LuaPlugin PRIVATE "-llua")
+	target_link_libraries(LuaPlugin PRIVATE "-L/usr/local/lib -llua")
 elseif(UNIX)
     target_link_libraries(LuaPlugin PRIVATE "-llua")
 else()
@@ -344,7 +345,7 @@ endif()
 addLibraryWithRPATH(UtilsPlugin ${UtilsPlugin_SOURCES})
 
 if(OSX)
-	target_link_libraries(UtilsPlugin PRIVATE "-ltimsort")
+	target_link_libraries(UtilsPlugin PRIVATE "-L/usr/local/lib -ltimsort")
 elseif(UNIX)
     target_link_libraries(UtilsPlugin PRIVATE "-ltimsort")
 else()
@@ -363,6 +364,11 @@ if(OSX)
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/osx
+        /usr/local/Cellar/pango/1.52.2/include/pango-1.0
+        /usr/local/Cellar/glib/2.80.0_2/include/glib-2.0
+        /usr/local/Cellar/glib/2.80.0_2/lib/glib-2.0/include
+        /usr/local/Cellar/harfbuzz/8.4.0/include/harfbuzz
+        /usr/local/Cellar/cairo/1.18.0/include/cairo
     )
     
     file(GLOB CairoGraphicsPlugin_SOURCES
@@ -418,7 +424,7 @@ endif()
 addLibraryWithRPATH(CairoGraphicsPlugin ${CairoGraphicsPlugin_SOURCES})
 
 if(OSX)
-	target_link_libraries(CairoGraphicsPlugin PRIVATE "-lpangocairo-1.0")
+	target_link_libraries(CairoGraphicsPlugin PRIVATE "-L/usr/local/Cellar/pango/1.52.2/lib/ -L/usr/local/Cellar/cairo/1.18.0/lib/ -L/usr/local/Cellar/glib/2.80.0_2/lib/ -lpango-1.0 -lpangocairo-1.0 -lcairo -lglib-2.0 -lgobject-2.0")
 elseif(UNIX)
     target_link_libraries(CairoGraphicsPlugin PRIVATE "-lpangocairo-1.0 -lcairo")
 else()
