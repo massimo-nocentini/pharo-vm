@@ -12,6 +12,14 @@
 					"rm -rf build/ pharo-vm-build/build/dist/lib/{libss*,libcairo.so*,libgit2.*,libharfbuzz.so*,libfontconfig.so*} #,libbz2*,libexpat*,libffi*,libfreetype*,libpixman*,libpng*"
 				]
 			},
+			"osx": {
+				"command": [
+					"cd ../ &&",
+					"export CC=clang && export CXX=clang++ &&",
+					"/usr/local/Cellar/cmake/3.29.2/bin/cmake --build pharo-vm-build --target install &&",
+					"rm -rf build/ pharo-vm-build/build/dist/Pharo.app/Contents/MacOS/Plugins/{libss*,libcairo.dylib*,libgit2.*,libharfbuzz.dylib*,libfontconfig.dylib*} #,libbz2*,libexpat*,libffi*,libfreetype*,libpixman*,libpng*"
+				]
+			},
 			"windows": {
 				"command": "C:\\msys64\\usr\\bin\\bash.exe scripts\\cygwin-build.sh"
 			},
@@ -33,6 +41,15 @@
 					"cmake -S pharo-vm -B pharo-vm-build -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DBUILD_IS_RELEASE=ON -DICEBERG_DEFAULT_REMOTE=httpsUrl -DGENERATE_SOURCES=FALSE -DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/"
 				]
 			},
+			"osx": {
+				"command": [
+					"cd ../ && rm -rf pharo-vm-c-src && mkdir -p pharo-vm-c-src && cd pharo-vm-c-src &&",
+					"wget https://files.pharo.org/vm/pharo-spur64-headless/Darwin-x86_64/source/PharoVM-10.2.0-f4c5e2aa-Darwin-x86_64-c-src.zip &&",
+					"unzip PharoVM-10.2.0-f4c5e2aa-Darwin-x86_64-c-src.zip && cd ../ &&",
+					"export CC=clang && export CXX=clang++ &&",
+					"/usr/local/Cellar/cmake/3.29.2/bin/cmake -S pharo-vm -B pharo-vm-build -DALWAYS_INTERACTIVE=TRUE -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DBUILD_IS_RELEASE=ON -DICEBERG_DEFAULT_REMOTE=httpsUrl -DGENERATE_SOURCES=FALSE -DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/"
+				]
+			},
 			"windows": {
 				"command": "C:\\msys64\\usr\\bin\\bash.exe scripts\\cygwin-prepareCompilation.sh"
 			},
@@ -46,6 +63,9 @@
 			"label": "(Hard) Clean build",
 			"type": "shell",
 			"linux": {
+				"command": "rm -rf ../pharo-vm-build ../pharo-vm-c-src"
+			},
+			"osx": {
 				"command": "rm -rf ../pharo-vm-build ../pharo-vm-c-src"
 			},
 			"windows": {
