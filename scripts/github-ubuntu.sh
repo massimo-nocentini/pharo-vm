@@ -16,6 +16,19 @@ cd timsort.c/src
 make && sudo make install
 cd ../../
 
+mkdir tree-sitter
+cd tree-sitter
+wget https://github.com/tree-sitter/tree-sitter/archive/refs/tags/v0.22.5.zip
+unzip v0.22.5.zip
+cd tree-sitter-0.22.5/
+make && sudo make install
+cd ../
+wget https://github.com/tree-sitter/tree-sitter/releases/download/v0.22.5/tree-sitter-linux-x64.gz
+gunzip -d -k -r -v tree-sitter-linux-x64
+chmod +x tree-sitter-linux-x64
+sudo cp tree-sitter-linux-x64 /usr/local/bin/tree-sitter
+cd ../
+
 mkdir pharo-vm-c-src
 cd pharo-vm-c-src
 wget https://files.pharo.org/vm/pharo-spur64-headless/Linux-x86_64/source/PharoVM-10.2.1-d1bfe9e-Linux-x86_64-c-src.zip
@@ -26,8 +39,8 @@ cmake -S pharo-vm -B pharo-vm-build -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIE
 cmake --build pharo-vm-build --target install
 rm -rf build/ pharo-vm-build/build/dist/lib/{libss*,libcairo.so*,libgit2.*,libharfbuzz.so*,libfontconfig.so*} #,libbz2*,libexpat*,libffi*,libfreetype*,libpixman*,libpng*"
 
-cp /usr/lib/x86_64-linux-gnu/{libssh2.so,libssl.so,libcairo-gobject.so,libcairo.so,libpango-1.0.so,libpangocairo-1.0.so,libgit2-glib-1.0.so,libgit2.so,libharfbuzz-cairo.so,libharfbuzz-gobject.so,libharfbuzz-icu.so,libharfbuzz.so,libharfbuzz-subset.so,libfontconfig.so} /usr/local/lib/liblua.a pharo-vm-build/build/dist/lib/
-
+cp /usr/lib/x86_64-linux-gnu/{libssh2.so,libssl.so,libcairo-gobject.so,libcairo.so,libpango-1.0.so,libpangocairo-1.0.so,libgit2-glib-1.0.so,libgit2.so,libharfbuzz-cairo.so,libharfbuzz-gobject.so,libharfbuzz-icu.so,libharfbuzz.so,libharfbuzz-subset.so,libfontconfig.so} pharo-vm-build/build/dist/lib/
+cp /usr/local/lib/liblua.a /usr/local/lib/libtree-sitter.so pharo-vm-build/build/dist/lib/
 
 cd pharo-vm-build/build/dist/
 zip -r pharo-vm-ubuntu.zip *
