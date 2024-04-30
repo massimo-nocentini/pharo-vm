@@ -17,7 +17,7 @@
 					"cd ../ &&",
 					"export CC=clang && export CXX=clang++ &&",
 					"/usr/local/Cellar/cmake/3.29.2/bin/cmake --build pharo-vm-build --target install &&",
-					"rm -rf build/ pharo-vm-build/build/dist/Pharo.app/Contents/MacOS/Plugins/{libss*,libcairo.dylib*,libgit2.*,libharfbuzz.dylib*,libfontconfig.dylib*} #,libbz2*,libexpat*,libffi*,libfreetype*,libpixman*,libpng*"
+					"rm -rf build/ pharo-vm-build/build/dist/Pharo.app/Contents/MacOS/Plugins/{libss*,libcairo*,libcrypto*,libgit2.*,libharfbuzz*,libfontconfig*,libfreetype*,libpixman*,libpng*}"
 				]
 			},
 			"windows": {
