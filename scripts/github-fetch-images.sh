@@ -29,6 +29,14 @@ zip -r Pharo64-120.zip *
 cd ..
 
 
+
+mkdir 130
+cd 130
+curl https://get.pharo.org/64/130 | bash
+zip -r Pharo64-130.zip *
+cd ..
+
+
 mkdir alpha
 cd alpha
 curl https://get.pharo.org/64/alpha | bash
