@@ -15,7 +15,7 @@ jobs:
         with:
           path: pharo-vm
       - name: Install dependencies
-        run: sudo apt install build-essential clang curl libbz2-1.0 libexpat1 libffi8 libfreetype6 libpixman-1-0 libpng16-16 libsdl2-2.0-0 libtty1 libpango1.0-0 libpangocairo-1.0-0 libpoppler-dev libpoppler-glib8 libpopplerkit0 libgit2-dev libgit2-glib-1.0-dev libssh2-1 openssl 
+        run: sudo apt install build-essential clang curl libbz2-dev libexpat1-dev libffi-dev libfreetype-dev libpixman-1-dev libpng-dev libsdl2-dev libsdl2-gfx-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-net-dev libsdl2-ttf-dev libpango1.0-dev libpangocairo-1.0-0 libpangoft2-1.0-0 libpangoxft-1.0-0 libgit2-dev libffi-dev libffindex0-dev libtty-dev libpoppler-dev libpoppler-glib-dev libgit2-glib-1.0-dev libssh2-1-dev openssl
       - name: Fetch images
         run: bash pharo-vm/scripts/github-fetch-images.sh
       - name: Build Pharo VM
