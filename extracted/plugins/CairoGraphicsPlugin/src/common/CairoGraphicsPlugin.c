@@ -310,30 +310,32 @@ EXPORT(sqInt)
 primitive_pango_layout_get_pixel_extents(void)
 {
 
-	PangoLayout *pango = readAddress(interpreterProxy->stackValue(0));
-	// PangoLayout *pango = pango_cairo_create_layout(cr);
+	PangoLayout *pango = readAddress(interpreterProxy->stackValue(1));
+	sqInt rectangleClass = interpreterProxy->stackValue(0);
 
 	PangoRectangle ink, logical;
 
 	pango_layout_get_pixel_extents(pango, &ink, &logical);
 
-	sqInt oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classArray(), 2);
+	PangoRectangle *prect = &logical;
+
+	sqInt oop = interpreterProxy->instantiateClassindexableSize(rectangleClass, 0);
 
 	sqInt qPoint = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classPoint(), 0);
-	interpreterProxy->storePointerofObjectwithValue(0, qPoint, interpreterProxy->integerObjectOf(logical.x));
-	interpreterProxy->storePointerofObjectwithValue(1, qPoint, interpreterProxy->integerObjectOf(logical.y));
+	interpreterProxy->storePointerofObjectwithValue(0, qPoint, interpreterProxy->integerObjectOf(prect->x));
+	interpreterProxy->storePointerofObjectwithValue(1, qPoint, interpreterProxy->integerObjectOf(prect->y));
 
-	interpreterProxy->stObjectatput(oop, 1, qPoint);
+	interpreterProxy->storePointerofObjectwithValue(0, oop, qPoint);
 
 	qPoint = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classPoint(), 0);
-	interpreterProxy->storePointerofObjectwithValue(0, qPoint, interpreterProxy->integerObjectOf(logical.width));
-	interpreterProxy->storePointerofObjectwithValue(1, qPoint, interpreterProxy->integerObjectOf(logical.height));
+	interpreterProxy->storePointerofObjectwithValue(0, qPoint, interpreterProxy->integerObjectOf(prect->width));
+	interpreterProxy->storePointerofObjectwithValue(1, qPoint, interpreterProxy->integerObjectOf(prect->height));
 
-	interpreterProxy->stObjectatput(oop, 2, qPoint);
+	interpreterProxy->storePointerofObjectwithValue(1, oop, qPoint);
 
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->popthenPush(2, oop);
+		interpreterProxy->popthenPush(3, oop);
 	}
 
 	return null;
