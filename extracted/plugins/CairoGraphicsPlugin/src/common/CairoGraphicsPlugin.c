@@ -128,6 +128,27 @@ primitive_pango_cairo_show_layout(void)
 }
 
 EXPORT(sqInt)
+primitive_g_utf8_make_valid(void)
+{
+	sqInt oop = interpreterProxy->stackValue(0); //	get the receiver, which is a string.
+	char *text = interpreterProxy->firstIndexableField(oop);
+	int length = interpreterProxy->stSizeOf(oop);
+
+	gchar *fixed = g_utf8_make_valid(text, length);
+
+	sqInt fixedOop = interpreterProxy->stringForCString(fixed);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(1, fixedOop);
+	}
+
+	g_free(fixed);
+
+	return null;
+}
+
+EXPORT(sqInt)
 primitive_pango_layout_set_text(void)
 {
 	PangoLayout *layout = readAddress(interpreterProxy->stackValue(1));
