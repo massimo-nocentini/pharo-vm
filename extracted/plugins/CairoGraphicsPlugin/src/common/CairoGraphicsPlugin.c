@@ -510,7 +510,7 @@ primitive_cairo_scaled_font_text_to_glyphs(void)
 
 	char *strUtf8 = interpreterProxy->arrayValueOf(interpreterProxy->stackValue(6));
 	int len = interpreterProxy->stackIntegerValue(5);
-	cairo_scaled_font_t *scaled_font = readAddress(interpreterProxy->stackValue(4));
+	cairo_scaled_font_t *scaled_font = readAddress(interpreterProxy->fetchPointerofObject(0, interpreterProxy->stackValue(4)));
 	sqInt glyphsExternalAddress = interpreterProxy->stackValue(3);
 	int *numGlyphs = interpreterProxy->arrayValueOf(interpreterProxy->stackValue(2));
 	double x = interpreterProxy->stackFloatValue(1);
