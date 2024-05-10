@@ -16,10 +16,10 @@ jobs:
           path: pharo-vm
       - name: Install dependencies
         run: sudo apt install build-essential clang curl libbz2-dev libexpat1-dev libffi-dev libfreetype-dev libpixman-1-dev libpng-dev libsdl2-dev libsdl2-gfx-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-net-dev libsdl2-ttf-dev libpango1.0-dev libpangocairo-1.0-0 libpangoft2-1.0-0 libpangoxft-1.0-0 libgit2-dev libffi-dev libffindex0-dev libtty-dev libpoppler-dev libpoppler-glib-dev libgit2-glib-1.0-dev libssh2-1-dev openssl
-      - name: Fetch images
-        run: bash pharo-vm/scripts/github-fetch-images.sh
       - name: Build Pharo VM
         run: bash pharo-vm/scripts/github-ubuntu.sh
+      - name: Fetch images
+        run: bash pharo-vm/scripts/github-fetch-images.sh
       - name: Upload release assets
         run: |
           cd pharo-vm
@@ -30,7 +30,7 @@ jobs:
           gh release upload r${{github.run_number}} ../fresh-images/120/Pharo64-120.zip
           gh release upload r${{github.run_number}} ../fresh-images/130/Pharo64-130.zip
           gh release upload r${{github.run_number}} ../fresh-images/alpha/Pharo64-alpha.zip
-          gh release upload r${{github.run_number}} ../fresh-images/alpha/Pharo64-booklet.zip
+          gh release upload r${{github.run_number}} ../fresh-images/booklet/Pharo64-booklet.zip
           gh release upload r${{github.run_number}} ../pharo-vm-build/build/dist/pharo-vm-ubuntu.zip
   
   windows:
