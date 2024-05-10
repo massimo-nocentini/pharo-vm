@@ -61,6 +61,7 @@ curl https://get.pharo.org/64/130 | bash
     load ] on: MCMergeOrLoadWarning do: [:warning | warning load ].
 
 Smalltalk snapshot: true andQuit: true."
+rm -rf pharo-local/iceberg
 zip -r Pharo64-booklet.zip *
 cd ..
 
