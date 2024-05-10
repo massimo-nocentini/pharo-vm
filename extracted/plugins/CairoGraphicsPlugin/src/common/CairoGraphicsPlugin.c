@@ -733,6 +733,26 @@ primitive_string_to_utf8(void)
 }
 
 EXPORT(sqInt)
+primitive_string_to_bytearray(void)
+{
+
+	sqInt oop = interpreterProxy->stackValue(0); //	get the receiver, which is a string.`
+	sqInt size = interpreterProxy->stSizeOf(oop);
+
+	sqInt array = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classByteArray(), size);
+
+	memcpy(interpreterProxy->firstIndexableField(array), interpreterProxy->firstIndexableField(oop), size);
+	// *((void **)interpreterProxy->firstIndexableField(array)) = interpreterProxy->firstIndexableField(oop);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(1, array);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
 primitive_g_markup_escape_text(void)
 {
 

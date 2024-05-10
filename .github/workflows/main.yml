@@ -30,6 +30,7 @@ jobs:
           gh release upload r${{github.run_number}} ../fresh-images/120/Pharo64-120.zip
           gh release upload r${{github.run_number}} ../fresh-images/130/Pharo64-130.zip
           gh release upload r${{github.run_number}} ../fresh-images/alpha/Pharo64-alpha.zip
+          gh release upload r${{github.run_number}} ../fresh-images/alpha/Pharo64-booklet.zip
           gh release upload r${{github.run_number}} ../pharo-vm-build/build/dist/pharo-vm-ubuntu.zip
   
   windows:

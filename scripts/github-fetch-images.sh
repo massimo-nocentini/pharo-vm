@@ -43,4 +43,25 @@ curl https://get.pharo.org/64/alpha | bash
 zip -r Pharo64-alpha.zip *
 cd ..
 
+
+mkdir booklet
+cd booklet
+#curl https://get.pharo.org/64/130+vm | bash
+
+wget https://github.com/massimo-nocentini/pharo-vm/releases/latest/download/pharo-vm-ubuntu.zip
+
+unzip pharo-vm-ubuntu.zip
+
+curl https://get.pharo.org/64/130 | bash
+
+./pharo Pharo.image eval "
+[ Metacello new
+    baseline: 'BookletDSst';
+    repository: 'github://massimo-nocentini/Booklet-DSst/src';
+    load ] on: MCMergeOrLoadWarning do: [:warning | warning load ].
+
+Smalltalk snapshot: true andQuit: true."
+zip -r Pharo64-booklet.zip *
+cd ..
+
 cd ..
