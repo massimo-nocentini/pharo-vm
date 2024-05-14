@@ -253,7 +253,7 @@ elseif(WIN)
     set(VM_TARGET_OS "Win64")
 
     # this one is important
-    SET(CMAKE_SYSTEM_NAME Windows)
+    SET(CMAKE_SYSTEM_NAME "Windows")
 
     add_compile_definitions(WIN32_LEAN_AND_MEAN)
     add_compile_definitions(NO_ISNAN NO_SERVICE LSB_FIRST=1 AllocationCheckFiller=0xADD4E55)
