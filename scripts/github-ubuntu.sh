@@ -1,5 +1,5 @@
 
-wget https://www.lua.org/ftp/lua-5.4.6.tar.gz
+wget https://www.lua.org/ftp/lua-5.4.6.tar.gz --no-verbose
 tar xfz lua-5.4.6.tar.gz
 cd lua-5.4.6
 make "MYCFLAGS=-fPIC" linux
@@ -8,8 +8,8 @@ cd ..
 
 mkdir nodejs
 cd nodejs
-wget https://github.com/massimo-nocentini/ci.github/releases/download/r8/node-v22.1.0.zip
-unzip node-v22.1.0.zip
+wget https://github.com/massimo-nocentini/ci.github/releases/latest/download/ubuntu-node-v22.1.0.zip --no-verbose
+unzip ubuntu-node-v22.1.0.zip
 sudo cp bin/* /usr/local/bin/
 sudo cp -r lib/* /usr/local/lib/
 sudo cp -r include/* /usr/local/include/
