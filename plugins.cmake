@@ -431,6 +431,56 @@ else()
     target_link_libraries(CairoGraphicsPlugin PRIVATE "-LD:/msys64/ucrt64/bin -lpango-1.0-0 -lpangocairo-1.0-0 -lglib-2.0-0 -lcairo-2 -lgobject-2.0-0")
 endif()
 
+
+#
+# TreeSitterPlugin
+#
+
+message(STATUS "Adding plugin: TreeSitterPlugin")
+
+if(OSX)
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/include/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/include/osx
+    )
+    
+    file(GLOB TreeSitterPlugin_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/src/common/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/src/osx/*.c   
+    )
+elseif(UNIX)
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/include/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/include/unix
+    )
+    
+    file(GLOB TreeSitterPlugin_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/src/common/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/src/unix/*.c   
+    )    
+else()
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/include/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/include/win
+    )
+    
+    file(GLOB TreeSitterPlugin_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/src/common/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/src/win/*.c   
+    )    
+endif()
+
+addLibraryWithRPATH(TreeSitterPlugin ${TreeSitterPlugin_SOURCES})
+
+if(OSX)
+	target_link_libraries(TreeSitterPlugin PRIVATE "-ltree-sitter")
+elseif(UNIX)
+    target_link_libraries(TreeSitterPlugin PRIVATE "-ltree-sitter -ltree-sitter-c")
+else()
+    target_link_libraries(TreeSitterPlugin PRIVATE "-LD:/msys64/ucrt64/bin -ltree-sitter")
+endif()
+
+
 #
 # SqueakSSL
 #

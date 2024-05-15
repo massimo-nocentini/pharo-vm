@@ -62,6 +62,7 @@ jobs:
             mingw-w64-ucrt-x86_64-libgit2
             mingw-w64-ucrt-x86_64-libssh2
             mingw-w64-ucrt-x86_64-libtool
+            mingw-w64-ucrt-x86_64-tree-sitter
       - uses: actions/checkout@v4
         with:
           path: pharo-vm
