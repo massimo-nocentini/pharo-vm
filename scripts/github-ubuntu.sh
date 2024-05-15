@@ -6,6 +6,15 @@ make "MYCFLAGS=-fPIC" linux
 sudo make install
 cd ..
 
+mkdir nodejs
+cd nodejs
+wget https://github.com/massimo-nocentini/ci.github/releases/download/r8/node-v22.1.0.zip
+unzip node-v22.1.0.zip
+sudo cp bin/* /usr/local/bin/
+sudo cp -r lib/* /usr/local/lib/
+sudo cp -r include/* /usr/local/include/
+cd ..
+
 git clone --depth 1 https://github.com/massimo-nocentini/datetimeformatter.c.git
 cd datetimeformatter.c/src
 make && sudo make install
@@ -27,6 +36,13 @@ wget https://github.com/tree-sitter/tree-sitter/releases/download/v0.22.5/tree-s
 gunzip -d -k -r -v tree-sitter-linux-x64
 chmod +x tree-sitter-linux-x64
 sudo cp tree-sitter-linux-x64 /usr/local/bin/tree-sitter
+
+git clone --depth 1 https://github.com/tree-sitter/tree-sitter-c.git
+cd tree-sitter-c
+tree-sitter generate
+make && sudo make install
+cd ../
+
 cd ../
 
 mkdir pharo-vm-c-src
