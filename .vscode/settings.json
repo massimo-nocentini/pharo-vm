@@ -28,7 +28,8 @@
         "chrono": "c",
         "format": "c",
         "string_view": "c",
-        "sq.h": "c"
+        "sq.h": "c",
+        "api.h": "c"
     },
     "cmake.configureOnOpen": false,
     "C_Cpp.default.compilerPath": "/usr/bin/clang++-16"
