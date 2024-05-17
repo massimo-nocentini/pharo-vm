@@ -223,26 +223,24 @@ sqInt walk(sqInt class, sqInt cumulatedArray, const char *src, const TSLanguage 
 	int start = interpreterProxy->integerValueOf(interpreterProxy->stObjectat(cumulatedArray, start_point.row + 1)) + start_point.column;
 	int end = interpreterProxy->integerValueOf(interpreterProxy->stObjectat(cumulatedArray, end_point.row + 1)) + end_point.column;
 	int n = end - start;
-	char *token = (char *)malloc(sizeof(char) * n + 1);
-	strncpy(token, src + start, n);
-	token[n] = '\0';
+
+	sqInt oopContentString = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), n);
+	memcpy(interpreterProxy->firstIndexableField(oopContentString), src + start, n);
 
 	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, checked_stringForCString(field_name));
 	interpreterProxy->storeIntegerofObjectwithValue(fieldIndex++, oop, node_pos);
 	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, checked_stringForCString(type));
 	interpreterProxy->storeIntegerofObjectwithValue(fieldIndex++, oop, symbol_id);
 	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, checked_stringForCString(symbol_name));
-	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, interpreterProxy->makePointwithxValueyValue(start, end));
-	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, checked_stringForCString(token));
-	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, interpreterProxy->makePointwithxValueyValue(start_point.row, start_point.column));
-	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, interpreterProxy->makePointwithxValueyValue(end_point.row, end_point.column));
+	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, interpreterProxy->makePointwithxValueyValue(start + 1, end));
+	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, oopContentString);
+	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, interpreterProxy->makePointwithxValueyValue(start_point.column + 1, start_point.row + 1));
+	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, interpreterProxy->makePointwithxValueyValue(end_point.column, end_point.row + 1));
 	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, ts_node_is_null(node) ? interpreterProxy->trueObject() : interpreterProxy->falseObject());
 	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, ts_node_is_named(node) ? interpreterProxy->trueObject() : interpreterProxy->falseObject());
 	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, ts_node_is_missing(node) ? interpreterProxy->trueObject() : interpreterProxy->falseObject());
 	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, ts_node_is_extra(node) ? interpreterProxy->trueObject() : interpreterProxy->falseObject());
 	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, ts_node_has_error(node) ? interpreterProxy->trueObject() : interpreterProxy->falseObject());
-
-	free(token);
 
 	uint32_t c = ts_node_child_count(node);
 
