@@ -283,6 +283,173 @@ primitive_ts_ast(void)
 	return null;
 }
 
+EXPORT(sqInt)
+primitive_ts_query_new(void)
+{
+	sqInt oopLanguage = interpreterProxy->stackValue(3); // the receiver.
+	TSLanguage *language = readAddress(interpreterProxy->stackValue(2));
+	sqInt oopQueryString = interpreterProxy->stackValue(1);
+	char *query_source = interpreterProxy->firstIndexableField(oopQueryString);
+	sqInt length = interpreterProxy->stSizeOf(oopQueryString);
+	sqInt queryClass = interpreterProxy->stackValue(0);
+
+	uint32_t error_offset;
+	TSQueryError error_type;
+
+	TSQuery *query = ts_query_new(
+		language,
+		query_source,
+		length,
+		&error_offset,
+		&error_type);
+
+	sqInt anExternalAddress = newExternalAddress();
+
+	writeAddress(anExternalAddress, query);
+
+	sqInt oopQuery = interpreterProxy->instantiateClassindexableSize(queryClass, 0);
+	interpreterProxy->storeIntegerofObjectwithValue(0, oopQuery, error_offset);
+	interpreterProxy->storeIntegerofObjectwithValue(1, oopQuery, error_type);
+	interpreterProxy->storePointerofObjectwithValue(2, oopQuery, oopLanguage);
+	interpreterProxy->storePointerofObjectwithValue(3, oopQuery, oopQueryString);
+	interpreterProxy->storePointerofObjectwithValue(4, oopQuery, anExternalAddress);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(4, oopQuery);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_ts_query_delete(void)
+{
+
+	TSQuery *query = readAddress(interpreterProxy->stackValue(0));
+
+	ts_query_delete(query);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(1);
+	}
+
+	return null;
+}
+
+typedef struct TS_link_s
+{
+	struct TS_link_s *next;
+	sqInt oop;
+	int size;
+} TS_link_t;
+
+TS_link_t *push_oop_on_link(sqInt oop, TS_link_t *link)
+{
+	TS_link_t *new_link = (TS_link_t *)malloc(sizeof(TS_link_t));
+	new_link->next = link;
+	new_link->oop = oop;
+	new_link->size = link == NULL ? 0 : link->size + 1;
+	return new_link;
+}
+
+void free_link(TS_link_t *link)
+{
+	if (link->size > 0)
+		free_link(link->next);
+
+	free(link);
+}
+
+EXPORT(sqInt)
+primitive_ts_query_matches(void)
+{
+	TSQuery *query = readAddress(interpreterProxy->stackValue(2));
+	TSTree *tree = readAddress(interpreterProxy->stackValue(1));
+	sqInt class = interpreterProxy->stackValue(0);
+
+	TSQueryCursor *cursor = ts_query_cursor_new();
+
+	ts_query_cursor_exec(cursor, query, ts_tree_root_node(tree));
+
+	TSQueryMatch match;
+	TSQueryCapture capture;
+	TSNode captured_node;
+	TSPoint point;
+	int len;
+	uint32_t length;
+
+	int type, row, column;
+
+	TS_link_t *link = push_oop_on_link(interpreterProxy->nilObject(), NULL);
+
+	while (ts_query_cursor_next_match(cursor, &match))
+	{
+		for (int i = 0; i < match.capture_count; i++)
+		{
+			sqInt oop = interpreterProxy->instantiateClassindexableSize(class, 0);
+			link = push_oop_on_link(oop, link);
+
+			capture = match.captures[i];
+
+			captured_node = capture.node;
+
+			const char *capture_name = ts_query_capture_name_for_id(
+				query,
+				capture.index,
+				&length);
+
+			sqInt oopContentString = interpreterProxy->instantiateClassindexableSize(
+				interpreterProxy->classString(), length);
+			memcpy(interpreterProxy->firstIndexableField(oopContentString), capture_name, length);
+
+			interpreterProxy->storePointerofObjectwithValue(0, oop, oopContentString);
+
+			point = ts_node_start_point(captured_node);
+			row = point.row + 1;
+			column = point.column + 1;
+
+			interpreterProxy->storePointerofObjectwithValue(
+				1, oop, interpreterProxy->makePointwithxValueyValue(column, row));
+
+			point = ts_node_end_point(captured_node);
+			row = point.row + 1;
+			column = point.column;
+
+			interpreterProxy->storePointerofObjectwithValue(
+				2, oop, interpreterProxy->makePointwithxValueyValue(column, row));
+
+			// const char *str_value = ts_query_string_value_for_id(
+			//     query,
+			//     match.pattern_index,
+			//     &length);
+
+			// lua_pushstring(L, str_value);
+			// lua_setfield(L, -2, "query_string_value");
+		}
+	}
+
+	ts_query_cursor_delete(cursor);
+
+	sqInt oop = interpreterProxy->instantiateClassindexableSize(
+		interpreterProxy->classArray(), link->size);
+
+	for (TS_link_t *l = link; l->size > 0; l = l->next)
+	{
+		interpreterProxy->stObjectatput(oop, l->size, l->oop);
+	}
+
+	free_link(link);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(4, oop);
+	}
+
+	return null;
+}
+
 /*	Note: This is coded so that it can be run in Squeak. */
 
 /* InterpreterPlugin>>#setInterpreter: */
