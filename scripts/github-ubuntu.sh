@@ -72,12 +72,16 @@ cp /usr/local/lib/{liblua.a,libtree-sitter.so,libtree-sitter-c.so,libtree-sitter
 mkdir -p pharo-vm-build/build/dist/share/tree-sitter/language
 mkdir pharo-vm-build/build/dist/share/tree-sitter/language/c
 mkdir pharo-vm-build/build/dist/share/tree-sitter/language/json
+mkdir pharo-vm-build/build/dist/share/tree-sitter/language/javascript
 
 cp tree-sitter/tree-sitter-c/grammar.js pharo-vm-build/build/dist/share/tree-sitter/language/c/
 cp -r tree-sitter/tree-sitter-c/queries/ pharo-vm-build/build/dist/share/tree-sitter/language/c/
 
 cp tree-sitter/tree-sitter-json/grammar.js pharo-vm-build/build/dist/share/tree-sitter/language/json/
 cp -r tree-sitter/tree-sitter-json/queries/ pharo-vm-build/build/dist/share/tree-sitter/language/json/
+
+cp tree-sitter/tree-sitter-javascript/grammar.js pharo-vm-build/build/dist/share/tree-sitter/language/javascript/
+cp -r tree-sitter/tree-sitter-javascript/queries/ pharo-vm-build/build/dist/share/tree-sitter/language/javascript/
 
 cd pharo-vm-build/build/dist/
 zip -r pharo-vm-ubuntu.zip *
