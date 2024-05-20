@@ -98,6 +98,7 @@ sqInt checked_stringForCString(const char *cString)
 
 TSLanguage *tree_sitter_c();
 TSLanguage *tree_sitter_json();
+TSLanguage *tree_sitter_javascript();
 
 EXPORT(sqInt)
 primitive_tree_sitter_c(void)
@@ -122,6 +123,25 @@ primitive_tree_sitter_json(void)
 {
 
 	TSLanguage *lang = tree_sitter_json();
+
+	sqInt anExternalAddress = newExternalAddress();
+
+	writeAddress(anExternalAddress, lang);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(1, anExternalAddress);
+	}
+
+	return null;
+}
+
+
+EXPORT(sqInt)
+primitive_tree_sitter_javascript(void)
+{
+
+	TSLanguage *lang = tree_sitter_javascript();
 
 	sqInt anExternalAddress = newExternalAddress();
 

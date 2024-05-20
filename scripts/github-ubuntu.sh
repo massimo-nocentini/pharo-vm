@@ -49,6 +49,12 @@ tree-sitter generate
 make && sudo make install
 cd ../
 
+git clone --depth 1 https://github.com/tree-sitter/tree-sitter-javascript.git
+cd tree-sitter-javascript
+tree-sitter generate
+make && sudo make install
+cd ../
+
 cd ../
 
 mkdir pharo-vm-c-src
