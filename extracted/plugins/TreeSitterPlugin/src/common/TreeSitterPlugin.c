@@ -97,12 +97,31 @@ sqInt checked_stringForCString(const char *cString)
 }
 
 TSLanguage *tree_sitter_c();
+TSLanguage *tree_sitter_json();
 
 EXPORT(sqInt)
 primitive_tree_sitter_c(void)
 {
 
 	TSLanguage *lang = tree_sitter_c();
+
+	sqInt anExternalAddress = newExternalAddress();
+
+	writeAddress(anExternalAddress, lang);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(1, anExternalAddress);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_tree_sitter_json(void)
+{
+
+	TSLanguage *lang = tree_sitter_json();
 
 	sqInt anExternalAddress = newExternalAddress();
 
@@ -380,7 +399,7 @@ primitive_ts_query_matches(void)
 	int len;
 	uint32_t length;
 
-	int type, row, column;
+	int type, row, column, discreteTime = 1;
 
 	TS_link_t *link = push_oop_on_link(interpreterProxy->nilObject(), NULL);
 
@@ -419,6 +438,9 @@ primitive_ts_query_matches(void)
 
 			interpreterProxy->storePointerofObjectwithValue(
 				2, oop, interpreterProxy->makePointwithxValueyValue(column, row));
+
+			interpreterProxy->storeIntegerofObjectwithValue(
+				3, oop, discreteTime++);
 
 			// const char *str_value = ts_query_string_value_for_id(
 			//     query,

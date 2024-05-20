@@ -43,6 +43,12 @@ tree-sitter generate
 make && sudo make install
 cd ../
 
+git clone --depth 1 https://github.com/tree-sitter/tree-sitter-json.git
+cd tree-sitter-json
+tree-sitter generate
+make && sudo make install
+cd ../
+
 cd ../
 
 mkdir pharo-vm-c-src
@@ -56,10 +62,16 @@ cmake --build pharo-vm-build --target install
 rm -rf build/ pharo-vm-build/build/dist/lib/{libss*,libcairo.so*,libgit2.*,libharfbuzz.so*,libfontconfig.so*} #,libbz2*,libexpat*,libffi*,libfreetype*,libpixman*,libpng*"
 
 cp /usr/lib/x86_64-linux-gnu/{libssh2.so,libssl.so,libcairo-gobject.so,libcairo.so,libpango-1.0.so,libpangocairo-1.0.so,libgit2-glib-1.0.so,libgit2.so,libharfbuzz-cairo.so,libharfbuzz-gobject.so,libharfbuzz-icu.so,libharfbuzz.so,libharfbuzz-subset.so,libfontconfig.so} pharo-vm-build/build/dist/lib/
-cp /usr/local/lib/{liblua.a,libtree-sitter.so,libtree-sitter-c.so} pharo-vm-build/build/dist/lib/
-mkdir -p pharo-vm-build/build/dist/share/tree-sitter/query
-cp -r tree-sitter/tree-sitter-c/queries/ pharo-vm-build/build/dist/share/tree-sitter/query/
-mv pharo-vm-build/build/dist/share/tree-sitter/query/queries pharo-vm-build/build/dist/share/tree-sitter/query/c
+cp /usr/local/lib/{liblua.a,libtree-sitter.so,libtree-sitter-c.so,libtree-sitter-json.so} pharo-vm-build/build/dist/lib/
+mkdir -p pharo-vm-build/build/dist/share/tree-sitter/language
+mkdir pharo-vm-build/build/dist/share/tree-sitter/language/c
+mkdir pharo-vm-build/build/dist/share/tree-sitter/language/json
+
+cp tree-sitter/tree-sitter-c/grammar.js pharo-vm-build/build/dist/share/tree-sitter/language/c/
+cp -r tree-sitter/tree-sitter-c/queries/ pharo-vm-build/build/dist/share/tree-sitter/language/c/
+
+cp tree-sitter/tree-sitter-json/grammar.js pharo-vm-build/build/dist/share/tree-sitter/language/json/
+cp -r tree-sitter/tree-sitter-json/queries/ pharo-vm-build/build/dist/share/tree-sitter/language/json/
 
 cd pharo-vm-build/build/dist/
 zip -r pharo-vm-ubuntu.zip *
