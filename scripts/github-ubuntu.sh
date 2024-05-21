@@ -68,11 +68,12 @@ cmake --build pharo-vm-build --target install
 rm -rf build/ pharo-vm-build/build/dist/lib/{libss*,libcairo.so*,libgit2.*,libharfbuzz.so*,libfontconfig.so*} #,libbz2*,libexpat*,libffi*,libfreetype*,libpixman*,libpng*"
 
 cp /usr/lib/x86_64-linux-gnu/{libssh2.so,libssl.so,libcairo-gobject.so,libcairo.so,libpango-1.0.so,libpangocairo-1.0.so,libgit2-glib-1.0.so,libgit2.so,libharfbuzz-cairo.so,libharfbuzz-gobject.so,libharfbuzz-icu.so,libharfbuzz.so,libharfbuzz-subset.so,libfontconfig.so} pharo-vm-build/build/dist/lib/
-cp /usr/local/lib/{liblua.a,libtree-sitter.so,libtree-sitter-c.so,libtree-sitter-json.so} pharo-vm-build/build/dist/lib/
+cp /usr/local/lib/{liblua.a,libtree-sitter.so,libtree-sitter-c.so,libtree-sitter-json.so,libtree-sitter-javascript.so,libtree-sitter-python.so} pharo-vm-build/build/dist/lib/
 mkdir -p pharo-vm-build/build/dist/share/tree-sitter/language
 mkdir pharo-vm-build/build/dist/share/tree-sitter/language/c
 mkdir pharo-vm-build/build/dist/share/tree-sitter/language/json
 mkdir pharo-vm-build/build/dist/share/tree-sitter/language/javascript
+mkdir pharo-vm-build/build/dist/share/tree-sitter/language/python
 
 cp tree-sitter/tree-sitter-c/grammar.js pharo-vm-build/build/dist/share/tree-sitter/language/c/
 cp -r tree-sitter/tree-sitter-c/queries/ pharo-vm-build/build/dist/share/tree-sitter/language/c/
@@ -82,6 +83,9 @@ cp -r tree-sitter/tree-sitter-json/queries/ pharo-vm-build/build/dist/share/tree
 
 cp tree-sitter/tree-sitter-javascript/grammar.js pharo-vm-build/build/dist/share/tree-sitter/language/javascript/
 cp -r tree-sitter/tree-sitter-javascript/queries/ pharo-vm-build/build/dist/share/tree-sitter/language/javascript/
+
+cp tree-sitter/tree-sitter-python/grammar.js pharo-vm-build/build/dist/share/tree-sitter/language/python/
+cp -r tree-sitter/tree-sitter-python/queries/ pharo-vm-build/build/dist/share/tree-sitter/language/python/
 
 cd pharo-vm-build/build/dist/
 zip -r pharo-vm-ubuntu.zip *
