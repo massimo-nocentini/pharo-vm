@@ -55,6 +55,13 @@ tree-sitter generate
 make && sudo make install
 cd ../
 
+git clone --depth 1 https://github.com/tree-sitter/tree-sitter-python.git
+cd tree-sitter-python
+tree-sitter generate
+tree-sitter generate
+make && sudo make install
+cd ../
+
 cd ../
 
 mkdir pharo-vm-c-src
