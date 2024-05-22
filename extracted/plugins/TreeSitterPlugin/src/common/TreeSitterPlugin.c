@@ -228,9 +228,12 @@ EXPORT(sqInt)
 primitive_ts_parser_parse_string(void)
 {
 
-	TSParser *parser = readAddress(interpreterProxy->stackValue(1));
-	char *source_code = interpreterProxy->firstIndexableField(interpreterProxy->stackValue(0));
-	sqInt length = interpreterProxy->stSizeOf(interpreterProxy->stackValue(0));
+	TSParser *parser = readAddress(interpreterProxy->stackValue(2));
+	sqInt sourceString = interpreterProxy->stackValue(1);
+	sqInt treeClass = interpreterProxy->stackValue(0);
+
+	char *source_code = interpreterProxy->firstIndexableField(sourceString);
+	sqInt length = interpreterProxy->stSizeOf(sourceString);
 
 	TSTree *tree = ts_parser_parse_string(
 		parser,
@@ -242,9 +245,13 @@ primitive_ts_parser_parse_string(void)
 
 	writeAddress(anExternalAddress, tree);
 
+	sqInt oop = interpreterProxy->instantiateClassindexableSize(treeClass, 0);
+	interpreterProxy->storePointerofObjectwithValue(0, oop, sourceString);
+	interpreterProxy->storePointerofObjectwithValue(1, oop, anExternalAddress);
+
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->popthenPush(3, anExternalAddress);
+		interpreterProxy->popthenPush(4, oop);
 	}
 
 	return null;
@@ -266,7 +273,7 @@ primitive_ts_tree_delete(void)
 	return null;
 }
 
-sqInt walk(sqInt class, sqInt cumulatedArray, const char *src, const TSLanguage *lang, TSNode node, int node_pos, const char *field_name)
+sqInt walk(sqInt class, const char *src, const TSLanguage *lang, TSNode node, int node_pos, const char *field_name)
 {
 	int fieldIndex = 0;
 
@@ -277,8 +284,9 @@ sqInt walk(sqInt class, sqInt cumulatedArray, const char *src, const TSLanguage 
 	TSPoint start_point = ts_node_start_point(node);
 	TSPoint end_point = ts_node_end_point(node);
 	const char *symbol_name = ts_language_symbol_name(lang, symbol_id);
-	int start = interpreterProxy->integerValueOf(interpreterProxy->stObjectat(cumulatedArray, start_point.row + 1)) + start_point.column;
-	int end = interpreterProxy->integerValueOf(interpreterProxy->stObjectat(cumulatedArray, end_point.row + 1)) + end_point.column;
+	// char *node_string = ts_node_string(node);
+	int start = ts_node_start_byte(node);
+	int end = ts_node_end_byte(node);
 	int n = end - start;
 
 	sqInt oopContentString = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), n);
@@ -298,19 +306,21 @@ sqInt walk(sqInt class, sqInt cumulatedArray, const char *src, const TSLanguage 
 	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, ts_node_is_missing(node) ? interpreterProxy->trueObject() : interpreterProxy->falseObject());
 	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, ts_node_is_extra(node) ? interpreterProxy->trueObject() : interpreterProxy->falseObject());
 	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, ts_node_has_error(node) ? interpreterProxy->trueObject() : interpreterProxy->falseObject());
+	// interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, checked_stringForCString(node_string));
+
+	// free(node_string);
 
 	uint32_t c = ts_node_child_count(node);
 
 	sqInt oopChildren = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classArray(), c);
 
-	TSNode child;
 	for (int i = 0; i < c; i++)
 	{
-		child = ts_node_child(node, i);
+		TSNode child = ts_node_child(node, i);
 
 		interpreterProxy->stObjectatput(oopChildren,
 										i + 1,
-										walk(class, cumulatedArray, src, lang, child, i + 1, ts_node_field_name_for_child(node, i)));
+										walk(class, src, lang, child, i + 1, ts_node_field_name_for_child(node, i)));
 	}
 
 	interpreterProxy->storePointerofObjectwithValue(fieldIndex++, oop, oopChildren);
@@ -322,19 +332,18 @@ EXPORT(sqInt)
 primitive_ts_ast(void)
 {
 
-	TSTree *tree = readAddress(interpreterProxy->stackValue(3));
-	char *src = interpreterProxy->firstIndexableField(interpreterProxy->stackValue(2));
-	sqInt cumulatedSizes = interpreterProxy->stackValue(1);
+	TSTree *tree = readAddress(interpreterProxy->stackValue(2));
+	char *src = interpreterProxy->firstIndexableField(interpreterProxy->stackValue(1));
 	sqInt class = interpreterProxy->stackValue(0);
 
 	TSNode root_node = ts_tree_root_node(tree);
 	const TSLanguage *lang = ts_tree_language(tree);
 
-	sqInt w = walk(class, cumulatedSizes, src, lang, root_node, 1, NULL);
+	sqInt w = walk(class, src, lang, root_node, 1, NULL);
 
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->popthenPush(5, w);
+		interpreterProxy->popthenPush(4, w);
 	}
 
 	return null;
@@ -477,8 +486,11 @@ primitive_ts_query_matches(void)
 			interpreterProxy->storePointerofObjectwithValue(
 				2, oop, interpreterProxy->makePointwithxValueyValue(column, row));
 
+			interpreterProxy->storePointerofObjectwithValue(
+				3, oop, interpreterProxy->makePointwithxValueyValue(ts_node_start_byte(captured_node) + 1, ts_node_end_byte(captured_node)));
+
 			interpreterProxy->storeIntegerofObjectwithValue(
-				3, oop, discreteTime++);
+				4, oop, discreteTime++);
 
 			// const char *str_value = ts_query_string_value_for_id(
 			//     query,
