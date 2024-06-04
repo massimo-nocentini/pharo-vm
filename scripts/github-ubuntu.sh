@@ -27,12 +27,11 @@ cd ../../
 
 mkdir tree-sitter
 cd tree-sitter
-wget https://github.com/tree-sitter/tree-sitter/archive/refs/tags/v0.22.5.zip
-unzip v0.22.5.zip
-cd tree-sitter-0.22.5/
+git clone --depth 1 https://github.com/tree-sitter/tree-sitter.git
+cd tree-sitter/
 make && sudo make install
 cd ../
-wget https://github.com/tree-sitter/tree-sitter/releases/download/v0.22.5/tree-sitter-linux-x64.gz
+wget https://github.com/tree-sitter/tree-sitter/releases/latest/download/tree-sitter-linux-x64.gz --no-verbose
 gunzip -d -k -r -v tree-sitter-linux-x64
 chmod +x tree-sitter-linux-x64
 sudo cp tree-sitter-linux-x64 /usr/local/bin/tree-sitter
@@ -66,7 +65,7 @@ cd ../
 
 mkdir pharo-vm-c-src
 cd pharo-vm-c-src
-wget https://files.pharo.org/vm/pharo-spur64-headless/Linux-x86_64/source/PharoVM-10.2.1-d1bfe9e-Linux-x86_64-c-src.zip
+wget https://files.pharo.org/vm/pharo-spur64-headless/Linux-x86_64/source/PharoVM-10.2.1-d1bfe9e-Linux-x86_64-c-src.zip --no-verbose
 unzip PharoVM-10.2.1-d1bfe9e-Linux-x86_64-c-src.zip
 cd ..
 
