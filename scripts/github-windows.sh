@@ -34,6 +34,43 @@ cp timsort.h ${CURRENT_DIR}/current-dependencies/include
 cp libtimsort.dll ${CURRENT_DIR}/current-dependencies/lib
 cd ../../
 
+mkdir tree-sitter
+cd tree-sitter
+
+git clone --depth 1 https://github.com/tree-sitter/tree-sitter-c.git
+cd tree-sitter-c
+tree-sitter generate
+tree-sitter build
+cp c.dll ${CURRENT_DIR}/current-dependencies/lib/tree-sitter-c.dll
+cd ../
+
+git clone --depth 1 https://github.com/tree-sitter/tree-sitter-json.git
+cd tree-sitter-json
+tree-sitter generate
+tree-sitter build
+cp json.dll ${CURRENT_DIR}/current-dependencies/lib/tree-sitter-json.dll
+cd ../
+
+git clone --depth 1 https://github.com/tree-sitter/tree-sitter-javascript.git
+cd tree-sitter-javascript
+tree-sitter generate
+tree-sitter build
+cp javascript.dll ${CURRENT_DIR}/current-dependencies/lib/tree-sitter-javascript.dll
+cd ../
+
+git clone --depth 1 https://github.com/tree-sitter/tree-sitter-python.git
+cd tree-sitter-python
+tree-sitter generate
+tree-sitter generate
+tree-sitter build
+cp python.dll ${CURRENT_DIR}/current-dependencies/lib/tree-sitter-python.dll
+cd ../
+
+cp -r /ucrt64/include/tree_sitter/ ${CURRENT_DIR}/current-dependencies/include
+cp /ucrt64/bin/libtree-sitter.dll ${CURRENT_DIR}/current-dependencies/lib
+
+cd ../  # out of tree-sitter
+
 rm -rf pharo-vm-c-src
 mkdir -p pharo-vm-c-src
 cd pharo-vm-c-src
@@ -55,5 +92,24 @@ cd ../../
 cp current-dependencies/lib/*.dll pharo-vm-build/build/dist/
 cp msys2-fetcher.lua/test/pharo-goodies-sandbox/temp/ucrt64/bin/*.dll pharo-vm-build/build/dist/
 
+mkdir -p pharo-vm-build/build/dist/share/tree-sitter/language
+mkdir pharo-vm-build/build/dist/share/tree-sitter/language/c
+mkdir pharo-vm-build/build/dist/share/tree-sitter/language/json
+mkdir pharo-vm-build/build/dist/share/tree-sitter/language/javascript
+mkdir pharo-vm-build/build/dist/share/tree-sitter/language/python
+
+cp tree-sitter/tree-sitter-c/grammar.js pharo-vm-build/build/dist/share/tree-sitter/language/c/
+cp -r tree-sitter/tree-sitter-c/queries/ pharo-vm-build/build/dist/share/tree-sitter/language/c/
+
+cp tree-sitter/tree-sitter-json/grammar.js pharo-vm-build/build/dist/share/tree-sitter/language/json/
+cp -r tree-sitter/tree-sitter-json/queries/ pharo-vm-build/build/dist/share/tree-sitter/language/json/
+
+cp tree-sitter/tree-sitter-javascript/grammar.js pharo-vm-build/build/dist/share/tree-sitter/language/javascript/
+cp -r tree-sitter/tree-sitter-javascript/queries/ pharo-vm-build/build/dist/share/tree-sitter/language/javascript/
+
+cp tree-sitter/tree-sitter-python/grammar.js pharo-vm-build/build/dist/share/tree-sitter/language/python/
+cp -r tree-sitter/tree-sitter-python/queries/ pharo-vm-build/build/dist/share/tree-sitter/language/python/
+
 cd pharo-vm-build/build/dist/
+
 zip -r pharo-vm-windows.zip *

@@ -462,6 +462,7 @@ else()
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/include/win
+        D:/msys64/ucrt64/include/tree_sitter
     )
     
     file(GLOB TreeSitterPlugin_SOURCES
@@ -477,7 +478,7 @@ if(OSX)
 elseif(UNIX)
     target_link_libraries(TreeSitterPlugin PRIVATE "-ltree-sitter -ltree-sitter-c -ltree-sitter-json -ltree-sitter-javascript -ltree-sitter-python")
 else()
-    target_link_libraries(TreeSitterPlugin PRIVATE "-LD:/msys64/ucrt64/bin -ltree-sitter")
+    target_link_libraries(TreeSitterPlugin PRIVATE "-LD:/msys64/ucrt64/bin -ltree-sitter -L${CMAKE_CURRENT_SOURCE_DIR}/../current-dependencies/lib -ltree-sitter-c -ltree-sitter-json -ltree-sitter-javascript -ltree-sitter-python")
 endif()
 
 
