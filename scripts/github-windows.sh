@@ -37,37 +37,37 @@ cd ../../
 mkdir tree-sitter
 cd tree-sitter
 
+cp -r /ucrt64/include/tree_sitter/ ${CURRENT_DIR}/current-dependencies/include
+cp /ucrt64/bin/libtree-sitter.dll ${CURRENT_DIR}/current-dependencies/lib
+
 git clone --depth 1 https://github.com/tree-sitter/tree-sitter-c.git
 cd tree-sitter-c
 tree-sitter generate
-tree-sitter build
-cp c.dll ${CURRENT_DIR}/current-dependencies/lib/libtree-sitter-c.dll
+tree-sitter build -o libtree-sitter-c.dll
+cp libtree-sitter-c.dll ${CURRENT_DIR}/current-dependencies/lib/
 cd ../
 
 git clone --depth 1 https://github.com/tree-sitter/tree-sitter-json.git
 cd tree-sitter-json
 tree-sitter generate
-tree-sitter build
-cp json.dll ${CURRENT_DIR}/current-dependencies/lib/libtree-sitter-json.dll
+tree-sitter build -o libtree-sitter-json.dll
+cp libtree-sitter-json.dll ${CURRENT_DIR}/current-dependencies/lib/
 cd ../
 
 git clone --depth 1 https://github.com/tree-sitter/tree-sitter-javascript.git
 cd tree-sitter-javascript
 tree-sitter generate
-tree-sitter build
-cp javascript.dll ${CURRENT_DIR}/current-dependencies/lib/libtree-sitter-javascript.dll
+tree-sitter build -o libtree-sitter-javascript.dll
+cp libtree-sitter-javascript.dll ${CURRENT_DIR}/current-dependencies/lib/
 cd ../
 
 git clone --depth 1 https://github.com/tree-sitter/tree-sitter-python.git
 cd tree-sitter-python
 tree-sitter generate
 tree-sitter generate
-tree-sitter build
-cp python.dll ${CURRENT_DIR}/current-dependencies/lib/libtree-sitter-python.dll
+tree-sitter build -o libtree-sitter-python.dll
+cp libtree-sitter-python.dll ${CURRENT_DIR}/current-dependencies/lib/
 cd ../
-
-cp -r /ucrt64/include/tree_sitter/ ${CURRENT_DIR}/current-dependencies/include
-cp /ucrt64/bin/libtree-sitter.dll ${CURRENT_DIR}/current-dependencies/lib
 
 cd ../  # out of tree-sitter
 
