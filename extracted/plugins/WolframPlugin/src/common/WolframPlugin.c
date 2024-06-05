@@ -96,6 +96,65 @@ sqInt checked_stringForCString(const char *cString)
 	return interpreterProxy->stringForCString(cString == NULL ? "" : cString);
 }
 
+EXPORT(sqInt)
+primitive_WSInitialize(void)
+{
+	WSEnvironment env = WSInitialize(NULL);
+
+	sqInt anExternalAddress = newExternalAddress();
+
+	writeAddress(anExternalAddress, env);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(1, anExternalAddress);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_WSDeinitialize(void)
+{
+	WSEnvironment env = (WSEnvironment)readAddress(interpreterProxy->stackValue(0));
+
+	WSDeinitialize(env);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(1); // just leave the receiver on the stack.
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_WSOpenString(void)
+{
+	int errp, should_free;
+
+	WSEnvironment env = (WSEnvironment)readAddress(interpreterProxy->stackValue(1));
+	char *command_line = checked_cStringOrNullFor(interpreterProxy->stackValue(0), &should_free);
+
+	WSLINK link = WSOpenString(env, command_line, &errp);
+
+	sqInt anExternalAddress = newExternalAddress();
+
+	writeAddress(anExternalAddress, link);
+
+	if (should_free)
+	{
+		free(command_line);
+	}
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(3, anExternalAddress);
+	}
+
+	return null;
+}
+
 /*	Note: This is coded so that it can be run in Squeak. */
 
 /* InterpreterPlugin>>#setInterpreter: */
