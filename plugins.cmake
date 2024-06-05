@@ -401,12 +401,6 @@ else()
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/win
-        # ${SYSTEMDRIVE}/msys64/usr/local/include
-        # ${SYSTEMDRIVE}/msys64/ucrt64/include/pango-1.0
-        # ${SYSTEMDRIVE}/msys64/ucrt64/include/glib-2.0
-        # ${SYSTEMDRIVE}/msys64/ucrt64/lib/glib-2.0/include
-        # ${SYSTEMDRIVE}/msys64/ucrt64/include/cairo
-        # ${SYSTEMDRIVE}/msys64/ucrt64/include/harfbuzz
         ${CMAKE_CURRENT_SOURCE_DIR}/../current-dependencies/include
         D:/msys64/ucrt64/include/pango-1.0
         D:/msys64/ucrt64/include/glib-2.0
@@ -462,7 +456,7 @@ else()
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/include/win
-        D:/msys64/ucrt64/include/tree_sitter
+        D:/msys64/ucrt64/include/
     )
     
     file(GLOB TreeSitterPlugin_SOURCES
