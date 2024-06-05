@@ -477,6 +477,56 @@ endif()
 
 
 #
+# WolframPlugin
+#
+
+message(STATUS "Adding plugin: WolframPlugin")
+
+if(OSX)
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/include/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/include/osx
+    )
+    
+    file(GLOB WolframPlugin_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/src/common/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/src/osx/*.c   
+    )
+elseif(UNIX)
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/include/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/include/unix
+    )
+    
+    file(GLOB WolframPlugin_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/src/common/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/src/unix/*.c   
+    )    
+else()
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/include/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/include/win
+        D:/msys64/ucrt64/include/
+    )
+    
+    file(GLOB WolframPlugin_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/src/common/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/src/win/*.c   
+    )    
+endif()
+
+addLibraryWithRPATH(WolframPlugin ${WolframPlugin_SOURCES})
+
+if(OSX)
+	target_link_libraries(WolframPlugin PRIVATE "-L${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/lib -lWSTPi4")
+elseif(UNIX)
+    target_link_libraries(WolframPlugin PRIVATE "-L${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/lib -lWSTP64i4")
+else()
+    target_link_libraries(WolframPlugin PRIVATE "-L${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/lib -lwstp64i4")
+endif()
+
+
+#
 # SqueakSSL
 #
 

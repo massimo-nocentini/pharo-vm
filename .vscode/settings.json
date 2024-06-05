@@ -29,7 +29,8 @@
         "format": "c",
         "string_view": "c",
         "sq.h": "c",
-        "api.h": "c"
+        "api.h": "c",
+        "treesitterplugin.h": "c"
     },
     "cmake.configureOnOpen": false,
     "C_Cpp.default.compilerPath": "/usr/bin/clang++-16"
