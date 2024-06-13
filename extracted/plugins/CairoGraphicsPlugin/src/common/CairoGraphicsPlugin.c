@@ -968,6 +968,25 @@ primitive_cairo_move_to(void)
 	return null;
 }
 
+EXPORT(sqInt)
+primitive_cairo_rectangle(void)
+{
+	cairo_t *cr = read_cairo_t(interpreterProxy->stackValue(4));
+	double x = interpreterProxy->stackFloatValue(3);
+	double y = interpreterProxy->stackFloatValue(2);
+	double width = interpreterProxy->stackFloatValue(1);
+	double height = interpreterProxy->stackFloatValue(0);
+
+	cairo_rectangle(cr, x, y, width, height);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(4); // leave the receiver on the stack.
+	}
+
+	return null;
+}
+
 /*	Note: This is coded so that it can be run in Squeak. */
 
 /* InterpreterPlugin>>#setInterpreter: */
