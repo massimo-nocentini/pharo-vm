@@ -92,6 +92,11 @@ char *checked_cStringOrNullFor(sqInt oop, int *should_free)
 	return *should_free ? interpreterProxy->cStringOrNullFor(oop) : str;
 }
 
+cairo_t *read_cairo_t(sqInt oop)
+{
+	return (cairo_t *)readAddress(interpreterProxy->fetchPointerofObject(6, oop));
+}
+
 EXPORT(sqInt)
 primitive_pango_cairo_create_layout(void)
 {
@@ -906,7 +911,7 @@ primitive_cairo_fill_preserve(void)
 EXPORT(sqInt)
 primitive_cairo_get_current_point(void)
 {
-	cairo_t *cr = readAddress(interpreterProxy->fetchPointerofObject(6, interpreterProxy->stackValue(0)));
+	cairo_t *cr = read_cairo_t(interpreterProxy->stackValue(0));
 	double x, y;
 
 	cairo_get_current_point(cr, &x, &y);
@@ -917,6 +922,47 @@ primitive_cairo_get_current_point(void)
 	if (!(interpreterProxy->failed()))
 	{
 		interpreterProxy->popthenPush(1, qPoint);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_cairo_new_path(void)
+{
+	cairo_t *cr = read_cairo_t(interpreterProxy->stackValue(0));
+
+	cairo_new_path(cr);
+
+	// leave the receiver on the stack.
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_cairo_clip(void)
+{
+	cairo_t *cr = read_cairo_t(interpreterProxy->stackValue(0));
+
+	cairo_clip(cr);
+
+	// leave the receiver on the stack.
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_cairo_move_to(void)
+{
+	cairo_t *cr = read_cairo_t(interpreterProxy->stackValue(2));
+	double x = interpreterProxy->stackFloatValue(1);
+	double y = interpreterProxy->stackFloatValue(0);
+
+	cairo_move_to(cr, x, y);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(2); // leave the receiver on the stack.
 	}
 
 	return null;
