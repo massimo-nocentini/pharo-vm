@@ -332,6 +332,8 @@ primitive_pango_layout_get_pixel_extents(void)
 {
 
 	PangoLayout *pango = readAddress(interpreterProxy->stackValue(1));
+	// PangoContext *ctx = pango_font_map_create_context(pango_cairo_font_map_get_default());
+	// PangoLayout *pango = pango_layout_new(ctx);
 	sqInt rectangleClass = interpreterProxy->stackValue(0);
 
 	PangoRectangle ink, logical;
@@ -359,6 +361,9 @@ primitive_pango_layout_get_pixel_extents(void)
 		interpreterProxy->popthenPush(3, oop);
 	}
 
+	// g_object_unref(pango);
+	// g_object_unref(ctx);
+
 	return null;
 }
 
@@ -367,6 +372,8 @@ primitive_pango_layout_get_pixel_size(void)
 {
 
 	PangoLayout *pango = readAddress(interpreterProxy->stackValue(0));
+	// PangoContext *ctx = pango_font_map_create_context(pango_cairo_font_map_get_default());
+	// PangoLayout *pango = pango_layout_new(ctx);
 
 	int w, h;
 
@@ -380,6 +387,9 @@ primitive_pango_layout_get_pixel_size(void)
 	{
 		interpreterProxy->popthenPush(2, qPoint);
 	}
+
+	// g_object_unref(pango);
+	// g_object_unref(ctx);
 
 	return null;
 }
@@ -837,6 +847,76 @@ primitive_replace_tabs_with_spaces(void)
 	if (!(interpreterProxy->failed()))
 	{
 		interpreterProxy->popthenPush(2, fixed);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_cairo_get_scaled_font(void)
+{
+	cairo_t *cr = readAddress(interpreterProxy->stackValue(1));
+	sqInt *fontClass = interpreterProxy->stackValue(0);
+
+	cairo_scaled_font_t *font = cairo_get_scaled_font(cr);
+
+	sqInt oop = interpreterProxy->instantiateClassindexableSize(fontClass, 0);
+	sqInt externalAddress = newExternalAddress();
+	writeAddress(externalAddress, font);
+	interpreterProxy->storePointerofObjectwithValue(0, oop, externalAddress);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(3, oop);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_cairo_fill(void)
+{
+	cairo_t *cr = readAddress(interpreterProxy->stackValue(0));
+
+	cairo_fill(cr);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(1); // leave the receiver on the stack.
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_cairo_fill_preserve(void)
+{
+	cairo_t *cr = readAddress(interpreterProxy->stackValue(0));
+
+	cairo_fill_preserve(cr);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(1); // leave the receiver on the stack.
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_cairo_get_current_point(void)
+{
+	cairo_t *cr = readAddress(interpreterProxy->fetchPointerofObject(6, interpreterProxy->stackValue(0)));
+	double x, y;
+
+	cairo_get_current_point(cr, &x, &y);
+
+	sqInt qPoint = interpreterProxy->makePointwithxValueyValue(
+		interpreterProxy->floatObjectOf(x), interpreterProxy->floatObjectOf(y));
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(1, qPoint);
 	}
 
 	return null;
