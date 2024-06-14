@@ -26,6 +26,9 @@ pharo-vm/
 ##
 ## Get latest from https://github.com/github/gitignore/blob/master/VisualStudio.gitignore
 
+#vscode
+.vscode/
+
 # User-specific files
 *.rsuser
 *.suo
@@ -368,4 +371,3 @@ healthchecksdb
 /stack64/generated
 
 **/.DS_Store
-pharo-vm-c-src/PharoVM-10.0.9-de76067-Linux-x86_64-c-src.tar.gz

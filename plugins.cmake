@@ -404,13 +404,13 @@ else()
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/win
         ${CMAKE_CURRENT_SOURCE_DIR}/../current-dependencies/include
-        C:/msys64/ucrt64/include/pango-1.0
-        C:/msys64/ucrt64/include/glib-2.0
-        C:/msys64/ucrt64/lib/glib-2.0/include
-        C:/msys64/ucrt64/include/cairo
-        C:/msys64/ucrt64/include/harfbuzz
-        C:/msys64/ucrt64/include/gdk-pixbuf-2.0
-        C:/msys64/ucrt64/include/gtk-4.0
+        D:/msys64/ucrt64/include/pango-1.0
+        D:/msys64/ucrt64/include/glib-2.0
+        D:/msys64/ucrt64/lib/glib-2.0/include
+        D:/msys64/ucrt64/include/cairo
+        D:/msys64/ucrt64/include/harfbuzz
+        D:/msys64/ucrt64/include/gdk-pixbuf-2.0
+        D:/msys64/ucrt64/include/gtk-4.0
     )
     
     file(GLOB CairoGraphicsPlugin_SOURCES
@@ -426,7 +426,7 @@ if(OSX)
 elseif(UNIX)
     target_link_libraries(CairoGraphicsPlugin PRIVATE "-lpangocairo-1.0 -lcairo -lgdk_pixbuf-2.0 -lgtk-4")
 else()
-    target_link_libraries(CairoGraphicsPlugin PRIVATE "-LC:/msys64/ucrt64/bin -lpango-1.0-0 -lpangocairo-1.0-0 -lglib-2.0-0 -lcairo-2 -lgobject-2.0-0 -lgdk_pixbuf-2.0-0 -lgtk-4-1")
+    target_link_libraries(CairoGraphicsPlugin PRIVATE "-LD:/msys64/ucrt64/bin -lpango-1.0-0 -lpangocairo-1.0-0 -lglib-2.0-0 -lcairo-2 -lgobject-2.0-0 -lgdk_pixbuf-2.0-0 -lgtk-4-1")
 endif()
 
 
@@ -460,7 +460,7 @@ else()
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/include/win
-        C:/msys64/ucrt64/include/
+        D:/msys64/ucrt64/include/
     )
     
     file(GLOB TreeSitterPlugin_SOURCES
@@ -510,7 +510,7 @@ else()
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/include/win
-        C:/msys64/ucrt64/include/
+        D:/msys64/ucrt64/include/
     )
     
     file(GLOB WolframPlugin_SOURCES
