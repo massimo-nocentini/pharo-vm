@@ -8,6 +8,8 @@ static char __buildInfo[] = "CairoGraphicsPlugin VMMaker.oscog-eem.2495 uuid: fc
 #include <time.h>
 #include <pango/pangocairo.h>
 #include <cairo.h>
+#include <gdk-pixbuf/gdk-pixbuf.h>
+#include <gdk/gdk.h>
 
 /* Default EXPORT macro that does nothing (see comment in sq.h): */
 #define EXPORT(returnType) returnType
@@ -916,8 +918,9 @@ primitive_cairo_get_current_point(void)
 
 	cairo_get_current_point(cr, &x, &y);
 
-	sqInt qPoint = interpreterProxy->makePointwithxValueyValue(
-		interpreterProxy->floatObjectOf(x), interpreterProxy->floatObjectOf(y));
+	sqInt qPoint = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classPoint(), 0);
+	interpreterProxy->storePointerofObjectwithValue(0, qPoint, interpreterProxy->floatObjectOf(x));
+	interpreterProxy->storePointerofObjectwithValue(1, qPoint, interpreterProxy->floatObjectOf(y));
 
 	if (!(interpreterProxy->failed()))
 	{
@@ -982,6 +985,100 @@ primitive_cairo_rectangle(void)
 	if (!(interpreterProxy->failed()))
 	{
 		interpreterProxy->pop(4); // leave the receiver on the stack.
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_gdk_pixbuf_new_from_file(void)
+{
+	int should_free;
+	char *filename = checked_cStringOrNullFor(interpreterProxy->stackValue(0), &should_free);
+
+	GError *error = NULL;
+
+	GdkPixbuf *buf = gdk_pixbuf_new_from_file(filename, &error);
+
+	if (error != NULL)
+	{
+		printf("Error loading image: %s\n", error->message);
+		g_error_free(error);
+	}
+
+	sqInt oop = newExternalAddress();
+	writeAddress(oop, buf);
+
+	if (should_free)
+		free(filename);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(2, oop);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_gdk_pixbuf_new_from_inline(void)
+{
+	sqInt content = interpreterProxy->stackValue(0);
+	int length = interpreterProxy->stSizeOf(content);
+
+	GError *error = NULL;
+
+	GdkPixbuf *buf = gdk_pixbuf_new_from_inline(
+		length, interpreterProxy->firstIndexableField(content), 1, &error);
+
+	if (error != NULL)
+	{
+		printf("Error loading image: %s\n", error->message);
+		g_error_free(error);
+	}
+
+	sqInt oop = newExternalAddress();
+	writeAddress(oop, buf);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(2, oop);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_gdk_pixbuf_get_width_height(void)
+{
+	GdkPixbuf *buf = readAddress(interpreterProxy->stackValue(0));
+
+	int width = gdk_pixbuf_get_width(buf);
+	int height = gdk_pixbuf_get_height(buf);
+
+	sqInt qPoint = interpreterProxy->makePointwithxValueyValue(width, height);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(2, qPoint);
+	}
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_gdk_cairo_set_source_pixbuf(void)
+{
+	cairo_t *cr = read_cairo_t(interpreterProxy->stackValue(3));
+	GdkPixbuf *buf = readAddress(interpreterProxy->stackValue(2));
+	double x = interpreterProxy->stackFloatValue(1);
+	double y = interpreterProxy->stackFloatValue(0);
+
+	gdk_cairo_set_source_pixbuf(cr, buf, x, y);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->pop(3); // leave the receiver on the stack.
 	}
 
 	return null;

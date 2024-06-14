@@ -30,7 +30,13 @@
         "string_view": "c",
         "sq.h": "c",
         "api.h": "c",
-        "treesitterplugin.h": "c"
+        "treesitterplugin.h": "c",
+        "gdk-pixbuf.h": "c",
+        "glib.h": "c",
+        "gdk-pixbuf-macros.h": "c",
+        "gdk.h": "c",
+        "gdkcairo.h": "c",
+        "gdkdmabufformats.h": "c"
     },
     "cmake.configureOnOpen": false,
     "C_Cpp.default.compilerPath": "/usr/bin/clang++-16"
