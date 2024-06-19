@@ -318,6 +318,132 @@ primitive_fma(void)
 	return null;
 }
 
+#define KK 100										   /* the long lag */
+#define LL 37										   /* the short lag */
+#define mod_sum(x, y) (((x) + (y)) - (int)((x) + (y))) /* (x+y) mod 1.0 */
+
+// double ran_u[KK]; /* the generator state */
+void ranf_array(double aa[], int n, double ran_u[])
+{
+	register int i, j;
+	for (j = 0; j < KK; j++)
+		aa[j] = ran_u[j];
+	for (; j < n; j++)
+		aa[j] = mod_sum(aa[j - KK], aa[j - LL]);
+	for (i = 0; i < LL; i++, j++)
+		ran_u[i] = mod_sum(aa[j - KK], aa[j - LL]);
+	for (; i < KK; i++, j++)
+		ran_u[i] = mod_sum(aa[j - KK], ran_u[i - LL]);
+}
+
+/* the following routines are adapted from exercise 3.6--15 */
+/* after calling ranf_start, get new randoms by, e.g., "x=ranf_arr_next()" */
+
+// double ranf_arr_dummy = -1.0, ranf_arr_started = -1.0;
+//  double *ranf_arr_ptr = &ranf_arr_dummy; /* the next random fraction, or -1 */
+
+#define TT 70 /* guaranteed separation between streams */
+#define is_odd(s) ((s) & 1)
+
+void ranf_start(long seed, double ran_u[])
+{
+	register int t, s, j;
+	double u[KK + KK - 1];
+	double ulp = (1.0 / (1L << 30)) / (1L << 22); /* 2 to the -52 */
+	double ss = 2.0 * ulp * ((seed & 0x3fffffff) + 2);
+
+	for (j = 0; j < KK; j++)
+	{
+		u[j] = ss; /* bootstrap the buffer */
+		ss += ss;
+		if (ss >= 1.0)
+			ss -= 1.0 - 2 * ulp; /* cyclic shift of 51 bits */
+	}
+	u[1] += ulp; /* make u[1] (and only u[1]) "odd" */
+	for (s = seed & 0x3fffffff, t = TT - 1; t;)
+	{
+		for (j = KK - 1; j > 0; j--)
+			u[j + j] = u[j], u[j + j - 1] = 0.0; /* "square" */
+		for (j = KK + KK - 2; j >= KK; j--)
+		{
+			u[j - (KK - LL)] = mod_sum(u[j - (KK - LL)], u[j]);
+			u[j - KK] = mod_sum(u[j - KK], u[j]);
+		}
+		if (is_odd(s))
+		{ /* "multiply by z" */
+			for (j = KK; j > 0; j--)
+				u[j] = u[j - 1];
+			u[0] = u[KK]; /* shift the buffer cyclically */
+			u[LL] = mod_sum(u[LL], u[KK]);
+		}
+		if (s)
+			s >>= 1;
+		else
+			t--;
+	}
+	for (j = 0; j < LL; j++)
+		ran_u[j + KK - LL] = u[j];
+	for (; j < KK; j++)
+		ran_u[j - LL] = u[j];
+	for (j = 0; j < 10; j++)
+		ranf_array(u, KK + KK - 1, ran_u); /* warm things up */
+}
+
+double ranf_arr_cycle(double ran_u[], int QUALITY, double *ranf_arr_buf)
+{
+	ranf_array(ranf_arr_buf, QUALITY, ran_u);
+	ranf_arr_buf[KK] = -1;
+	return ranf_arr_buf[0];
+}
+
+EXPORT(sqInt)
+primitive_randomknuth_start(void)
+{
+
+	sqInt oop = interpreterProxy->stackValue(0); // the receiver, indeed.
+	sqInt stateArray = interpreterProxy->fetchPointerofObject(0, oop);
+
+	long seed = interpreterProxy->fetchIntegerofObject(1, oop);
+
+	double *ran_u = interpreterProxy->firstIndexableField(interpreterProxy->stObjectat(stateArray, 1));
+	double *ranf_arr_buf = interpreterProxy->firstIndexableField(interpreterProxy->stObjectat(stateArray, 2));
+
+	ranf_start(seed, ran_u);
+
+	return null;
+}
+
+EXPORT(sqInt)
+primitive_randomknuth_next(void)
+{
+
+	sqInt oop = interpreterProxy->stackValue(0); // the receiver, indeed.
+	sqInt stateArray = interpreterProxy->fetchPointerofObject(0, oop);
+	double *ran_u = interpreterProxy->firstIndexableField(interpreterProxy->stObjectat(stateArray, 1));
+	double *ranf_arr_buf = interpreterProxy->firstIndexableField(interpreterProxy->stObjectat(stateArray, 2));
+	sqInt cursor = interpreterProxy->integerValueOf(interpreterProxy->stObjectat(stateArray, 3));
+	sqInt quality = interpreterProxy->fetchIntegerofObject(4, oop);
+
+	double r = ranf_arr_buf[cursor - 1];
+
+	if (r > 0.0)
+	{
+		interpreterProxy->stObjectatput(stateArray, 3, interpreterProxy->integerObjectOf(cursor + 1));
+	}
+	else
+	{
+		r = ranf_arr_cycle(ran_u, quality, ranf_arr_buf);
+		interpreterProxy->stObjectatput(stateArray, 3, interpreterProxy->integerObjectOf(2));
+	}
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(1, interpreterProxy->floatObjectOf(r));
+	}
+
+	return null;
+}
+
 /*	Note: This is coded so that it can be run in Squeak. */
 
 /* InterpreterPlugin>>#setInterpreter: */
