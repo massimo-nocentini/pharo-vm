@@ -18,8 +18,10 @@
 				"command": [
 					"cd ../ &&",
 					"export CC=clang && export CXX=clang++ &&",
-					"/usr/local/Cellar/cmake/3.29.2/bin/cmake --build pharo-vm-build --target install &&",
-					"rm -rf build/ pharo-vm-build/build/dist/Pharo.app/Contents/MacOS/Plugins/{libss*,libcairo*,libcrypto*,libgit2.*,libharfbuzz*,libfontconfig*,libfreetype*,libpixman*,libpng*}"
+					"/usr/local/Cellar/cmake/3.29.6/bin/cmake --build pharo-vm-build --target install &&",
+					"rm -rf build/ pharo-vm-build/build/dist/Pharo.app/Contents/MacOS/Plugins/{libss*,libcairo*,libcrypto*,libgit2.*,libharfbuzz*,libfontconfig*,libfreetype*,libpixman*,libpng*} &&",
+					"mkdir -p pharo-vm-build/build/dist/share &&",
+					"cp -r /usr/local/share/tree-sitter pharo-vm-build/build/dist/share/"
 				]
 			},
 			"windows": {
@@ -37,7 +39,7 @@
 			"linux": {
 				"command": [
 					"cd ../ && rm -rf pharo-vm-c-src && mkdir -p pharo-vm-c-src && cd pharo-vm-c-src &&",
-					"wget https://files.pharo.org/vm/pharo-spur64-headless/Linux-x86_64/source/PharoVM-10.2.1-d1bfe9e-Linux-x86_64-c-src.zip &&",
+					"wget https://files.pharo.org/vm/pharo-spur64-headless/Linux-x86_64/source/PharoVM-10.2.1-d1bfe9e-Linux-x86_64-c-src.zip  --no-verbose &&",
 					"unzip PharoVM-10.2.1-d1bfe9e-Linux-x86_64-c-src.zip && cd ../ &&",
 					"export CC=clang && export CXX=clang++ &&",
 					"cmake -S pharo-vm -B pharo-vm-build -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DBUILD_IS_RELEASE=ON -DICEBERG_DEFAULT_REMOTE=httpsUrl -DGENERATE_SOURCES=FALSE -DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/"
@@ -46,10 +48,10 @@
 			"osx": {
 				"command": [
 					"cd ../ && rm -rf pharo-vm-c-src && mkdir -p pharo-vm-c-src && cd pharo-vm-c-src &&",
-					"wget https://files.pharo.org/vm/pharo-spur64-headless/Darwin-x86_64/source/PharoVM-10.2.1-d1bfe9ec-Darwin-x86_64-c-src.zip &&",
+					"wget https://files.pharo.org/vm/pharo-spur64-headless/Darwin-x86_64/source/PharoVM-10.2.1-d1bfe9ec-Darwin-x86_64-c-src.zip  --no-verbose &&",
 					"unzip PharoVM-10.2.1-d1bfe9ec-Darwin-x86_64-c-src.zip && cd ../ &&",
 					"export CC=clang && export CXX=clang++ &&",
-					"/usr/local/Cellar/cmake/3.29.2/bin/cmake -S pharo-vm -B pharo-vm-build -DALWAYS_INTERACTIVE=TRUE -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DBUILD_IS_RELEASE=ON -DICEBERG_DEFAULT_REMOTE=httpsUrl -DGENERATE_SOURCES=FALSE -DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/"
+					"/usr/local/Cellar/cmake/3.29.6/bin/cmake -S pharo-vm -B pharo-vm-build -DALWAYS_INTERACTIVE=TRUE -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DBUILD_IS_RELEASE=ON -DICEBERG_DEFAULT_REMOTE=httpsUrl -DGENERATE_SOURCES=FALSE -DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/"
 				]
 			},
 			"windows": {

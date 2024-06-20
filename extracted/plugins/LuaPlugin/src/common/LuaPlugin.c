@@ -1039,7 +1039,7 @@ primitive_lua_topointer(void)
 	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
 	sqInt idx = interpreterProxy->stackIntegerValue(0);
 
-	void *ptr = lua_topointer(L, idx);
+	void *ptr = (void *)lua_topointer(L, idx);
 
 	sqInt externalAddress = newExternalAddress();
 

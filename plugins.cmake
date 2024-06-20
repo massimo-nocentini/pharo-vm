@@ -229,7 +229,6 @@ else()
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/DateTimeFormatterPlugin/include/win
-        # ${SYSTEMDRIVE}/msys64/usr/local/include
         ${CMAKE_CURRENT_SOURCE_DIR}/../current-dependencies/include
     )
     
@@ -246,7 +245,6 @@ if(OSX)
 elseif(UNIX)
     target_link_libraries(DateTimeFormatterPlugin PRIVATE "-ldatetimeformatter")
 else()
-    # target_link_libraries(DateTimeFormatterPlugin PRIVATE "-L${SYSTEMDRIVE}/msys64/usr/local/lib -ldatetimeformatter")
     target_link_libraries(DateTimeFormatterPlugin PRIVATE "-L${CMAKE_CURRENT_SOURCE_DIR}/../current-dependencies/lib -ldatetimeformatter")
 endif()
 
@@ -261,6 +259,7 @@ if(OSX)
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/LuaPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/LuaPlugin/include/osx
+        /usr/local/include
     )
     
     file(GLOB LuaPlugin_SOURCES
@@ -281,7 +280,6 @@ else()
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/LuaPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/LuaPlugin/include/win
-        # ${SYSTEMDRIVE}/msys64/usr/local/include
         ${CMAKE_CURRENT_SOURCE_DIR}/../current-dependencies/include
     )
     
@@ -298,7 +296,6 @@ if(OSX)
 elseif(UNIX)
     target_link_libraries(LuaPlugin PRIVATE "-llua")
 else()
-    # target_link_libraries(LuaPlugin PRIVATE "-L${SYSTEMDRIVE}/msys64/usr/local/lib -llua54")
     target_link_libraries(LuaPlugin PRIVATE "-L${CMAKE_CURRENT_SOURCE_DIR}/../current-dependencies/lib -llua54")
 endif()
 
@@ -312,6 +309,7 @@ if(OSX)
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/include/osx
+        /usr/local/include
     )
     
     file(GLOB UtilsPlugin_SOURCES
@@ -332,7 +330,6 @@ else()
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/include/win
-        # ${SYSTEMDRIVE}/msys64/usr/local/include
         ${CMAKE_CURRENT_SOURCE_DIR}/../current-dependencies/include
     )
     
@@ -349,7 +346,6 @@ if(OSX)
 elseif(UNIX)
     target_link_libraries(UtilsPlugin PRIVATE "-ltimsort")
 else()
-    # target_link_libraries(UtilsPlugin PRIVATE "-L${SYSTEMDRIVE}/msys64/usr/local/lib -ltimsort")
     target_link_libraries(UtilsPlugin PRIVATE "-L${CMAKE_CURRENT_SOURCE_DIR}/../current-dependencies/lib -ltimsort")
 endif()
 
@@ -364,11 +360,13 @@ if(OSX)
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/osx
-        /usr/local/Cellar/pango/1.52.2/include/pango-1.0
-        /usr/local/Cellar/glib/2.80.0_2/include/glib-2.0
-        /usr/local/Cellar/glib/2.80.0_2/lib/glib-2.0/include
-        /usr/local/Cellar/harfbuzz/8.4.0/include/harfbuzz
+        /usr/local/Cellar/pango/1.54.0/include/pango-1.0
+        /usr/local/Cellar/glib/2.80.3/include/glib-2.0
+        /usr/local/Cellar/glib/2.80.3/lib/glib-2.0/include
+        /usr/local/Cellar/harfbuzz/8.5.0/include/harfbuzz
         /usr/local/Cellar/cairo/1.18.0/include/cairo
+        /usr/local/Cellar/gdk-pixbuf/2.42.12/include/gdk-pixbuf-2.0
+        /usr/local/Cellar/gtk4/4.14.4/include/gtk-4.0/
     )
     
     file(GLOB CairoGraphicsPlugin_SOURCES
@@ -422,7 +420,7 @@ endif()
 addLibraryWithRPATH(CairoGraphicsPlugin ${CairoGraphicsPlugin_SOURCES})
 
 if(OSX)
-	target_link_libraries(CairoGraphicsPlugin PRIVATE "-L/usr/local/Cellar/pango/1.52.2/lib/ -L/usr/local/Cellar/cairo/1.18.0/lib/ -L/usr/local/Cellar/glib/2.80.0_2/lib/ -lpango-1.0 -lpangocairo-1.0 -lcairo -lglib-2.0 -lgobject-2.0")
+	target_link_libraries(CairoGraphicsPlugin PRIVATE "-L/usr/local/Cellar/pango/1.54.0/lib/ -L/usr/local/Cellar/cairo/1.18.0/lib/ -L/usr/local/Cellar/glib/2.80.3/lib/ -L/usr/local/Cellar/gtk4/4.14.4/lib/ -L/usr/local/Cellar/gdk-pixbuf/2.42.12/lib/ -lpango-1.0 -lpangocairo-1.0 -lcairo -lglib-2.0 -lgobject-2.0 -lgdk_pixbuf-2.0.0 -lgtk-4.1")
 elseif(UNIX)
     target_link_libraries(CairoGraphicsPlugin PRIVATE "-lpangocairo-1.0 -lcairo -lgdk_pixbuf-2.0 -lgtk-4")
 else()
@@ -472,7 +470,7 @@ endif()
 addLibraryWithRPATH(TreeSitterPlugin ${TreeSitterPlugin_SOURCES})
 
 if(OSX)
-	target_link_libraries(TreeSitterPlugin PRIVATE "-ltree-sitter")
+	target_link_libraries(TreeSitterPlugin PRIVATE "-L/usr/local/lib -L/usr/local/Cellar/tree-sitter/0.22.6/lib/ -ltree-sitter -ltree-sitter-c -ltree-sitter-json -ltree-sitter-javascript -ltree-sitter-python")
 elseif(UNIX)
     target_link_libraries(TreeSitterPlugin PRIVATE "-ltree-sitter -ltree-sitter-c -ltree-sitter-json -ltree-sitter-javascript -ltree-sitter-python")
 else()
@@ -505,7 +503,9 @@ elseif(UNIX)
     file(GLOB WolframPlugin_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/src/common/*.c
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/src/unix/*.c   
-    )    
+    )
+
+    addLibraryWithRPATH(WolframPlugin ${WolframPlugin_SOURCES})
 else()
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/include/common
@@ -516,13 +516,14 @@ else()
     file(GLOB WolframPlugin_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/src/common/*.c
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/src/win/*.c   
-    )    
+    )
+
+    addLibraryWithRPATH(WolframPlugin ${WolframPlugin_SOURCES})
 endif()
 
-addLibraryWithRPATH(WolframPlugin ${WolframPlugin_SOURCES})
 
 if(OSX)
-	target_link_libraries(WolframPlugin PRIVATE "-L${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/lib -lWSTPi4")
+	# target_link_libraries(WolframPlugin PRIVATE "-L${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/lib -L/usr/local/lib -lWSTPi4")
 elseif(UNIX)
     target_link_libraries(WolframPlugin PRIVATE "-L${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/lib -lWSTP64i4")
 else()

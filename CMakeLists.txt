@@ -8,6 +8,7 @@
 cmake_minimum_required(VERSION 3.7.2)
 # Use new and simpler escape sequences
 cmake_policy(SET CMP0053 NEW)
+cmake_policy(SET CMP0135 NEW)
 
 include(cmake/BuildType.cmake)
 include(macros.cmake)
