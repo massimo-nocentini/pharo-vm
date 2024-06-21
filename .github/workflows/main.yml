@@ -45,6 +45,7 @@ jobs:
         run: bash pharo-vm/scripts/github-ubuntu.sh
       - name: Upload release assets
         run: |
+          cd pharo-vm
           gh release upload r${{github.run_number}} ../pharo-vm-build/build/dist/pharo-vm-ubuntu.zip
           gh release upload r${{github.run_number}} ../booklet-image/Pharo130-booklet.zip
   
@@ -110,7 +111,7 @@ jobs:
       - name: Install Homebrew
         run: /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"  
       - name: Install Dependencies  
-        run: brew install curl cmake bzip2 expat libffi freetype pixman libpng sdl2 sdl2_gfx sdl2_image sdl2_mixer sdl2_net sdl2_ttf pango cairo libgit2  libgit2-glib poppler libssh2 gtk4 gdk-pixbuf
+        run: brew install curl cmake bzip2 expat libffi freetype pixman libpng sdl2 sdl2_gfx sdl2_image sdl2_mixer sdl2_net sdl2_ttf pango cairo libgit2  libgit2-glib poppler libssh2 gtk4 gdk-pixbuf node tree-sitter
       - name: Build Pharo VM
         run: bash pharo-vm/scripts/github-macos.sh
       - name: Upload release assets
