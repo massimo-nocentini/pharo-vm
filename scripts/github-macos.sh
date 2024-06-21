@@ -46,11 +46,11 @@ cd ../
 
 mkdir pharo-vm-c-src
 cd pharo-vm-c-src
-wget wget https://files.pharo.org/vm/pharo-spur64-headless/Darwin-x86_64/source/PharoVM-10.2.1-d1bfe9ec-Darwin-x86_64-c-src.zip --no-verbose
+wget https://files.pharo.org/vm/pharo-spur64-headless/Darwin-x86_64/source/PharoVM-10.2.1-d1bfe9ec-Darwin-x86_64-c-src.zip --no-verbose
 unzip PharoVM-10.2.1-d1bfe9ec-Darwin-x86_64-c-src.zip
 cd ..
 
-cmake -S pharo-vm -B pharo-vm-build -DALWAYS_INTERACTIVE=TRUE -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DBUILD_IS_RELEASE=ON -DICEBERG_DEFAULT_REMOTE=httpsUrl -DGENERATE_SOURCES=FALSE -DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/
+cmake -S pharo-vm -B pharo-vm-build -DALWAYS_INTERACTIVE=TRUE -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DBUILD_IS_RELEASE=ON -DICEBERG_DEFAULT_REMOTE=httpsUrl -DGENERATE_SOURCES=TRUE #-DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/
 cmake --build pharo-vm-build --target install
 #rm -rf build/ pharo-vm-build/build/dist/lib/{libss*,libcairo.so*,libgit2.*,libharfbuzz.so*,libfontconfig.so*} #,libbz2*,libexpat*,libffi*,libfreetype*,libpixman*,libpng*"
 

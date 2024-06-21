@@ -51,7 +51,7 @@
 					"wget https://files.pharo.org/vm/pharo-spur64-headless/Darwin-x86_64/source/PharoVM-10.2.1-d1bfe9ec-Darwin-x86_64-c-src.zip  --no-verbose &&",
 					"unzip PharoVM-10.2.1-d1bfe9ec-Darwin-x86_64-c-src.zip && cd ../ &&",
 					"export CC=clang && export CXX=clang++ &&",
-					"/usr/local/Cellar/cmake/3.29.6/bin/cmake -S pharo-vm -B pharo-vm-build -DALWAYS_INTERACTIVE=TRUE -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DBUILD_IS_RELEASE=ON -DICEBERG_DEFAULT_REMOTE=httpsUrl -DGENERATE_SOURCES=FALSE -DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/"
+					"/usr/local/Cellar/cmake/3.29.6/bin/cmake -S pharo-vm -B pharo-vm-build -DALWAYS_INTERACTIVE=TRUE -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DBUILD_IS_RELEASE=ON -DICEBERG_DEFAULT_REMOTE=httpsUrl -DGENERATE_SOURCES=TRUE #-DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/"
 				]
 			},
 			"windows": {
