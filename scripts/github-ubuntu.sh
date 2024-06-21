@@ -95,3 +95,23 @@ cp -r tree-sitter/tree-sitter-python/queries/ pharo-vm-build/build/dist/share/tr
 
 cd pharo-vm-build/build/dist/
 zip -r pharo-vm-ubuntu.zip *
+
+cd ../../../
+
+mkdir booklet-image
+cd booklet-image
+
+curl https://get.pharo.org/64/130 | bash
+
+../pharo-vm-build/build/dist/pharo Pharo.image eval "
+[ Metacello new
+    baseline: 'BookletDSst';
+    repository: 'github://massimo-nocentini/Booklet-DSst/src';
+    load ] on: MCMergeOrLoadWarning do: [:warning | warning load ].
+
+Smalltalk snapshot: true andQuit: true."
+
+rm -rf pharo-local/iceberg
+zip -r Pharo130-booklet.zip *
+
+cd ..
