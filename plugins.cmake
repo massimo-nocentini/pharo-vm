@@ -504,8 +504,6 @@ elseif(UNIX)
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/src/common/*.c
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/src/unix/*.c   
     )
-
-    addLibraryWithRPATH(WolframPlugin ${WolframPlugin_SOURCES})
 else()
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/include/common
@@ -517,13 +515,12 @@ else()
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/src/common/*.c
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/src/win/*.c   
     )
-
-    addLibraryWithRPATH(WolframPlugin ${WolframPlugin_SOURCES})
 endif()
 
+addLibraryWithRPATH(WolframPlugin ${WolframPlugin_SOURCES})
 
 if(OSX)
-    # target_link_libraries(WolframPlugin PRIVATE "-L${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/lib -lWSTPi4")
+    target_link_libraries(WolframPlugin PRIVATE "-L${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/lib -lWSTPi4 -lstdc++")
 elseif(UNIX)
     target_link_libraries(WolframPlugin PRIVATE "-L${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/lib -lWSTP64i4")
 else()
