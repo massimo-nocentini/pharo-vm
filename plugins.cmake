@@ -360,13 +360,13 @@ if(OSX)
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/osx
-        /usr/local/Cellar/pango/1.54.0/include/pango-1.0
-        /usr/local/Cellar/glib/2.80.3/include/glib-2.0
-        /usr/local/Cellar/glib/2.80.3/lib/glib-2.0/include
-        /usr/local/Cellar/harfbuzz/8.5.0/include/harfbuzz
-        /usr/local/Cellar/cairo/1.18.0/include/cairo
-        /usr/local/Cellar/gdk-pixbuf/2.42.12/include/gdk-pixbuf-2.0
-        /usr/local/Cellar/gtk4/4.14.4/include/gtk-4.0/
+        /usr/local/include/pango-1.0
+        /usr/local/lib/glib-2.0/include
+        /usr/local/include/glib-2.0
+        /usr/local/include/harfbuzz
+        /usr/local/include/cairo
+        /usr/local/include/gdk-pixbuf-2.0
+        /usr/local/include/gtk-4.0
     )
     
     file(GLOB CairoGraphicsPlugin_SOURCES
@@ -420,7 +420,7 @@ endif()
 addLibraryWithRPATH(CairoGraphicsPlugin ${CairoGraphicsPlugin_SOURCES})
 
 if(OSX)
-	target_link_libraries(CairoGraphicsPlugin PRIVATE "-L/usr/local/Cellar/pango/1.54.0/lib/ -L/usr/local/Cellar/cairo/1.18.0/lib/ -L/usr/local/Cellar/glib/2.80.3/lib/ -L/usr/local/Cellar/gtk4/4.14.4/lib/ -L/usr/local/Cellar/gdk-pixbuf/2.42.12/lib/ -lpango-1.0 -lpangocairo-1.0 -lcairo -lglib-2.0 -lgobject-2.0 -lgdk_pixbuf-2.0.0 -lgtk-4.1")
+	target_link_libraries(CairoGraphicsPlugin PRIVATE "-L/usr/local/lib -lpango-1.0 -lpangocairo-1.0 -lcairo -lglib-2.0 -lgobject-2.0 -lgdk_pixbuf-2.0.0 -lgtk-4.1")
 elseif(UNIX)
     target_link_libraries(CairoGraphicsPlugin PRIVATE "-lpangocairo-1.0 -lcairo -lgdk_pixbuf-2.0 -lgtk-4")
 else()
@@ -523,7 +523,7 @@ endif()
 
 
 if(OSX)
-	# target_link_libraries(WolframPlugin PRIVATE "-L${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/lib -L/usr/local/lib -lWSTPi4")
+    # target_link_libraries(WolframPlugin PRIVATE "-L${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/lib -lWSTPi4")
 elseif(UNIX)
     target_link_libraries(WolframPlugin PRIVATE "-L${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/WolframPlugin/lib -lWSTP64i4")
 else()

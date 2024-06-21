@@ -1,5 +1,4 @@
 
-TREE_SITTER_BIN_PATH=/usr/local/Cellar/tree-sitter/0.22.6/bin
 
 wget https://www.lua.org/ftp/lua-5.4.6.tar.gz --no-verbose
 tar xfz lua-5.4.6.tar.gz
@@ -20,26 +19,26 @@ cd ../../
 
 git clone --depth 1 https://github.com/tree-sitter/tree-sitter-c.git
 cd tree-sitter-c
-${TREE_SITTER_BIN_PATH}/tree-sitter generate
+tree-sitter generate
 make && sudo make install
 cd ../
 
 git clone --depth 1 https://github.com/tree-sitter/tree-sitter-json.git
 cd tree-sitter-json
-${TREE_SITTER_BIN_PATH}/tree-sitter generate
+tree-sitter generate
 make && sudo make install
 cd ../
 
 git clone --depth 1 https://github.com/tree-sitter/tree-sitter-javascript.git
 cd tree-sitter-javascript
-${TREE_SITTER_BIN_PATH}/tree-sitter generate
+tree-sitter generate
 make && sudo make install
 cd ../
 
 git clone --depth 1 https://github.com/tree-sitter/tree-sitter-python.git
 cd tree-sitter-python
-${TREE_SITTER_BIN_PATH}/tree-sitter generate
-${TREE_SITTER_BIN_PATH}/tree-sitter generate
+tree-sitter generate
+tree-sitter generate
 make && sudo make install
 cd ../
 
