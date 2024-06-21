@@ -114,7 +114,8 @@ jobs:
         run: |
           brew install wget curl cmake bzip2 expat libffi freetype pixman libpng sdl2 sdl2_gfx sdl2_image sdl2_mixer sdl2_net sdl2_ttf pango cairo libgit2  libgit2-glib poppler libssh2 gtk4 gdk-pixbuf node tree-sitter
           sudo ln -s /usr/local/Cellar/tree-sitter/0.22.6/bin/tree-sitter /usr/local/bin/tree-sitter
-          sudo ln -s /usr/local/Cellar/cmake/3.29.6/bin/cmake /usr/local/bin/cmake
+          sudo ln -s /usr/local/Cellar/cmake/3.29.6/bin/cmake /usr/local/bin/cmake-brew
+          sudo update_dyld_shared_cache
       - name: Build Pharo VM
         run: bash pharo-vm/scripts/github-macos.sh
       - name: Upload release assets
