@@ -17,6 +17,10 @@ cd timsort.c/src
 make macos && sudo make install-macos
 cd ../../
 
+
+mkdir tree-sitter
+cd tree-sitter
+
 git clone --depth 1 https://github.com/tree-sitter/tree-sitter-c.git
 cd tree-sitter-c
 tree-sitter generate
