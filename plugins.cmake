@@ -470,7 +470,7 @@ endif()
 addLibraryWithRPATH(TreeSitterPlugin ${TreeSitterPlugin_SOURCES})
 
 if(OSX)
-	target_link_libraries(TreeSitterPlugin PRIVATE "-L/usr/local/lib -L/usr/local/Cellar/tree-sitter/0.22.6/lib/ -ltree-sitter -ltree-sitter-c -ltree-sitter-json -ltree-sitter-javascript -ltree-sitter-python")
+	target_link_libraries(TreeSitterPlugin PRIVATE "-L/usr/local/lib -ltree-sitter -ltree-sitter-c -ltree-sitter-json -ltree-sitter-javascript -ltree-sitter-python")
 elseif(UNIX)
     target_link_libraries(TreeSitterPlugin PRIVATE "-ltree-sitter -ltree-sitter-c -ltree-sitter-json -ltree-sitter-javascript -ltree-sitter-python")
 else()
