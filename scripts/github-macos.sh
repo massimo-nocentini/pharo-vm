@@ -17,6 +17,8 @@ cd timsort.c/src
 make macos && sudo make install-macos
 cd ../../
 
+ls /usr/local/opt/pango/include/pango-1.0/
+
 
 mkdir tree-sitter
 cd tree-sitter
