@@ -103,7 +103,7 @@ jobs:
       CC: clang
       CXX: clang++
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    runs-on: macos-latest
+    runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
         with:
