@@ -1,8 +1,8 @@
 
 
-wget https://www.lua.org/ftp/lua-5.4.6.tar.gz --no-verbose
-tar xfz lua-5.4.6.tar.gz
-cd lua-5.4.6
+wget https://www.lua.org/ftp/lua-5.4.7.tar.gz --no-verbose
+tar xfz lua-5.4.7.tar.gz
+cd lua-5.4.7
 make "MYCFLAGS=-fPIC" macosx
 sudo make install
 cd ..
@@ -16,9 +16,6 @@ git clone --depth 1 https://github.com/massimo-nocentini/timsort.c.git
 cd timsort.c/src
 make macos && sudo make install-macos
 cd ../../
-
-ls /usr/local/opt/pango/include/pango-1.0/
-
 
 mkdir tree-sitter
 cd tree-sitter

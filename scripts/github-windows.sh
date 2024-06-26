@@ -7,9 +7,9 @@ mkdir current-dependencies
 mkdir current-dependencies/include
 mkdir current-dependencies/lib
 
-wget https://www.lua.org/ftp/lua-5.4.6.tar.gz
-tar xfz lua-5.4.6.tar.gz
-cd lua-5.4.6
+wget https://www.lua.org/ftp/lua-5.4.7.tar.gz
+tar xfz lua-5.4.7.tar.gz
+cd lua-5.4.7
 mingw32-make mingw
 cd src
 cp lua.exe luac.exe lua54.dll /ucrt64/bin/

@@ -1,7 +1,7 @@
 
-wget https://www.lua.org/ftp/lua-5.4.6.tar.gz --no-verbose
-tar xfz lua-5.4.6.tar.gz
-cd lua-5.4.6
+wget https://www.lua.org/ftp/lua-5.4.7.tar.gz --no-verbose
+tar xfz lua-5.4.7.tar.gz
+cd lua-5.4.7
 make "MYCFLAGS=-fPIC" linux
 sudo make install
 cd ..
@@ -27,10 +27,12 @@ cd ../../
 
 mkdir tree-sitter
 cd tree-sitter
+
 git clone --depth 1 https://github.com/tree-sitter/tree-sitter.git
 cd tree-sitter/
 make && sudo make install
 cd ../
+
 wget https://github.com/tree-sitter/tree-sitter/releases/latest/download/tree-sitter-linux-x64.gz --no-verbose
 gunzip -d -k -r -v tree-sitter-linux-x64
 chmod +x tree-sitter-linux-x64
@@ -63,11 +65,11 @@ cd ../
 
 cd ../
 
-mkdir pharo-vm-c-src
-cd pharo-vm-c-src
-wget https://files.pharo.org/vm/pharo-spur64-headless/Linux-x86_64/source/PharoVM-10.2.1-d1bfe9e-Linux-x86_64-c-src.zip --no-verbose
-unzip PharoVM-10.2.1-d1bfe9e-Linux-x86_64-c-src.zip
-cd ..
+# mkdir pharo-vm-c-src
+# cd pharo-vm-c-src
+# wget https://files.pharo.org/vm/pharo-spur64-headless/Linux-x86_64/source/PharoVM-10.2.1-d1bfe9e-Linux-x86_64-c-src.zip --no-verbose
+# unzip PharoVM-10.2.1-d1bfe9e-Linux-x86_64-c-src.zip
+# cd ..
 
 cmake -S pharo-vm -B pharo-vm-build -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DBUILD_IS_RELEASE=ON -DICEBERG_DEFAULT_REMOTE=httpsUrl -DGENERATE_SOURCES=TRUE #-DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/
 cmake --build pharo-vm-build --target install
