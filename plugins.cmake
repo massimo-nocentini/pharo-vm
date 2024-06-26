@@ -357,16 +357,52 @@ endif()
 message(STATUS "Adding plugin: CairoGraphicsPlugin")
 
 if(OSX)
+    execute_process(
+        COMMAND brew --prefix pango
+        OUTPUT_VARIABLE PANGO_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
+    execute_process(
+        COMMAND brew --prefix glib
+        OUTPUT_VARIABLE GLIB_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
+    execute_process(
+        COMMAND brew --prefix harfbuzz
+        OUTPUT_VARIABLE HARFBUZZ_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
+    execute_process(
+        COMMAND brew --prefix cairo
+        OUTPUT_VARIABLE CAIRO_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
+    execute_process(
+        COMMAND brew --prefix gdk-pixbuf
+        OUTPUT_VARIABLE GDK_PIXBUF_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
+    execute_process(
+        COMMAND brew --prefix gtk4
+        OUTPUT_VARIABLE GTK4_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/CairoGraphicsPlugin/include/osx
-        /usr/local/include/pango-1.0
-        /usr/local/lib/glib-2.0/include
-        /usr/local/include/glib-2.0
-        /usr/local/include/harfbuzz
-        /usr/local/include/cairo
-        /usr/local/include/gdk-pixbuf-2.0
-        /usr/local/include/gtk-4.0
+        ${PANGO_PATH}/include/pango-1.0
+        ${GLIB_PATH}/lib/glib-2.0/include
+        ${GLIB_PATH}/include/glib-2.0
+        ${HARFBUZZ_PATH}/include/harfbuzz
+        ${CAIRO_PATH}/include/cairo
+        ${GDK_PIXBUF_PATH}/include/gdk-pixbuf-2.0
+        ${GTK4_PATH}/include/gtk-4.0
     )
     
     file(GLOB CairoGraphicsPlugin_SOURCES
@@ -420,7 +456,13 @@ endif()
 addLibraryWithRPATH(CairoGraphicsPlugin ${CairoGraphicsPlugin_SOURCES})
 
 if(OSX)
-	target_link_libraries(CairoGraphicsPlugin PRIVATE "-L/usr/local/lib -lpango-1.0 -lpangocairo-1.0 -lcairo -lglib-2.0 -lgobject-2.0 -lgdk_pixbuf-2.0.0 -lgtk-4.1")
+    execute_process(
+        COMMAND brew --prefix
+        OUTPUT_VARIABLE BREW_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
+	target_link_libraries(CairoGraphicsPlugin PRIVATE "-L${BREW_PATH}/lib -lpango-1.0 -lpangocairo-1.0 -lcairo -lglib-2.0 -lgobject-2.0 -lgdk_pixbuf-2.0.0 -lgtk-4.1")
 elseif(UNIX)
     target_link_libraries(CairoGraphicsPlugin PRIVATE "-lpangocairo-1.0 -lcairo -lgdk_pixbuf-2.0 -lgtk-4")
 else()
@@ -435,9 +477,17 @@ endif()
 message(STATUS "Adding plugin: TreeSitterPlugin")
 
 if(OSX)
+
+    execute_process(
+        COMMAND brew --prefix tree-sitter
+        OUTPUT_VARIABLE TREE_SITTER_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/TreeSitterPlugin/include/osx
+        ${TREE_SITTER_PATH}/include/
     )
     
     file(GLOB TreeSitterPlugin_SOURCES
@@ -470,7 +520,12 @@ endif()
 addLibraryWithRPATH(TreeSitterPlugin ${TreeSitterPlugin_SOURCES})
 
 if(OSX)
-	target_link_libraries(TreeSitterPlugin PRIVATE "-L/usr/local/lib -ltree-sitter -ltree-sitter-c -ltree-sitter-json -ltree-sitter-javascript -ltree-sitter-python")
+    execute_process(
+        COMMAND brew --prefix
+        OUTPUT_VARIABLE BREW_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+	target_link_libraries(TreeSitterPlugin PRIVATE "-L${BREW_PATH}/lib -L/usr/local/lib -ltree-sitter -ltree-sitter-c -ltree-sitter-json -ltree-sitter-javascript -ltree-sitter-python")
 elseif(UNIX)
     target_link_libraries(TreeSitterPlugin PRIVATE "-ltree-sitter -ltree-sitter-c -ltree-sitter-json -ltree-sitter-javascript -ltree-sitter-python")
 else()

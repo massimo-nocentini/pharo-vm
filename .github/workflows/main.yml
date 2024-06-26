@@ -111,14 +111,14 @@ jobs:
       - name: Install Dependencies  
         run: |
           brew install wget curl cmake bzip2 expat libffi freetype pixman libpng sdl2 sdl2_gfx sdl2_image sdl2_mixer sdl2_net sdl2_ttf pango cairo libgit2 libgit2-glib poppler libssh2 gtk4 gdk-pixbuf node tree-sitter
-          # sudo ln -s /usr/local/Cellar/tree-sitter/0.22.6/bin/tree-sitter /usr/local/bin/tree-sitter
           sudo update_dyld_shared_cache
       - name: Build Pharo VM
         run: bash pharo-vm/scripts/github-macos.sh
       - name: Upload release assets
         run: |
           cd pharo-vm
-          gh release upload r${{github.run_number}} ../pharo-vm-build/build/dist/pharo-vm-macos.zip
+          cp ../pharo-vm-build/build/dist/pharo-vm-macos.zip pharo-vm-macos-intel.zip
+          gh release upload r${{github.run_number}} pharo-vm-macos-intel.zip
 
   macos-arm64:
     needs: images
@@ -133,6 +133,12 @@ jobs:
           path: pharo-vm
       - name: Install Dependencies  
         run: |
-          brew install wget curl pango
-          echo "trying pango..."
-          ls /usr/local/opt/pango/include/pango-1.0/
+          brew install wget curl cmake bzip2 expat libffi freetype pixman libpng sdl2 sdl2_gfx sdl2_image sdl2_mixer sdl2_net sdl2_ttf pango cairo libgit2 libgit2-glib poppler libssh2 gtk4 gdk-pixbuf node tree-sitter
+          sudo update_dyld_shared_cache
+      - name: Build Pharo VM
+        run: bash pharo-vm/scripts/github-macos.sh
+      - name: Upload release assets
+        run: |
+          cd pharo-vm
+          cp ../pharo-vm-build/build/dist/pharo-vm-macos.zip pharo-vm-macos-arm64.zip
+          gh release upload r${{github.run_number}} pharo-vm-macos-arm64.zip
