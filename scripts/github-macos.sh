@@ -47,13 +47,29 @@ cd ../
 
 cd ../
 
+# _____________________________________________________________________________________________________________________________________________
+# For the sake of documentation, the following commands download the Pharo VM sources 
+# from Pharo upstream to avoid generation of the C sources,
+# which is faster but not indipedent from the Pharo's team build process.
+
 # mkdir pharo-vm-c-src
 # cd pharo-vm-c-src
 # wget https://files.pharo.org/vm/pharo-spur64-headless/Darwin-x86_64/source/PharoVM-10.2.1-d1bfe9ec-Darwin-x86_64-c-src.zip --no-verbose
 # unzip PharoVM-10.2.1-d1bfe9ec-Darwin-x86_64-c-src.zip
 # cd ..
+# _____________________________________________________________________________________________________________________________________________
 
-cmake -S pharo-vm -B pharo-vm-build -DALWAYS_INTERACTIVE=TRUE -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DBUILD_IS_RELEASE=ON -DICEBERG_DEFAULT_REMOTE=httpsUrl -DGENERATE_SOURCES=TRUE #-DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/
+cmake -S pharo-vm -B pharo-vm-build \
+    -DALWAYS_INTERACTIVE=TRUE \
+    -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE \
+    -DBUILD_IS_RELEASE=ON \
+    -DICEBERG_DEFAULT_REMOTE=httpsUrl \
+    -DGENERATE_SOURCES=TRUE #-DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/
+
+# Copy SDL2 library to the build directory to replace the downloaded ones.
+cp $(brew --prefix sdl2)/lib/libSDL2-2.0.0.dylib pharo-vm-build/SDL2-2.24.1-src/
+cp $(brew --prefix sdl2)/lib/libSDL2-2.0.0.dylib pharo-vm-build/SDL2-2.24.1-src/libSDL2.dylib
+
 cmake --build pharo-vm-build --target install
 #rm -rf build/ pharo-vm-build/build/dist/lib/{libss*,libcairo.so*,libgit2.*,libharfbuzz.so*,libfontconfig.so*} #,libbz2*,libexpat*,libffi*,libfreetype*,libpixman*,libpng*"
 
