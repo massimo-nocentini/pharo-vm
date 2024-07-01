@@ -59,6 +59,9 @@ cd ../
 # cd ..
 # _____________________________________________________________________________________________________________________________________________
 
+export CC=$(brew --prefix llvm)/bin/clang
+export CXX=$(brew --prefix llvm)/bin/clang++
+
 cmake -S pharo-vm -B pharo-vm-build \
     -DALWAYS_INTERACTIVE=TRUE \
     -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE \
