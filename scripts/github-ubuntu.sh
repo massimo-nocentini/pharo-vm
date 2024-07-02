@@ -121,6 +121,8 @@ IceRepositoryCreator new
 
 repo checkoutBranch: 'primitives-for-athens-cairo-canvas-merge'.
 
+repo workingCopy loadAllPackages; discardChanges .
+
 [ Metacello new
     baseline: 'BookletDSst';
     repository: 'github://massimo-nocentini/Booklet-DSst/src';
