@@ -106,6 +106,21 @@ cd booklet-image
 curl https://get.pharo.org/64/130 | bash
 
 ../pharo-vm-build/build/dist/pharo Pharo.image eval "
+
+remote := IceGitRemote
+	          name: 'mn'
+	          url: 'https://github.com/massimo-nocentini/pharo.git'.
+
+repo := IceRepository repositoryNamed: 'pharo'.
+
+IceRepositoryCreator new
+	repository: repo;
+	remote: remote;
+	location: repo location;
+	createRepository.
+
+repo checkoutBranch: 'primitives-for-athens-cairo-canvas-merge'.
+
 [ Metacello new
     baseline: 'BookletDSst';
     repository: 'github://massimo-nocentini/Booklet-DSst/src';
