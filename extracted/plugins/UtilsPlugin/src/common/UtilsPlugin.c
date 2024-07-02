@@ -304,9 +304,9 @@ primitive_timsort(void)
 EXPORT(sqInt)
 primitive_fma(void)
 {
-	sqInt x = interpreterProxy->stackFloatValue(2); // the receiver, indeed.
-	sqInt y = interpreterProxy->stackFloatValue(1);
-	sqInt z = interpreterProxy->stackFloatValue(0);
+	double x = interpreterProxy->stackFloatValue(2); // the receiver, indeed.
+	double y = interpreterProxy->stackFloatValue(1);
+	double z = interpreterProxy->stackFloatValue(0);
 
 	double res = fma(x, y, z);
 
