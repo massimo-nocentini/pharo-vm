@@ -235,11 +235,12 @@ primitive_ts_parser_parse_string(void)
 	char *source_code = interpreterProxy->firstIndexableField(sourceString);
 	sqInt length = interpreterProxy->stSizeOf(sourceString);
 
-	TSTree *tree = ts_parser_parse_string(
+	TSTree *tree = ts_parser_parse_string_encoding(
 		parser,
 		NULL,
 		source_code,
-		length);
+		length,
+		TSInputEncodingUTF8);
 
 	sqInt anExternalAddress = newExternalAddress();
 
@@ -355,7 +356,7 @@ primitive_ts_query_new(void)
 	sqInt oopLanguage = interpreterProxy->stackValue(3); // the receiver.
 	TSLanguage *language = readAddress(interpreterProxy->stackValue(2));
 	sqInt oopQueryString = interpreterProxy->stackValue(1);
-	char *query_source = interpreterProxy->firstIndexableField(oopQueryString);
+	const char *query_source = interpreterProxy->firstIndexableField(oopQueryString);
 	sqInt length = interpreterProxy->stSizeOf(oopQueryString);
 	sqInt queryClass = interpreterProxy->stackValue(0);
 
@@ -374,7 +375,7 @@ primitive_ts_query_new(void)
 	writeAddress(anExternalAddress, query);
 
 	sqInt oopQuery = interpreterProxy->instantiateClassindexableSize(queryClass, 0);
-	interpreterProxy->storeIntegerofObjectwithValue(0, oopQuery, error_offset);
+	interpreterProxy->storeIntegerofObjectwithValue(0, oopQuery, error_offset + 1); // because Pharo uses 1-based indexes.
 	interpreterProxy->storeIntegerofObjectwithValue(1, oopQuery, error_type);
 	interpreterProxy->storePointerofObjectwithValue(2, oopQuery, oopLanguage);
 	interpreterProxy->storePointerofObjectwithValue(3, oopQuery, oopQueryString);
@@ -408,7 +409,7 @@ typedef struct TS_link_s
 {
 	struct TS_link_s *next;
 	sqInt oop;
-	int size;
+	uint32_t size;
 } TS_link_t;
 
 TS_link_t *push_oop_on_link(sqInt oop, TS_link_t *link)
@@ -444,22 +445,19 @@ primitive_ts_query_matches(void)
 	TSQueryCapture capture;
 	TSNode captured_node;
 	TSPoint point;
-	uint32_t length;
 
-	int type, row, column, discreteTime = 1, start_byte;
+	uint32_t length, start_byte, end_byte, row, column, discreteTime = 1;
 
 	TS_link_t *link = push_oop_on_link(interpreterProxy->nilObject(), NULL);
 
 	while (ts_query_cursor_next_match(cursor, &match))
 	{
-		for (int i = 0; i < match.capture_count; i++)
+		for (uint16_t i = 0; i < match.capture_count; i++)
 		{
 			sqInt oop = interpreterProxy->instantiateClassindexableSize(class, 0);
 			link = push_oop_on_link(oop, link);
 
 			capture = match.captures[i];
-
-			captured_node = capture.node;
 
 			const char *capture_name = ts_query_capture_name_for_id(
 				query,
@@ -471,6 +469,8 @@ primitive_ts_query_matches(void)
 			memcpy(interpreterProxy->firstIndexableField(oopContentString), capture_name, length);
 
 			interpreterProxy->storePointerofObjectwithValue(0, oop, oopContentString);
+
+			captured_node = capture.node;
 
 			point = ts_node_start_point(captured_node);
 			row = point.row + 1;
@@ -486,14 +486,16 @@ primitive_ts_query_matches(void)
 			interpreterProxy->storePointerofObjectwithValue(
 				2, oop, interpreterProxy->makePointwithxValueyValue(column, row));
 
+			start_byte = ts_node_start_byte(captured_node);
+			end_byte = ts_node_end_byte(captured_node);
+
 			interpreterProxy->storePointerofObjectwithValue(
-				3, oop, interpreterProxy->makePointwithxValueyValue(ts_node_start_byte(captured_node) + 1, ts_node_end_byte(captured_node)));
+				3, oop, interpreterProxy->makePointwithxValueyValue(start_byte + 1, end_byte));
 
 			interpreterProxy->storeIntegerofObjectwithValue(
 				4, oop, discreteTime++);
 
-			start_byte = ts_node_start_byte(captured_node);
-			length = ts_node_end_byte(captured_node) - start_byte;
+			length = end_byte - start_byte;
 
 			oopContentString = interpreterProxy->instantiateClassindexableSize(
 				interpreterProxy->classString(), length);
