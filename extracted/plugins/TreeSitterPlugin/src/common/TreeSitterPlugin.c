@@ -431,8 +431,9 @@ void free_link(TS_link_t *link)
 EXPORT(sqInt)
 primitive_ts_query_matches(void)
 {
-	TSQuery *query = readAddress(interpreterProxy->stackValue(2));
-	TSTree *tree = readAddress(interpreterProxy->stackValue(1));
+	TSQuery *query = readAddress(interpreterProxy->stackValue(3));
+	TSTree *tree = readAddress(interpreterProxy->stackValue(2));
+	char *sourceCode = interpreterProxy->firstIndexableField(interpreterProxy->stackValue(1));
 	sqInt class = interpreterProxy->stackValue(0);
 
 	TSQueryCursor *cursor = ts_query_cursor_new();
@@ -443,10 +444,9 @@ primitive_ts_query_matches(void)
 	TSQueryCapture capture;
 	TSNode captured_node;
 	TSPoint point;
-	int len;
 	uint32_t length;
 
-	int type, row, column, discreteTime = 1;
+	int type, row, column, discreteTime = 1, start_byte;
 
 	TS_link_t *link = push_oop_on_link(interpreterProxy->nilObject(), NULL);
 
@@ -492,13 +492,15 @@ primitive_ts_query_matches(void)
 			interpreterProxy->storeIntegerofObjectwithValue(
 				4, oop, discreteTime++);
 
-			// const char *str_value = ts_query_string_value_for_id(
-			//     query,
-			//     match.pattern_index,
-			//     &length);
+			start_byte = ts_node_start_byte(captured_node);
+			length = ts_node_end_byte(captured_node) - start_byte;
 
-			// lua_pushstring(L, str_value);
-			// lua_setfield(L, -2, "query_string_value");
+			oopContentString = interpreterProxy->instantiateClassindexableSize(
+				interpreterProxy->classString(), length);
+
+			memcpy(interpreterProxy->firstIndexableField(oopContentString), sourceCode + start_byte, length);
+
+			interpreterProxy->storePointerofObjectwithValue(5, oop, oopContentString);
 		}
 	}
 
@@ -516,7 +518,7 @@ primitive_ts_query_matches(void)
 
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->popthenPush(4, oop);
+		interpreterProxy->popthenPush(5, oop);
 	}
 
 	return null;

@@ -7,7 +7,7 @@
 			"linux": {
 				"command": [
 					"cd ../ &&",
-					"export CC=clang && export CXX=clang++ &&",
+					"export CC=$(brew --prefix llvm)/bin/clang && export CXX=$(brew --prefix llvm)/bin/clang++ &&",
 					"$(brew --prefix cmake)/bin/cmake --build pharo-vm-build --target install &&",
 					"rm -rf build/ pharo-vm-build/build/dist/lib/{libss*,libcairo.so*,libgit2.*,libharfbuzz.so*,libfontconfig.so*,libbz2.so.1*,libcrypto.so*,libexpat.so*,libfreetype.so*,libpixman-1.so*,libpng*} &&",
 					"mkdir -p pharo-vm-build/build/dist/share &&",
@@ -17,7 +17,7 @@
 			"osx": {
 				"command": [
 					"cd ../ &&",
-					"export CC=clang && export CXX=clang++ &&",
+					"export CC=$(brew --prefix llvm)/bin/clang && export CXX=$(brew --prefix llvm)/bin/clang++ &&",
 					"$(brew --prefix cmake)/bin/cmake --build pharo-vm-build --target install &&",
 					"rm -rf build/ pharo-vm-build/build/dist/Pharo.app/Contents/MacOS/Plugins/{libss*,libcairo*,libcrypto*,libgit2.*,libharfbuzz*,libfontconfig*,libfreetype*,libpixman*,libpng*} &&",
 					"mkdir -p pharo-vm-build/build/dist/share &&",
@@ -42,7 +42,7 @@
 					// "rm -rf pharo-vm-c-src && mkdir -p pharo-vm-c-src && cd pharo-vm-c-src &&",
 					// "wget https://files.pharo.org/vm/pharo-spur64-headless/Linux-x86_64/source/PharoVM-10.2.1-d1bfe9e-Linux-x86_64-c-src.zip  --no-verbose &&",
 					// "unzip PharoVM-10.2.1-d1bfe9e-Linux-x86_64-c-src.zip && cd ../ &&",
-					"export CC=clang && export CXX=clang++ &&",
+					"export CC=$(brew --prefix llvm)/bin/clang && export CXX=$(brew --prefix llvm)/bin/clang++ &&",
 					"$(brew --prefix cmake)/bin/cmake -S pharo-vm -B pharo-vm-build -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DBUILD_IS_RELEASE=ON -DICEBERG_DEFAULT_REMOTE=httpsUrl -DGENERATE_SOURCES=TRUE &&", //#-DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/
 					// "cp $(brew --prefix sdl2)/lib/libSDL2.so pharo-vm-build/SDL2-2.24.1-src/ && cp $(brew --prefix sdl2)/lib/libSDL2-2.0.so.0 pharo-vm-build/SDL2-2.24.1-src/ && cp $(brew --prefix sdl2)/lib/libSDL2-2.0.so.0 pharo-vm-build/SDL2-2.24.1-src/libSDL2-2.0.so.0.2400.1",
 					"echo 'Done'"
@@ -54,7 +54,7 @@
 					// "rm -rf pharo-vm-c-src && mkdir -p pharo-vm-c-src && cd pharo-vm-c-src &&",
 					// "wget https://files.pharo.org/vm/pharo-spur64-headless/Darwin-x86_64/source/PharoVM-10.2.1-d1bfe9ec-Darwin-x86_64-c-src.zip  --no-verbose &&",
 					// "unzip PharoVM-10.2.1-d1bfe9ec-Darwin-x86_64-c-src.zip && cd ../ &&",
-					"export CC=clang && export CXX=clang++ &&",
+					"export CC=$(brew --prefix llvm)/bin/clang && export CXX=$(brew --prefix llvm)/bin/clang++ &&",
 					"$(brew --prefix cmake)/bin/cmake -S pharo-vm -B pharo-vm-build -DALWAYS_INTERACTIVE=TRUE -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DBUILD_IS_RELEASE=ON -DICEBERG_DEFAULT_REMOTE=httpsUrl -DGENERATE_SOURCES=TRUE &&",  // -DGENERATED_SOURCE_DIR=../pharo-vm-c-src/pharo-vm/
 					"cp $(brew --prefix sdl2)/lib/libSDL2-2.0.0.dylib pharo-vm-build/SDL2-2.24.1-src/ && cp $(brew --prefix sdl2)/lib/libSDL2-2.0.0.dylib pharo-vm-build/SDL2-2.24.1-src/libSDL2.dylib",
 				]
