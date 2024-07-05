@@ -452,6 +452,32 @@ primitive_ts_query_matches(void)
 
 	while (ts_query_cursor_next_match(cursor, &match))
 	{
+		// const TSQueryPredicateStep *qps = ts_query_predicates_for_pattern(query, match.pattern_index, &length);
+
+		// for (uint32_t i = 0; i < length; i++)
+		// {
+		// 	TSQueryPredicateStep step = qps[i];
+		// 	switch (step.type)
+		// 	{
+		// 	case TSQueryPredicateStepTypeString:
+		// 	{
+		// 		uint32_t length;
+		// 		const char *str = ts_query_string_value_for_id(query, step.value_id, &length);
+		// 		printf("Step %u: String (\"%.*s\")\n", i, length, str);
+		// 	}
+		// 	break;
+
+		// 	case TSQueryPredicateStepTypeCapture:
+		// 		printf("Step %u: Capture (%u)\n", i, step.value_id);
+
+		// 		break;
+
+		// 	default:
+		// 		printf("Step %u: Unknown type (%u)\n", i, step.value_id);
+		// 		break;
+		// 	}
+		// }
+
 		for (uint16_t i = 0; i < match.capture_count; i++)
 		{
 			sqInt oop = interpreterProxy->instantiateClassindexableSize(class, 0);
