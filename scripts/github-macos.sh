@@ -86,8 +86,10 @@ cp $(brew --prefix gtk4)/lib/*.dylib pharo-vm-build/build/dist/lib/
 cp $(brew --prefix harfbuzz)/lib/*.dylib pharo-vm-build/build/dist/lib/
 cp $(brew --prefix glib)/lib/*.dylib pharo-vm-build/build/dist/lib/
 
-#cp /usr/lib/x86_64-linux-gnu/{libssh2.so,libssl.so,libcairo-gobject.so,libcairo.so,libpango-1.0.so,libpangocairo-1.0.so,libgit2-glib-1.0.so,libgit2.so,libharfbuzz-cairo.so,libharfbuzz-gobject.so,libharfbuzz-icu.so,libharfbuzz.so,libharfbuzz-subset.so,libfontconfig.so} pharo-vm-build/build/dist/lib/
-cp /usr/local/lib/{liblua.a,libtree-sitter.dylib,libtree-sitter-c.dylib,libtree-sitter-json.dylib,libtree-sitter-javascript.dylib,libtree-sitter-python.dylib} pharo-vm-build/build/dist/lib/
+# copy libraries that we've compiled.
+cp /usr/local/lib/{liblua.a,libdatetimeformatter.dylib,libtimsort.dylib,libtree-sitter.dylib,libtree-sitter-c.dylib,libtree-sitter-json.dylib,libtree-sitter-javascript.dylib,libtree-sitter-python.dylib} pharo-vm-build/build/dist/lib/
+
+# `tree-sitter` stuff.
 mkdir -p pharo-vm-build/build/dist/share/tree-sitter/language
 mkdir pharo-vm-build/build/dist/share/tree-sitter/language/c
 mkdir pharo-vm-build/build/dist/share/tree-sitter/language/json
@@ -106,5 +108,8 @@ cp -r tree-sitter/tree-sitter-javascript/queries/ pharo-vm-build/build/dist/shar
 cp tree-sitter/tree-sitter-python/grammar.js pharo-vm-build/build/dist/share/tree-sitter/language/python/
 cp -r tree-sitter/tree-sitter-python/queries/ pharo-vm-build/build/dist/share/tree-sitter/language/python/
 
+# Almost done, zipping.
 cd pharo-vm-build/build/dist/
 zip -r pharo-vm-macos.zip *
+
+echo "Done"
