@@ -76,6 +76,16 @@ cp $(brew --prefix sdl2)/lib/libSDL2-2.0.0.dylib pharo-vm-build/SDL2-2.24.1-src/
 cmake --build pharo-vm-build --target install
 #rm -rf build/ pharo-vm-build/build/dist/lib/{libss*,libcairo.so*,libgit2.*,libharfbuzz.so*,libfontconfig.so*} #,libbz2*,libexpat*,libffi*,libfreetype*,libpixman*,libpng*"
 
+# copy now up to date libraries:
+cp $(brew --prefix cairo)/lib/*.dylib pharo-vm-build/build/dist/lib/
+cp $(brew --prefix fontconfig)/lib/*.dylib pharo-vm-build/build/dist/lib/
+cp $(brew --prefix freetype)/lib/*.dylib pharo-vm-build/build/dist/lib/
+cp $(brew --prefix gdk-pixbuf)/lib/*.dylib pharo-vm-build/build/dist/lib/
+cp $(brew --prefix gobject-introspection)/lib/*.dylib pharo-vm-build/build/dist/lib/
+cp $(brew --prefix gtk4)/lib/*.dylib pharo-vm-build/build/dist/lib/
+cp $(brew --prefix harfbuzz)/lib/*.dylib pharo-vm-build/build/dist/lib/
+cp $(brew --prefix glib)/lib/*.dylib pharo-vm-build/build/dist/lib/
+
 #cp /usr/lib/x86_64-linux-gnu/{libssh2.so,libssl.so,libcairo-gobject.so,libcairo.so,libpango-1.0.so,libpangocairo-1.0.so,libgit2-glib-1.0.so,libgit2.so,libharfbuzz-cairo.so,libharfbuzz-gobject.so,libharfbuzz-icu.so,libharfbuzz.so,libharfbuzz-subset.so,libfontconfig.so} pharo-vm-build/build/dist/lib/
 cp /usr/local/lib/{liblua.a,libtree-sitter.dylib,libtree-sitter-c.dylib,libtree-sitter-json.dylib,libtree-sitter-javascript.dylib,libtree-sitter-python.dylib} pharo-vm-build/build/dist/lib/
 mkdir -p pharo-vm-build/build/dist/share/tree-sitter/language
