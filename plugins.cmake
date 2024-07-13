@@ -342,7 +342,7 @@ endif()
 addLibraryWithRPATH(UtilsPlugin ${UtilsPlugin_SOURCES})
 
 if(OSX)
-	target_link_libraries(UtilsPlugin PRIVATE "-L/usr/local/lib -ltimsort")
+	target_link_libraries(UtilsPlugin PRIVATE "")
 elseif(UNIX)
     target_link_libraries(UtilsPlugin PRIVATE "-ltimsort")
 else()

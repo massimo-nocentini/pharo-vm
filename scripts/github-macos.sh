@@ -85,6 +85,7 @@ cp $(brew --prefix gobject-introspection)/lib/*.dylib pharo-vm-build/build/dist/
 cp $(brew --prefix gtk4)/lib/*.dylib pharo-vm-build/build/dist/lib/
 cp $(brew --prefix harfbuzz)/lib/*.dylib pharo-vm-build/build/dist/lib/
 cp $(brew --prefix glib)/lib/*.dylib pharo-vm-build/build/dist/lib/
+cp $(brew --prefix pixman)/lib/*.dylib pharo-vm-build/build/dist/lib/
 
 # copy libraries that we've compiled.
 cp /usr/local/lib/{liblua.a,libdatetimeformatter.dylib,libtimsort.dylib,libtree-sitter.dylib,libtree-sitter-c.dylib,libtree-sitter-json.dylib,libtree-sitter-javascript.dylib,libtree-sitter-python.dylib} pharo-vm-build/build/dist/lib/
