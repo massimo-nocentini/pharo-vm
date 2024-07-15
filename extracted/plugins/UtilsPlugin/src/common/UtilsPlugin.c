@@ -296,7 +296,7 @@ reverse_slice(tim_object_t **lo, tim_object_t **hi)
 	assert(lo && hi);
 
 	tim_object_t *t;
-	
+
 	--hi;
 	while (lo < hi)
 	{
@@ -804,11 +804,10 @@ merge_freemem(MergeState *ms)
 static int
 merge_getmem(MergeState *ms, tim_ssize_t need)
 {
-	
+
 	assert(ms != NULL);
 	if (need <= ms->alloced)
 		return 0;
-
 
 	/* Don't realloc!  That can cost cycles to copy the old data, but
 	 * we don't care what's in the block.
@@ -996,7 +995,7 @@ merge_hi(MergeState *ms, sortslice ssa, tim_ssize_t na,
 	basea = ssa;
 	baseb = ms->a;
 	ssb.keys = ms->a.keys + nb - 1;
-	
+
 	sortslice_advance(&ssa, na - 1);
 
 	sortslice_copy_decr(&dest, &ssa);
@@ -1465,28 +1464,33 @@ primitive_timsort(void)
 
 	if (!(interpreterProxy->failed()))
 	{
+
+		sqInt res;
+
 		if (v == NULL)
 		{
-			interpreterProxy->popthenPush(3, interpreterProxy->nilObject());
+			res = interpreterProxy->nilObject();
 		}
 		else
 		{
-			sqInt j;
 			for (sqInt i = 0; i < size; i++)
 			{
-				j = i + 1;
 				each = objs[i];
-				interpreterProxy->stObjectatput(recv, j, each->oop);
-				interpreterProxy->stObjectatput(doubles, j, each->stIndex);
+
+				// interpreterProxy->stObjectatput(recv, i, each->oop);
+				interpreterProxy->stObjectatput(doubles, i + 1, each->oop);
 
 				free(each);
 			}
 
-			interpreterProxy->pop(2); // leave the receiver on the stack.
+			free(v);
+
+			res = doubles;
 		}
+
+		interpreterProxy->popthenPush(3, res);
 	}
 
-	free(v);
 	free(objs);
 
 	return null;
