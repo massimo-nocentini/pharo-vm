@@ -12,11 +12,6 @@ cd datetimeformatter.c/src
 make macos && sudo make install-macos
 cd ../../
 
-git clone --depth 1 https://github.com/massimo-nocentini/timsort.c.git
-cd timsort.c/src
-make macos && sudo make install-macos
-cd ../../
-
 mkdir tree-sitter
 cd tree-sitter
 
@@ -88,7 +83,7 @@ cp $(brew --prefix glib)/lib/*.dylib pharo-vm-build/build/dist/lib/
 cp $(brew --prefix pixman)/lib/*.dylib pharo-vm-build/build/dist/lib/
 
 # copy libraries that we've compiled.
-cp /usr/local/lib/{liblua.a,libdatetimeformatter.dylib,libtimsort.dylib,libtree-sitter.dylib,libtree-sitter-c.dylib,libtree-sitter-json.dylib,libtree-sitter-javascript.dylib,libtree-sitter-python.dylib} pharo-vm-build/build/dist/lib/
+cp /usr/local/lib/{liblua.a,libdatetimeformatter.dylib,libtree-sitter.dylib,libtree-sitter-c.dylib,libtree-sitter-json.dylib,libtree-sitter-javascript.dylib,libtree-sitter-python.dylib} pharo-vm-build/build/dist/lib/
 
 # `tree-sitter` stuff.
 mkdir -p pharo-vm-build/build/dist/share/tree-sitter/language

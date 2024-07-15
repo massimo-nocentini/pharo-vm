@@ -27,13 +27,6 @@ cp datetimeformatter.h ${CURRENT_DIR}/current-dependencies/include
 cp libdatetimeformatter.dll ${CURRENT_DIR}/current-dependencies/lib
 cd ../../
 
-git clone --depth 1 https://github.com/massimo-nocentini/timsort.c.git
-cd timsort.c/src
-mingw32-make mingw
-cp timsort.h ${CURRENT_DIR}/current-dependencies/include
-cp libtimsort.dll ${CURRENT_DIR}/current-dependencies/lib
-cd ../../
-
 mkdir tree-sitter
 cd tree-sitter
 

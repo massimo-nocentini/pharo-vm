@@ -6,7 +6,6 @@ char __buildInfo[] = "UtilsPlugin VMMaker.oscog-eem.2495 uuid: fcbf4c90-4c50-4ff
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-// #include <timsort.h>
 
 /* Default EXPORT macro that does nothing (see comment in sq.h): */
 #define EXPORT(returnType) returnType
@@ -435,16 +434,6 @@ struct s_MergeState
 	 * even when none of our special cases apply and we have to use
 	 * safe_object_compare. */
 	int (*key_compare)(tim_object_t *, tim_object_t *, MergeState *);
-
-	/* This function is used by unsafe_object_compare to optimize comparisons
-	 * when we know our list is type-homogeneous but we can't assume anything else.
-	 * In the pre-sort check it is set equal to Py_TYPE(key)->tp_richcompare */
-	tim_object_t *(*key_richcompare)(tim_object_t *, tim_object_t *, int);
-
-	/* This function is used by unsafe_tuple_compare to compare the first elements
-	 * of tuples. It may be set to safe_object_compare, but the idea is that hopefully
-	 * we can assume more, and use one of the special-case compares. */
-	int (*tuple_elem_compare)(tim_object_t *, tim_object_t *, MergeState *);
 };
 
 /* binarysort is the best method for sorting small arrays: it does
@@ -1477,7 +1466,6 @@ primitive_timsort(void)
 			{
 				each = objs[i];
 
-				// interpreterProxy->stObjectatput(recv, i, each->oop);
 				interpreterProxy->stObjectatput(doubles, i + 1, each->oop);
 
 				free(each);

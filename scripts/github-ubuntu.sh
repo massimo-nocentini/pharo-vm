@@ -20,11 +20,6 @@ cd datetimeformatter.c/src
 make && sudo make install
 cd ../../
 
-git clone --depth 1 https://github.com/massimo-nocentini/timsort.c.git
-cd timsort.c/src
-make && sudo make install
-cd ../../
-
 mkdir tree-sitter
 cd tree-sitter
 

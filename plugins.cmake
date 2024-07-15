@@ -309,7 +309,6 @@ if(OSX)
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/include/osx
-        /usr/local/include
     )
     
     file(GLOB UtilsPlugin_SOURCES
@@ -330,7 +329,6 @@ else()
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/include/common
         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/UtilsPlugin/include/win
-        ${CMAKE_CURRENT_SOURCE_DIR}/../current-dependencies/include
     )
     
     file(GLOB UtilsPlugin_SOURCES
@@ -344,9 +342,9 @@ addLibraryWithRPATH(UtilsPlugin ${UtilsPlugin_SOURCES})
 if(OSX)
 	target_link_libraries(UtilsPlugin PRIVATE "")
 elseif(UNIX)
-    target_link_libraries(UtilsPlugin PRIVATE "-ltimsort")
+    target_link_libraries(UtilsPlugin PRIVATE "")
 else()
-    target_link_libraries(UtilsPlugin PRIVATE "-L${CMAKE_CURRENT_SOURCE_DIR}/../current-dependencies/lib -ltimsort")
+    target_link_libraries(UtilsPlugin PRIVATE "")
 endif()
 
 
