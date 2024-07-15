@@ -295,10 +295,12 @@ reverse_slice(tim_object_t **lo, tim_object_t **hi)
 {
 	assert(lo && hi);
 
+	tim_object_t *t;
+	
 	--hi;
 	while (lo < hi)
 	{
-		tim_object_t *t = *lo;
+		t = *lo;
 		*lo = *hi;
 		*hi = t;
 		++lo;
@@ -312,46 +314,27 @@ tim_mem_malloc(size_t size)
 	return (size > (size_t)SSIZE_T_MAX) ? NULL : malloc(size);
 }
 
-STATIC_LOCAL_INLINE(tim_ssize_t)
-Py_SIZE(tim_listobject_t *ob)
-{
-	return ob->ob_size;
-}
-
-STATIC_LOCAL_INLINE(void)
-Py_SET_SIZE(tim_listobject_t *ob, tim_ssize_t size)
-{
-	ob->ob_size = size;
-}
-
 typedef struct
 {
 	tim_object_t **keys;
-	tim_object_t **values;
 } sortslice;
 
 STATIC_LOCAL_INLINE(void)
 sortslice_copy(sortslice *s1, tim_ssize_t i, sortslice *s2, tim_ssize_t j)
 {
 	s1->keys[i] = s2->keys[j];
-	if (s1->values != NULL)
-		s1->values[i] = s2->values[j];
 }
 
 STATIC_LOCAL_INLINE(void)
 sortslice_copy_incr(sortslice *dst, sortslice *src)
 {
 	*dst->keys++ = *src->keys++;
-	if (dst->values != NULL)
-		*dst->values++ = *src->values++;
 }
 
 STATIC_LOCAL_INLINE(void)
 sortslice_copy_decr(sortslice *dst, sortslice *src)
 {
 	*dst->keys-- = *src->keys--;
-	if (dst->values != NULL)
-		*dst->values-- = *src->values--;
 }
 
 STATIC_LOCAL_INLINE(void)
@@ -359,8 +342,6 @@ sortslice_memcpy(sortslice *s1, tim_ssize_t i, sortslice *s2, tim_ssize_t j,
 				 tim_ssize_t n)
 {
 	memcpy(&s1->keys[i], &s2->keys[j], sizeof(tim_object_t *) * n);
-	if (s1->values != NULL)
-		memcpy(&s1->values[i], &s2->values[j], sizeof(tim_object_t *) * n);
 }
 
 STATIC_LOCAL_INLINE(void)
@@ -368,16 +349,12 @@ sortslice_memmove(sortslice *s1, tim_ssize_t i, sortslice *s2, tim_ssize_t j,
 				  tim_ssize_t n)
 {
 	memmove(&s1->keys[i], &s2->keys[j], sizeof(tim_object_t *) * n);
-	if (s1->values != NULL)
-		memmove(&s1->values[i], &s2->values[j], sizeof(tim_object_t *) * n);
 }
 
 STATIC_LOCAL_INLINE(void)
 sortslice_advance(sortslice *slice, tim_ssize_t n)
 {
 	slice->keys += n;
-	if (slice->values != NULL)
-		slice->values += n;
 }
 
 /* Comparison function: ms->key_compare, which is set at run-time in
@@ -522,16 +499,6 @@ binarysort(MergeState *ms, sortslice lo, tim_object_t **hi, tim_object_t **start
 		for (p = start; p > l; --p)
 			*p = *(p - 1);
 		*l = pivot;
-		if (lo.values != NULL)
-		{
-			tim_ssize_t offset = lo.values - lo.keys;
-			p = start + offset;
-			pivot = *p;
-			l += offset;
-			for (p = start + offset; p > l; --p)
-				*p = *(p - 1);
-			*l = pivot;
-		}
 	}
 	return 0;
 
@@ -809,7 +776,6 @@ merge_init(MergeState *ms, tim_ssize_t list_size, sortslice *lo)
 
 	ms->key_compare = safe_object_compare;
 	ms->alloced = MERGESTATE_TEMP_SIZE;
-	ms->a.values = NULL;
 	ms->a.keys = ms->temparray;
 	ms->n = 0;
 	ms->min_gallop = MIN_GALLOP;
@@ -838,30 +804,26 @@ merge_freemem(MergeState *ms)
 static int
 merge_getmem(MergeState *ms, tim_ssize_t need)
 {
-	int multiplier;
-
+	
 	assert(ms != NULL);
 	if (need <= ms->alloced)
 		return 0;
 
-	multiplier = ms->a.values != NULL ? 2 : 1;
 
 	/* Don't realloc!  That can cost cycles to copy the old data, but
 	 * we don't care what's in the block.
 	 */
 	merge_freemem(ms);
-	if ((size_t)need > SSIZE_T_MAX / sizeof(tim_object_t *) / multiplier)
+	if ((size_t)need > SSIZE_T_MAX / sizeof(tim_object_t *))
 	{
 		// PyErr_NoMemory();
 		printf("No memory.\n");
 		return -1;
 	}
-	ms->a.keys = (tim_object_t **)tim_mem_malloc(multiplier * need * sizeof(tim_object_t *));
+	ms->a.keys = (tim_object_t **)tim_mem_malloc(need * sizeof(tim_object_t *));
 	if (ms->a.keys != NULL)
 	{
 		ms->alloced = need;
-		if (ms->a.values != NULL)
-			ms->a.values = &ms->a.keys[need];
 		return 0;
 	}
 	// PyErr_NoMemory();
@@ -1034,8 +996,7 @@ merge_hi(MergeState *ms, sortslice ssa, tim_ssize_t na,
 	basea = ssa;
 	baseb = ms->a;
 	ssb.keys = ms->a.keys + nb - 1;
-	if (ssb.values != NULL)
-		ssb.values = ms->a.values + nb - 1;
+	
 	sortslice_advance(&ssa, na - 1);
 
 	sortslice_copy_decr(&dest, &ssa);
@@ -1343,8 +1304,6 @@ static void
 reverse_sortslice(sortslice *s, tim_ssize_t n)
 {
 	reverse_slice(s->keys, &s->keys[n]);
-	if (s->values != NULL)
-		reverse_slice(s->values, &s->values[n]);
 }
 
 /* An adaptive, stable, natural mergesort.  See listsort.txt.
@@ -1381,13 +1340,12 @@ static tim_object_t *list_sort_impl(tim_listobject_t *self, int reverse)
 	 * sorting (allowing mutations during sorting is a core-dump
 	 * factory, since ob_item may change).
 	 */
-	saved_ob_size = Py_SIZE(self);
+	saved_ob_size = self->ob_size;
 	saved_ob_item = self->ob_item;
-	Py_SET_SIZE(self, 0);
+	self->ob_size = 0;
 	self->ob_item = NULL;
 
 	lo.keys = saved_ob_item;
-	lo.values = NULL;
 
 	merge_init(&ms, saved_ob_size, &lo);
 
@@ -1459,7 +1417,7 @@ fail:
 	merge_freemem(&ms);
 
 	final_ob_item = self->ob_item;
-	Py_SET_SIZE(self, saved_ob_size);
+	self->ob_size = saved_ob_size;
 	self->ob_item = saved_ob_item;
 
 	if (final_ob_item != NULL)
