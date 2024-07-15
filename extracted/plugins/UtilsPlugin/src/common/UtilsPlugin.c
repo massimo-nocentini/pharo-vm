@@ -269,8 +269,8 @@ primitive_strtok_r(void)
  * values are always moved in sync.
  */
 
-#define Py_LOCAL_INLINE(type) inline type
-#define SIZEOF_SIZE_T 8
+#define Py_LOCAL_INLINE(type) static inline type
+#define SIZEOF_SIZE_T sizeof(size_t)
 
 #define PY_SSIZE_T_MAX INTPTR_MAX
 
@@ -751,8 +751,7 @@ fail:
 }
 
 /* Conceptually a MergeState's constructor. */
-void merge_init(MergeState *ms, Py_ssize_t list_size,
-				sortslice *lo)
+void merge_init(MergeState *ms, Py_ssize_t list_size, sortslice *lo)
 {
 	assert(ms != NULL);
 	ms->alloced = MERGESTATE_TEMP_SIZE;
@@ -1286,8 +1285,7 @@ void reverse_sortslice(sortslice *s, Py_ssize_t n)
 /* Heterogeneous compare: default, always safe to fall back on. */
 int safe_object_compare(PyObject *v, PyObject *w, MergeState *ms)
 {
-	/* No assumptions necessary! */
-	return PyObject_RichCompareBool(v, w);
+	return (v == NULL || w == NULL) ? -1 : PyObject_RichCompareBool(v, w);
 }
 
 /* An adaptive, stable, natural mergesort.  See listsort.txt.
@@ -1313,7 +1311,7 @@ ascending or descending, according to their function values.
 The reverse flag can be set to sort in descending order.
 [clinic start generated code]*/
 
-PyObject *
+static PyObject *
 list_sort_impl(PyListObject *self, int reverse)
 {
 	MergeState ms;
@@ -1331,8 +1329,6 @@ list_sort_impl(PyListObject *self, int reverse)
 	 */
 	saved_ob_size = self->size;
 	saved_ob_item = self->ob_item;
-	self->size = 0;
-	self->ob_item = NULL;
 
 	lo.keys = saved_ob_item;
 
@@ -1372,13 +1368,19 @@ list_sort_impl(PyListObject *self, int reverse)
 		if (n < minrun)
 		{
 			const Py_ssize_t force = nremaining <= minrun ? nremaining : minrun;
+
 			if (binarysort(&ms, lo, lo.keys + force, lo.keys + n) < 0)
+			{
 				goto fail;
+			}
+			printf("*********************** done binary sort\n");
 			n = force;
 		}
 
 		/* Maybe merge pending runs. */
-		assert(ms.n == 0 || ms.pending[ms.n - 1].base.keys + ms.pending[ms.n - 1].len == lo.keys);
+		assert(ms.n == 0 || ms.pending[ms.n - 1].base.keys +
+									ms.pending[ms.n - 1].len ==
+								lo.keys);
 		if (found_new_run(&ms, n) < 0)
 			goto fail;
 		/* Push new run on stack. */
@@ -1393,14 +1395,12 @@ list_sort_impl(PyListObject *self, int reverse)
 
 	if (merge_force_collapse(&ms) < 0)
 		goto fail;
-	assert(ms.n == 1);
 
-	assert(ms.pending[0].len == saved_ob_size);
 	lo = ms.pending[0].base;
 
 succeed:
 	result = PyMem_Malloc(sizeof(PyObject));
-	result->index = -1;
+	result->index = 0;
 	result->value = 0.0;
 	result->oop = interpreterProxy->nilObject();
 fail:
@@ -1408,10 +1408,7 @@ fail:
 	if (reverse && saved_ob_size > 1)
 		reverse_slice(saved_ob_item, saved_ob_item + saved_ob_size);
 
-	merge_freemem(&ms);
-
-	self->size = saved_ob_size;
-	self->ob_item = saved_ob_item;
+	// merge_freemem(&ms);
 
 	return result;
 }
@@ -1427,21 +1424,19 @@ primitive_timsort(void)
 	sqInt reverse = interpreterProxy->booleanValueOf(interpreterProxy->stackValue(0));
 
 	sqInt size = interpreterProxy->stSizeOf(recv);
-	sqInt i_next;
-	PyObject *each;
 
 	PyObject *objs = PyMem_Malloc(sizeof(PyObject) * size);
 
+	PyObject *each;
+
 	for (int i = 0; i < size; i++)
 	{
-		i_next = i + 1;
+		sqInt i_next = i + 1;
 		each = objs + i;
 		each->oop = interpreterProxy->stObjectat(recv, i_next);
 		each->value = interpreterProxy->floatValueOf(interpreterProxy->stObjectat(doubles, i_next));
 		each->index = i_next;
 	}
-
-	printf("**** size: %ld", size);
 
 	PyListObject list;
 
