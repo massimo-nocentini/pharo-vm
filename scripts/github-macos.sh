@@ -3,7 +3,7 @@
 wget https://www.lua.org/ftp/lua-5.4.7.tar.gz --no-verbose
 tar xfz lua-5.4.7.tar.gz
 cd lua-5.4.7
-make "MYCFLAGS=-fPIC" macosx
+make "CC=$(brew --prefix llvm)/bin/clang" "MYCFLAGS=-fPIC" macosx
 sudo make install
 cd ..
 
