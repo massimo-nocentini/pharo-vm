@@ -72,18 +72,19 @@ cmake --build pharo-vm-build --target install
 #rm -rf build/ pharo-vm-build/build/dist/lib/{libss*,libcairo.so*,libgit2.*,libharfbuzz.so*,libfontconfig.so*} #,libbz2*,libexpat*,libffi*,libfreetype*,libpixman*,libpng*"
 
 # copy now up to date libraries:
-cp $(brew --prefix cairo)/lib/*.dylib pharo-vm-build/build/dist/lib/
-cp $(brew --prefix fontconfig)/lib/*.dylib pharo-vm-build/build/dist/lib/
-cp $(brew --prefix freetype)/lib/*.dylib pharo-vm-build/build/dist/lib/
-cp $(brew --prefix gdk-pixbuf)/lib/*.dylib pharo-vm-build/build/dist/lib/
-cp $(brew --prefix gobject-introspection)/lib/*.dylib pharo-vm-build/build/dist/lib/
-cp $(brew --prefix gtk4)/lib/*.dylib pharo-vm-build/build/dist/lib/
-cp $(brew --prefix harfbuzz)/lib/*.dylib pharo-vm-build/build/dist/lib/
-cp $(brew --prefix glib)/lib/*.dylib pharo-vm-build/build/dist/lib/
-cp $(brew --prefix pixman)/lib/*.dylib pharo-vm-build/build/dist/lib/
+DIST_PLUGINS_DIR=pharo-vm-build/build/dist/Pharo.app/Contents/MacOS/Plugins/
+cp $(brew --prefix cairo)/lib/*.dylib $DIST_PLUGINS_DIR
+cp $(brew --prefix fontconfig)/lib/*.dylib $DIST_PLUGINS_DIR
+cp $(brew --prefix freetype)/lib/*.dylib $DIST_PLUGINS_DIR
+cp $(brew --prefix gdk-pixbuf)/lib/*.dylib $DIST_PLUGINS_DIR
+cp $(brew --prefix gobject-introspection)/lib/*.dylib $DIST_PLUGINS_DIR
+cp $(brew --prefix gtk4)/lib/*.dylib $DIST_PLUGINS_DIR
+cp $(brew --prefix harfbuzz)/lib/*.dylib $DIST_PLUGINS_DIR
+cp $(brew --prefix glib)/lib/*.dylib $DIST_PLUGINS_DIR
+cp $(brew --prefix pixman)/lib/*.dylib $DIST_PLUGINS_DIR
 
 # copy libraries that we've compiled.
-cp /usr/local/lib/{liblua.a,libdatetimeformatter.dylib,libtree-sitter.dylib,libtree-sitter-c.dylib,libtree-sitter-json.dylib,libtree-sitter-javascript.dylib,libtree-sitter-python.dylib} pharo-vm-build/build/dist/lib/
+cp /usr/local/lib/{liblua.a,libdatetimeformatter.dylib,libtree-sitter.dylib,libtree-sitter-c.dylib,libtree-sitter-json.dylib,libtree-sitter-javascript.dylib,libtree-sitter-python.dylib} $DIST_PLUGINS_DIR
 
 # `tree-sitter` stuff.
 mkdir -p pharo-vm-build/build/dist/share/tree-sitter/language
