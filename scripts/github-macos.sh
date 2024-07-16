@@ -74,6 +74,7 @@ cmake --build pharo-vm-build --target install
 # copy now up to date libraries:
 DIST_PLUGINS_DIR=pharo-vm-build/build/dist/Pharo.app/Contents/MacOS/Plugins/
 cp $(brew --prefix cairo)/lib/*.dylib $DIST_PLUGINS_DIR
+cp $(brew --prefix pango)/lib/*.dylib $DIST_PLUGINS_DIR
 cp $(brew --prefix fontconfig)/lib/*.dylib $DIST_PLUGINS_DIR
 cp $(brew --prefix freetype)/lib/*.dylib $DIST_PLUGINS_DIR
 cp $(brew --prefix gdk-pixbuf)/lib/*.dylib $DIST_PLUGINS_DIR
