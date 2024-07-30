@@ -1592,6 +1592,9 @@ primitive_randomknuth_start(void)
 
 	ranf_start(seed, ran_u);
 
+	double *ranf_arr_buf = interpreterProxy->firstIndexableField(interpreterProxy->stObjectat(stateArray, 2));
+	ranf_arr_buf[0] = -1.0;
+
 	return null;
 }
 
@@ -1629,7 +1632,7 @@ primitive_randomknuth_next(void)
 
 	double r = ranf_arr_buf[cursor - 1];
 
-	if (r > 0.0)
+	if (r >= 0.0)
 	{
 		interpreterProxy->stObjectatput(stateArray, 3, interpreterProxy->integerObjectOf(cursor + 1));
 	}
