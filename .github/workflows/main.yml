@@ -111,6 +111,8 @@ jobs:
           path: pharo-vm
       - name: Install Dependencies  
         run: |
+          brew update
+          brew upgrade
           brew install wget curl cmake bzip2 expat libffi freetype pixman libpng sdl2 sdl2_gfx sdl2_image sdl2_mixer sdl2_net sdl2_ttf pango cairo libgit2 libgit2-glib poppler libssh2 gtk4 gdk-pixbuf node tree-sitter llvm
           sudo update_dyld_shared_cache
       - name: Build Pharo VM
@@ -132,6 +134,8 @@ jobs:
           path: pharo-vm
       - name: Install Dependencies  
         run: |
+          brew update
+          brew upgrade
           brew install wget curl cmake bzip2 expat libffi freetype pixman libpng sdl2 sdl2_gfx sdl2_image sdl2_mixer sdl2_net sdl2_ttf pango cairo libgit2 libgit2-glib poppler libssh2 gtk4 gdk-pixbuf node tree-sitter llvm
           sudo update_dyld_shared_cache
       - name: Build Pharo VM
