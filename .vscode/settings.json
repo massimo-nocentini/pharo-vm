@@ -36,7 +36,8 @@
         "gdk-pixbuf-macros.h": "c",
         "gdk.h": "c",
         "gdkcairo.h": "c",
-        "gdkdmabufformats.h": "c"
+        "gdkdmabufformats.h": "c",
+        "stdbool.h": "c"
     },
     "cmake.configureOnOpen": false,
     "C_Cpp.default.compilerPath": "/usr/bin/clang++-16"

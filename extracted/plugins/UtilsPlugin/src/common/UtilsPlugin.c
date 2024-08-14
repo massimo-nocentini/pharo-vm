@@ -4,6 +4,7 @@ char __buildInfo[] = "UtilsPlugin VMMaker.oscog-eem.2495 uuid: fcbf4c90-4c50-4ff
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <time.h>
 
@@ -16,8 +17,6 @@ char __buildInfo[] = "UtilsPlugin VMMaker.oscog-eem.2495 uuid: fcbf4c90-4c50-4ff
 // #include "sqPlatformSpecific.h" /* Platform specific definitions */
 // #include "sqMemoryAccess.h"
 
-#define true 1
-#define false 0
 #define null 0 /* using 'null' because nil is predefined in Think C */
 #ifdef SQUEAK_BUILTIN_PLUGIN
 #undef EXPORT
@@ -1318,9 +1317,8 @@ static tim_object_t *list_sort_impl(tim_listobject_t *self, int reverse)
 	tim_ssize_t nremaining;
 	tim_ssize_t minrun;
 	sortslice lo;
-	tim_ssize_t saved_ob_size, saved_allocated;
+	tim_ssize_t saved_ob_size;
 	tim_object_t **saved_ob_item;
-	tim_object_t **final_ob_item;
 	tim_object_t *result = NULL; /* guilty until proved innocent */
 
 	/* The list is temporarily made empty, so that mutations performed
@@ -1404,14 +1402,9 @@ fail:
 
 	merge_freemem(&ms);
 
-	final_ob_item = self->ob_item;
 	self->ob_size = saved_ob_size;
 	self->ob_item = saved_ob_item;
 
-	if (final_ob_item != NULL)
-	{
-		free(final_ob_item);
-	}
 	return result;
 }
 #undef IFLT
@@ -1623,8 +1616,7 @@ EXPORT(sqInt)
 primitive_randomknuth_next(void)
 {
 
-	sqInt oop = interpreterProxy->stackValue(0); // the receiver, indeed.
-	sqInt stateArray = interpreterProxy->fetchPointerofObject(0, oop);
+	sqInt stateArray = interpreterProxy->stackValue(0);
 
 	double *ran_u = interpreterProxy->firstIndexableField(interpreterProxy->stObjectat(stateArray, 1));
 	double *ranf_arr_buf = interpreterProxy->firstIndexableField(interpreterProxy->stObjectat(stateArray, 2));
@@ -1644,7 +1636,7 @@ primitive_randomknuth_next(void)
 
 	if (!(interpreterProxy->failed()))
 	{
-		interpreterProxy->popthenPush(1, interpreterProxy->floatObjectOf(r));
+		interpreterProxy->popthenPush(2, interpreterProxy->floatObjectOf(r));
 	}
 
 	return null;
