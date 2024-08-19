@@ -101,8 +101,6 @@ primitive_decasteljau(void)
 	sqInt designpoints_length = interpreterProxy->stSizeOf(designpoints);
 	sqInt domain_length = interpreterProxy->stSizeOf(parameterDomain);
 
-	// printf("design point size %d, parameter domain size %d\n", designpoints_length, domain_length);
-
 	//  sqInt aSequenceableOfPoints = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classArray(), designpoints_length);
 
 	double h, u, t, x, y, h1, qx, qy;
@@ -122,8 +120,6 @@ primitive_decasteljau(void)
 		qx = interpreterProxy->fetchFloatofObject(0, qPoint);
 		qy = interpreterProxy->fetchFloatofObject(1, qPoint);
 
-		// printf("design point (%f, %f) for param %f (%dith)\n", qx, qy, t, j);
-
 		for (int k = 1; k < designpoints_length; k++)
 		{
 			h *= fma(t, (double)designpoints_length, (-t) * (double)k);
@@ -142,7 +138,6 @@ primitive_decasteljau(void)
 			// interpreterProxy->storePointerofObjectwithValue(1, interpreterProxy->floatObjectOf(y), qPoint);
 
 			// qPoint = interpreterProxy->makePointwithxValueyValue(interpreterProxy->floatObjectOf(x), interpreterProxy->floatObjectOf(y));
-			// printf("intermediate (%f, %f) for param %f (%dith)\n", qx, qy, t, j);
 		}
 
 		qPoint = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classPoint(), 0);
@@ -151,15 +146,12 @@ primitive_decasteljau(void)
 
 		interpreterProxy->stObjectatput(controlpoints, j, qPoint);
 
-		// printf("finished (%f, %f) for param %f (%dith)\n", qx, qy, t, j);
 	}
 
 	if (!(interpreterProxy->failed()))
 	{
 		interpreterProxy->pop(3);
 	}
-
-	// printf("finished\n");
 
 	return null;
 }
@@ -749,7 +741,6 @@ safe_object_compare(tim_object_t *v, tim_object_t *w, MergeState *ms)
 {
 	if (v == NULL || w == NULL)
 	{
-		printf("NULL pointers in safe compare.\n");
 		return -1;
 	}
 
@@ -803,8 +794,6 @@ merge_getmem(MergeState *ms, tim_ssize_t need)
 	merge_freemem(ms);
 	if ((size_t)need > SSIZE_T_MAX / sizeof(tim_object_t *))
 	{
-		// PyErr_NoMemory();
-		printf("No memory.\n");
 		return -1;
 	}
 	ms->a.keys = (tim_object_t **)tim_mem_malloc(need * sizeof(tim_object_t *));
@@ -813,8 +802,7 @@ merge_getmem(MergeState *ms, tim_ssize_t need)
 		ms->alloced = need;
 		return 0;
 	}
-	// PyErr_NoMemory();
-	printf("No memory.\n");
+	
 	return -1;
 }
 #define MERGE_GETMEM(MS, NEED) ((NEED) <= (MS)->alloced ? 0 : merge_getmem(MS, NEED))
