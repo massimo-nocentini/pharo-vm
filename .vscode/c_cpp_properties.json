@@ -23,6 +23,16 @@
             ],
             "defines": [],
             "intelliSenseMode": "linux-gcc-x64"
+        },
+        {
+            "name": "MacOS",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/include/**",
+                "${workspaceFolder}/include/pharovm/**",
+            ],
+            "defines": [],
+            "intelliSenseMode": "macos-clang-x64"
         }
     ],
     "version": 4
