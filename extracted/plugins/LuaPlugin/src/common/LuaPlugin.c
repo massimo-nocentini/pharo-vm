@@ -9,6 +9,7 @@ static char __buildInfo[] = "LuaPlugin VMMaker.oscog-eem.2495 uuid: fcbf4c90-4c5
 #include <lua.h>
 #include <lualib.h>
 #include <lauxlib.h>
+#include <pthread.h>
 
 /* Default EXPORT macro that does nothing (see comment in sq.h): */
 #define EXPORT(returnType) returnType
@@ -1178,6 +1179,85 @@ primitive_luaL_checknumber(void)
 	if (!(interpreterProxy->failed()))
 	{
 		interpreterProxy->popthenPush(3, interpreterProxy->floatObjectOf(v)); // just leave the receiver on the stacks
+	}
+
+	return null;
+}
+
+typedef struct lua_pthread_s
+{
+	lua_State *L;
+	int *retcode;
+	char *status;
+	char *str; // NULL-terminated string, therefore no need of the size_t length value.
+
+} lua_pthread_t;
+
+void *lua_pthread_worker(void *arg)
+{
+	lua_pthread_t *data = (lua_pthread_t *)arg;
+
+	// printf("****************** working: %s\n", data->str);
+
+	*data->status = 'b'; // 'b' for busy.
+
+	*data->retcode = luaL_dostring(data->L, data->str);
+
+	*data->status = 'd'; // 'd' for done.
+
+	free(data->str);
+
+	//printf("****************** done\n");
+
+	return arg;
+}
+
+EXPORT(sqInt)
+primitive_lua_pthread(void)
+{
+
+	lua_State *L = lua_StateFor(interpreterProxy->stackValue(1));
+	sqInt strOop = interpreterProxy->stackValue(0);
+
+	lua_pthread_t *data = malloc(sizeof(lua_pthread_t)); // prepare a pointer to the arg data structure.
+
+	sqInt stateArray = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classArray(), 3);
+
+	sqInt oopStatusByteArray = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classByteArray(), sizeof(char));
+	interpreterProxy->stObjectatput(stateArray, 1, oopStatusByteArray);
+
+	sqInt oopRetCodeByteArray = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classByteArray(), sizeof(int));
+	interpreterProxy->stObjectatput(stateArray, 2, oopRetCodeByteArray);
+
+	sqInt oopDataExternalAddress = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classExternalAddress(), 0);
+	writeAddress(oopDataExternalAddress, data);
+	interpreterProxy->stObjectatput(stateArray, 3, oopDataExternalAddress);
+
+	// prepare the `data` argument object.
+	data->L = L;
+
+	data->status = (char *)interpreterProxy->arrayValueOf(oopStatusByteArray);
+	*(data->status) = 'r'; // 'r' for ready.
+
+	data->retcode = (int *)interpreterProxy->arrayValueOf(oopRetCodeByteArray);
+	*(data->retcode) = LUA_TNONE;
+
+	data->str = interpreterProxy->cStringOrNullFor(strOop);
+
+	// start the thread.
+	pthread_t *thread = malloc(sizeof(pthread_t));
+
+	int s;
+
+	s = pthread_create(thread, NULL, &lua_pthread_worker, data);
+	assert(s == 0);
+
+	s = pthread_detach(*thread);
+	assert(s == 0);
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(3, stateArray); // just leave the receiver on the stacks
 	}
 
 	return null;

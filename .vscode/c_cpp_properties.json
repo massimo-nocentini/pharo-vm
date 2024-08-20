@@ -29,10 +29,11 @@
             "includePath": [
                 "${workspaceFolder}/**",
                 "${workspaceFolder}/include/**",
-                "${workspaceFolder}/include/pharovm/**",
+                "${workspaceFolder}/include/pharovm/**"
             ],
             "defines": [],
-            "intelliSenseMode": "macos-clang-x64"
+            "intelliSenseMode": "macos-clang-x64",
+            "compilerPath": "$(brew --prefix llvm)/bin"
         }
     ],
     "version": 4

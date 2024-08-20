@@ -37,8 +37,9 @@
         "gdk.h": "c",
         "gdkcairo.h": "c",
         "gdkdmabufformats.h": "c",
-        "stdbool.h": "c"
+        "stdbool.h": "c",
+        "__threading_support": "c"
     },
     "cmake.configureOnOpen": false,
-    "C_Cpp.default.compilerPath": "/usr/bin/clang++-16"
+    "C_Cpp.default.compilerPath": "$(brew --prefix llvm)/bin"
 }
