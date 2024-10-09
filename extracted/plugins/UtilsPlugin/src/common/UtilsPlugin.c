@@ -145,7 +145,6 @@ primitive_decasteljau(void)
 		interpreterProxy->storePointerofObjectwithValue(1, qPoint, interpreterProxy->floatObjectOf(qy));
 
 		interpreterProxy->stObjectatput(controlpoints, j, qPoint);
-
 	}
 
 	if (!(interpreterProxy->failed()))
@@ -274,7 +273,6 @@ typedef struct tim_object_s
 
 typedef struct tim_listobject_s
 {
-	sqInt oop;
 	tim_object_t **ob_item;
 	sqInt ob_size;
 } tim_listobject_t;
@@ -802,7 +800,7 @@ merge_getmem(MergeState *ms, tim_ssize_t need)
 		ms->alloced = need;
 		return 0;
 	}
-	
+
 	return -1;
 }
 #define MERGE_GETMEM(MS, NEED) ((NEED) <= (MS)->alloced ? 0 : merge_getmem(MS, NEED))
@@ -1402,31 +1400,29 @@ EXPORT(sqInt)
 primitive_timsort(void)
 {
 
-	sqInt recv = interpreterProxy->stackValue(2); // the receiver.
-	sqInt doubles = interpreterProxy->stackValue(1);
+	sqInt pairs = interpreterProxy->stackValue(1); // the array of pairs.
 	int reverse = interpreterProxy->stackValue(0) == interpreterProxy->trueObject();
 
-	sqInt size = interpreterProxy->stSizeOf(recv);
-
-	assert(size == interpreterProxy->stSizeOf(doubles));
+	sqInt size = interpreterProxy->stSizeOf(pairs);
 
 	tim_object_t **objs = tim_mem_malloc(sizeof(tim_object_t *) * size);
 
 	tim_object_t *each;
+	sqInt oopFloatPair;
 
 	for (int i = 0; i < size; i++)
 	{
 		sqInt i_next = i + 1;
 
 		each = objs[i] = tim_mem_malloc(sizeof(tim_object_t));
-		each->oop = interpreterProxy->stObjectat(recv, i_next);
-		each->value = interpreterProxy->floatValueOf(interpreterProxy->stObjectat(doubles, i_next));
+		oopFloatPair = interpreterProxy->stObjectat(pairs, i_next);
+		each->oop = interpreterProxy->stObjectat(oopFloatPair, 1);
+		each->value = interpreterProxy->floatValueOf(interpreterProxy->stObjectat(oopFloatPair, 2));
 		each->stIndex = i_next;
 	}
 
 	tim_listobject_t list;
 
-	list.oop = recv;
 	list.ob_size = size;
 	list.ob_item = objs;
 
@@ -1446,15 +1442,14 @@ primitive_timsort(void)
 			for (sqInt i = 0; i < size; i++)
 			{
 				each = objs[i];
-
-				interpreterProxy->stObjectatput(doubles, i + 1, each->oop);
+				interpreterProxy->stObjectatput(pairs, i + 1, each->oop);
 
 				free(each);
 			}
 
 			free(v);
 
-			res = doubles;
+			res = pairs;
 		}
 
 		interpreterProxy->popthenPush(3, res);
