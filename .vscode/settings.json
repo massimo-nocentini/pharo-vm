@@ -38,7 +38,10 @@
         "gdkcairo.h": "c",
         "gdkdmabufformats.h": "c",
         "stdbool.h": "c",
-        "__threading_support": "c"
+        "__threading_support": "c",
+        "chicken.h": "c",
+        "stdlib.h": "c",
+        "luaplugin.h": "c"
     },
     "cmake.configureOnOpen": false,
     "C_Cpp.default.compilerPath": "/usr/bin/clang"

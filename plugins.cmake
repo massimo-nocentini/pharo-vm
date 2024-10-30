@@ -349,6 +349,55 @@ endif()
 
 
 #
+# ChickenSchemePlugin
+#
+
+# message(STATUS "Adding plugin: ChickenSchemePlugin")
+
+# if(OSX)
+#     include_directories(
+#         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/ChickenSchemePlugin/include/common
+#         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/ChickenSchemePlugin/include/osx
+#     )
+    
+#     file(GLOB ChickenSchemePlugin_SOURCES
+#         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/ChickenSchemePlugin/src/common/*.c
+#         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/ChickenSchemePlugin/src/osx/*.c   
+#     )
+# elseif(UNIX)
+#     include_directories(
+#         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/ChickenSchemePlugin/include/common
+#         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/ChickenSchemePlugin/include/unix
+#     )
+    
+#     file(GLOB ChickenSchemePlugin_SOURCES
+#         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/ChickenSchemePlugin/src/common/*.c
+#         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/ChickenSchemePlugin/src/unix/*.c   
+#     )    
+# else()
+#     include_directories(
+#         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/ChickenSchemePlugin/include/common
+#         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/ChickenSchemePlugin/include/win
+#     )
+    
+#     file(GLOB ChickenSchemePlugin_SOURCES
+#         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/ChickenSchemePlugin/src/common/*.c
+#         ${CMAKE_CURRENT_SOURCE_DIR}/extracted/plugins/ChickenSchemePlugin/src/win/*.c   
+#     )    
+# endif()
+
+# addLibraryWithRPATH(ChickenSchemePlugin ${ChickenSchemePlugin_SOURCES})
+
+# if(OSX)
+# 	target_link_libraries(ChickenSchemePlugin PRIVATE "")
+# elseif(UNIX)
+#     target_link_libraries(ChickenSchemePlugin PRIVATE "-lchicken")
+# else()
+#     target_link_libraries(ChickenSchemePlugin PRIVATE "")
+# endif()
+
+
+#
 # CairoGraphicsPlugin
 #
 
