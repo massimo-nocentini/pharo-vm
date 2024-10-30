@@ -419,6 +419,7 @@ elseif(UNIX)
         /usr/include/cairo
         /usr/include/glib-2.0
         /usr/lib/x86_64-linux-gnu/glib-2.0/include
+        /usr/lib/glib-2.0/include
         /usr/include/pixman-1
         /usr/include/uuid
         /usr/include/freetype2

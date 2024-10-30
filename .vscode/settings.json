@@ -41,5 +41,5 @@
         "__threading_support": "c"
     },
     "cmake.configureOnOpen": false,
-    "C_Cpp.default.compilerPath": "$(brew --prefix llvm)/bin"
+    "C_Cpp.default.compilerPath": "/usr/bin/clang"
 }

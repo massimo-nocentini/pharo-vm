@@ -1477,6 +1477,34 @@ primitive_fma(void)
 	return null;
 }
 
+
+EXPORT(sqInt)
+primitive_sqInt(void)
+{
+	sqInt self = interpreterProxy->stackValue(0); // the receiver, indeed.
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(1, interpreterProxy->integerObjectOf(self));
+	}
+
+	return null;
+}
+
+
+EXPORT(sqInt)
+primitive_sqObjectInt(void)
+{
+	sqInt self = interpreterProxy->stackObjectValue(0); // the receiver, indeed.
+
+	if (!(interpreterProxy->failed()))
+	{
+		interpreterProxy->popthenPush(1, interpreterProxy->integerObjectOf(self));
+	}
+
+	return null;
+}
+
 #define knuth_random_QUALITY 1009									/* the quality */
 #define knuth_random_KK 100											/* the long lag */
 #define knuth_random_LL 37											/* the short lag */
