@@ -335,23 +335,29 @@ primitive_WSOpenString(void)
 {
 	int errp, should_free;
 
-	WSEnvironment env = (WSEnvironment)readAddress(interpreterProxy->stackValue(1));
-	char *command_line = checked_cStringOrNullFor(interpreterProxy->stackValue(0), &should_free);
+	char *command_line = checked_cStringOrNullFor(interpreterProxy->stackValue(1), &should_free);
+	WSEnvironment env = (WSEnvironment)readAddress(interpreterProxy->stackValue(0));
 
 	WSLINK link = WSOpenString(env, command_line, &errp);
-
-	sqInt anExternalAddress = newExternalAddress();
-
-	writeAddress(anExternalAddress, link);
 
 	if (should_free)
 	{
 		free(command_line);
 	}
 
-	if (!(interpreterProxy->failed()))
+	if (link != NULL && errp == WSEOK)
 	{
-		interpreterProxy->popthenPush(3, anExternalAddress);
+		sqInt anExternalAddress = newExternalAddress();
+		writeAddress(anExternalAddress, link);
+
+		if (!(interpreterProxy->failed()))
+		{
+			interpreterProxy->popthenPush(3, anExternalAddress);
+		}
+	}
+	else
+	{
+		interpreterProxy->primitiveFail();
 	}
 
 	return null;
@@ -359,17 +365,15 @@ primitive_WSOpenString(void)
 
 sqInt rec(WSLINK lp, sqInt oopLink, sqInt exprClass, sqInt exprSymbolClass, sqInt exprIntegerClass, sqInt exprRealClass)
 {
-	char *error_msg = NULL;
-	const char *string;
-	const char *theNumber;
+	const unsigned char *string;
 	int bytes;
 	int characters;
 	int n;
 	int rawType;
-	wslong32 i;
+	wsint64 i;
 	double r;
 
-	sqInt oop, args;
+	sqInt oop, args, temp;
 
 	switch (WSGetNext(lp))
 	{
@@ -377,13 +381,16 @@ sqInt rec(WSLINK lp, sqInt oopLink, sqInt exprClass, sqInt exprSymbolClass, sqIn
 
 		if (!WSGetUTF8Function(lp, &string, &bytes, &n))
 		{
-			error_msg = "unable to read the function from lp";
 			return interpreterProxy->primitiveFail();
 		}
 
 		oop = interpreterProxy->instantiateClassindexableSize(exprClass, 0);
 
-		interpreterProxy->storePointerofObjectwithValue(0, oop, checked_stringForCString(string));
+		temp = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), bytes);
+		memcpy(interpreterProxy->firstIndexableField(temp), string, bytes);
+		interpreterProxy->storePointerofObjectwithValue(0, oop, temp);
+		temp = 0;
+
 		WSReleaseUTF8Symbol(lp, string, bytes);
 
 		args = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classArray(), n);
@@ -397,17 +404,19 @@ sqInt rec(WSLINK lp, sqInt oopLink, sqInt exprClass, sqInt exprSymbolClass, sqIn
 		interpreterProxy->storePointerofObjectwithValue(2, oop, oopLink);
 		interpreterProxy->storePointerofObjectwithValue(3, oop, interpreterProxy->falseObject());
 
+		args = 0;
+
 		break;
 
 	case WSTKSTR:
 
 		if (!WSGetUTF8String(lp, &string, &bytes, &characters))
 		{
-			error_msg = "unable to read the UTF-8 string from lp";
 			return interpreterProxy->primitiveFail();
 		}
 
-		oop = checked_stringForCString(string);
+		oop = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), bytes);
+		memcpy(interpreterProxy->firstIndexableField(oop), string, bytes);
 
 		WSReleaseUTF8String(lp, string, bytes);
 
@@ -417,7 +426,6 @@ sqInt rec(WSLINK lp, sqInt oopLink, sqInt exprClass, sqInt exprSymbolClass, sqIn
 
 		if (!WSGetUTF8Symbol(lp, &string, &bytes, &characters))
 		{
-			error_msg = "unable to read the UTF-8 symbol from lp";
 			return interpreterProxy->primitiveFail();
 		}
 
@@ -426,13 +434,17 @@ sqInt rec(WSLINK lp, sqInt oopLink, sqInt exprClass, sqInt exprSymbolClass, sqIn
 		interpreterProxy->storePointerofObjectwithValue(0, oop, checked_stringForCString("Symbol"));
 
 		args = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classArray(), 1);
-		interpreterProxy->stObjectatput(args, 1, checked_stringForCString(string));
+		temp = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), bytes);
+		memcpy(interpreterProxy->firstIndexableField(temp), string, bytes);
+		interpreterProxy->stObjectatput(args, 1, temp);
 
 		interpreterProxy->storePointerofObjectwithValue(1, oop, args);
 		interpreterProxy->storePointerofObjectwithValue(2, oop, oopLink);
 		interpreterProxy->storePointerofObjectwithValue(3, oop, interpreterProxy->falseObject());
 
 		WSReleaseUTF8Symbol(lp, string, bytes);
+
+		args = temp = 0; // cleanup the pointer to the aux used before.
 
 		break;
 
@@ -442,31 +454,34 @@ sqInt rec(WSLINK lp, sqInt oopLink, sqInt exprClass, sqInt exprSymbolClass, sqIn
 
 		if (rawType == WSTK_WSSHORT || rawType == WSTK_WSINT || rawType == WSTK_WSSIZE_T || rawType == WSTK_WSLONG || rawType == WSTK_WSINT64)
 		{
-			if (!WSGetInteger32(lp, &i))
+			if (!WSGetInteger64(lp, &i))
 			{
-				error_msg = "unable to read the long from lp";
 				return interpreterProxy->primitiveFail();
 			}
 
-			oop = interpreterProxy->integerObjectOf(i);
+			oop = interpreterProxy->signed64BitIntegerFor(i);
 		}
 		else
 		{
 
-			WSGetNumberAsString(lp, &theNumber);
+			WSGetNumberAsUTF8String(lp, &string, &bytes, &characters);
 
 			oop = interpreterProxy->instantiateClassindexableSize(exprIntegerClass, 0);
 
 			interpreterProxy->storePointerofObjectwithValue(0, oop, checked_stringForCString("Integer"));
 
 			args = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classArray(), 1);
-			interpreterProxy->stObjectatput(args, 1, checked_stringForCString(theNumber));
+			temp = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), bytes);
+			memcpy(interpreterProxy->firstIndexableField(temp), string, bytes);
+			interpreterProxy->stObjectatput(args, 1, temp);
 
 			interpreterProxy->storePointerofObjectwithValue(1, oop, args);
 			interpreterProxy->storePointerofObjectwithValue(2, oop, oopLink);
 			interpreterProxy->storePointerofObjectwithValue(3, oop, interpreterProxy->falseObject());
 
-			WSReleaseString(lp, theNumber);
+			temp = args = 0;
+
+			WSReleaseUTF8Symbol(lp, string, bytes);
 		}
 
 		break;
@@ -479,7 +494,6 @@ sqInt rec(WSLINK lp, sqInt oopLink, sqInt exprClass, sqInt exprSymbolClass, sqIn
 		{
 			if (!WSGetReal64(lp, &r))
 			{
-				error_msg = "unable to read the real from lp";
 				return interpreterProxy->primitiveFail();
 			}
 
@@ -488,26 +502,30 @@ sqInt rec(WSLINK lp, sqInt oopLink, sqInt exprClass, sqInt exprSymbolClass, sqIn
 		else
 		{
 
-			WSGetNumberAsString(lp, &theNumber);
+			WSGetNumberAsUTF8String(lp, &string, &bytes, &characters);
 
-			oop = interpreterProxy->instantiateClassindexableSize(exprRealClass, 0);
+			oop = interpreterProxy->instantiateClassindexableSize(exprIntegerClass, 0);
 
 			interpreterProxy->storePointerofObjectwithValue(0, oop, checked_stringForCString("Real"));
 
 			args = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classArray(), 1);
-			interpreterProxy->stObjectatput(args, 1, checked_stringForCString(theNumber));
-		
+			temp = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classString(), bytes);
+			memcpy(interpreterProxy->firstIndexableField(temp), string, bytes);
+			interpreterProxy->stObjectatput(args, 1, temp);
+
 			interpreterProxy->storePointerofObjectwithValue(1, oop, args);
 			interpreterProxy->storePointerofObjectwithValue(2, oop, oopLink);
 			interpreterProxy->storePointerofObjectwithValue(3, oop, interpreterProxy->falseObject());
 
-			WSReleaseString(lp, theNumber);
+			temp = args = 0;
+
+			WSReleaseUTF8Symbol(lp, string, bytes);
 		}
 
 		break;
 
 	default:
-		error_msg = "Unhandled value of type id %d.", WSGetType(lp);
+		printf("WolframPlugin: Unhandled value of type id %d.\n", WSGetType(lp));
 		return interpreterProxy->primitiveFail();
 	}
 
@@ -532,7 +550,8 @@ primitive_read_from_link(void)
 	int bytes;
 	int characters;
 
-	char *error_msg = NULL;
+	char error_msg[1024];
+	error_msg[0] = '\0';
 
 	while ((pkt = WSNextPacket(lp), pkt) && pkt != RETURNPKT)
 	{
@@ -541,36 +560,34 @@ primitive_read_from_link(void)
 		case MESSAGEPKT:
 			if (!WSGetMessage(lp, &code, &param))
 			{
-				error_msg = "unable to read the message code from lp";
+				sprintf(error_msg, "Got message code %d with param %d\n", code, param);
 			}
-			printf("Got message code %d with param %d\n", code, param);
+
 			break;
 		case TEXTPKT:
 
 			if (!WSGetUTF8String(lp, &string, &bytes, &characters))
 			{
-				error_msg = "unable to read the UTF-8 string from lp";
+				sprintf(error_msg, "Got the text: %s\n", string);
 			}
-
-			printf("Got the text: %s\n", string);
 
 			WSReleaseUTF8String(lp, string, bytes);
 			break;
 		default:
-			printf("Got packet of type %d.\n", pkt);
+			sprintf(error_msg, "Got packet of type %d.\n", pkt);
 			break;
 		}
 
-		WSNewPacket(lp);
+		// WSNewPacket(lp);
 
-		if (err = WSError(lp), err)
-		{
-			error_msg = err;
-			break;
-		}
+		// if (err = WSError(lp), err)
+		// {
+		// 	error_msg = err;
+		// 	break;
+		// }
 	}
 
-	sqInt oop = error_msg != NULL ? oop = interpreterProxy->stringForCString(error_msg) : rec(lp, oopLink, exprClass, exprSymbolClass, exprIntegerClass, exprRealClass);
+	sqInt oop = error_msg[0] != '\0' ? interpreterProxy->stringForCString(error_msg) : rec(lp, oopLink, exprClass, exprSymbolClass, exprIntegerClass, exprRealClass);
 
 	if (!(interpreterProxy->failed()))
 	{
