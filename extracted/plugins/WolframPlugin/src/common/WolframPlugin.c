@@ -265,9 +265,9 @@ EXPORT(sqInt)
 primitive_WSPutInteger32(void)
 {
 	WSLINK link = (WSLINK)readAddress(interpreterProxy->fetchPointerofObject(0, interpreterProxy->stackValue(1)));
-	int d = interpreterProxy->stackIntegerValue(0);
+	wsint64 d = interpreterProxy->signed64BitValueOf(interpreterProxy->stackValue(0));
 
-	int r = WSPutInteger32(link, d);
+	int r = WSPutInteger64(link, d);
 
 	if (!(interpreterProxy->failed()))
 	{
