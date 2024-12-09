@@ -62,7 +62,7 @@ extractVCSInformation(GIT_COMMIT_HASH GIT_DESCRIBE GIT_COMMIT_DATE)
 
 set(VERSION_MAJOR 10)
 set(VERSION_MINOR 3)
-set(VERSION_PATCH_NUMBER 1)
+set(VERSION_PATCH_NUMBER 2)
 
 if(BUILD_IS_RELEASE)
 	set(VERSION_PATCH "${VERSION_PATCH_NUMBER}")
@@ -325,8 +325,7 @@ add_compile_options(
     -Wno-deprecated-declarations
     -Wno-pointer-to-int-cast
     -Wno-compare-distinct-pointer-types
-    -Wno-incompatible-function-pointer-types
-    -Wno-unused-local-typedef
+    #-Wno-incompatible-function-pointer-types
     -Wno-unknown-warning-option
 )
 
