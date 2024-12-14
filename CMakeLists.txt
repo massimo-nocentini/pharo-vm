@@ -5,7 +5,7 @@
 #  vmmaker: generates a Pharo development environment with the virtual machine code, Slang transpiler and machine code simulation
 #  generate-sources: generates the virtual machine source code in C, using the Slang-to-C transpiler
 
-cmake_minimum_required(VERSION 3.7.2)
+cmake_minimum_required(VERSION 3.10.0)
 # Use new and simpler escape sequences
 cmake_policy(SET CMP0053 NEW)
 cmake_policy(SET CMP0135 NEW)
