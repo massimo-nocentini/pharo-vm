@@ -2,7 +2,7 @@
 wget https://www.lua.org/ftp/lua-5.4.7.tar.gz --no-verbose
 tar xfz lua-5.4.7.tar.gz
 cd lua-5.4.7
-make "MYCFLAGS=-fPIC" linux
+make CC=clang "MYCFLAGS=-fPIC" linux
 sudo make install
 cd ..
 
