@@ -145,10 +145,10 @@ primitive_WSActivate(void)
 
 	int r = WSActivate(link);
 
-	if (!(interpreterProxy->failed()))
-	{
-		interpreterProxy->popthenPush(2, interpreterProxy->integerObjectOf(r));
-	}
+	// if (!(interpreterProxy->failed()))
+	// {
+	interpreterProxy->popthenPush(2, interpreterProxy->integerObjectOf(r));
+	// }
 
 	return null;
 }
@@ -541,7 +541,7 @@ primitive_read_from_link(void)
 	sqInt exprIntegerClass = interpreterProxy->stackValue(1);
 	sqInt exprRealClass = interpreterProxy->stackValue(0);
 
-	WSLINK lp = (WSLINK)readAddress(interpreterProxy->fetchPointerofObject(0, oopLink));
+	WSLINK lp = readAddress(interpreterProxy->fetchPointerofObject(0, oopLink));
 
 	int pkt, err;
 	int code, param;
@@ -553,14 +553,14 @@ primitive_read_from_link(void)
 	char error_msg[1024];
 	error_msg[0] = '\0';
 
-	while ((pkt = WSNextPacket(lp), pkt) && pkt != RETURNPKT)
+	while ((pkt = WSNextPacket(lp)) && pkt != RETURNPKT)
 	{
 		switch (pkt)
 		{
 		case MESSAGEPKT:
 			if (!WSGetMessage(lp, &code, &param))
 			{
-				sprintf(error_msg, "Got message code %d with param %d\n", code, param);
+				printf("Got message code %d with param %d\n", code, param);
 			}
 
 			break;
@@ -568,21 +568,25 @@ primitive_read_from_link(void)
 
 			if (!WSGetUTF8String(lp, &string, &bytes, &characters))
 			{
-				sprintf(error_msg, "Got the text: %s\n", string);
+				printf("Got the text: %s\n", string);
 			}
 
 			WSReleaseUTF8String(lp, string, bytes);
 			break;
+
 		default:
-			sprintf(error_msg, "Got packet of type %d.\n", pkt);
+			printf("Got packet of type %d.\n", pkt);
 			break;
 		}
 
-		// WSNewPacket(lp);
+		WSNewPacket(lp);
+		// err = WSError(lp);
 
-		// if (err = WSError(lp), err)
+		// if (err)
 		// {
 		// 	error_msg = err;
+
+		// 	sprintf(error_msg, "Got error %d.\n", err);
 		// 	break;
 		// }
 	}

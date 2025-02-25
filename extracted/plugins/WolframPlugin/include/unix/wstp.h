@@ -1,6 +1,6 @@
 /*************************************************************************
 
-        Copyright 1986 through 2023 by Wolfram Research Inc.
+        Copyright 1986 through 2024 by Wolfram Research Inc.
         All rights reserved
 
 *************************************************************************/
@@ -118,8 +118,8 @@
 #error "This header file only works with WSVERSION=6, WSINTERFACE=4"
 #endif
 
-#define WSREVISION 50
-#define WSMATHVERSION 14.0.0
+#define WSREVISION 51
+#define WSMATHVERSION 14.1.0
 
 
 /*
@@ -2805,8 +2805,8 @@ ML_EXTERN_C
 #error "This header file only works with MLVERSION=6, MLINTERFACE=4"
 #endif
 
-#define MLREVISION 50
-#define MLMATHVERSION 14.0.0
+#define MLREVISION 51
+#define MLMATHVERSION 14.1.0
 
 
 /*
