@@ -525,7 +525,9 @@ sqInt rec(WSLINK lp, sqInt oopLink, sqInt exprClass, sqInt exprSymbolClass, sqIn
 		break;
 
 	default:
-		printf("WolframPlugin: Unhandled value of type id %d.\n", WSGetType(lp));
+		const char *default_error = WSErrorMessage(lp);
+		printf("WolframPlugin: Unhandled value of type id %d and error message:\n\t%s\n", WSGetType(lp), default_error);
+		WSClearError(lp);
 		return interpreterProxy->primitiveFail();
 	}
 
