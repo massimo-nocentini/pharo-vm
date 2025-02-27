@@ -7,10 +7,10 @@ RUN apt update && apt upgrade -y && apt install -y build-essential cmake git wge
 ENV CC=clang
 ENV CXX=clang++
 
-WORKDIR /home/tree-sitter
-
 RUN wget https://www.lua.org/ftp/lua-5.4.7.tar.gz --no-verbose && tar -xzf lua-5.4.7.tar.gz && \
     cd lua-5.4.7 && make CC=clang MYCFLAGS="-fPIC" && make install && cd .. && rm -rf lua-5.4.7
+
+WORKDIR /home/ubuntu/tree-sitter
 
 RUN git clone https://github.com/massimo-nocentini/datetimeformatter.c.git --depth=1 && \
     cd datetimeformatter.c/src && make linux && make install && cd ../.. && rm -rf datetimeformatter.c
@@ -27,12 +27,12 @@ RUN git clone --depth 1 https://github.com/tree-sitter/tree-sitter-javascript.gi
 RUN git clone --depth 1 https://github.com/tree-sitter/tree-sitter-python.git && \
     cd tree-sitter-python && tree-sitter generate && make && make install
 
-WORKDIR /home
+WORKDIR /home/ubuntu
 
-COPY ./ ./pharo-vm
+COPY . pharo-vm
 
-RUN cmake -S pharo-vm -B pharo-vm-build -DVERSION_UPDATE_FROM_GIT=FALSE -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DICEBERG_DEFAULT_REMOTE=httpsUrl -DGENERATE_SOURCES=TRUE && \
-    cmake --build pharo-vm-build --target install
+RUN cmake -S pharo-vm -B pharo-vm-build -DVERSION_UPDATE_FROM_GIT=FALSE -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DICEBERG_DEFAULT_REMOTE=httpsUrl -DGENERATE_SOURCES=TRUE
+RUN cmake --build pharo-vm-build --target install
 
 RUN mkdir -p pharo-vm-build/build/dist/share/tree-sitter/language && \
     mkdir pharo-vm-build/build/dist/share/tree-sitter/language/c && \
