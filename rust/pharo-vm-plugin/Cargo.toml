@@ -1,0 +1,19 @@
+[package]
+name = "pharo-vm-plugin"
+description = "Write Pharo VM plugins in Rust. Header-free: no Pharo checkout, CMake or bindgen required."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Enables tests/layout.rs, which checks the checked-in proxy struct against the
+# real headers via pharo-vm-sys. Off by default: pharo-vm-sys needs the VM's
+# generated headers and the CMake environment, which a plugin author building
+# out of tree will not have. In-tree CI turns it on.
+verify-abi = ["dep:pharo-vm-sys"]
+
+[dependencies]
+pharo-vm-plugin-macros = { path = "../pharo-vm-plugin-macros" }
+pharo-vm-sys = { workspace = true, optional = true }

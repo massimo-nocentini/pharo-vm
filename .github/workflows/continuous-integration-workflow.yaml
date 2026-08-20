@@ -41,6 +41,65 @@ jobs:
             - name: make install
               run: cd build && make install
 
+            # The Rust platform layer must stay ABI-identical to the C it
+            # replaces. Linux only: abi-check.sh reads the dynamic symbol table
+            # with `nm -D`, which is GNU binutils syntax.
+            #
+            # This reuses the C sources the build above already generated
+            # (GENERATED_SOURCE_DIR), so the extra cost is one configure and
+            # compile rather than a second VMMaker run.
+            - name: Rust platform layer -- ABI check
+              if: matrix.variant.os == 'ubuntu-18.04'
+              run: |
+                set -euo pipefail
+                LIB=build/build/vm/lib${APPNAME}VMCore.so
+
+                rust/tools/abi-check.sh capture "$LIB" abi-baseline.txt
+
+                cmake -S . -B build-rust \
+                  -DAPPNAME=$APPNAME \
+                  -DVM_EXECUTABLE_NAME=$VM_EXECUTABLE_NAME \
+                  -DUSE_RUST_PLATFORM=ON \
+                  -DGENERATE_SOURCES=OFF \
+                  -DGENERATE_VMMAKER=OFF \
+                  -DGENERATED_SOURCE_DIR="$PWD/build"
+                cmake --build build-rust
+
+                rust/tools/abi-check.sh compare \
+                  "build-rust/build/vm/lib${APPNAME}VMCore.so" abi-baseline.txt
+
+            - name: Rust platform layer -- unit tests
+              if: matrix.variant.os == 'ubuntu-18.04'
+              run: |
+                set -euo pipefail
+                # cargo needs the same header environment CMake gives bindgen;
+                # cmake/rust.cmake wrote it out when configuring build-rust.
+                source build-rust/rust-env.sh
+                cd rust
+                cargo test --workspace --features pharo-vm-plugin/verify-abi
+                cargo fmt --check
+
+            # The plugin SDK's whole promise is that a plugin author needs
+            # nothing but cargo -- no Pharo checkout, no CMake, no bindgen. Run
+            # it with the header environment explicitly stripped, so that
+            # promise cannot rot unnoticed.
+            - name: Rust plugin SDK -- builds without the VM headers
+              if: matrix.variant.os == 'ubuntu-18.04'
+              run: |
+                set -euo pipefail
+                cd rust
+                env -u PHAROVM_INCLUDE_DIRS -u PHAROVM_COMPILE_DEFS \
+                  cargo test -p pharo-vm-plugin -p uuid-plugin
+                env -u PHAROVM_INCLUDE_DIRS -u PHAROVM_COMPILE_DEFS \
+                  cargo build -p uuid-plugin --release
+                # The five symbols sqNamedPrims.c looks for must all be there.
+                for sym in getModuleName setInterpreter initialiseModule \
+                           primitiveMakeUUID primitiveMakeUUIDAccessorDepth; do
+                  nm -D --defined-only target/release/libUUIDPlugin.so \
+                    | grep -qw "$sym" || { echo "plugin ABI: missing $sym"; exit 1; }
+                done
+                echo "plugin ABI: all expected symbols exported"
+
             - name: Package artifacts
               run: |
                 cd build

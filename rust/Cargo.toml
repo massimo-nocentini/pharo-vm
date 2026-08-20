@@ -1,0 +1,36 @@
+# Rust components of the Pharo VM.
+#
+# See rust/README.md for how this fits into the CMake build, and
+# docs/rust-port.md for the migration plan this workspace implements.
+
+[workspace]
+resolver = "2"
+members = [
+    "pharo-vm-sys",
+    "pharo-platform",
+    "pharo-vm-plugin",
+    "pharo-vm-plugin-macros",
+    "examples/uuid-plugin",
+    "plugins/jpeg-plugin",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+# Kept in step with the oldest toolchain we are willing to require of packagers.
+rust-version = "1.77"  # core::mem::offset_of!, used by the ABI layout test
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+pharo-vm-sys = { path = "pharo-vm-sys" }
+
+# A panic must never unwind across the `extern "C"` boundary into the generated
+# interpreter: that is undefined behaviour. Aborting is the only sound default.
+# Entry points that can fail gracefully catch the failure themselves instead of
+# relying on unwinding.
+[profile.release]
+panic = "abort"
+
+[profile.dev]
+panic = "abort"

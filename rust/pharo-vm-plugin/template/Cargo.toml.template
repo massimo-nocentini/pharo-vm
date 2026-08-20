@@ -1,0 +1,21 @@
+[package]
+name = "my-pharo-plugin"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+# This name decides three things that must agree: the built file name
+# (libMyPlugin.so), the module name the VM looks up, and the `module:` in your
+# image-side pragma.
+name = "MyPlugin"
+crate-type = ["cdylib"]
+
+[dependencies]
+# The crate is not published yet, so point at your Pharo checkout. Once it is
+# on crates.io this becomes `pharo-vm-plugin = "0.1"`.
+pharo-vm-plugin = { path = "/path/to/pharo-vm/rust/pharo-vm-plugin" }
+
+[profile.release]
+# A panic must never unwind into the interpreter. The SDK catches panics at
+# every primitive boundary; aborting is the belt to that pair of braces.
+panic = "abort"

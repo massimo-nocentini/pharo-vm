@@ -1,0 +1,17 @@
+[package]
+name = "pharo-platform"
+description = "Rust implementation of the Pharo VM's platform layer, replacing src/*.c wave by wave."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# A staticlib so CMake can drop it into the same link as the generated
+# interpreter: the symbols it exports must be indistinguishable from the C
+# objects they replace. See cmake/rust.cmake and rust/tools/abi-check.sh.
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+pharo-vm-sys.workspace = true

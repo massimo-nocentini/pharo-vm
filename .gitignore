@@ -371,3 +371,8 @@ healthchecksdb
 /stack64/generated
 
 **/.DS_Store
+
+# Rust platform layer (see rust/README.md)
+/rust/target
+# Cargo.lock is intentionally NOT ignored: the VM is an application, and
+# packagers need reproducible dependency versions.

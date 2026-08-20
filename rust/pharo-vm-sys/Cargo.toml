@@ -1,0 +1,16 @@
+[package]
+name = "pharo-vm-sys"
+description = "Raw FFI bindings to the Pharo VM's C headers. Generated at build time; no abstraction."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# Not a cdylib/staticlib: this crate only carries declarations. The linkable
+# artefacts are produced by `pharo-platform` (and by plugin crates).
+crate-type = ["rlib"]
+
+[build-dependencies]
+bindgen = "0.69"

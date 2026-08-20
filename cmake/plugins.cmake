@@ -49,7 +49,11 @@ add_vm_plugin(SurfacePlugin TRUE FALSE)
 add_vm_plugin(FloatArrayPlugin TRUE FALSE)
 add_vm_plugin(LargeIntegers FALSE FALSE)
 add_vm_plugin(JPEGReaderPlugin FALSE FALSE)
-add_vm_plugin(JPEGReadWriter2Plugin FALSE FALSE)
+# Built from rust/plugins/jpeg-plugin when USE_RUST_PLUGINS is ON. Both define
+# a target of this name, so exactly one of them may be added.
+if(NOT "JPEGReadWriter2Plugin" IN_LIST RUST_REPLACED_PLUGINS)
+    add_vm_plugin(JPEGReadWriter2Plugin FALSE FALSE)
+endif()
 add_vm_plugin(MiscPrimitivePlugin FALSE FALSE)
 add_vm_plugin(DSAPrims FALSE FALSE)
 add_vm_plugin(BitBltPlugin FALSE FALSE)

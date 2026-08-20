@@ -1,0 +1,29 @@
+//! A Pharo VM plugin.
+
+#![allow(non_snake_case)] // primitive names follow the image's conventions
+
+use pharo_vm_plugin::{pharo_plugin, pharo_primitive, Interp, PrimErr, PrimResult};
+
+// Must match [lib] name in Cargo.toml and the `module:` in your pragma.
+pharo_plugin!("MyPlugin");
+
+/// Answers the receiver doubled.
+///
+/// Call it from the image with:
+///
+/// ```smalltalk
+/// Integer compile: 'doubled
+///     <primitive: ''primitiveDoubled'' module: ''MyPlugin''>
+///     ^ self primitiveFailed'.
+///
+/// 21 doubled.  "=> 42"
+/// ```
+#[pharo_primitive]
+fn primitiveDoubled(vm: &Interp) -> PrimResult<isize> {
+    // `doubled` is unary, so the primitive takes no arguments and the receiver
+    // is at stack offset 0. Check this first: a named primitive can be
+    // installed in a method of any arity, so the count is input, not a given.
+    vm.expect_argument_count(0)?;
+    let n = vm.stack_integer(0)?;
+    n.checked_mul(2).ok_or(PrimErr::LimitExceeded)
+}

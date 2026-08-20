@@ -36,6 +36,8 @@ option(FEATURE_LIB_PTHREADW32	"Windows only, link to win32 version of pthread"		
 option(FEATURE_PLUGIN_UUID		"Build UUID plugin"													ON)
 option(FEATURE_PLUGIN_SSL		"Build SqueakSSL plugin"											ON)
 option(BUILD_VM_CORE_STATIC		"Build the VM core as a static library"								OFF)
+option(USE_RUST_PLATFORM		"Build the migrated platform-layer files in Rust instead of C"		OFF)
+option(USE_RUST_PLUGINS			"Build the migrated plugins in Rust instead of C"					OFF)
 option(GENERATE_VMMAKER			"If it generates the VMMaker image"									ON)
 option(GENERATE_SOURCES			"If it generates the C sources"										ON)
 option(ALWAYS_INTERACTIVE		"Be interactive by default"											OFF)
@@ -467,6 +469,13 @@ if(${FEATURE_FFI})
     endif()
 endif()
 
+# Decide which platform-layer files come from Rust rather than C. When
+# USE_RUST_PLATFORM is OFF this is empty and SUPPORT_SOURCES is untouched.
+include(cmake/rust.cmake)
+if(RUST_REPLACED_C_SOURCES)
+    list(REMOVE_ITEM SUPPORT_SOURCES ${RUST_REPLACED_C_SOURCES})
+endif()
+
 set(VM_SOURCES
     ${SUPPORT_SOURCES}
     ${GENERATED_SOURCES}
@@ -519,6 +528,10 @@ if(${FEATURE_MESSAGE_COUNT})
     target_compile_definitions(${VM_LIBRARY_NAME} 
         PRIVATE FEATURE_MESSAGE_COUNT=1)
 endif()
+
+# Link the Rust platform layer. Must come after the include directories and
+# compile definitions above: bindgen is given exactly those flags.
+configure_rust_platform()
 
 #If in OSX, configure creation of Bundle
 if(OSX)

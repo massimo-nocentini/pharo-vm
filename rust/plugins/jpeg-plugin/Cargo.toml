@@ -1,0 +1,20 @@
+[package]
+name = "jpeg-plugin"
+description = "JPEGReadWriter2Plugin in Rust, replacing the vendored 1998 IJG libjpeg."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# Must match the module name the image asks for.
+name = "JPEGReadWriter2Plugin"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pharo-vm-plugin = { path = "../../pharo-vm-plugin" }
+# Pure-Rust, maintained, from the image-rs project. Replaces the vendored copy
+# of IJG libjpeg 6b (27-Mar-1998) that this plugin used to carry.
+jpeg-decoder = { version = "0.3", default-features = false }
+jpeg-encoder = { version = "0.7", default-features = false }

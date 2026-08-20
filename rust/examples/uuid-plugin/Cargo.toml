@@ -1,0 +1,17 @@
+[package]
+name = "uuid-plugin"
+description = "Example Pharo VM plugin in Rust: a drop-in replacement for the C UUIDPlugin."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# The library name decides the file name, and the VM looks for the module by
+# that name: libUUIDPlugin.so / .dylib / UUIDPlugin.dll.
+name = "UUIDPlugin"
+crate-type = ["cdylib"]
+
+[dependencies]
+pharo-vm-plugin = { path = "../../pharo-vm-plugin" }
