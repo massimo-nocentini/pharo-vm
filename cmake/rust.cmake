@@ -77,6 +77,10 @@ if(NOT WIN32 AND NOT APPLE)
         # Builds its mutex with platform_semaphore, so it follows it.
         ${CMAKE_CURRENT_SOURCE_DIR}/src/threadSafeQueue/threadSafeQueue.c
                                                         # rust/pharo-platform/src/thread_safe_queue.rs
+        # Apple reads defaults from a PList through parameters.m before
+        # parsing, which parameters.rs does not do.
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/parameters/parameters.c
+                                                        # rust/pharo-platform/src/parameters.rs
     )
 endif()
 

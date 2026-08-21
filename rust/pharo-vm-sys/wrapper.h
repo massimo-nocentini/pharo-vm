@@ -30,3 +30,6 @@
 /* Wave 5 -- semaphores. The Semaphore vtable is shared with the FFI worker and
  * callback code in src/ffi/, which is still C. */
 #include "pharovm/semaphores/pSemaphore.h"
+
+/* Wave 9 -- command-line parameters. */
+#include "pharovm/parameters/parameters.h"

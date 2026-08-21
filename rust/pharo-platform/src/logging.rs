@@ -71,6 +71,8 @@ pub(crate) enum Args {
     OneString(Option<String>),
     /// Two `%s` conversions.
     TwoStrings(Option<String>, Option<String>),
+    /// One `%s` and one `%u`.
+    StringAndU32(Option<String>, u32),
     /// No conversions.
     None,
     /// One `%d` conversion.
@@ -362,6 +364,43 @@ pub(crate) unsafe fn message_two_strings(
             fmt.as_ptr(),
             a,
             b,
+        );
+    }
+}
+
+/// `logDebug(fmt, s, n)` where `fmt` has one `%s` then one `%u`.
+///
+/// The `%u` takes a `c_uint`, which is how `parameters.c` prints a `size_t`
+/// count. That is a mismatched conversion in the C, and passing a `u32` here
+/// is what reproduces it rather than fixing it.
+///
+/// # Safety
+///
+/// `s`, if non-null, must be a NUL-terminated string valid for the call.
+pub(crate) unsafe fn message_string_and_u32(
+    level: c_int,
+    fmt: &'static CStr,
+    site: Site,
+    s: *const c_char,
+    n: u32,
+) {
+    #[cfg(test)]
+    {
+        // SAFETY: delegated to the caller by this function's contract.
+        let args = Args::StringAndU32(unsafe { recorded_string(s) }, n);
+        record(level, site, fmt, args);
+    }
+    #[cfg(not(test))]
+    // SAFETY: one %s and one %u, matched by a string pointer and a c_uint.
+    unsafe {
+        pharo_vm_sys::logMessage(
+            level,
+            site.file.as_ptr(),
+            site.function.as_ptr(),
+            site.line,
+            fmt.as_ptr(),
+            s,
+            n as core::ffi::c_uint,
         );
     }
 }

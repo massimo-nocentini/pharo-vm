@@ -50,6 +50,8 @@ pub mod memory_unix;
 pub mod named_prims;
 pub mod parameter_vector;
 #[cfg(unix)]
+pub mod parameters;
+#[cfg(unix)]
 pub mod path_utilities;
 #[cfg(unix)]
 pub mod pharo_semaphore;

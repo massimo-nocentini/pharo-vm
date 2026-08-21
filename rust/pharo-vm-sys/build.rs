@@ -44,6 +44,9 @@ const ALLOWED_TYPES: &[&str] = &[
     // Wave 7. The unsigned counterpart of sqInt, used for heap sizes and
     // addresses in the memory-mapping entry points the interpreter calls.
     "usqInt",
+    // Wave 9. Filled in here and read by the generated interpreter and by
+    // src/client.c, so the layout is a live ABI.
+    "VMParameters",
 ];
 
 /// Only functions Rust *calls into C* belong here.
@@ -74,12 +77,22 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "failed",
     // Wave 8. The interpreter proxy handed to each plugin's setInterpreter.
     "sqGetInterpreterProxy",
+    // Wave 9. All still C: logLevel is in src/debug.c, the rest in src/utils.c.
+    "logLevel",
+    "getVMVersion",
+    "getSourceVersion",
+    "setVMPath",
+    "getFullPath",
 ];
 
 /// Global C variables. Note that enum *variants* do not belong here: with the
 /// `NewType` enum style they are emitted as associated constants on the type
 /// itself (`VMErrorCode::VM_SUCCESS`), so allowlisting the type is enough.
 const ALLOWED_VARS: &[&str] = &[
+    // Wave 9. Both are string macros in the generated config.h, so they cannot
+    // be restated in Rust without drifting from the C build's identity.
+    "VM_NAME",
+    "DEFAULT_IMAGE_NAME",
     // Wave 3. `moduleNameBuffer` is `char[FILENAME_MAX]` and is an exported
     // symbol, so the length has to come from the same stdio.h the C saw.
     "FILENAME_MAX",
