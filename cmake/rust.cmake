@@ -87,6 +87,11 @@ if(NOT WIN32 AND ${SIZEOF_VOID_P} STREQUAL "8")
     list(APPEND RUST_REPLACED_C_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/common/sqHeapMap.c
                                                         # rust/pharo-platform/src/heap_map.rs
+        # named_prims.rs treats pointerForOop as the identity, which holds
+        # while sqMemoryBase is 0 -- true everywhere except a 32-bit image on
+        # a 64-bit host.
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/common/sqNamedPrims.c
+                                                        # rust/pharo-platform/src/named_prims.rs
     )
 endif()
 

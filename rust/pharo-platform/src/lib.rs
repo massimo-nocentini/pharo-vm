@@ -46,6 +46,8 @@ pub mod image_access;
 mod logging;
 #[cfg(unix)]
 pub mod memory_unix;
+#[cfg(all(unix, target_pointer_width = "64"))]
+pub mod named_prims;
 pub mod parameter_vector;
 #[cfg(unix)]
 pub mod path_utilities;
@@ -56,3 +58,23 @@ pub mod platform_semaphore;
 pub mod string_utilities;
 #[cfg(all(unix, not(target_vendor = "apple")))]
 pub mod thread_safe_queue;
+
+/// Shared harness state for the unit tests.
+///
+/// Several modules keep process-wide state that the C kept too -- the module
+/// chain, `moduleNameBuffer`, the plugin search paths, the page size. Cargo
+/// runs tests in threads, so anything touching that state takes this lock,
+/// and it has to be *one* lock across modules because the state is shared
+/// across them: `named_prims` loading a module writes `external_primitives`'
+/// name buffer.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::sync::{Mutex, MutexGuard};
+
+    static GLOBALS: Mutex<()> = Mutex::new(());
+
+    /// Serialises access to the crate's process-wide state.
+    pub(crate) fn lock_globals() -> MutexGuard<'static, ()> {
+        GLOBALS.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}

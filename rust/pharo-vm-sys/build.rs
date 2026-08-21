@@ -72,6 +72,8 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // reports whether the last primitive failed.
     "signalSemaphoreWithIndex",
     "failed",
+    // Wave 8. The interpreter proxy handed to each plugin's setInterpreter.
+    "sqGetInterpreterProxy",
 ];
 
 /// Global C variables. Note that enum *variants* do not belong here: with the

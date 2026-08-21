@@ -69,6 +69,8 @@ pub(crate) enum Args {
     TwoLongLong(c_longlong, c_longlong),
     /// One `%s` conversion. Null is recorded as `None`.
     OneString(Option<String>),
+    /// Two `%s` conversions.
+    TwoStrings(Option<String>, Option<String>),
     /// No conversions.
     None,
     /// One `%d` conversion.
@@ -311,6 +313,55 @@ pub(crate) fn debug_allocation_summary(
             aligned_size,
             aligned_at,
             obtained_at,
+        );
+    }
+}
+
+/// Renders a `%s` argument for the test recorder.
+///
+/// # Safety
+///
+/// `s`, if non-null, must be a NUL-terminated string valid for the call.
+#[cfg(test)]
+unsafe fn recorded_string(s: *const c_char) -> Option<String> {
+    if s.is_null() {
+        return None;
+    }
+    // SAFETY: callers of the `%s` helpers promise a NUL-terminated string.
+    Some(unsafe { CStr::from_ptr(s) }.to_string_lossy().into_owned())
+}
+
+/// `logTrace(fmt, a, b)` and friends, where `fmt` has exactly two `%s`.
+///
+/// # Safety
+///
+/// `a` and `b`, if non-null, must be NUL-terminated strings valid for the
+/// call. Nulls are passed through as the C did; glibc prints "(null)".
+pub(crate) unsafe fn message_two_strings(
+    level: c_int,
+    fmt: &'static CStr,
+    site: Site,
+    a: *const c_char,
+    b: *const c_char,
+) {
+    #[cfg(test)]
+    {
+        // SAFETY: `recorded_string` requires the caller's contract, which this
+        // function's own contract passes on.
+        let args = Args::TwoStrings(unsafe { recorded_string(a) }, unsafe { recorded_string(b) });
+        record(level, site, fmt, args);
+    }
+    #[cfg(not(test))]
+    // SAFETY: two %s conversions, two string pointers.
+    unsafe {
+        pharo_vm_sys::logMessage(
+            level,
+            site.file.as_ptr(),
+            site.function.as_ptr(),
+            site.line,
+            fmt.as_ptr(),
+            a,
+            b,
         );
     }
 }

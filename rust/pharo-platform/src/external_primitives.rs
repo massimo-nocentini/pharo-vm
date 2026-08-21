@@ -360,7 +360,7 @@ pub unsafe extern "C" fn ioFreeModule(module_handle: *mut c_void) -> sqInt {
 ///
 /// # Safety
 ///
-/// `lookup_name` must be a NUL-terminated string valid for the call,
+/// `lookup_name` must be null or a NUL-terminated string valid for the call,
 /// `module_handle` must be null or live, and `accessor_depth_ptr` must be null
 /// or point to a writable `sqInt`.
 #[no_mangle]
@@ -372,8 +372,12 @@ pub unsafe extern "C" fn ioFindExternalFunctionInAccessorDepthInto(
     // SAFETY: delegated to the caller.
     unsafe {
         // The C tested `!*lookupName` to keep empty names out of dlsym, which
-        // the comment attributes to `eitherPlugin:` code.
-        if *lookup_name == 0 {
+        // the comment attributes to `eitherPlugin:` code. A null name reached
+        // that test through findInternalFunctionIn, which canonicalises an
+        // empty name to NULL and then passes it straight here -- so the C
+        // dereferenced null for a primitive whose name was the empty string.
+        // Treated as empty instead, which reaches the same answer.
+        if lookup_name.is_null() || *lookup_name == 0 {
             return core::ptr::null_mut();
         }
 
@@ -409,15 +413,12 @@ pub unsafe extern "C" fn ioFindExternalFunctionInAccessorDepthInto(
 mod tests {
     use super::*;
     use std::ffi::CString;
-    use std::sync::{Mutex, MutexGuard};
+    use std::sync::Mutex;
 
     /// Serialises everything that touches `moduleNameBuffer` or the installed
-    /// search paths, both of which are process-wide.
-    static GLOBALS: Mutex<()> = Mutex::new(());
-
-    fn lock() -> MutexGuard<'static, ()> {
-        GLOBALS.lock().unwrap_or_else(|e| e.into_inner())
-    }
+    /// search paths, both of which are process-wide -- and shared with
+    /// `named_prims`, hence the crate-wide lock.
+    use crate::test_support::lock_globals as lock;
 
     /// The NULL-terminated arrays [`super::paths`] answers from during tests.
     ///
