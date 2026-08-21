@@ -36,6 +36,15 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
+#[cfg(all(
+    unix,
+    not(any(
+        target_arch = "x86",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
+    ))
+))]
+pub mod client;
 pub mod error_code;
 #[cfg(unix)]
 pub mod external_primitives;

@@ -348,7 +348,7 @@ fn strdup_bytes(bytes: &[u8]) -> *mut c_char {
 /// The C used the `sqImageFileExists` macro, which dispatches through
 /// `currentFileAccessHandler()`, so a test that installed its own handler is
 /// obeyed here too.
-fn image_file_exists(path: *const c_char) -> bool {
+pub(crate) fn image_file_exists(path: *const c_char) -> bool {
     // SAFETY: currentFileAccessHandler never answers null, and the slot is
     // always filled.
     unsafe {

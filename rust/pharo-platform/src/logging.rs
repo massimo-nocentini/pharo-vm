@@ -26,6 +26,8 @@ use core::ffi::{c_char, c_int, c_longlong, c_void, CStr};
 
 /// `LOG_ERROR` from `include/pharovm/debug.h`.
 pub(crate) const LOG_ERROR: c_int = 1;
+/// `LOG_INFO` from `include/pharovm/debug.h`.
+pub(crate) const LOG_INFO: c_int = 3;
 /// `LOG_DEBUG` from `include/pharovm/debug.h`.
 pub(crate) const LOG_DEBUG: c_int = 4;
 /// `LOG_TRACE` from `include/pharovm/debug.h`.
@@ -73,6 +75,8 @@ pub(crate) enum Args {
     TwoStrings(Option<String>, Option<String>),
     /// One `%s` and one `%u`.
     StringAndU32(Option<String>, u32),
+    /// One `%ld`.
+    OneLong(core::ffi::c_long),
     /// No conversions.
     None,
     /// One `%d` conversion.
@@ -401,6 +405,24 @@ pub(crate) unsafe fn message_string_and_u32(
             fmt.as_ptr(),
             s,
             n as core::ffi::c_uint,
+        );
+    }
+}
+
+/// `logDebug(fmt, n)` / `logInfo(fmt, n)` where `fmt` has exactly one `%ld`.
+pub(crate) fn message_one_long(level: c_int, fmt: &'static CStr, site: Site, n: core::ffi::c_long) {
+    #[cfg(test)]
+    record(level, site, fmt, Args::OneLong(n));
+    #[cfg(not(test))]
+    // SAFETY: one %ld conversion, one c_long argument.
+    unsafe {
+        pharo_vm_sys::logMessage(
+            level,
+            site.file.as_ptr(),
+            site.function.as_ptr(),
+            site.line,
+            fmt.as_ptr(),
+            n,
         );
     }
 }

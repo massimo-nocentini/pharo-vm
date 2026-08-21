@@ -33,3 +33,7 @@
 
 /* Wave 9 -- command-line parameters. */
 #include "pharovm/parameters/parameters.h"
+
+/* Wave 10 -- the VM's startup path. */
+#include "pharovm/pharoClient.h"
+#include "pharovm/fileDialog.h"

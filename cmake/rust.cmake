@@ -84,6 +84,17 @@ if(NOT WIN32 AND NOT APPLE)
     )
 endif()
 
+# Not on 32-bit x86 or PowerPC: client.c opens with fldcw / mtfsfi, which set
+# the x87 control word and the PowerPC FPSCR. Both expand to nothing on every
+# other architecture. Getting x87 precision control wrong changes float results
+# instead of crashing, and nothing here can test it, so those two keep the C.
+if(NOT WIN32 AND NOT APPLE
+   AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(i[3-6]86|x86$|ppc|powerpc)")
+    list(APPEND RUST_REPLACED_C_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/client.c        # rust/pharo-platform/src/client.rs
+    )
+endif()
+
 # 64-bit Unix only: sqHeapMap.c has a second implementation, selected by
 # SQ_IMAGE32, with a single-level 256-entry table for a 32-bit address space.
 # A 64-bit build cannot reach it, and heap_map.rs does not provide it.

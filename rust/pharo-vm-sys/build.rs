@@ -47,6 +47,9 @@ const ALLOWED_TYPES: &[&str] = &[
     // Wave 9. Filled in here and read by the generated interpreter and by
     // src/client.c, so the layout is a live ABI.
     "VMParameters",
+    // Wave 10. Filled in by client.c and read by the platform's file dialog,
+    // which stays C.
+    "VMFileDialog",
 ];
 
 /// Only functions Rust *calls into C* belong here.
@@ -83,6 +86,27 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "getSourceVersion",
     "setVMPath",
     "getFullPath",
+    // Wave 10. The startup sequence. The first group is the generated
+    // interpreter's, the rest are platform C that stays C.
+    "initGlobalStructure",
+    "ioInitTime",
+    "ioInitExternalSemaphores",
+    "setMaxStacksToPrint",
+    // The seven other set* entry points client.c uses have no declaration in
+    // any header -- it declared them itself, and so does client.rs.
+    "readImageNamed",
+    "interpret",
+    "aioInit",
+    "setPharoCommandLineParameters",
+    "installErrorHandlers",
+    "registerCurrentThreadToHandleExceptions",
+    "setProcessArguments",
+    "setProcessEnvironmentVector",
+    "osCogStackPageHeadroom",
+    "setImageName",
+    "vm_file_dialog_run_modal_open",
+    "vm_file_dialog_destroy",
+    "vm_file_dialog_is_nop",
 ];
 
 /// Global C variables. Note that enum *variants* do not belong here: with the

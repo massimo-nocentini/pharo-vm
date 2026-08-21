@@ -129,27 +129,6 @@ fn as_file(f: *mut c_void) -> *mut libc::FILE {
     f.cast::<libc::FILE>()
 }
 
-/// Borrows a C string as a `Path`, or `None` if the pointer is null.
-///
-/// The C passed a null straight to `stat`, which fails with `EFAULT` and so
-/// reported "does not exist". Returning `None` here reaches the same answer
-/// without the UB of `CStr::from_ptr(null)`.
-///
-/// # Safety
-///
-/// `p`, if non-null, must point to a NUL-terminated string that stays valid
-/// for the duration of the call.
-unsafe fn path_from_ptr<'a>(p: *const c_char) -> Option<&'a std::path::Path> {
-    use std::os::unix::ffi::OsStrExt;
-
-    if p.is_null() {
-        return None;
-    }
-    // SAFETY: delegated to the caller by this function's contract.
-    let bytes = unsafe { CStr::from_ptr(p) }.to_bytes();
-    Some(std::path::Path::new(std::ffi::OsStr::from_bytes(bytes)))
-}
-
 /// Closes an image file. Returns what `fclose` returned.
 ///
 /// # Safety
@@ -351,6 +330,48 @@ pub unsafe extern "C" fn basicImageFileWrite(
     bytes_to_write
 }
 
+/// `stat(2)` on `path`, answering its mode, or `None` if the call failed.
+///
+/// Deliberately `libc::stat` rather than `std::fs::metadata`. The answer would
+/// be the same, but the *errno* would not: `std`'s implementation probes for
+/// `statx` support by calling it with null pointers and checking for `EFAULT`,
+/// so a failed lookup can leave `EFAULT` behind instead of `ENOENT`. That
+/// matters because `src/client.c` logs `errno` right after asking whether the
+/// image exists, and prints "Bad address" instead of "No such file or
+/// directory".
+///
+/// The large-file variant is selected explicitly, because the C was compiled
+/// with `_FILE_OFFSET_BITS=64` and a plain 32-bit `stat` would fail with
+/// `EOVERFLOW` on a large inode.
+///
+/// # Safety
+///
+/// `path` must be a NUL-terminated string valid for the call.
+unsafe fn stat_mode(path: *const c_char) -> Option<libc::mode_t> {
+    #[cfg(all(target_os = "linux", target_pointer_width = "32"))]
+    // SAFETY: delegated to the caller; `st` is fully written by a successful
+    // stat64 and never read after a failure.
+    unsafe {
+        let mut st: libc::stat64 = core::mem::zeroed();
+        if libc::stat64(path, &mut st) == 0 {
+            Some(st.st_mode)
+        } else {
+            None
+        }
+    }
+    #[cfg(not(all(target_os = "linux", target_pointer_width = "32")))]
+    // SAFETY: as above. On a 64-bit target `libc::stat` already is the
+    // large-file variant.
+    unsafe {
+        let mut st: libc::stat = core::mem::zeroed();
+        if libc::stat(path, &mut st) == 0 {
+            Some(st.st_mode)
+        } else {
+            None
+        }
+    }
+}
+
 /// Non-zero if `a_path` names something that `stat` can see.
 ///
 /// # Safety
@@ -358,15 +379,13 @@ pub unsafe extern "C" fn basicImageFileWrite(
 /// `a_path`, if non-null, must be a NUL-terminated string valid for the call.
 #[no_mangle]
 pub unsafe extern "C" fn basicImageFileExists(a_path: *const c_char) -> c_int {
-    // `std::fs::metadata` is `stat(2)` with the large-file variant picked
-    // correctly for the target, which matters on 32-bit hosts where the C was
-    // compiled with _FILE_OFFSET_BITS=64 and a hand-rolled `libc::stat` would
-    // not be. Both follow symlinks and both report failure as "does not exist".
-    // SAFETY: delegated to the caller.
-    match unsafe { path_from_ptr(a_path) } {
-        Some(path) => std::fs::metadata(path).is_ok() as c_int,
-        None => 0,
+    // A null path never reaches `stat`, so it also does not set EFAULT the way
+    // the C's did. Nothing passes null.
+    if a_path.is_null() {
+        return 0;
     }
+    // SAFETY: delegated to the caller.
+    c_int::from(unsafe { stat_mode(a_path) }.is_some())
 }
 
 /// Draws the image load/save progress bar on stdout.
@@ -432,10 +451,13 @@ pub extern "C" fn basicImageReportProgress(total_size: usize, current_size: usiz
 /// `a_path`, if non-null, must be a NUL-terminated string valid for the call.
 #[no_mangle]
 pub unsafe extern "C" fn basicImageIsDirectory(a_path: *const c_char) -> c_int {
+    if a_path.is_null() {
+        return 0;
+    }
+    // The C answered 0 when stat failed, and S_ISDIR of the mode otherwise.
     // SAFETY: delegated to the caller.
-    match unsafe { path_from_ptr(a_path) } {
-        // The C returned 0 when stat failed, then S_ISDIR of the mode.
-        Some(path) => std::fs::metadata(path).map_or(0, |m| m.is_dir() as c_int),
+    match unsafe { stat_mode(a_path) } {
+        Some(mode) => c_int::from(mode & libc::S_IFMT == libc::S_IFDIR),
         None => 0,
     }
 }
