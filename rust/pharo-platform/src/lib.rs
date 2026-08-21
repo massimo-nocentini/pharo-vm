@@ -52,3 +52,5 @@ pub mod pharo_semaphore;
 #[cfg(all(unix, not(target_vendor = "apple")))]
 pub mod platform_semaphore;
 pub mod string_utilities;
+#[cfg(all(unix, not(target_vendor = "apple")))]
+pub mod thread_safe_queue;

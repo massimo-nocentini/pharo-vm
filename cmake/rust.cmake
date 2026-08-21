@@ -72,6 +72,9 @@ if(NOT WIN32 AND NOT APPLE)
     list(APPEND RUST_REPLACED_C_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/semaphores/platformSemaphore.c
                                                         # rust/pharo-platform/src/platform_semaphore.rs
+        # Builds its mutex with platform_semaphore, so it follows it.
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/threadSafeQueue/threadSafeQueue.c
+                                                        # rust/pharo-platform/src/thread_safe_queue.rs
     )
 endif()
 
