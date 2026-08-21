@@ -39,13 +39,15 @@ mod interp {
     use pharo_vm_sys::sqInt;
 
     /// Queues a signal for the image semaphore at `index`.
+    ///
+    /// Since wave 11 this is `crate::external_semaphores`, not C.
     pub fn signal_semaphore_with_index(index: sqInt) {
         #[cfg(test)]
         super::tests::record_signal(index);
         #[cfg(not(test))]
-        // SAFETY: takes an index by value and touches only interpreter state.
+        // SAFETY: takes an index by value and touches only the request table.
         unsafe {
-            pharo_vm_sys::signalSemaphoreWithIndex(index);
+            crate::external_semaphores::signalSemaphoreWithIndex(index);
         }
     }
 

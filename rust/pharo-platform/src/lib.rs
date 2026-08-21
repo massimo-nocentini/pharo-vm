@@ -48,6 +48,8 @@ pub mod client;
 pub mod error_code;
 #[cfg(unix)]
 pub mod external_primitives;
+#[cfg(all(unix, not(target_vendor = "apple")))]
+pub mod external_semaphores;
 #[cfg(all(unix, target_pointer_width = "64"))]
 pub mod heap_map;
 #[cfg(unix)]

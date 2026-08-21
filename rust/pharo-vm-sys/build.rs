@@ -73,10 +73,9 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // Wave 4. `error` logs and then aborts; it is declared void in C but never
     // returns.
     "error",
-    // Wave 5. Both are in the generated interpreter: signalSemaphoreWithIndex
-    // queues a signal for the image's semaphore at that index, and `failed`
-    // reports whether the last primitive failed.
-    "signalSemaphoreWithIndex",
+    // Wave 5. `failed` reports whether the last primitive failed.
+    // (signalSemaphoreWithIndex was here until wave 11 ported the file that
+    // defines it; a symbol this workspace exports must never be bound.)
     "failed",
     // Wave 8. The interpreter proxy handed to each plugin's setInterpreter.
     "sqGetInterpreterProxy",
@@ -107,6 +106,16 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "vm_file_dialog_run_modal_open",
     "vm_file_dialog_destroy",
     "vm_file_dialog_is_nop",
+    // Wave 11. The interpreter's side of external semaphores, plus the two
+    // helpers sqExternalSemaphores.c reaches for.
+    "forceInterruptCheck",
+    "doSignalSemaphoreWithIndex",
+    "getExternalSemaphoreWithIndex",
+    "doWaitSemaphore",
+    // highBit is declared only by the generated cointerp.h, which wrapper.h
+    // does not reach, and aioInterruptPoll only inside the .c file itself.
+    // external_semaphores.rs declares both, as the C did.
+    "logAssert",
 ];
 
 /// Global C variables. Note that enum *variants* do not belong here: with the
