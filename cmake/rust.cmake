@@ -62,6 +62,16 @@ if(NOT WIN32)
     )
 endif()
 
+# 64-bit Unix only: sqHeapMap.c has a second implementation, selected by
+# SQ_IMAGE32, with a single-level 256-entry table for a 32-bit address space.
+# A 64-bit build cannot reach it, and heap_map.rs does not provide it.
+if(NOT WIN32 AND ${SIZEOF_VOID_P} STREQUAL "8")
+    list(APPEND RUST_REPLACED_C_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/common/sqHeapMap.c
+                                                        # rust/pharo-platform/src/heap_map.rs
+    )
+endif()
+
 # Plugins built from rust/plugins/ instead of plugins/.
 # The name is the module name, which is also the cargo lib name and therefore
 # the CMake target name -- so the C plugin of the same name must be skipped, or

@@ -58,6 +58,9 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // NULL-terminated `char **` arrays owned by the callee.
     "getPluginPaths",
     "getSystemSearchPaths",
+    // Wave 4. `error` logs and then aborts; it is declared void in C but never
+    // returns.
+    "error",
 ];
 
 /// Global C variables. Note that enum *variants* do not belong here: with the

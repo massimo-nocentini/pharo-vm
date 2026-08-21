@@ -39,6 +39,8 @@
 pub mod error_code;
 #[cfg(unix)]
 pub mod external_primitives;
+#[cfg(all(unix, target_pointer_width = "64"))]
+pub mod heap_map;
 #[cfg(unix)]
 pub mod image_access;
 mod logging;
