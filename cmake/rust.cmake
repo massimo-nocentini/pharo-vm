@@ -43,6 +43,9 @@ set(RUST_REPLACED_C_SOURCES
 #
 #   pathUtilities.c    GetCurrentDirectoryW, FindFirstFileW
 #   imageAccess.c      _wfopen, _wstat
+#   externalPrimitives.c
+#                      LoadLibraryW, GetProcAddress, and a fallback that looks
+#                      symbols up in PharoVMCore.dll by name
 #   stringUtilities.c  MultiByteToWideChar, WideCharToMultiByte -- these are
 #                      `vm_string_convert_utf8_to_utf16` and its inverse, which
 #                      string_utilities.rs does not provide and which
@@ -52,6 +55,8 @@ if(NOT WIN32)
     list(APPEND RUST_REPLACED_C_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/pathUtilities.c # rust/pharo-platform/src/path_utilities.rs
         ${CMAKE_CURRENT_SOURCE_DIR}/src/imageAccess.c   # rust/pharo-platform/src/image_access.rs
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/externalPrimitives.c
+                                                        # rust/pharo-platform/src/external_primitives.rs
         ${CMAKE_CURRENT_SOURCE_DIR}/src/stringUtilities.c
                                                         # rust/pharo-platform/src/string_utilities.rs
     )

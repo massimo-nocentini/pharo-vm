@@ -54,6 +54,8 @@ use core::ffi::{c_char, c_int, c_long, c_longlong, c_void, CStr};
 
 use pharo_vm_sys::{sqInt, FileAccessHandler};
 
+use crate::logging::{self, site};
+
 /// Read and write chunk size, 128 Kb.
 ///
 /// The C wrote `#define CHUNK_SIZE 128 * 1024` with no parentheses. Every use
@@ -73,128 +75,12 @@ static SHOW_OUTPUT_IN_CONSOLE: bool = false;
 /// The C's `progressText`, likewise never assigned.
 static PROGRESS_TEXT: &CStr = c"";
 
-/// `LOG_ERROR` from `include/pharovm/debug.h`.
-const LOG_ERROR: c_int = 1;
-
 /// The `__FILENAME__` the C compiler would have produced for this file.
 ///
 /// `debug.h` defines `__FILENAME__` as `__FILE__ + SOURCE_PATH_SIZE`, where
 /// CMake sets `SOURCE_PATH_SIZE` to the length of the source root, leaving the
 /// repo-relative path.
 const C_FILE: &CStr = c"src/imageAccess.c";
-
-/// The two `logError` shapes this module needs, behind a seam the tests can
-/// observe.
-///
-/// `logMessage` is variadic, so it cannot be stubbed by defining it in Rust,
-/// and linking `src/debug.c` into the unit-test binary would drag in the rest
-/// of the platform layer. Under `cfg(test)` the calls are recorded instead,
-/// which also lets the tests assert that the C-identical arguments are the ones
-/// being passed.
-mod logging {
-    use super::{C_FILE, LOG_ERROR};
-    use core::ffi::{c_int, c_longlong, CStr};
-
-    /// One recorded call, in the shape `logMessage`/`logMessageFromErrno`
-    /// would have received it.
-    #[cfg(test)]
-    #[derive(Debug, PartialEq, Eq, Clone)]
-    pub struct Record {
-        /// `LOG_ERROR`, always, for this module.
-        pub level: c_int,
-        /// `__FILENAME__` at the original C call site.
-        pub file: &'static str,
-        /// The message for the errno form, or the format string otherwise.
-        pub msg: &'static str,
-        /// `__FUNCTION__` at the original C call site.
-        pub function: &'static str,
-        /// `__LINE__` at the original C call site.
-        pub line: c_int,
-        /// The two `%lld` arguments, absent for the errno form.
-        pub args: Option<(c_longlong, c_longlong)>,
-    }
-
-    #[cfg(test)]
-    thread_local! {
-        static RECORDED: std::cell::RefCell<Vec<Record>> =
-            const { std::cell::RefCell::new(Vec::new()) };
-    }
-
-    /// Clears the recorded calls and returns what had accumulated.
-    #[cfg(test)]
-    pub fn take() -> Vec<Record> {
-        RECORDED.with(|r| core::mem::take(&mut *r.borrow_mut()))
-    }
-
-    #[cfg(test)]
-    fn record(rec: Record) {
-        RECORDED.with(|r| r.borrow_mut().push(rec));
-    }
-
-    /// What the `logErrorFromErrno` macro expands to. `line` is the line in
-    /// [`C_FILE`], see the module docs.
-    pub fn error_from_errno(msg: &'static CStr, function: &'static CStr, line: c_int) {
-        #[cfg(test)]
-        {
-            record(Record {
-                level: LOG_ERROR,
-                file: C_FILE.to_str().expect("literal"),
-                msg: msg.to_str().expect("literal"),
-                function: function.to_str().expect("literal"),
-                line,
-                args: None,
-            });
-        }
-        #[cfg(not(test))]
-        // SAFETY: all four pointers are to 'static NUL-terminated literals, and
-        // logMessageFromErrno only reads them.
-        unsafe {
-            pharo_vm_sys::logMessageFromErrno(
-                LOG_ERROR,
-                msg.as_ptr(),
-                C_FILE.as_ptr(),
-                function.as_ptr(),
-                line,
-            );
-        }
-    }
-
-    /// The `logError("...%lld...%lld", a, b)` shape, the only variadic form
-    /// this module needs.
-    pub fn error_two_longlong(
-        fmt: &'static CStr,
-        function: &'static CStr,
-        line: c_int,
-        a: c_longlong,
-        b: c_longlong,
-    ) {
-        #[cfg(test)]
-        {
-            record(Record {
-                level: LOG_ERROR,
-                file: C_FILE.to_str().expect("literal"),
-                msg: fmt.to_str().expect("literal"),
-                function: function.to_str().expect("literal"),
-                line,
-                args: Some((a, b)),
-            });
-        }
-        #[cfg(not(test))]
-        // SAFETY: the format string is a literal with exactly two %lld
-        // conversions, and exactly two c_longlong arguments follow it.
-        unsafe {
-            pharo_vm_sys::logMessage(
-                LOG_ERROR,
-                C_FILE.as_ptr(),
-                function.as_ptr(),
-                line,
-                fmt.as_ptr(),
-                a,
-                b,
-            );
-        }
-    }
-}
 
 /// Reports progress through the *current* handler, not through
 /// [`basicImageReportProgress`] directly.
@@ -343,7 +229,7 @@ pub unsafe extern "C" fn basicImageFileRead(
             unsafe { libc::fread(current_ptr.cast::<c_void>(), 1, chunk_to_read, as_file(f)) };
 
         if last_read_bytes < chunk_to_read {
-            logging::error_from_errno(c"fread", c"basicImageFileRead", 105);
+            logging::error_from_errno(c"fread", site!(C_FILE, c"basicImageFileRead", 105));
             return last_read_bytes;
         }
 
@@ -367,8 +253,7 @@ pub unsafe extern "C" fn basicImageFileRead(
     if bytes_to_read != read_bytes {
         logging::error_two_longlong(
             c"Error reading expected to read: %lld actual read:%lld",
-            c"basicImageFileRead",
-            118,
+            site!(C_FILE, c"basicImageFileRead", 118),
             bytes_to_read as c_longlong,
             read_bytes as c_longlong,
         );
@@ -435,7 +320,7 @@ pub unsafe extern "C" fn basicImageFileWrite(
             unsafe { libc::fwrite(current_ptr.cast::<c_void>(), 1, chunk_to_write, as_file(f)) };
 
         if last_write_bytes != chunk_to_write {
-            logging::error_from_errno(c"fwrite", c"basicImageFileWrite", 153);
+            logging::error_from_errno(c"fwrite", site!(C_FILE, c"basicImageFileWrite", 153));
             // Verbatim: the read path returns the short count on its own, this
             // one adds the running total to it.
             return last_write_bytes + wrote_bytes;
@@ -456,8 +341,7 @@ pub unsafe extern "C" fn basicImageFileWrite(
     if bytes_to_write != wrote_bytes {
         logging::error_two_longlong(
             c"Error reading expected to write: %lld actual wrote:%lld",
-            c"basicImageFileWrite",
-            166,
+            site!(C_FILE, c"basicImageFileWrite", 166),
             bytes_to_write as c_longlong,
             wrote_bytes as c_longlong,
         );
@@ -753,12 +637,12 @@ mod tests {
         assert_eq!(
             logging::take(),
             vec![logging::Record {
-                level: LOG_ERROR,
-                file: "src/imageAccess.c",
-                msg: "fread",
-                function: "basicImageFileRead",
+                level: logging::LOG_ERROR,
+                file: "src/imageAccess.c".into(),
+                function: "basicImageFileRead".into(),
                 line: 105,
-                args: None,
+                msg: "fread".into(),
+                args: logging::Args::FromErrno,
             }]
         );
     }

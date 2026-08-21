@@ -54,13 +54,19 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // logErrorFromErrno macros.
     "logMessage",
     "logMessageFromErrno",
+    // Wave 3. Both live in src/utils.c, which is still C. They return
+    // NULL-terminated `char **` arrays owned by the callee.
+    "getPluginPaths",
+    "getSystemSearchPaths",
 ];
 
 /// Global C variables. Note that enum *variants* do not belong here: with the
 /// `NewType` enum style they are emitted as associated constants on the type
 /// itself (`VMErrorCode::VM_SUCCESS`), so allowlisting the type is enough.
 const ALLOWED_VARS: &[&str] = &[
-    // (none yet)
+    // Wave 3. `moduleNameBuffer` is `char[FILENAME_MAX]` and is an exported
+    // symbol, so the length has to come from the same stdio.h the C saw.
+    "FILENAME_MAX",
 ];
 
 fn env_list(key: &str) -> Option<Vec<String>> {

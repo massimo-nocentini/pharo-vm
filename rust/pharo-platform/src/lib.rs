@@ -38,7 +38,10 @@
 
 pub mod error_code;
 #[cfg(unix)]
+pub mod external_primitives;
+#[cfg(unix)]
 pub mod image_access;
+mod logging;
 pub mod parameter_vector;
 #[cfg(unix)]
 pub mod path_utilities;
