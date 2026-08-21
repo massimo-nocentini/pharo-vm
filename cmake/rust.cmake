@@ -61,6 +61,8 @@ if(NOT WIN32)
                                                         # rust/pharo-platform/src/string_utilities.rs
         ${CMAKE_CURRENT_SOURCE_DIR}/src/semaphores/pharoSemaphore.c
                                                         # rust/pharo-platform/src/pharo_semaphore.rs
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/unix/memoryUnix.c
+                                                        # rust/pharo-platform/src/memory_unix.rs
     )
 endif()
 

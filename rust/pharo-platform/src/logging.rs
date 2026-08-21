@@ -22,7 +22,7 @@
 //! and differential testing can diff stderr. Every caller therefore names a
 //! `.c` file that no longer compiles into the Rust build; that is deliberate.
 
-use core::ffi::{c_char, c_int, c_longlong, CStr};
+use core::ffi::{c_char, c_int, c_longlong, c_void, CStr};
 
 /// `LOG_ERROR` from `include/pharovm/debug.h`.
 pub(crate) const LOG_ERROR: c_int = 1;
@@ -69,6 +69,25 @@ pub(crate) enum Args {
     TwoLongLong(c_longlong, c_longlong),
     /// One `%s` conversion. Null is recorded as `None`.
     OneString(Option<String>),
+    /// No conversions.
+    None,
+    /// One `%d` conversion.
+    OneInt(c_int),
+    /// One `%p` conversion, recorded as an integer.
+    OnePtr(usize),
+    /// The five-argument allocation summary in `memoryUnix.c`.
+    AllocationSummary {
+        /// The `%zu` size the caller asked for.
+        requested_size: usize,
+        /// The `%p` address the caller asked for.
+        requested_at: usize,
+        /// The `%zu` size after page alignment.
+        aligned_size: usize,
+        /// The `%p` address after page alignment.
+        aligned_at: usize,
+        /// The `%p` address actually obtained, or null.
+        obtained_at: usize,
+    },
 }
 
 /// One recorded call, in the shape the C function would have received it.
@@ -186,6 +205,112 @@ pub(crate) unsafe fn message_one_string(
             site.line,
             fmt.as_ptr(),
             s,
+        );
+    }
+}
+
+/// `logError(fmt)` / `logDebug(fmt)` with no conversions at all.
+///
+/// Note that the C passed the message straight through as the format string,
+/// so a `%` in it would still be interpreted. Every caller here uses a literal
+/// without one.
+pub(crate) fn message_no_args(level: c_int, fmt: &'static CStr, site: Site) {
+    #[cfg(test)]
+    record(level, site, fmt, Args::None);
+    #[cfg(not(test))]
+    // SAFETY: a literal format string with no conversions and no arguments
+    // following it.
+    unsafe {
+        pharo_vm_sys::logMessage(
+            level,
+            site.file.as_ptr(),
+            site.function.as_ptr(),
+            site.line,
+            fmt.as_ptr(),
+        );
+    }
+}
+
+/// `logError(fmt, i)` where `fmt` has exactly one `%d`.
+pub(crate) fn message_one_int(level: c_int, fmt: &'static CStr, site: Site, i: c_int) {
+    #[cfg(test)]
+    record(level, site, fmt, Args::OneInt(i));
+    #[cfg(not(test))]
+    // SAFETY: one %d conversion, one c_int argument.
+    unsafe {
+        pharo_vm_sys::logMessage(
+            level,
+            site.file.as_ptr(),
+            site.function.as_ptr(),
+            site.line,
+            fmt.as_ptr(),
+            i,
+        );
+    }
+}
+
+/// `logDebug(fmt, p)` / `logError(fmt, p)` where `fmt` has exactly one `%p`.
+pub(crate) fn message_one_ptr(level: c_int, fmt: &'static CStr, site: Site, p: *const c_void) {
+    #[cfg(test)]
+    record(level, site, fmt, Args::OnePtr(p as usize));
+    #[cfg(not(test))]
+    // SAFETY: one %p conversion, one pointer argument. The pointer is only
+    // formatted, never dereferenced, so it need not be valid.
+    unsafe {
+        pharo_vm_sys::logMessage(
+            level,
+            site.file.as_ptr(),
+            site.function.as_ptr(),
+            site.line,
+            fmt.as_ptr(),
+            p,
+        );
+    }
+}
+
+/// The one `logDebug` in `memoryUnix.c` that summarises an allocation:
+/// `%zu`, `%p`, `%zu`, `%p`, `%p`, in that order.
+///
+/// Specific rather than generic because matching a format string to a varargs
+/// list has to be done by hand, and the only way to keep that honest is to do
+/// it once per shape.
+pub(crate) fn debug_allocation_summary(
+    fmt: &'static CStr,
+    site: Site,
+    requested_size: usize,
+    requested_at: *const c_void,
+    aligned_size: usize,
+    aligned_at: *const c_void,
+    obtained_at: *const c_void,
+) {
+    #[cfg(test)]
+    record(
+        LOG_DEBUG,
+        site,
+        fmt,
+        Args::AllocationSummary {
+            requested_size,
+            requested_at: requested_at as usize,
+            aligned_size,
+            aligned_at: aligned_at as usize,
+            obtained_at: obtained_at as usize,
+        },
+    );
+    #[cfg(not(test))]
+    // SAFETY: the conversions are %zu %p %zu %p %p and the five arguments
+    // below match them in order and type. The pointers are only formatted.
+    unsafe {
+        pharo_vm_sys::logMessage(
+            LOG_DEBUG,
+            site.file.as_ptr(),
+            site.function.as_ptr(),
+            site.line,
+            fmt.as_ptr(),
+            requested_size,
+            requested_at,
+            aligned_size,
+            aligned_at,
+            obtained_at,
         );
     }
 }

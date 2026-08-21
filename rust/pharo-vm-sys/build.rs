@@ -41,6 +41,9 @@ const ALLOWED_TYPES: &[&str] = &[
     // Wave 5. Passed by pointer between this crate and the still-C FFI worker
     // and callback code, so the layout is a live ABI.
     "Semaphore",
+    // Wave 7. The unsigned counterpart of sqInt, used for heap sizes and
+    // addresses in the memory-mapping entry points the interpreter calls.
+    "usqInt",
 ];
 
 /// Only functions Rust *calls into C* belong here.

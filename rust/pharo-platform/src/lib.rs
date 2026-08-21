@@ -44,6 +44,8 @@ pub mod heap_map;
 #[cfg(unix)]
 pub mod image_access;
 mod logging;
+#[cfg(unix)]
+pub mod memory_unix;
 pub mod parameter_vector;
 #[cfg(unix)]
 pub mod path_utilities;
