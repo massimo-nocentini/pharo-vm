@@ -47,4 +47,8 @@ mod logging;
 pub mod parameter_vector;
 #[cfg(unix)]
 pub mod path_utilities;
+#[cfg(unix)]
+pub mod pharo_semaphore;
+#[cfg(all(unix, not(target_vendor = "apple")))]
+pub mod platform_semaphore;
 pub mod string_utilities;

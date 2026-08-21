@@ -59,6 +59,19 @@ if(NOT WIN32)
                                                         # rust/pharo-platform/src/external_primitives.rs
         ${CMAKE_CURRENT_SOURCE_DIR}/src/stringUtilities.c
                                                         # rust/pharo-platform/src/string_utilities.rs
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/semaphores/pharoSemaphore.c
+                                                        # rust/pharo-platform/src/pharo_semaphore.rs
+    )
+endif()
+
+# Non-Apple Unix only: platformSemaphore.c has three implementations, and the
+# Apple one uses dispatch semaphores because POSIX unnamed semaphores are
+# deprecated and non-functional there. platform_semaphore.rs is the sem_init
+# one only.
+if(NOT WIN32 AND NOT APPLE)
+    list(APPEND RUST_REPLACED_C_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/semaphores/platformSemaphore.c
+                                                        # rust/pharo-platform/src/platform_semaphore.rs
     )
 endif()
 

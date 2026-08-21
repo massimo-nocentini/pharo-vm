@@ -38,6 +38,9 @@ const ALLOWED_TYPES: &[&str] = &[
     // The width of the VM's object-pointer-sized integer is decided by
     // config.h; never assume it, always take it from the headers.
     "sqInt",
+    // Wave 5. Passed by pointer between this crate and the still-C FFI worker
+    // and callback code, so the layout is a live ABI.
+    "Semaphore",
 ];
 
 /// Only functions Rust *calls into C* belong here.
@@ -61,6 +64,11 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // Wave 4. `error` logs and then aborts; it is declared void in C but never
     // returns.
     "error",
+    // Wave 5. Both are in the generated interpreter: signalSemaphoreWithIndex
+    // queues a signal for the image's semaphore at that index, and `failed`
+    // reports whether the last primitive failed.
+    "signalSemaphoreWithIndex",
+    "failed",
 ];
 
 /// Global C variables. Note that enum *variants* do not belong here: with the

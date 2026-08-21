@@ -26,3 +26,7 @@
  * way rather than including it bare. */
 #include "pharovm/common/sq.h"
 #include "pharovm/imageAccess.h"
+
+/* Wave 5 -- semaphores. The Semaphore vtable is shared with the FFI worker and
+ * callback code in src/ffi/, which is still C. */
+#include "pharovm/semaphores/pSemaphore.h"
