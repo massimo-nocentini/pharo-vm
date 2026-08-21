@@ -31,6 +31,13 @@ const ALLOWED_TYPES: &[&str] = &[
     // Wave 1. Shared field-for-field with parameters.c and parameters.m, which
     // are still C, so the layout is a live ABI.
     "VMParameterVector",
+    // Wave 2. `defaultFileAccessHandler` is filled in by Rust but read and
+    // called through by the generated interpreter (the `sqImageFile*` macros in
+    // imageAccess.h expand there), so the layout is a live ABI too.
+    "FileAccessHandler",
+    // The width of the VM's object-pointer-sized integer is decided by
+    // config.h; never assume it, always take it from the headers.
+    "sqInt",
 ];
 
 /// Only functions Rust *calls into C* belong here.
@@ -42,7 +49,11 @@ const ALLOWED_TYPES: &[&str] = &[
 /// mismatch the linker cannot catch. `vm_error_code_to_string` is the Wave 0
 /// example -- deliberately absent.
 const ALLOWED_FUNCTIONS: &[&str] = &[
-    // (none yet: Wave 0 only exports, it does not call in)
+    // Wave 2. `src/debug.c` stays C, and a port that stopped logging would be
+    // a behaviour change; these are the two entry points behind the logError /
+    // logErrorFromErrno macros.
+    "logMessage",
+    "logMessageFromErrno",
 ];
 
 /// Global C variables. Note that enum *variants* do not belong here: with the

@@ -37,6 +37,8 @@
 #![warn(missing_docs)]
 
 pub mod error_code;
+#[cfg(unix)]
+pub mod image_access;
 pub mod parameter_vector;
 #[cfg(unix)]
 pub mod path_utilities;

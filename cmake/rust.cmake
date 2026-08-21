@@ -33,17 +33,27 @@
 # Add to this list in the same commit that adds the Rust module.
 set(RUST_REPLACED_C_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/errorCode.c        # rust/pharo-platform/src/error_code.rs
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/stringUtilities.c  # rust/pharo-platform/src/string_utilities.rs
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parameters/parameterVector.c
                                                        # rust/pharo-platform/src/parameter_vector.rs
 )
 
-# Ported for Unix only: pathUtilities.c has a _WIN32 branch for every function,
-# using APIs (GetCurrentDirectoryW, FindFirstFileW) whose behaviour differs
-# enough that porting them untested would be guesswork. Windows keeps the C.
+# Ported for Unix only. Each of these has a _WIN32 branch built on APIs whose
+# behaviour differs enough that porting them without a Windows machine to test
+# on would be guesswork, so Windows keeps compiling the C:
+#
+#   pathUtilities.c    GetCurrentDirectoryW, FindFirstFileW
+#   imageAccess.c      _wfopen, _wstat
+#   stringUtilities.c  MultiByteToWideChar, WideCharToMultiByte -- these are
+#                      `vm_string_convert_utf8_to_utf16` and its inverse, which
+#                      string_utilities.rs does not provide and which
+#                      src/win/fileDialogWin32.c calls unconditionally. Dropping
+#                      the C file on Windows therefore fails the link.
 if(NOT WIN32)
     list(APPEND RUST_REPLACED_C_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/pathUtilities.c # rust/pharo-platform/src/path_utilities.rs
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/imageAccess.c   # rust/pharo-platform/src/image_access.rs
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/stringUtilities.c
+                                                        # rust/pharo-platform/src/string_utilities.rs
     )
 endif()
 

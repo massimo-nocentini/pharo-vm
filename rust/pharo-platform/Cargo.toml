@@ -15,3 +15,4 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 pharo-vm-sys.workspace = true
+libc.workspace = true

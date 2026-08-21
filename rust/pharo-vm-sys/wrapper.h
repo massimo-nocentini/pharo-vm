@@ -18,3 +18,11 @@
 
 /* Wave 1 */
 #include "pharovm/parameters/parameterVector.h"
+
+/* Wave 2 -- image file access.
+ *
+ * imageAccess.h names sqInt and EXPORT without including anything that
+ * defines them; it is only ever reached through sq.h, so reach it the same
+ * way rather than including it bare. */
+#include "pharovm/common/sq.h"
+#include "pharovm/imageAccess.h"
