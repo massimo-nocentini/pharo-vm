@@ -37,3 +37,11 @@
 /* Wave 10 -- the VM's startup path. */
 #include "pharovm/pharoClient.h"
 #include "pharovm/fileDialog.h"
+
+/* Wave 12 -- the interpreter proxy's function table.
+ *
+ * This header is the single source of truth for the ~150 declarations
+ * sqGetInterpreterProxy wires into the VirtualMachine struct. build.rs
+ * allowlists the whole file rather than naming them one by one, so adding an
+ * entry to the proxy needs no change here. */
+#include "pharovm/common/interpreterProxyFunctions.h"

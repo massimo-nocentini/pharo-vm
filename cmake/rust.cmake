@@ -80,6 +80,11 @@ if(NOT WIN32 AND NOT APPLE)
         # Likewise.
         ${CMAKE_CURRENT_SOURCE_DIR}/src/common/sqExternalSemaphores.c
                                                         # rust/pharo-platform/src/external_semaphores.rs
+        # The interpreter proxy. Its ~150 declarations live in
+        # include/pharovm/common/interpreterProxyFunctions.h, which both this C
+        # file and pharo-vm-sys read, so neither side restates them.
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/common/sqVirtualMachine.c
+                                                        # rust/pharo-platform/src/virtual_machine.rs
         # Apple reads defaults from a PList through parameters.m before
         # parsing, which parameters.rs does not do.
         ${CMAKE_CURRENT_SOURCE_DIR}/src/parameters/parameters.c

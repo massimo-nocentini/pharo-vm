@@ -118,6 +118,33 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "logAssert",
 ];
 
+/// Functions that `interpreterProxyFunctions.h` declares but this workspace
+/// *defines*, so they must not be bound however they got onto the allowlist.
+///
+/// The header is allowlisted wholesale, which is what keeps it from needing a
+/// list of 150 names; these five are the exceptions, each ported in an earlier
+/// wave. Declaring and defining the same symbol is at best redundant and at
+/// worst a signature mismatch the linker cannot catch.
+const BLOCKED_FUNCTIONS: &[&str] = &[
+    // rust/pharo-platform/src/external_semaphores.rs
+    "signalSemaphoreWithIndex",
+    "waitOnExternalSemaphoreIndex",
+    // rust/pharo-platform/src/named_prims.rs
+    "ioLoadModuleOfLength",
+    "ioLoadSymbolOfLengthFromModule",
+    "ioLoadFunctionFrom",
+];
+
+/// Headers every declaration of which is bound.
+///
+/// Used where a header exists precisely to enumerate a set -- naming its
+/// members individually in [`ALLOWED_FUNCTIONS`] would be a second copy of the
+/// same list, and would go stale.
+const ALLOWED_FILES: &[&str] = &[
+    // Wave 12: the interpreter proxy's function table.
+    r".*interpreterProxyFunctions\.h",
+];
+
 /// Global C variables. Note that enum *variants* do not belong here: with the
 /// `NewType` enum style they are emitted as associated constants on the type
 /// itself (`VMErrorCode::VM_SUCCESS`), so allowlisting the type is enough.
@@ -126,6 +153,9 @@ const ALLOWED_VARS: &[&str] = &[
     // be restated in Rust without drifting from the C build's identity.
     "VM_NAME",
     "DEFAULT_IMAGE_NAME",
+    // Wave 12. The proxy's version, which decides which entries the table has.
+    "VM_PROXY_MAJOR",
+    "VM_PROXY_MINOR",
     // Wave 3. `moduleNameBuffer` is `char[FILENAME_MAX]` and is an exported
     // symbol, so the length has to come from the same stdio.h the C saw.
     "FILENAME_MAX",
@@ -202,6 +232,12 @@ fn main() {
     let bindings = ALLOWED_VARS
         .iter()
         .fold(bindings, |b, v| b.allowlist_var(v));
+    let bindings = ALLOWED_FILES
+        .iter()
+        .fold(bindings, |b, f| b.allowlist_file(f));
+    let bindings = BLOCKED_FUNCTIONS
+        .iter()
+        .fold(bindings, |b, f| b.blocklist_function(f));
 
     let bindings = bindings.generate().unwrap_or_else(|e| {
         panic!(

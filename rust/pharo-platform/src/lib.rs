@@ -71,6 +71,8 @@ pub mod platform_semaphore;
 pub mod string_utilities;
 #[cfg(all(unix, not(target_vendor = "apple")))]
 pub mod thread_safe_queue;
+#[cfg(all(unix, not(target_vendor = "apple")))]
+pub mod virtual_machine;
 
 /// Shared harness state for the unit tests.
 ///
