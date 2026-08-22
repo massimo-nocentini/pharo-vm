@@ -33,17 +33,88 @@
 # Add to this list in the same commit that adds the Rust module.
 set(RUST_REPLACED_C_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/errorCode.c        # rust/pharo-platform/src/error_code.rs
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/stringUtilities.c  # rust/pharo-platform/src/string_utilities.rs
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parameters/parameterVector.c
                                                        # rust/pharo-platform/src/parameter_vector.rs
 )
 
-# Ported for Unix only: pathUtilities.c has a _WIN32 branch for every function,
-# using APIs (GetCurrentDirectoryW, FindFirstFileW) whose behaviour differs
-# enough that porting them untested would be guesswork. Windows keeps the C.
+# Ported for Unix only. Each of these has a _WIN32 branch built on APIs whose
+# behaviour differs enough that porting them without a Windows machine to test
+# on would be guesswork, so Windows keeps compiling the C:
+#
+#   pathUtilities.c    GetCurrentDirectoryW, FindFirstFileW
+#   imageAccess.c      _wfopen, _wstat
+#   externalPrimitives.c
+#                      LoadLibraryW, GetProcAddress, and a fallback that looks
+#                      symbols up in PharoVMCore.dll by name
+#   stringUtilities.c  MultiByteToWideChar, WideCharToMultiByte -- these are
+#                      `vm_string_convert_utf8_to_utf16` and its inverse, which
+#                      string_utilities.rs does not provide and which
+#                      src/win/fileDialogWin32.c calls unconditionally. Dropping
+#                      the C file on Windows therefore fails the link.
 if(NOT WIN32)
     list(APPEND RUST_REPLACED_C_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/pathUtilities.c # rust/pharo-platform/src/path_utilities.rs
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/imageAccess.c   # rust/pharo-platform/src/image_access.rs
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/externalPrimitives.c
+                                                        # rust/pharo-platform/src/external_primitives.rs
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/stringUtilities.c
+                                                        # rust/pharo-platform/src/string_utilities.rs
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/semaphores/pharoSemaphore.c
+                                                        # rust/pharo-platform/src/pharo_semaphore.rs
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/unix/memoryUnix.c
+                                                        # rust/pharo-platform/src/memory_unix.rs
+    )
+endif()
+
+# Non-Apple Unix only: platformSemaphore.c has three implementations, and the
+# Apple one uses dispatch semaphores because POSIX unnamed semaphores are
+# deprecated and non-functional there. platform_semaphore.rs is the sem_init
+# one only.
+if(NOT WIN32 AND NOT APPLE)
+    list(APPEND RUST_REPLACED_C_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/semaphores/platformSemaphore.c
+                                                        # rust/pharo-platform/src/platform_semaphore.rs
+        # Builds its mutex with platform_semaphore, so it follows it.
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/threadSafeQueue/threadSafeQueue.c
+                                                        # rust/pharo-platform/src/thread_safe_queue.rs
+        # Likewise.
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/common/sqExternalSemaphores.c
+                                                        # rust/pharo-platform/src/external_semaphores.rs
+        # The interpreter proxy. Its ~150 declarations live in
+        # include/pharovm/common/interpreterProxyFunctions.h, which both this C
+        # file and pharo-vm-sys read, so neither side restates them.
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/common/sqVirtualMachine.c
+                                                        # rust/pharo-platform/src/virtual_machine.rs
+        # Apple reads defaults from a PList through parameters.m before
+        # parsing, which parameters.rs does not do.
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/parameters/parameters.c
+                                                        # rust/pharo-platform/src/parameters.rs
+    )
+endif()
+
+# Not on 32-bit x86 or PowerPC: client.c opens with fldcw / mtfsfi, which set
+# the x87 control word and the PowerPC FPSCR. Both expand to nothing on every
+# other architecture. Getting x87 precision control wrong changes float results
+# instead of crashing, and nothing here can test it, so those two keep the C.
+if(NOT WIN32 AND NOT APPLE
+   AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(i[3-6]86|x86$|ppc|powerpc)")
+    list(APPEND RUST_REPLACED_C_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/client.c        # rust/pharo-platform/src/client.rs
+    )
+endif()
+
+# 64-bit Unix only: sqHeapMap.c has a second implementation, selected by
+# SQ_IMAGE32, with a single-level 256-entry table for a 32-bit address space.
+# A 64-bit build cannot reach it, and heap_map.rs does not provide it.
+if(NOT WIN32 AND ${SIZEOF_VOID_P} STREQUAL "8")
+    list(APPEND RUST_REPLACED_C_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/common/sqHeapMap.c
+                                                        # rust/pharo-platform/src/heap_map.rs
+        # named_prims.rs treats pointerForOop as the identity, which holds
+        # while sqMemoryBase is 0 -- true everywhere except a 32-bit image on
+        # a 64-bit host.
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/common/sqNamedPrims.c
+                                                        # rust/pharo-platform/src/named_prims.rs
     )
 endif()
 

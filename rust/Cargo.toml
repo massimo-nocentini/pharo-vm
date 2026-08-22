@@ -24,6 +24,10 @@ publish = false
 
 [workspace.dependencies]
 pharo-vm-sys = { path = "pharo-vm-sys" }
+# Only for the C library entry points a port has to keep calling: `pharo-platform`
+# uses std where it can, but a file whose handle is a `FILE *` shared with the
+# generated interpreter has to speak C stdio, not `std::fs`.
+libc = "0.2"
 
 # A panic must never unwind across the `extern "C"` boundary into the generated
 # interpreter: that is undefined behaviour. Aborting is the only sound default.

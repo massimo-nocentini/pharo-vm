@@ -470,10 +470,16 @@ if(${FEATURE_FFI})
 endif()
 
 # Decide which platform-layer files come from Rust rather than C. When
-# USE_RUST_PLATFORM is OFF this is empty and SUPPORT_SOURCES is untouched.
+# USE_RUST_PLATFORM is OFF this is empty and both lists are untouched.
+#
+# EXTRACTED_SOURCES as well as SUPPORT_SOURCES: the per-platform cmake files
+# (Linux.cmake and friends) put the Unix-specific sources there, and both lists
+# end up in VM_SOURCES below, so a file listed in only one of them would still
+# be compiled and collide with the Rust definition at link time.
 include(cmake/rust.cmake)
 if(RUST_REPLACED_C_SOURCES)
     list(REMOVE_ITEM SUPPORT_SOURCES ${RUST_REPLACED_C_SOURCES})
+    list(REMOVE_ITEM EXTRACTED_SOURCES ${RUST_REPLACED_C_SOURCES})
 endif()
 
 set(VM_SOURCES

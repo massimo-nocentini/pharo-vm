@@ -18,21 +18,16 @@ use core::ffi::{c_char, CStr};
 
 use crate::error_code::VMErrorCode;
 
-/// Mirror of `VMParameterVector` in
+/// `VMParameterVector` from
 /// `include/pharovm/parameters/parameterVector.h`.
 ///
-/// Declared here rather than taken from `pharo-vm-sys` because
-/// `parameters.c` and `parameters.m` still share this struct field for field;
-/// the layout is the ABI, and a mismatch would corrupt the argument list.
-#[repr(C)]
-#[derive(Debug)]
-pub struct VMParameterVector {
-    /// Number of live entries in `parameters`.
-    pub count: u32,
-    /// The entries, followed by a NULL terminator so the array can be handed
-    /// straight to `execv` and friends. Null when empty.
-    pub parameters: *mut *const c_char,
-}
+/// Taken from `pharo-vm-sys` rather than restated here: `parameters.m` on
+/// Apple still shares this struct field for field, so the layout is a live
+/// ABI, and bindgen's generated layout tests are what keep the two in step.
+/// It has two fields: `count`, and `parameters`, which holds the entries
+/// followed by a NULL terminator so the array can be handed straight to
+/// `execv` and friends, or null when empty.
+pub use pharo_vm_sys::VMParameterVector;
 
 /// Releases the vector's array, leaving it empty.
 ///
