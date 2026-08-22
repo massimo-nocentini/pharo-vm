@@ -22,6 +22,12 @@
 //! and differential testing can diff stderr. Every caller therefore names a
 //! `.c` file that no longer compiles into the Rust build; that is deliberate.
 
+// Which shapes are live depends on the target: the modules gated out on Apple
+// and Windows in `lib.rs` are the only callers of some of them. Dropping a
+// shape because one platform stopped using it would only mean re-deriving it
+// for the next wave, so the whole seam is kept.
+#![allow(dead_code)]
+
 use core::ffi::{c_char, c_int, c_longlong, c_void, CStr};
 
 /// `LOG_ERROR` from `include/pharovm/debug.h`.

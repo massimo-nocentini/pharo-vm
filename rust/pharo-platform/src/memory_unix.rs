@@ -279,6 +279,9 @@ pub extern "C" fn sqAllocateMemory(
     let min_heap_size = min_heap_size as usize;
     let desired_base_address = desired_base_address as usize;
 
+    // Only the `cfg(not(apple))` retry below moves this along; on Apple the
+    // binding is never reassigned.
+    #[cfg_attr(target_vendor = "apple", allow(unused_mut))]
     let mut desired_base_aligned = align_down(desired_base_address);
     let mut heap_limit = align_down(desired_heap_size.max(1));
     if heap_limit < desired_heap_size {

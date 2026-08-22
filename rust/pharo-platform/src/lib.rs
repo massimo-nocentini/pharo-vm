@@ -36,8 +36,16 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
+// The `cfg` on each module below must mirror the target guard that puts the
+// corresponding file into `RUST_REPLACED_C_SOURCES` in `cmake/rust.cmake`,
+// including its reasoning. A module compiled where CMake still builds the C
+// exports the same `#[no_mangle]` symbols twice, and the VM fails to link with
+// duplicate symbols the moment the linker has cause to pull that archive
+// member in -- which it may not do until an unrelated change.
+
 #[cfg(all(
     unix,
+    not(target_vendor = "apple"),
     not(any(
         target_arch = "x86",
         target_arch = "powerpc",
@@ -60,7 +68,7 @@ pub mod memory_unix;
 #[cfg(all(unix, target_pointer_width = "64"))]
 pub mod named_prims;
 pub mod parameter_vector;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_vendor = "apple")))]
 pub mod parameters;
 #[cfg(unix)]
 pub mod path_utilities;

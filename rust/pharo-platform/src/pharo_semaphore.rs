@@ -38,16 +38,35 @@ use pharo_vm_sys::{sqInt, Semaphore};
 mod interp {
     use pharo_vm_sys::sqInt;
 
+    #[cfg(all(not(test), target_vendor = "apple"))]
+    extern "C" {
+        /// `signalSemaphoreWithIndex` as C, for the targets where
+        /// `sqExternalSemaphores.c` is still the one that defines it.
+        ///
+        /// Declared here rather than allowlisted in `pharo-vm-sys`: on the
+        /// targets where this workspace *exports* that symbol, binding it is
+        /// exactly what `ALLOWED_FUNCTIONS` forbids. The signature is
+        /// `include/pharovm/common/sq.h`'s.
+        fn signalSemaphoreWithIndex(semaIndex: sqInt) -> sqInt;
+    }
+
     /// Queues a signal for the image semaphore at `index`.
     ///
-    /// Since wave 11 this is `crate::external_semaphores`, not C.
+    /// Since wave 11 this is `crate::external_semaphores` -- except on Apple,
+    /// where `external_semaphores` is gated out (see `cmake/rust.cmake`) and
+    /// the C file still provides the symbol.
     pub fn signal_semaphore_with_index(index: sqInt) {
         #[cfg(test)]
         super::tests::record_signal(index);
-        #[cfg(not(test))]
+        #[cfg(all(not(test), not(target_vendor = "apple")))]
         // SAFETY: takes an index by value and touches only the request table.
         unsafe {
             crate::external_semaphores::signalSemaphoreWithIndex(index);
+        }
+        #[cfg(all(not(test), target_vendor = "apple"))]
+        // SAFETY: same call, resolved to the C definition.
+        unsafe {
+            signalSemaphoreWithIndex(index);
         }
     }
 
