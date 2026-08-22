@@ -116,6 +116,9 @@ function(configure_rust_platform)
         # the C build.
         PROFILE release
     )
+    # Stated in the configure log so a build can be checked at a glance: the
+    # profile is fixed here and does not follow CMAKE_BUILD_TYPE.
+    message(STATUS "Rust crates: cargo profile 'release' (independent of CMAKE_BUILD_TYPE)")
 
     if(USE_RUST_PLATFORM)
         _configure_rust_platform_layer()
