@@ -1,0 +1,18 @@
+# The smallest possible Pharo VM plugin: one primitive answering a String.
+[package]
+name = "hello-plugin"
+description = "Minimal example Pharo VM plugin in Rust: one primitive that answers a String."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# The library name decides the file name, and the VM looks for the module by
+# that name: libHelloPlugin.so / .dylib / HelloPlugin.dll.
+name = "HelloPlugin"
+crate-type = ["cdylib"]
+
+[dependencies]
+pharo-vm-plugin = { path = "../../pharo-vm-plugin" }

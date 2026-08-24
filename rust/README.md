@@ -28,6 +28,7 @@ heartbeat thread, async I/O, command-line parsing, module loading and FFI.
 | `pharo-platform` | The port target. Exports `#[no_mangle]` symbols that replace `src/*.c`, wave by wave. |
 | `pharo-vm-plugin` | **Plugin SDK.** Write VM plugins in Rust. Header-free, so it needs none of the above. See [its README](pharo-vm-plugin/README.md). |
 | `pharo-vm-plugin-macros` | The `#[pharo_primitive]` attribute. Not used directly. |
+| `examples/hello-plugin` | The smallest plugin: one primitive answering a String, with a `.st` driver script. |
 | `examples/uuid-plugin` | A worked plugin: drop-in replacement for the C `UUIDPlugin`. |
 
 The two halves are independent. `pharo-platform` is an in-tree port and needs

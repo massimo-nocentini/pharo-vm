@@ -90,8 +90,8 @@ struct SignalRequest {
     responses: c_int,
 }
 
-/// The VM's own thread, set by the platform's main. Exported because
-/// `#if !COGMTVM` puts its definition in this file.
+/// The VM's own thread, set by `vm_init` in [`crate::client`] on worker-thread
+/// builds. Exported because `#if !COGMTVM` puts its definition in this file.
 #[no_mangle]
 pub static mut ioVMThread: libc::pthread_t = 0;
 

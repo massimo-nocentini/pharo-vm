@@ -121,6 +121,18 @@ pub unsafe extern "C" fn vm_init(parameters: *mut VMParameters) -> c_int {
         // the module docs on why this file is not compiled for those targets.
 
         pharo_vm_sys::ioInitTime();
+
+        // Record the interpreter's thread -- in worker mode vm_init runs on
+        // the spawned VM thread, not the main one. The crash reporter's
+        // runningInVMThread (src/unix/debugUnix.c) compares against this to
+        // decide whether to dump the Smalltalk stacks. The C's
+        // `ioCurrentOSThread()` is `pthread_self()` on every Unix
+        // (include/pharovm/unix/sqPlatformSpecific.h).
+        #[cfg(pharo_vm_in_worker_thread)]
+        {
+            crate::external_semaphores::ioVMThread = libc::pthread_self();
+        }
+
         pharo_vm_sys::ioInitExternalSemaphores();
 
         pharo_vm_sys::setMaxStacksToPrint((*parameters).maxStackFramesToPrint as sqInt);

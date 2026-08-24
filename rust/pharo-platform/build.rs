@@ -53,6 +53,10 @@ const CONFIG_HEADERS: &[&str] = &["config.h", "interp.h"];
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=PHAROVM_COMPILE_DEFS");
+    // Without this, a first build made with a missing or wrong include list
+    // pinned the header-derived cfgs until `cargo clean`: nothing told cargo
+    // the environment the cfgs were derived from had changed.
+    println!("cargo:rerun-if-env-changed=PHAROVM_INCLUDE_DIRS");
 
     for name in TRACKED {
         println!("cargo:rustc-check-cfg=cfg({})", name.to_lowercase());
@@ -85,10 +89,20 @@ fn main() {
 /// out when the option is off, so an absent macro is simply not matched.
 fn emit_config_header_cfgs() {
     let Ok(dirs) = env::var("PHAROVM_INCLUDE_DIRS") else {
+        // pharo-vm-sys refuses to build at all without this variable, so a
+        // finished VM can never actually be missing it -- but this script can
+        // run first, and silence here once cost a build its --worker option.
+        println!(
+            "cargo:warning=PHAROVM_INCLUDE_DIRS is not set; treating {} as \
+             undefined. Build through CMake, or source build/rust-env.sh.",
+            TRACKED_CONFIG.join(" and ")
+        );
         return;
     };
 
     for header in CONFIG_HEADERS {
+        let mut found = false;
+        let mut candidates = Vec::new();
         for dir in dirs
             .split(LIST_SEP)
             .map(str::trim)
@@ -96,9 +110,11 @@ fn emit_config_header_cfgs() {
         {
             let candidate = std::path::Path::new(dir).join(header);
             let Ok(text) = std::fs::read_to_string(&candidate) else {
+                candidates.push(candidate);
                 continue;
             };
             println!("cargo:rerun-if-changed={}", candidate.display());
+            found = true;
 
             for line in text.lines() {
                 let line = line.trim();
@@ -120,6 +136,23 @@ fn emit_config_header_cfgs() {
             // The first directory holding this header is the one the C
             // compiler would have found, so stop looking.
             break;
+        }
+
+        if !found {
+            // A header the C build compiles against but this script cannot
+            // see means the two sides may disagree -- for config.h that turns
+            // PHARO_VM_IN_WORKER_THREAD off here alone, and the VM then
+            // rejects --worker as an unknown option. Say so, and register the
+            // paths it could appear at so the script reruns (instead of
+            // caching the wrong answer) once the header is generated.
+            println!(
+                "cargo:warning={header} was not found in any PHAROVM_INCLUDE_DIRS \
+                 directory; the cfgs it can define ({}) are OFF for this build.",
+                TRACKED_CONFIG.join(", ")
+            );
+            for candidate in candidates {
+                println!("cargo:rerun-if-changed={}", candidate.display());
+            }
         }
     }
 }
