@@ -4,105 +4,93 @@
 //! task queue (`src/ffi/worker/worker.c`) and as the callback queue
 //! (`src/ffi/callbacks/callbacks.c`), both still C.
 //!
-//! Two semaphores, doing different jobs:
-//!
-//! * **the mutex**, created here with an initial count of 1, guards the links.
-//! * **the element semaphore** is supplied by the caller and counts items, so
-//!   that [`threadsafe_queue_take`] can block until there is something to take.
-//!   It is reached through its vtable, not through `platform_semaphore_*`,
-//!   because the callback queue passes a [`crate::pharo_semaphore`] here --
-//!   signalling it wakes a Smalltalk process rather than a thread.
+//! The deque is guarded by a [`std::sync::Mutex`]; the **element semaphore**
+//! is supplied by the caller and counts items, so that
+//! [`threadsafe_queue_take`] can block until there is something to take. It is
+//! reached through its vtable, not through `platform_semaphore_*`, because the
+//! callback queue passes a [`crate::pharo_semaphore`] here -- signalling it
+//! wakes a Smalltalk process rather than a thread. (The C guarded the links
+//! with a second counting semaphore used as a mutex; nothing observable hangs
+//! on that choice, and a lock guard cannot forget to release.)
 //!
 //! # Scope
 //!
-//! Non-Apple Unix, because it builds its mutex with
-//! [`crate::platform_semaphore`], which is POSIX-only. Windows and Apple keep
-//! the C.
+//! Non-Apple Unix, mirroring where `cmake/rust.cmake` swaps the C out. The
+//! C-era reason -- the mutex was built from [`crate::platform_semaphore`],
+//! which is POSIX-only -- no longer applies, so widening the scope is now a
+//! CMake decision, not a porting one.
 //!
 //! # The queue type is opaque
 //!
 //! `threadSafeQueue.h` declares `TSQueue` without defining it, so no C
 //! translation unit knows its size or layout, and only this module allocates
-//! or frees one. That makes the allocator an implementation detail: the C used
-//! `malloc`/`free`, this uses Rust's, and nothing can tell the difference.
+//! or frees one. That makes both the allocator and the internal representation
+//! implementation details: the C used `malloc`/`free` and a hand-rolled linked
+//! list, this uses Rust's allocator and a [`VecDeque`], and nothing can tell
+//! the difference.
 //!
-//! # Faithful oddity
+//! # Divergences, and both are fixes
 //!
-//! `threadsafe_queue_free` does not free the mutex. The C says so in a comment
-//! -- "shouldn't we free the mutex here? if so, we should check if the mutex is
-//! alive after every wait" -- and it is right that freeing it is not safe
-//! without also fixing every waiter. Both queues in the tree live for the
-//! process, so this leaks at most twice. Left alone.
-//!
-//! # One divergence, and it is a fix
-//!
-//! `threadsafe_queue_take` read `queue->first` *before* taking the mutex, and
-//! only then locked to unlink it. Two threads that were each handed a permit
-//! by the element semaphore could therefore read the same node, both return
-//! its element, and both free it. Here the read happens under the mutex, where
-//! it plainly belonged. Both queues have a single consumer today, so no
-//! reachable behaviour changes; there is a test with several consumers that
-//! would have caught the old version.
+//! * `threadsafe_queue_take` read `queue->first` *before* taking the mutex,
+//!   and only then locked to unlink it. Two threads that were each handed a
+//!   permit by the element semaphore could therefore read the same node, both
+//!   return its element, and both free it. Here the pop happens under the
+//!   mutex, where it plainly belonged. Both queues have a single consumer
+//!   today, so no reachable behaviour changes; there is a test with several
+//!   consumers that would have caught the old version.
+//! * The C's mutex was a separate allocation that `threadsafe_queue_free`
+//!   deliberately leaked -- its comment wonders whether freeing would be safe.
+//!   Here the mutex lives inside the queue and is freed with it, which is
+//!   sound because the free contract already requires that no other thread is
+//!   inside any queue operation.
 
 use core::ffi::{c_int, c_void};
+use std::collections::VecDeque;
+use std::sync::{Mutex, MutexGuard};
 
 use pharo_vm_sys::Semaphore;
 
-use crate::platform_semaphore::{
-    platform_semaphore_new, platform_semaphore_signal, platform_semaphore_wait,
-};
-
-/// A node in the linked list. Owns nothing but its own box: the element is the
-/// caller's.
-struct TSQueueNode {
-    element: *mut c_void,
-    next: *mut TSQueueNode,
-}
-
 /// The queue. Opaque to C; see the module docs.
-///
-/// `repr(C)` is not required, since no C code knows this layout, but it keeps
-/// the field order the same as the C's for anyone reading both.
-#[repr(C)]
 pub struct TSQueue {
-    first: *mut TSQueueNode,
-    last: *mut TSQueueNode,
-    mutex: *mut Semaphore,
+    /// The elements, oldest first. They are the caller's; nothing here ever
+    /// dereferences or frees one.
+    items: Mutex<VecDeque<*mut c_void>>,
     /// Counts elements. Owned by the caller of [`threadsafe_queue_new`], and
     /// deliberately not freed here.
     semaphore: *mut Semaphore,
 }
 
+impl TSQueue {
+    /// Locks the deque. A poisoned lock is ignored: C callers cannot unwind,
+    /// so poison can only come from a panicking test thread.
+    fn lock(&self) -> MutexGuard<'_, VecDeque<*mut c_void>> {
+        self.items.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
 /// Creates an empty queue counted by `semaphore`.
 ///
-/// Returns null if the mutex cannot be created, after reporting it with
-/// `perror` as the C did. `semaphore` is not adopted: it is neither signalled
-/// on failure here nor freed by [`threadsafe_queue_free`].
+/// `semaphore` is not adopted: it is neither signalled here nor freed by
+/// [`threadsafe_queue_free`]. (The C could also fail and answer null when its
+/// mutex semaphore could not be created; the `Mutex` cannot fail, so neither
+/// can this.)
 ///
 /// # Safety
 ///
 /// `semaphore` must be a live [`Semaphore`] that outlives the queue.
 #[no_mangle]
 pub unsafe extern "C" fn threadsafe_queue_new(semaphore: *mut Semaphore) -> *mut TSQueue {
-    let mutex = platform_semaphore_new(1);
-    if mutex.is_null() {
-        // SAFETY: a 'static NUL-terminated literal.
-        unsafe { libc::perror(c"mutex initialization error in make_queue".as_ptr()) };
-        return core::ptr::null_mut();
-    }
-
     Box::into_raw(Box::new(TSQueue {
-        first: core::ptr::null_mut(),
-        last: core::ptr::null_mut(),
-        mutex,
+        items: Mutex::new(VecDeque::new()),
         semaphore,
     }))
 }
 
-/// Frees the queue and every node still in it.
+/// Frees the queue and everything it owns.
 ///
 /// The elements themselves are the caller's and are not touched. Neither is
-/// the element semaphore, nor the mutex -- see the module docs.
+/// the element semaphore. The mutex goes with the queue -- see the divergence
+/// note in the module docs.
 ///
 /// # Safety
 ///
@@ -111,49 +99,22 @@ pub unsafe extern "C" fn threadsafe_queue_new(semaphore: *mut Semaphore) -> *mut
 #[no_mangle]
 pub unsafe extern "C" fn threadsafe_queue_free(queue: *mut TSQueue) {
     // SAFETY: delegated to the caller.
-    unsafe {
-        let mutex = (*queue).mutex;
-        platform_semaphore_wait(mutex);
-
-        let mut node = (*queue).first;
-        while !node.is_null() {
-            let next = (*node).next;
-            drop(Box::from_raw(node));
-            node = next;
-        }
-
-        drop(Box::from_raw(queue));
-
-        // Signalling after the queue is gone is fine: `mutex` is a copy of the
-        // pointer, and the mutex outlives the queue by design.
-        platform_semaphore_signal(mutex);
-    }
+    unsafe { drop(Box::from_raw(queue)) };
 }
 
 /// Counts the elements currently queued.
 ///
-/// Walks the list under the mutex, so it is O(n) and the answer is stale the
-/// moment it is returned. `worker.c` uses it only as an "is it empty" test.
+/// The answer is stale the moment it is returned; `worker.c` uses it only as
+/// an "is it empty" test. (O(1) now -- the C walked its list under the mutex.)
 ///
 /// # Safety
 ///
 /// `queue` must be live.
 #[no_mangle]
 pub unsafe extern "C" fn threadsafe_queue_size(queue: *mut TSQueue) -> c_int {
-    // SAFETY: delegated to the caller; the walk stays under the mutex.
-    unsafe {
-        platform_semaphore_wait((*queue).mutex);
-
-        let mut size: c_int = 0;
-        let mut node = (*queue).first;
-        while !node.is_null() {
-            size += 1;
-            node = (*node).next;
-        }
-
-        platform_semaphore_signal((*queue).mutex);
-        size
-    }
+    // SAFETY: delegated to the caller.
+    let queue = unsafe { &*queue };
+    queue.lock().len() as c_int
 }
 
 /// Appends `element` and signals the element semaphore.
@@ -168,26 +129,14 @@ pub unsafe extern "C" fn threadsafe_queue_size(queue: *mut TSQueue) -> c_int {
 /// [`threadsafe_queue_take`] cannot then distinguish from an empty queue.
 #[no_mangle]
 pub unsafe extern "C" fn threadsafe_queue_put(queue: *mut TSQueue, element: *mut c_void) {
-    let node = Box::into_raw(Box::new(TSQueueNode {
-        element,
-        next: core::ptr::null_mut(),
-    }));
+    // SAFETY: delegated to the caller.
+    let queue = unsafe { &*queue };
+    queue.lock().push_back(element); // The guard drops here, before the signal.
 
-    // SAFETY: delegated to the caller; `node` was just allocated.
+    // SAFETY: the semaphore is live by the contract of threadsafe_queue_new,
+    // and its vtable slots are always filled.
     unsafe {
-        platform_semaphore_wait((*queue).mutex);
-
-        if (*queue).first.is_null() {
-            (*queue).first = node;
-            (*queue).last = node;
-        } else {
-            (*(*queue).last).next = node;
-            (*queue).last = node;
-        }
-
-        platform_semaphore_signal((*queue).mutex);
-
-        let semaphore = (*queue).semaphore;
+        let semaphore = queue.semaphore;
         (*semaphore).signal.unwrap()(semaphore);
     }
 }
@@ -203,41 +152,27 @@ pub unsafe extern "C" fn threadsafe_queue_put(queue: *mut TSQueue, element: *mut
 #[no_mangle]
 pub unsafe extern "C" fn threadsafe_queue_take(queue: *mut TSQueue) -> *mut c_void {
     // SAFETY: delegated to the caller.
+    let queue = unsafe { &*queue };
+
+    // Block until the queue has elements.
+    // SAFETY: the semaphore is live and its vtable slots filled; perror takes
+    // a 'static NUL-terminated literal.
     unsafe {
-        // Block until the queue has elements.
-        let semaphore = (*queue).semaphore;
+        let semaphore = queue.semaphore;
         if (*semaphore).wait.unwrap()(semaphore) != 0 {
             libc::perror(c"Failed semaphore wait on thread safe queue".as_ptr());
             return core::ptr::null_mut();
         }
-
-        platform_semaphore_wait((*queue).mutex);
-
-        // Reading `first` under the mutex rather than before taking it; see
-        // the divergence note in the module docs.
-        let node = (*queue).first;
-        if node.is_null() {
-            platform_semaphore_signal((*queue).mutex);
-            return core::ptr::null_mut();
-        }
-
-        if (*queue).first == (*queue).last {
-            (*queue).first = core::ptr::null_mut();
-            (*queue).last = core::ptr::null_mut();
-        } else {
-            (*queue).first = (*node).next;
-        }
-
-        platform_semaphore_signal((*queue).mutex);
-
-        let node = Box::from_raw(node);
-        node.element
     }
+
+    // Popping under the mutex; see the divergence note in the module docs.
+    queue.lock().pop_front().unwrap_or(core::ptr::null_mut())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform_semaphore::platform_semaphore_new;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -302,8 +237,8 @@ mod tests {
 
     #[test]
     fn the_head_and_tail_stay_consistent_across_emptying_and_refilling() {
-        // Draining to empty resets both `first` and `last`; a stale `last`
-        // would make the next put append to a freed node.
+        // With the C's linked list, draining to empty had to reset both
+        // `first` and `last`; kept as a regression test of the same shape.
         let q = Fixture::new();
         q.put(1);
         assert_eq!(q.take(), 1);
@@ -390,13 +325,14 @@ mod tests {
     #[test]
     fn freeing_a_non_empty_queue_releases_its_nodes() {
         // Nothing here can assert the absence of a leak, but it does exercise
-        // the walk in threadsafe_queue_free, which is where a mistake would
-        // corrupt the heap and show up under the test runner's allocator.
+        // the teardown of a queue that still holds elements, which is where a
+        // mistake would corrupt the heap and show up under the test runner's
+        // allocator.
         let q = Fixture::new();
         for i in 1..=10 {
             q.put(i);
         }
         assert_eq!(q.size(), 10);
-        // Dropped here with ten nodes still queued.
+        // Dropped here with ten elements still queued.
     }
 }

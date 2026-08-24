@@ -15,39 +15,81 @@
 //!
 //! Where this code deliberately differs, it says so.
 
-/// Form depth as the image reports it: the magnitude is bits per pixel, and a
-/// negative value means the two (or four) pixels packed into a word are in the
-/// opposite order.
+use pharo_vm_plugin::PrimErr;
+
+/// A `Form` depth this plugin can pack.
+///
+/// The image reports depth as a signed integer: the magnitude is bits per
+/// pixel, and a negative value means the two (or four) pixels packed into a
+/// word are in the opposite order. That raw integer exists only at the
+/// [`TryFrom`] boundary; everything past it works in terms of the three
+/// supported layouts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NativeDepth(pub i32);
+pub enum FormDepth {
+    /// 32 bits per pixel: one ARGB pixel per word.
+    Argb32 {
+        /// Pixel order within a word is reversed (a negative depth).
+        reversed: bool,
+    },
+    /// 16 bits per pixel: two RGB555 pixels per word.
+    Rgb555 {
+        /// Pixel order within a word is reversed (a negative depth).
+        reversed: bool,
+    },
+    /// 8 bits per pixel: four grayscale pixels per word.
+    Gray8 {
+        /// Pixel order within a word is reversed (a negative depth).
+        reversed: bool,
+    },
+}
 
-impl NativeDepth {
-    /// Bits per pixel, ignoring word order.
+impl TryFrom<isize> for FormDepth {
+    type Error = PrimErr;
+
+    /// Fails with `BadArgument` for any depth this plugin cannot pack, the
+    /// code the callers' explicit depth checks used to produce.
+    fn try_from(depth: isize) -> Result<Self, PrimErr> {
+        Ok(match depth {
+            32 => Self::Argb32 { reversed: false },
+            -32 => Self::Argb32 { reversed: true },
+            16 => Self::Rgb555 { reversed: false },
+            -16 => Self::Rgb555 { reversed: true },
+            8 => Self::Gray8 { reversed: false },
+            -8 => Self::Gray8 { reversed: true },
+            _ => return Err(PrimErr::BadArgument),
+        })
+    }
+}
+
+impl FormDepth {
+    /// Pixels packed into one 32-bit bitmap word.
     #[must_use]
-    pub const fn bits(self) -> u32 {
-        self.0.unsigned_abs()
+    pub const fn pixels_per_word(self) -> usize {
+        match self {
+            Self::Argb32 { .. } => 1,
+            Self::Rgb555 { .. } => 2,
+            Self::Gray8 { .. } => 4,
+        }
     }
 
-    /// Is the packing order reversed within a word?
+    /// Components the encoder receives per pixel.
+    ///
+    /// Grayscale for [`FormDepth::Gray8`], RGB for everything else -- exactly
+    /// the choice the C made when setting `in_color_space`.
     #[must_use]
-    pub const fn reversed(self) -> bool {
-        self.0 < 0
-    }
-
-    /// Whether this plugin can pack to this depth at all.
-    #[must_use]
-    pub const fn is_supported(self) -> bool {
-        matches!(self.bits(), 32 | 16 | 8)
+    pub const fn components(self) -> usize {
+        match self {
+            Self::Gray8 { .. } => 1,
+            Self::Argb32 { .. } | Self::Rgb555 { .. } => 3,
+        }
     }
 }
 
 /// Everything the row packer needs that does not change between rows.
 #[derive(Debug, Clone, Copy)]
 pub struct RowConfig {
-    /// Form depth, signed for word order.
-    pub depth: NativeDepth,
-    /// Pixels packed into one 32-bit word: 1 at depth 32, 2 at 16, 4 at 8.
-    pub pixels_per_word: usize,
+    /// Destination Form depth.
+    pub depth: FormDepth,
     /// Words in one row of the destination bitmap.
     pub words_per_row: usize,
     /// Components the decoder emits per pixel: 3 for RGB, 1 for grayscale.
@@ -73,7 +115,7 @@ const fn offsets(out_components: usize) -> ([usize; 3], [usize; 3]) {
     }
 }
 
-/// Reads `row[i]`, or 0 past the end.
+/// Reads `pixels[i]`, or 0 past the end.
 ///
 /// **This is a deliberate divergence from the C.** There, the packing loop
 /// steps `out_components * pixels_per_word` bytes at a time until it passes
@@ -84,21 +126,8 @@ const fn offsets(out_components: usize) -> ([usize; 3], [usize; 3]) {
 /// and whatever it produces for those trailing pixels is not reproducible.
 /// Substituting zero keeps the output deterministic and the read in bounds.
 #[inline]
-fn at(row: &[u8], i: usize) -> u8 {
-    row.get(i).copied().unwrap_or(0)
-}
-
-/// Reduces an 8-bit channel to 5 bits through the ordered dither.
-#[inline]
-fn dither_channel(value: u8, threshold: u32) -> u32 {
-    let di = (u32::from(value) * 496) >> 8;
-    let dmi = di & 15;
-    let dmo = di >> 4;
-    if threshold < dmi {
-        dmo + 1
-    } else {
-        dmo
-    }
+fn at(pixels: &[u8], i: usize) -> u8 {
+    pixels.get(i).copied().unwrap_or(0)
 }
 
 /// Packs one decoded scanline into `out`, which must be `words_per_row` long.
@@ -108,33 +137,32 @@ fn dither_channel(value: u8, threshold: u32) -> u32 {
 pub fn pack_row(row: &[u8], scanline: u32, cfg: &RowConfig, out: &mut [u32]) {
     debug_assert_eq!(out.len(), cfg.words_per_row);
 
-    let row_stride = row.len();
-    let step = cfg.out_components * cfg.pixels_per_word;
+    let step = cfg.out_components * cfg.depth.pixels_per_word();
     if step == 0 {
-        return;
+        return; // `chunks(0)` would panic
     }
     let (off1, off2) = offsets(cfg.out_components);
 
-    let mut i = 0usize;
-    let mut j = 0usize;
-    while i < row_stride && j < out.len() {
-        out[j] = match cfg.depth.bits() {
-            32 => {
-                let r = u32::from(at(row, i + off1[0]));
-                let g = u32::from(at(row, i + off1[1]));
-                let b = u32::from(at(row, i + off1[2]));
+    // The last chunk may be short when the width is not a multiple of
+    // pixels_per_word; `at` zero-fills the missing tail (see above).
+    for (j, (pixels, word)) in row.chunks(step).zip(out.iter_mut()).enumerate() {
+        *word = match cfg.depth {
+            FormDepth::Argb32 { .. } => {
+                let r = u32::from(at(pixels, off1[0]));
+                let g = u32::from(at(pixels, off1[1]));
+                let b = u32::from(at(pixels, off1[2]));
                 (255 << 24) | (r << 16) | (g << 8) | b
             }
-            16 => {
+            FormDepth::Rgb555 { reversed } => {
                 let (mut r1, mut g1, mut b1) = (
-                    at(row, i + off1[0]),
-                    at(row, i + off1[1]),
-                    at(row, i + off1[2]),
+                    at(pixels, off1[0]),
+                    at(pixels, off1[1]),
+                    at(pixels, off1[2]),
                 );
                 let (mut r2, mut g2, mut b2) = (
-                    at(row, i + off2[0]),
-                    at(row, i + off2[1]),
-                    at(row, i + off2[2]),
+                    at(pixels, off2[0]),
+                    at(pixels, off2[1]),
+                    at(pixels, off2[2]),
                 );
 
                 let (p1, p2);
@@ -165,30 +193,37 @@ pub fn pack_row(row: &[u8], scanline: u32, cfg: &RowConfig, out: &mut [u32]) {
 
                 let w1 = 32768 | (p1.0 << 10) | (p1.1 << 5) | p1.2;
                 let w2 = 32768 | (p2.0 << 10) | (p2.1 << 5) | p2.2;
-                if cfg.depth.reversed() {
+                if reversed {
                     (w2 << 16) | w1
                 } else {
                     (w1 << 16) | w2
                 }
             }
-            8 => {
-                let g1 = u32::from(at(row, i));
-                let g2 = u32::from(at(row, i + 1));
-                let g3 = u32::from(at(row, i + 2));
-                let g4 = u32::from(at(row, i + 3));
-                if cfg.depth.reversed() {
+            FormDepth::Gray8 { reversed } => {
+                let g1 = u32::from(at(pixels, 0));
+                let g2 = u32::from(at(pixels, 1));
+                let g3 = u32::from(at(pixels, 2));
+                let g4 = u32::from(at(pixels, 3));
+                if reversed {
                     (g4 << 24) | (g3 << 16) | (g2 << 8) | g1
                 } else {
                     (g1 << 24) | (g2 << 16) | (g3 << 8) | g4
                 }
             }
-            // The C left `bitmapWord` uninitialised for any other depth and
-            // stored it anyway. Callers reject unsupported depths before
-            // getting here; zero is the safe answer if one slips through.
-            _ => 0,
         };
-        i += step;
-        j += 1;
+    }
+}
+
+/// Reduces an 8-bit channel to 5 bits through the ordered dither.
+#[inline]
+fn dither_channel(value: u8, threshold: u32) -> u32 {
+    let di = (u32::from(value) * 496) >> 8;
+    let dmi = di & 15;
+    let dmo = di >> 4;
+    if threshold < dmi {
+        dmo + 1
+    } else {
+        dmo
     }
 }
 
@@ -196,10 +231,13 @@ pub fn pack_row(row: &[u8], scanline: u32, cfg: &RowConfig, out: &mut [u32]) {
 mod tests {
     use super::*;
 
-    fn cfg(depth: i32, ppw: usize, wpr: usize, occ: usize, dither: bool) -> RowConfig {
+    fn depth(raw: isize) -> FormDepth {
+        FormDepth::try_from(raw).expect("a supported depth")
+    }
+
+    fn cfg(raw_depth: isize, wpr: usize, occ: usize, dither: bool) -> RowConfig {
         RowConfig {
-            depth: NativeDepth(depth),
-            pixels_per_word: ppw,
+            depth: depth(raw_depth),
             words_per_row: wpr,
             out_components: occ,
             dither,
@@ -207,10 +245,35 @@ mod tests {
     }
 
     #[test]
+    fn only_the_six_form_depths_convert() {
+        for raw in [32, -32, 16, -16, 8, -8] {
+            assert!(FormDepth::try_from(raw).is_ok(), "depth {raw}");
+        }
+        for raw in [0, 1, -1, 2, 4, 24, -24, 64] {
+            assert_eq!(
+                FormDepth::try_from(raw),
+                Err(PrimErr::BadArgument),
+                "depth {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn geometry_follows_the_depth() {
+        assert_eq!(depth(32).pixels_per_word(), 1);
+        assert_eq!(depth(-16).pixels_per_word(), 2);
+        assert_eq!(depth(8).pixels_per_word(), 4);
+        assert_eq!(depth(8).components(), 1);
+        assert_eq!(depth(-8).components(), 1);
+        assert_eq!(depth(16).components(), 3);
+        assert_eq!(depth(32).components(), 3);
+    }
+
+    #[test]
     fn depth_32_packs_argb_with_opaque_alpha() {
         let row = [0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc];
         let mut out = [0u32; 2];
-        pack_row(&row, 0, &cfg(32, 1, 2, 3, false), &mut out);
+        pack_row(&row, 0, &cfg(32, 2, 3, false), &mut out);
         assert_eq!(out, [0xFF12_3456, 0xFF78_9ABC]);
     }
 
@@ -218,7 +281,7 @@ mod tests {
     fn depth_32_grayscale_replicates_the_single_channel() {
         let row = [0x40, 0x80];
         let mut out = [0u32; 2];
-        pack_row(&row, 0, &cfg(32, 1, 2, 1, false), &mut out);
+        pack_row(&row, 0, &cfg(32, 2, 1, false), &mut out);
         assert_eq!(out, [0xFF40_4040, 0xFF80_8080]);
     }
 
@@ -227,7 +290,7 @@ mod tests {
         // Two RGB pixels: (0xFF,0x00,0x00) and (0x00,0xFF,0x00).
         let row = [0xFF, 0x00, 0x00, 0x00, 0xFF, 0x00];
         let mut out = [0u32; 1];
-        pack_row(&row, 0, &cfg(16, 2, 1, 3, false), &mut out);
+        pack_row(&row, 0, &cfg(16, 1, 3, false), &mut out);
         let red = 32768u32 | (31 << 10);
         let green = 32768u32 | (31 << 5);
         assert_eq!(out[0], (red << 16) | green);
@@ -238,8 +301,8 @@ mod tests {
         let row = [0xFF, 0x00, 0x00, 0x00, 0xFF, 0x00];
         let mut fwd = [0u32; 1];
         let mut rev = [0u32; 1];
-        pack_row(&row, 0, &cfg(16, 2, 1, 3, false), &mut fwd);
-        pack_row(&row, 0, &cfg(-16, 2, 1, 3, false), &mut rev);
+        pack_row(&row, 0, &cfg(16, 1, 3, false), &mut fwd);
+        pack_row(&row, 0, &cfg(-16, 1, 3, false), &mut rev);
         assert_eq!(fwd[0] >> 16, rev[0] & 0xFFFF);
         assert_eq!(fwd[0] & 0xFFFF, rev[0] >> 16);
     }
@@ -249,8 +312,8 @@ mod tests {
         let row = [0x11, 0x22, 0x33, 0x44];
         let mut fwd = [0u32; 1];
         let mut rev = [0u32; 1];
-        pack_row(&row, 0, &cfg(8, 4, 1, 1, false), &mut fwd);
-        pack_row(&row, 0, &cfg(-8, 4, 1, 1, false), &mut rev);
+        pack_row(&row, 0, &cfg(8, 1, 1, false), &mut fwd);
+        pack_row(&row, 0, &cfg(-8, 1, 1, false), &mut rev);
         assert_eq!(fwd[0], 0x1122_3344);
         assert_eq!(rev[0], 0x4433_2211);
     }
@@ -271,8 +334,8 @@ mod tests {
         let row = [0x88; 12];
         let mut a = [0u32; 2];
         let mut b = [0u32; 2];
-        pack_row(&row, 0, &cfg(16, 2, 2, 3, true), &mut a);
-        pack_row(&row, 1, &cfg(16, 2, 2, 3, true), &mut b);
+        pack_row(&row, 0, &cfg(16, 2, 3, true), &mut a);
+        pack_row(&row, 1, &cfg(16, 2, 3, true), &mut b);
         // A flat input still produces a pattern; otherwise dithering is a no-op.
         assert!(a != b || a[0] != a[1]);
     }
@@ -283,7 +346,7 @@ mod tests {
     fn odd_width_at_depth_16_stays_in_bounds() {
         let row = [0xFF, 0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01]; // 3 px
         let mut out = [0u32; 2]; // words_per_row for width 3 = 2
-        pack_row(&row, 0, &cfg(16, 2, 2, 3, false), &mut out);
+        pack_row(&row, 0, &cfg(16, 2, 3, false), &mut out);
         // Second word's high half is the real third pixel; the low half is the
         // zero-filled phantom pixel, which the C read from past the buffer.
         assert_eq!(out[1] & 0xFFFF, 32768);

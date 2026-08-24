@@ -25,9 +25,9 @@ mod state;
 
 use jpeg_decoder::{Decoder, PixelFormat};
 use jpeg_encoder::{ColorType, Encoder};
-use pharo_vm_plugin::{pharo_plugin, pharo_primitive, Interp, Oop, PrimErr, PrimResult};
+use pharo_vm_plugin::{pharo_plugin, pharo_primitive, sqInt, Interp, Oop, PrimErr, PrimResult};
 
-use pixels::{NativeDepth, RowConfig};
+use pixels::{FormDepth, RowConfig};
 use state::{Decompress, ErrorMgr};
 
 pharo_plugin!("JPEGReadWriter2Plugin");
@@ -41,6 +41,60 @@ mod form {
     pub const WIDTH: isize = 1;
     pub const HEIGHT: isize = 2;
     pub const DEPTH: isize = 3;
+}
+
+/// A `Form` the image handed us, validated and measured.
+///
+/// The decode and encode primitives share one checking pass: the kind check,
+/// the instance-variable fetches, the depth and positivity checks, and the
+/// geometry -- computed exactly as the C shim did -- with the bitmap checked
+/// to be word-indexable and large enough to hold it.
+struct Form {
+    /// The Bitmap holding the pixels.
+    bitmap: Oop,
+    depth: FormDepth,
+    /// Width in pixels.
+    width: usize,
+    /// Height in pixels.
+    height: usize,
+    /// 32-bit words in one row of the bitmap.
+    words_per_row: usize,
+}
+
+impl Form {
+    fn read(vm: &Interp, oop: Oop) -> PrimResult<Self> {
+        if !vm.is_kind_of_named(oop, "Form")? {
+            return Err(PrimErr::BadArgument);
+        }
+        let bitmap = vm.fetch_pointer(form::BITS, oop)?;
+        let depth = vm.fetch_integer(form::DEPTH, oop)?;
+        let width = vm.fetch_integer(form::WIDTH, oop)?;
+        let height = vm.fetch_integer(form::HEIGHT, oop)?;
+
+        let depth = FormDepth::try_from(depth)?;
+        if width <= 0 || height <= 0 {
+            return Err(PrimErr::BadArgument);
+        }
+        if !vm.is_words_or_bytes(bitmap)? {
+            return Err(PrimErr::BadArgument);
+        }
+
+        let width = width as usize;
+        let height = height as usize;
+        let words_per_row = width.div_ceil(depth.pixels_per_word());
+        let bitmap_bytes = usize::try_from(vm.byte_size_of(bitmap)?)?;
+        if bitmap_bytes < words_per_row * 4 * height {
+            return Err(PrimErr::BadArgument);
+        }
+
+        Ok(Self {
+            bitmap,
+            depth,
+            width,
+            height,
+            words_per_row,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -95,9 +149,7 @@ fn primJPEGErrorMgr2StructSize(vm: &Interp) -> PrimResult<isize> {
 /// C plugin answered whatever happened to be in the struct, and the image
 /// detects "no header" by seeing a zero width.
 fn decompress_arg(vm: &Interp) -> PrimResult<Decompress> {
-    // One argument: the blob. With one argument, stack offset 0 is it.
-    vm.expect_argument_count(1)?;
-    let blob = vm.stack_value(0)?;
+    let (blob,): (Oop,) = vm.args()?;
     let bytes = vm.bytes_of(blob)?;
     Ok(Decompress::from_bytes(bytes).unwrap_or_else(Decompress::empty))
 }
@@ -135,19 +187,11 @@ const fn out_components(format: PixelFormat) -> u32 {
 
 /// Parses just the header, recording the image's dimensions in the blob.
 ///
-/// Arguments, innermost first: the decompression blob, the JPEG bytes, the
-/// error record.
-///
 /// A malformed JPEG is **not** a primitive failure. The C plugin swallowed
 /// libjpeg's longjmp and left the struct alone, and the image checks for a
 /// zero width; failing the primitive here would change that contract.
 #[pharo_primitive(name = "primJPEGReadHeaderfromByteArrayerrorMgr")]
-fn read_header(vm: &Interp) -> PrimResult<()> {
-    vm.expect_argument_count(3)?;
-    let blob = vm.stack_value(2)?;
-    let source = vm.stack_value(1)?;
-    let error = vm.stack_value(0)?;
-
+fn read_header(vm: &Interp, blob: Oop, source: Oop, error: Oop) -> PrimResult<()> {
     let source_bytes = vm.bytes_of(source)?;
     if source_bytes.is_empty() {
         return finish_header(vm, blob, error, Decompress::empty());
@@ -182,51 +226,21 @@ fn finish_header(vm: &Interp, blob: Oop, error: Oop, state: Decompress) -> PrimR
 
 /// Decodes the image into a `Form`'s bitmap.
 ///
-/// Arguments, innermost first: the decompression blob, the JPEG bytes, the
-/// `Form`, the dither flag, the error record. Mirrors the argument order and
-/// the validation the C plugin's generated shim performed.
+/// Mirrors the argument order and the validation the C plugin's generated
+/// shim performed.
 #[pharo_primitive(name = "primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgr")]
-fn read_image(vm: &Interp) -> PrimResult<()> {
-    vm.expect_argument_count(5)?;
-    let blob = vm.stack_value(4)?;
-    let source = vm.stack_value(3)?;
-    let form = vm.stack_value(2)?;
-    let dither = vm.boolean_value(vm.stack_value(1)?)?;
-    let error = vm.stack_value(0)?;
-
-    if !vm.is_kind_of_named(form, "Form")? {
-        return Err(PrimErr::BadArgument);
-    }
+fn read_image(
+    vm: &Interp,
+    blob: Oop,
+    source: Oop,
+    form: Oop,
+    dither: bool,
+    error: Oop,
+) -> PrimResult<()> {
     if vm.bytes_of(blob)?.len() < Decompress::blob_size() {
         return Err(PrimErr::BadArgument);
     }
-
-    let bitmap = vm.fetch_pointer(form::BITS, form)?;
-    let native_depth = NativeDepth(vm.fetch_integer(form::DEPTH, form)? as i32);
-    let form_width = vm.fetch_integer(form::WIDTH, form)?;
-    let form_height = vm.fetch_integer(form::HEIGHT, form)?;
-
-    if !native_depth.is_supported() || form_width <= 0 || form_height <= 0 {
-        return Err(PrimErr::BadArgument);
-    }
-    if !vm.is_words_or_bytes(bitmap)? {
-        return Err(PrimErr::BadArgument);
-    }
-
-    // Geometry, computed exactly as the C shim did.
-    let form_depth = native_depth.bits();
-    let form_components = if form_depth == 8 { 1 } else { 4 };
-    let component_bits = if form_depth == 16 { 4 } else { 8 };
-    let pixels_per_word = (32 / (form_components * component_bits)) as usize;
-    let form_width = form_width as usize;
-    let form_height = form_height as usize;
-    let words_per_row = form_width.div_ceil(pixels_per_word);
-
-    let bitmap_bytes =
-        usize::try_from(vm.byte_size_of(bitmap)?).map_err(|_| PrimErr::BadArgument)?;
-    if bitmap_bytes < words_per_row * 4 * form_height {
-        return Err(PrimErr::BadArgument);
-    }
+    let form = Form::read(vm, form)?;
 
     let source_bytes = vm.bytes_of(source)?;
     if source_bytes.is_empty() {
@@ -246,17 +260,16 @@ fn read_image(vm: &Interp) -> PrimResult<()> {
     let occ = out_components(info.pixel_format) as usize;
     let row_stride = usize::from(info.width) * occ;
     let cfg = RowConfig {
-        depth: native_depth,
-        pixels_per_word,
-        words_per_row,
+        depth: form.depth,
+        words_per_row: form.words_per_row,
         out_components: occ,
         dither,
     };
 
     // Pack row by row, writing each into the bitmap as it is produced. Rows
     // beyond the Form's height are dropped rather than overrunning it.
-    let rows = usize::from(info.height).min(form_height);
-    let mut words = vec![0u32; words_per_row];
+    let rows = usize::from(info.height).min(form.height);
+    let mut words = vec![0u32; form.words_per_row];
     for row in 0..rows {
         let start = row * row_stride;
         let end = (start + row_stride).min(pixels.len());
@@ -265,7 +278,7 @@ fn read_image(vm: &Interp) -> PrimResult<()> {
         }
         words.fill(0);
         pixels::pack_row(&pixels[start..end], row as u32, &cfg, &mut words);
-        vm.write_words(bitmap, row * words_per_row, &words)?;
+        vm.write_words(form.bitmap, row * form.words_per_row, &words)?;
     }
 
     finish_image(vm, error, false)
@@ -284,86 +297,56 @@ fn finish_image(vm: &Interp, error: Oop, failed: bool) -> PrimResult<()> {
 
 /// Encodes a `Form` as JPEG into the destination byte array.
 ///
-/// Arguments, innermost first: the compression blob, the destination
-/// `ByteArray`, the `Form`, the quality (0-100), the progressive flag, the
-/// error record. Answers the number of bytes written, or 0 if the encoded
-/// image did not fit -- the same signal the C gave when its fixed-capacity
-/// destination filled up.
+/// The quality runs 0-100. Answers the number of bytes written, or 0 if the
+/// encoded image did not fit -- the same signal the C gave when its
+/// fixed-capacity destination filled up.
 #[pharo_primitive(name = "primJPEGWriteImageonByteArrayformqualityprogressiveJPEGerrorMgr")]
-fn write_image(vm: &Interp) -> PrimResult<isize> {
-    vm.expect_argument_count(6)?;
-    let blob = vm.stack_value(5)?;
-    let destination = vm.stack_value(4)?;
-    let form = vm.stack_value(3)?;
-    let quality = vm.stack_integer(2)?;
-    let progressive = vm.boolean_value(vm.stack_value(1)?)?;
-    let error = vm.stack_value(0)?;
-
-    if !vm.is_kind_of_named(form, "Form")? {
-        return Err(PrimErr::BadArgument);
-    }
+fn write_image(
+    vm: &Interp,
+    blob: Oop,
+    destination: Oop,
+    form: Oop,
+    quality: sqInt,
+    progressive: bool,
+    error: Oop,
+) -> PrimResult<isize> {
     if vm.bytes_of(blob)?.len() < Decompress::blob_size() {
         return Err(PrimErr::BadArgument);
     }
-
-    let bitmap = vm.fetch_pointer(form::BITS, form)?;
-    let form_width = vm.fetch_integer(form::WIDTH, form)?;
-    let form_height = vm.fetch_integer(form::HEIGHT, form)?;
-    let native_depth = NativeDepth(vm.fetch_integer(form::DEPTH, form)? as i32);
-
-    if !native_depth.is_supported() || form_width <= 0 || form_height <= 0 {
-        return Err(PrimErr::BadArgument);
-    }
-    if !vm.is_words_or_bytes(bitmap)? {
-        return Err(PrimErr::BadArgument);
-    }
-
-    let form_depth = native_depth.bits();
-    let form_components = if form_depth == 8 { 1 } else { 4 };
-    let component_bits = if form_depth == 16 { 4 } else { 8 };
-    let pixels_per_word = (32 / (form_components * component_bits)) as usize;
-    let width = form_width as usize;
-    let height = form_height as usize;
-    let words_per_row = width.div_ceil(pixels_per_word);
-
-    let bitmap_bytes =
-        usize::try_from(vm.byte_size_of(bitmap)?).map_err(|_| PrimErr::BadArgument)?;
-    if bitmap_bytes < words_per_row * 4 * height {
-        return Err(PrimErr::BadArgument);
-    }
+    let form = Form::read(vm, form)?;
 
     // JPEG dimensions are 16-bit, and the encoder takes u16.
-    let (Ok(w16), Ok(h16)) = (u16::try_from(width), u16::try_from(height)) else {
+    let (Ok(w16), Ok(h16)) = (u16::try_from(form.width), u16::try_from(form.height)) else {
         return Err(PrimErr::LimitExceeded);
     };
 
-    let components = encode::input_components(native_depth);
-    let padded_row = words_per_row * pixels_per_word * components;
-    let words = vm.words_of(bitmap)?;
+    let components = form.depth.components();
+    let padded_row = form.words_per_row * form.depth.pixels_per_word() * components;
+    let words = vm.words_of(form.bitmap)?;
 
     // Unpack the whole image, then encode in one go.
-    let mut samples = vec![0u8; padded_row * height];
-    for row in 0..height {
-        let start = row * words_per_row;
-        let Some(row_words) = words.get(start..start + words_per_row) else {
+    let mut samples = vec![0u8; padded_row * form.height];
+    for row in 0..form.height {
+        let start = row * form.words_per_row;
+        let Some(row_words) = words.get(start..start + form.words_per_row) else {
             return Err(PrimErr::BadIndex);
         };
         let out = &mut samples[row * padded_row..(row + 1) * padded_row];
-        encode::unpack_row(row_words, native_depth, pixels_per_word, out);
+        encode::unpack_row(row_words, form.depth, out);
     }
 
     // The encoder wants tightly packed rows; drop the padding pixels that the
     // Form carries when its width is not a multiple of pixels_per_word.
-    let tight_row = width * components;
+    let tight_row = form.width * components;
     if tight_row != padded_row {
-        for row in 0..height {
+        for row in 0..form.height {
             samples.copy_within(
                 row * padded_row..row * padded_row + tight_row,
                 row * tight_row,
             );
         }
     }
-    samples.truncate(tight_row * height);
+    samples.truncate(tight_row * form.height);
 
     let color = if components == 1 {
         ColorType::Luma
@@ -380,8 +363,7 @@ fn write_image(vm: &Interp) -> PrimResult<isize> {
         return Ok(0);
     }
 
-    let capacity =
-        usize::try_from(vm.byte_size_of(destination)?).map_err(|_| PrimErr::BadArgument)?;
+    let capacity = usize::try_from(vm.byte_size_of(destination)?)?;
     if out.len() > capacity {
         // Would not fit. Report nothing written rather than truncating to a
         // corrupt JPEG.

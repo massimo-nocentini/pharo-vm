@@ -75,6 +75,56 @@ impl PrimErr {
     }
 }
 
+impl core::fmt::Display for PrimErr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::GenericFailure => "primitive failed",
+            Self::BadReceiver => "bad receiver",
+            Self::BadArgument => "bad argument",
+            Self::BadIndex => "index out of bounds",
+            Self::BadNumArgs => "wrong number of arguments",
+            Self::Inappropriate => "inappropriate operation",
+            Self::Unsupported => "unsupported operation",
+            Self::NoModification => "target is read-only",
+            Self::NoMemory => "out of object memory",
+            Self::NoCMemory => "out of C memory",
+            Self::NotFound => "not found",
+            Self::BadMethod => "malformed method",
+            Self::NamedInternal => "named-primitive machinery failure",
+            Self::ObjectMayMove => "object may move",
+            Self::LimitExceeded => "limit exceeded",
+            Self::ObjectIsPinned => "object is pinned",
+            Self::WritePastObject => "write past end of object",
+            Self::ObjectMoved => "object moved",
+            Self::ObjectNotPinned => "object not pinned",
+            Self::CallbackError => "callback failed",
+            Self::OSError => "OS call failed",
+            Self::FFIException => "FFI call raised",
+            Self::NeedCompaction => "object memory needs compaction",
+            Self::OperationFailed => "operation failed",
+        })
+    }
+}
+
+impl std::error::Error for PrimErr {}
+
+/// A value that does not fit the integer type a primitive needs is a malformed
+/// argument, so `usize::try_from(len)?` fails the right way on its own.
+impl From<core::num::TryFromIntError> for PrimErr {
+    fn from(_: core::num::TryFromIntError) -> Self {
+        Self::BadArgument
+    }
+}
+
+/// An I/O error maps to the code the VM reserves for failed OS calls; the
+/// underlying `io::Error` detail has nowhere to go, since the image only sees
+/// the code.
+impl From<std::io::Error> for PrimErr {
+    fn from(_: std::io::Error) -> Self {
+        Self::OSError
+    }
+}
+
 /// What a primitive body returns.
 ///
 /// `Ok` carries whatever the primitive answers (see [`crate::IntoReturn`]);

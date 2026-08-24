@@ -102,26 +102,6 @@ fn report_progress(total_size: usize, current_size: usize) {
     }
 }
 
-/// `stdout`, which the `libc` crate does not expose because C hides it behind a
-/// macro. glibc and musl name the underlying object `stdout`; the BSDs and
-/// macOS name it `__stdoutp`.
-mod c_stdout {
-    extern "C" {
-        #[cfg_attr(
-            any(target_os = "macos", target_os = "ios", target_os = "freebsd"),
-            link_name = "__stdoutp"
-        )]
-        static mut stdout: *mut libc::FILE;
-    }
-
-    /// Returns the `FILE *` that C's `stdout` macro would evaluate to.
-    pub fn get() -> *mut libc::FILE {
-        // SAFETY: the C runtime initialises this before main and only replaces
-        // it via freopen, which nothing here does.
-        unsafe { stdout }
-    }
-}
-
 /// Interprets a `sqImageFile` as the `FILE *` this module's handlers store in
 /// it.
 #[inline]
@@ -196,37 +176,34 @@ pub unsafe extern "C" fn basicImageFileRead(
     }
 
     let mut read_bytes: usize = 0;
-    let mut remaining_bytes = bytes_to_read;
-    let mut current_ptr = initial_ptr.cast::<u8>();
+    // SAFETY: the caller guarantees the buffer is writable for `sz * count`
+    // bytes; this is the one place the raw pointer becomes a slice, and the
+    // chunk walk below stays inside it by construction. The C's loop condition
+    // `while(lastReadBytes > 0 && readBytes < bytesToRead)` is equivalent to
+    // exhausting the chunks: the short-read arm returns early, so a chunk that
+    // completes always advances by its full length.
+    let buffer =
+        unsafe { core::slice::from_raw_parts_mut(initial_ptr.cast::<u8>(), bytes_to_read) };
 
-    loop {
-        let chunk_to_read = remaining_bytes.min(CHUNK_SIZE);
+    for chunk in buffer.chunks_mut(CHUNK_SIZE) {
+        // SAFETY: the chunk lies inside the caller's buffer.
+        let last_read_bytes = unsafe {
+            libc::fread(
+                chunk.as_mut_ptr().cast::<c_void>(),
+                1,
+                chunk.len(),
+                as_file(f),
+            )
+        };
 
-        // SAFETY: current_ptr has advanced by exactly the bytes already read,
-        // so chunk_to_read <= remaining_bytes bytes are still in bounds.
-        let last_read_bytes =
-            unsafe { libc::fread(current_ptr.cast::<c_void>(), 1, chunk_to_read, as_file(f)) };
-
-        if last_read_bytes < chunk_to_read {
+        if last_read_bytes < chunk.len() {
             logging::error_from_errno(c"fread", site!(C_FILE, c"basicImageFileRead", 105));
+            // Verbatim C behaviour: the short count alone, not the total.
             return last_read_bytes;
         }
 
         read_bytes += last_read_bytes;
-        // SAFETY: as above -- the sum of all last_read_bytes never exceeds
-        // bytes_to_read, so this stays within the caller's buffer (one past the
-        // end at most, which is a valid pointer to form).
-        current_ptr = unsafe { current_ptr.add(last_read_bytes) };
-        remaining_bytes -= last_read_bytes;
-
         report_progress(bytes_to_read, read_bytes);
-
-        // The C's `while(lastReadBytes > 0 && readBytes < bytesToRead)`. The
-        // short-read arm above already returned, so the first half can only be
-        // false when chunk_to_read was 0, which cannot happen here.
-        if !(last_read_bytes > 0 && read_bytes < bytes_to_read) {
-            break;
-        }
     }
 
     if bytes_to_read != read_bytes {
@@ -287,34 +264,25 @@ pub unsafe extern "C" fn basicImageFileWrite(
     }
 
     let mut wrote_bytes: usize = 0;
-    let mut remaining_bytes = bytes_to_write;
-    let mut current_ptr = initial_ptr.cast::<u8>();
+    // SAFETY: the caller guarantees the buffer is readable for `sz * count`
+    // bytes; this is the one place the raw pointer becomes a slice, and the
+    // chunk walk below stays inside it by construction.
+    let buffer = unsafe { core::slice::from_raw_parts(initial_ptr.cast::<u8>(), bytes_to_write) };
 
-    loop {
-        let chunk_to_write = remaining_bytes.min(CHUNK_SIZE);
-
-        // SAFETY: current_ptr has advanced by exactly the bytes already
-        // written, so chunk_to_write bytes are still in bounds.
+    for chunk in buffer.chunks(CHUNK_SIZE) {
+        // SAFETY: the chunk lies inside the caller's buffer.
         let last_write_bytes =
-            unsafe { libc::fwrite(current_ptr.cast::<c_void>(), 1, chunk_to_write, as_file(f)) };
+            unsafe { libc::fwrite(chunk.as_ptr().cast::<c_void>(), 1, chunk.len(), as_file(f)) };
 
-        if last_write_bytes != chunk_to_write {
+        if last_write_bytes != chunk.len() {
             logging::error_from_errno(c"fwrite", site!(C_FILE, c"basicImageFileWrite", 153));
             // Verbatim: the read path returns the short count on its own, this
             // one adds the running total to it.
             return last_write_bytes + wrote_bytes;
         }
 
-        wrote_bytes += chunk_to_write;
-        // SAFETY: as above.
-        current_ptr = unsafe { current_ptr.add(last_write_bytes) };
-        remaining_bytes -= last_write_bytes;
-
+        wrote_bytes += chunk.len();
         report_progress(bytes_to_write, wrote_bytes);
-
-        if bytes_to_write <= wrote_bytes {
-            break;
-        }
     }
 
     if bytes_to_write != wrote_bytes {
@@ -440,7 +408,7 @@ pub extern "C" fn basicImageReportProgress(total_size: usize, current_size: usiz
 
     // SAFETY: stdout is always a valid stream.
     unsafe {
-        libc::fflush(c_stdout::get());
+        libc::fflush(crate::cstdio::c_stdout());
     }
 }
 

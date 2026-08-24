@@ -62,6 +62,7 @@
 //! correctly behaves identically.
 
 use core::ffi::{c_int, c_void, CStr};
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 /// Root table size, the C's `NUMROOTPAGES`.
 const NUM_ROOT_PAGES: usize = 65536;
@@ -90,10 +91,17 @@ const C_FILE: &CStr = c"src/common/sqHeapMap.c";
 
 /// The root table. Entries are directories, themselves arrays of leaf pages.
 ///
-/// `static mut` and reached only through raw pointers: this is shared with the
-/// generated interpreter, so forming a Rust reference to it would be undefined
-/// behaviour.
-static mut MAP_PAGES: [*mut *mut u8; NUM_ROOT_PAGES] = [core::ptr::null_mut(); NUM_ROOT_PAGES];
+/// The symbol is not exported -- the generated interpreter reaches the map
+/// only through the three functions below -- so this need not be `static mut`.
+/// `AtomicPtr` slots with relaxed ordering give the C's plain loads and stores
+/// (there is no concurrent writer; see the module docs) with safe,
+/// bounds-checked indexing at the root level.
+static MAP_PAGES: [AtomicPtr<*mut u8>; NUM_ROOT_PAGES] = {
+    // A `const` item, so the array-repeat initialiser is allowed to copy it.
+    #[allow(clippy::declare_interior_mutable_const)]
+    const NULL_DIRECTORY: AtomicPtr<*mut u8> = AtomicPtr::new(core::ptr::null_mut());
+    [NULL_DIRECTORY; NUM_ROOT_PAGES]
+};
 
 /// Which directory in [`MAP_PAGES`] covers `address`.
 #[inline]
@@ -168,21 +176,25 @@ fn checked_directory_index(address: usize) -> usize {
 }
 
 /// Allocates and zeroes `size` bytes, or logs and exits as the C did.
+///
+/// `alloc_zeroed` routes to `calloc`, so a fresh leaf page -- of which seven
+/// eighths is never touched, see the module docs -- comes from lazily-zeroed
+/// pages instead of being dirtied by an explicit memset. The blocks are never
+/// freed (the C's design), so no layout bookkeeping for deallocation is kept.
 fn alloc_zeroed_or_exit(size: usize, line: c_int) -> *mut u8 {
-    // SAFETY: malloc with a non-zero size; the result is checked before use,
-    // and write_bytes stays within the block just allocated.
-    unsafe {
-        let p = libc::malloc(size).cast::<u8>();
-        if p.is_null() {
-            crate::logging::error_from_errno(
-                c"heapMap malloc",
-                crate::logging::site!(C_FILE, c"heapMapAtWordPut", line),
-            );
-            libc::exit(1);
-        }
-        core::ptr::write_bytes(p, 0, size);
-        p
+    let layout = core::alloc::Layout::from_size_align(size, core::mem::align_of::<*mut c_void>())
+        .expect("both map levels have small, fixed sizes");
+    // SAFETY: the layout has a non-zero size; the result is checked before use.
+    let p = unsafe { std::alloc::alloc_zeroed(layout) };
+    if p.is_null() {
+        crate::logging::error_from_errno(
+            c"heapMap malloc",
+            crate::logging::site!(C_FILE, c"heapMapAtWordPut", line),
+        );
+        // SAFETY: exit runs atexit handlers and does not return.
+        unsafe { libc::exit(1) };
     }
+    p
 }
 
 /// Non-zero if the map has a bit set for `word_pointer`.
@@ -199,16 +211,14 @@ pub unsafe extern "C" fn heapMapAtWord(word_pointer: *mut c_void) -> c_int {
     let address = word_pointer as usize;
     let index = checked_directory_index(address);
 
-    // SAFETY: `index` is in range, and every non-null directory entry points
-    // at DIRECTORY_ENTRIES slots, every non-null page at HEAP_MAP_PAGE_SIZE
-    // bytes -- both guaranteed by heapMapAtWordPut, the only writer.
+    let directory = MAP_PAGES[index].load(Ordering::Relaxed);
+    if directory.is_null() {
+        return 0;
+    }
+    // SAFETY: every non-null directory points at DIRECTORY_ENTRIES slots,
+    // every non-null page at HEAP_MAP_PAGE_SIZE bytes -- both guaranteed by
+    // heapMapAtWordPut, the only writer.
     unsafe {
-        let directory = *core::ptr::addr_of!(MAP_PAGES)
-            .cast::<*mut *mut u8>()
-            .add(index);
-        if directory.is_null() {
-            return 0;
-        }
         let page = *directory.add(page_index(address));
         if page.is_null() {
             return 0;
@@ -228,17 +238,15 @@ pub unsafe extern "C" fn heapMapAtWordPut(word_pointer: *mut c_void, bit: c_int)
     let address = word_pointer as usize;
     let index = checked_directory_index(address);
 
-    // SAFETY: `index` is in range; each allocation below is sized for the
-    // level it serves, so the subsequent indexing stays inside it.
+    let mut directory = MAP_PAGES[index].load(Ordering::Relaxed);
+    if directory.is_null() {
+        directory = alloc_zeroed_or_exit(DIRECTORY_SIZE, 165).cast::<*mut u8>();
+        MAP_PAGES[index].store(directory, Ordering::Relaxed);
+    }
+
+    // SAFETY: each allocation above and below is sized for the level it
+    // serves, so the indexing stays inside it.
     unsafe {
-        let root = core::ptr::addr_of_mut!(MAP_PAGES).cast::<*mut *mut u8>();
-
-        let mut directory = *root.add(index);
-        if directory.is_null() {
-            directory = alloc_zeroed_or_exit(DIRECTORY_SIZE, 165).cast::<*mut u8>();
-            *root.add(index) = directory;
-        }
-
         let page_slot = directory.add(page_index(address));
         let mut page = *page_slot;
         if page.is_null() {
@@ -262,20 +270,19 @@ pub unsafe extern "C" fn heapMapAtWordPut(word_pointer: *mut c_void, bit: c_int)
 /// Not thread-safe; see the module docs.
 #[no_mangle]
 pub unsafe extern "C" fn clearHeapMap() {
-    // SAFETY: walks only allocated directories and pages, each of the size it
-    // was allocated with.
-    unsafe {
-        let root = core::ptr::addr_of!(MAP_PAGES).cast::<*mut *mut u8>();
-        for i in 0..NUM_ROOT_PAGES {
-            let directory = *root.add(i);
-            if directory.is_null() {
-                continue;
-            }
-            for j in 0..DIRECTORY_ENTRIES {
-                let page = *directory.add(j);
-                if !page.is_null() {
-                    core::ptr::write_bytes(page, 0, HEAP_MAP_PAGE_SIZE);
-                }
+    for slot in &MAP_PAGES {
+        let directory = slot.load(Ordering::Relaxed);
+        if directory.is_null() {
+            continue;
+        }
+        // SAFETY: walks only allocated directories and pages, each of the
+        // size it was allocated with; nothing else touches the map while the
+        // VM is stopped for a collection (see the module docs).
+        let entries = unsafe { core::slice::from_raw_parts(directory, DIRECTORY_ENTRIES) };
+        for &page in entries {
+            if !page.is_null() {
+                // SAFETY: as above.
+                unsafe { core::slice::from_raw_parts_mut(page, HEAP_MAP_PAGE_SIZE) }.fill(0);
             }
         }
     }

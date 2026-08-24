@@ -53,6 +53,8 @@
     ))
 ))]
 pub mod client;
+#[cfg(unix)]
+mod cstdio;
 pub mod error_code;
 #[cfg(unix)]
 pub mod external_primitives;

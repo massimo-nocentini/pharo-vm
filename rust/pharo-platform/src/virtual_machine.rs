@@ -46,7 +46,8 @@
 //!   called one would call through a null pointer. Left exactly as they were
 //!   -- filling them in is a decision about the plugin ABI, not a port -- but
 //!   there is a test that names all four, so a fifth cannot appear unnoticed.
-//! * The proxy is `calloc`ed and never freed, and `sqGetInterpreterProxy` is
+//! * The proxy is built once and never freed (the C `calloc`ed it; here the
+//!   table is a leaked `Box`, same lifetime), and `sqGetInterpreterProxy` is
 //!   not synchronised -- two threads racing the first call would each build a
 //!   table and one would leak. Only the VM thread calls it.
 
@@ -124,174 +125,183 @@ pub unsafe extern "C" fn sqGetInterpreterProxy() -> *mut VirtualMachine {
         if !VM.is_null() {
             return VM;
         }
-        VM = libc::calloc(1, core::mem::size_of::<VirtualMachine>()).cast::<VirtualMachine>();
-        if VM.is_null() {
-            // The C did not check calloc; it would have written through the
-            // null on the next line. Answering null at least lets
-            // callInitializersIn fail the plugin instead.
-            return VM;
-        }
-        let vm = &mut *VM;
-
         // Generated from the `VM->field = function;` block in
-        // sqVirtualMachine.c, with VM_PROXY_MINOR resolved to 15. Order is the
-        // C's. Each line is type-checked against the field's declared
+        // sqVirtualMachine.c, with VM_PROXY_MINOR resolved to 15. Order is
+        // the C's, with the three slots the C never mentions spelled out at
+        // the end. Each entry is type-checked against the field's declared
         // signature, so a wrong pairing is a compile error rather than a
-        // corrupted plugin call.
-        vm.majorVersion = Some(major_version);
-        vm.minorVersion = Some(minor_version);
-        vm.pop = Some(pharo_vm_sys::pop);
-        vm.popthenPush = Some(pharo_vm_sys::popthenPush);
-        vm.push = Some(pharo_vm_sys::push);
-        vm.pushBool = Some(pharo_vm_sys::pushBool);
-        vm.pushFloat = Some(pharo_vm_sys::pushFloat);
-        vm.pushInteger = Some(pharo_vm_sys::pushInteger);
-        vm.stackFloatValue = Some(pharo_vm_sys::stackFloatValue);
-        vm.stackIntegerValue = Some(pharo_vm_sys::stackIntegerValue);
-        vm.stackObjectValue = Some(pharo_vm_sys::stackObjectValue);
-        vm.stackValue = Some(pharo_vm_sys::stackValue);
-        vm.argumentCountOf = Some(pharo_vm_sys::argumentCountOf);
-        vm.arrayValueOf = Some(pharo_vm_sys::arrayValueOf);
-        vm.byteSizeOf = Some(pharo_vm_sys::byteSizeOf);
-        vm.fetchArrayofObject = Some(pharo_vm_sys::fetchArrayofObject);
-        vm.fetchClassOf = Some(pharo_vm_sys::fetchClassOf);
-        vm.fetchFloatofObject = Some(pharo_vm_sys::fetchFloatofObject);
-        vm.fetchIntegerofObject = Some(intercept_fetch_integer_of_object);
-        vm.fetchPointerofObject = Some(pharo_vm_sys::fetchPointerofObject);
-        vm.obsoleteDontUseThisFetchWordofObject =
-            Some(pharo_vm_sys::obsoleteDontUseThisFetchWordofObject);
-        vm.firstFixedField = Some(pharo_vm_sys::firstFixedField);
-        vm.firstIndexableField = Some(pharo_vm_sys::firstIndexableField);
-        vm.literalofMethod = Some(pharo_vm_sys::literalofMethod);
-        vm.literalCountOf = Some(pharo_vm_sys::literalCountOf);
-        vm.methodArgumentCount = Some(pharo_vm_sys::methodArgumentCount);
-        vm.methodPrimitiveIndex = Some(pharo_vm_sys::methodPrimitiveIndex);
-        vm.primitiveIndexOf = Some(pharo_vm_sys::primitiveIndexOf);
-        vm.primitiveMethod = Some(pharo_vm_sys::primitiveMethod);
-        vm.sizeOfSTArrayFromCPrimitive = Some(pharo_vm_sys::sizeOfSTArrayFromCPrimitive);
-        vm.slotSizeOf = Some(pharo_vm_sys::slotSizeOf);
-        vm.stObjectat = Some(pharo_vm_sys::stObjectat);
-        vm.stObjectatput = Some(pharo_vm_sys::stObjectatput);
-        vm.stSizeOf = Some(pharo_vm_sys::stSizeOf);
-        vm.storeIntegerofObjectwithValue = Some(pharo_vm_sys::storeIntegerofObjectwithValue);
-        vm.storePointerofObjectwithValue = Some(pharo_vm_sys::storePointerofObjectwithValue);
-        vm.isKindOf = Some(pharo_vm_sys::isKindOf);
-        vm.isMemberOf = Some(pharo_vm_sys::isMemberOf);
-        vm.isBytes = Some(pharo_vm_sys::isBytes);
-        vm.isFloatObject = Some(pharo_vm_sys::isFloatObject);
-        vm.isIndexable = Some(pharo_vm_sys::isIndexable);
-        vm.isIntegerObject = Some(pharo_vm_sys::isIntegerObject);
-        vm.isIntegerValue = Some(pharo_vm_sys::isIntegerValue);
-        vm.isPointers = Some(pharo_vm_sys::isPointers);
-        vm.isWeak = Some(pharo_vm_sys::isWeak);
-        vm.isWords = Some(pharo_vm_sys::isWords);
-        vm.isWordsOrBytes = Some(pharo_vm_sys::isWordsOrBytes);
-        vm.booleanValueOf = Some(pharo_vm_sys::booleanValueOf);
-        vm.checkedIntegerValueOf = Some(pharo_vm_sys::checkedIntegerValueOf);
-        vm.floatObjectOf = Some(pharo_vm_sys::floatObjectOf);
-        vm.floatValueOf = Some(pharo_vm_sys::floatValueOf);
-        vm.integerObjectOf = Some(pharo_vm_sys::integerObjectOf);
-        vm.integerValueOf = Some(pharo_vm_sys::integerValueOf);
-        vm.positive32BitIntegerFor = Some(pharo_vm_sys::positive32BitIntegerFor);
-        vm.positive32BitValueOf = Some(pharo_vm_sys::positive32BitValueOf);
-        vm.falseObject = Some(pharo_vm_sys::falseObject);
-        vm.nilObject = Some(pharo_vm_sys::nilObject);
-        vm.trueObject = Some(pharo_vm_sys::trueObject);
-        vm.classArray = Some(pharo_vm_sys::classArray);
-        vm.classBitmap = Some(pharo_vm_sys::classBitmap);
-        vm.classByteArray = Some(pharo_vm_sys::classByteArray);
-        vm.classCharacter = Some(pharo_vm_sys::classCharacter);
-        vm.classFloat = Some(pharo_vm_sys::classFloat);
-        vm.classLargePositiveInteger = Some(pharo_vm_sys::classLargePositiveInteger);
-        vm.classPoint = Some(pharo_vm_sys::classPoint);
-        vm.classSemaphore = Some(pharo_vm_sys::classSemaphore);
-        vm.classSmallInteger = Some(pharo_vm_sys::classSmallInteger);
-        vm.classString = Some(pharo_vm_sys::classString);
-        vm.clone = Some(pharo_vm_sys::clone);
-        vm.instantiateClassindexableSize = Some(pharo_vm_sys::instantiateClassindexableSize);
-        vm.makePointwithxValueyValue = Some(pharo_vm_sys::makePointwithxValueyValue);
-        vm.popRemappableOop = Some(pharo_vm_sys::popRemappableOop);
-        vm.pushRemappableOop = Some(pharo_vm_sys::pushRemappableOop);
-        vm.becomewith = Some(pharo_vm_sys::becomewith);
-        vm.byteSwapped = Some(pharo_vm_sys::byteSwapped);
-        vm.failed = Some(pharo_vm_sys::failed);
-        vm.fullGC = Some(pharo_vm_sys::fullGC);
-        vm.primitiveFail = Some(pharo_vm_sys::primitiveFail);
-        vm.signalSemaphoreWithIndex = Some(crate::external_semaphores::signalSemaphoreWithIndex);
-        vm.success = Some(pharo_vm_sys::success);
-        vm.superclassOf = Some(pharo_vm_sys::superclassOf);
-        vm.loadBitBltFrom = Some(pharo_vm_sys::loadBitBltFrom);
-        vm.copyBits = Some(pharo_vm_sys::copyBits);
-        vm.copyBitsFromtoat = Some(pharo_vm_sys::copyBitsFromtoat);
-        vm.classExternalAddress = Some(pharo_vm_sys::classExternalAddress);
-        vm.ioLoadModuleOfLength = Some(crate::named_prims::ioLoadModuleOfLength);
-        vm.ioLoadSymbolOfLengthFromModule =
-            Some(crate::named_prims::ioLoadSymbolOfLengthFromModule);
-        vm.isInMemory = Some(pharo_vm_sys::isInMemory);
-        vm.signed32BitIntegerFor = Some(pharo_vm_sys::signed32BitIntegerFor);
-        vm.signed32BitValueOf = Some(pharo_vm_sys::signed32BitValueOf);
-        vm.includesBehaviorThatOf = Some(pharo_vm_sys::includesBehaviorThatOf);
-        vm.classLargeNegativeInteger = Some(pharo_vm_sys::classLargeNegativeInteger);
-        vm.ioLoadFunctionFrom = Some(crate::named_prims::ioLoadFunctionFrom);
-        vm.ioMicroMSecs = Some(pharo_vm_sys::ioMicroMSecs);
-        vm.positive64BitIntegerFor = Some(pharo_vm_sys::positive64BitIntegerFor);
-        vm.positive64BitValueOf = Some(pharo_vm_sys::positive64BitValueOf);
-        vm.signed64BitIntegerFor = Some(pharo_vm_sys::signed64BitIntegerFor);
-        vm.signed64BitValueOf = Some(pharo_vm_sys::signed64BitValueOf);
-        vm.isArray = Some(pharo_vm_sys::isArray);
-        vm.forceInterruptCheck = Some(pharo_vm_sys::forceInterruptCheck);
-        vm.fetchLong32ofObject = Some(pharo_vm_sys::fetchLong32ofObject);
-        vm.getThisSessionID = Some(pharo_vm_sys::getThisSessionID);
-        vm.ioFilenamefromStringofLengthresolveAliases =
-            Some(pharo_vm_sys::ioFilenamefromStringofLengthresolveAliases);
-        vm.vmEndianness = Some(pharo_vm_sys::vmEndianness);
-        vm.addGCRoot = Some(pharo_vm_sys::addGCRoot);
-        vm.removeGCRoot = Some(pharo_vm_sys::removeGCRoot);
-        vm.primitiveFailFor = Some(pharo_vm_sys::primitiveFailFor);
-        vm.isOopImmutable = Some(pharo_vm_sys::isOopImmutable);
-        vm.isOopMutable = Some(pharo_vm_sys::isOopMutable);
-        vm.methodReturnBool = Some(pharo_vm_sys::methodReturnBool);
-        vm.methodReturnFloat = Some(pharo_vm_sys::methodReturnFloat);
-        vm.methodReturnInteger = Some(pharo_vm_sys::methodReturnInteger);
-        vm.methodReturnReceiver = Some(pharo_vm_sys::methodReturnReceiver);
-        vm.methodReturnString = Some(pharo_vm_sys::methodReturnString);
-        vm.methodReturnValue = Some(pharo_vm_sys::methodReturnValue);
-        vm.topRemappableOop = Some(pharo_vm_sys::topRemappableOop);
-        vm.addHighPriorityTickee = Some(pharo_vm_sys::addHighPriorityTickee);
-        vm.addSynchronousTickee = Some(pharo_vm_sys::addSynchronousTickee);
-        vm.utcMicroseconds = Some(pharo_vm_sys::ioUTCMicroseconds);
-        vm.tenuringIncrementalGC = Some(pharo_vm_sys::tenuringIncrementalGC);
-        vm.isYoung = Some(pharo_vm_sys::isYoung);
-        vm.isKindOfClass = Some(pharo_vm_sys::isKindOfClass);
-        vm.primitiveErrorTable = Some(pharo_vm_sys::primitiveErrorTable);
-        vm.primitiveFailureCode = Some(pharo_vm_sys::primitiveFailureCode);
-        vm.instanceSizeOf = Some(pharo_vm_sys::instanceSizeOf);
-        vm.signedMachineIntegerValueOf = Some(pharo_vm_sys::signedMachineIntegerValueOf);
-        vm.stackSignedMachineIntegerValue = Some(pharo_vm_sys::stackSignedMachineIntegerValue);
-        vm.positiveMachineIntegerValueOf = Some(pharo_vm_sys::positiveMachineIntegerValueOf);
-        vm.stackPositiveMachineIntegerValue = Some(pharo_vm_sys::stackPositiveMachineIntegerValue);
-        vm.cStringOrNullFor = Some(pharo_vm_sys::cStringOrNullFor);
-        vm.signalNoResume = Some(pharo_vm_sys::signalNoResume);
-        vm.isImmediate = Some(pharo_vm_sys::isImmediate);
-        vm.characterObjectOf = Some(pharo_vm_sys::characterObjectOf);
-        vm.characterValueOf = Some(pharo_vm_sys::characterValueOf);
-        vm.isCharacterObject = Some(pharo_vm_sys::isCharacterObject);
-        vm.isCharacterValue = Some(pharo_vm_sys::isCharacterValue);
-        vm.isPinned = Some(pharo_vm_sys::isPinned);
-        vm.pinObject = Some(pharo_vm_sys::pinObject);
-        vm.unpinObject = Some(pharo_vm_sys::unpinObject);
-        vm.statNumGCs = Some(pharo_vm_sys::statNumGCs);
-        vm.stringForCString = Some(pharo_vm_sys::stringForCString);
-        vm.primitiveFailForOSError = Some(pharo_vm_sys::primitiveFailForOSError);
-        vm.isBooleanObject = Some(pharo_vm_sys::isBooleanObject);
-        vm.isPositiveMachineIntegerObject = Some(pharo_vm_sys::isPositiveMachineIntegerObject);
-        vm.ptEnterInterpreterFromCallback = Some(pharo_vm_sys::ptEnterInterpreterFromCallback);
-        vm.ptExitInterpreterToCallback = Some(pharo_vm_sys::ptExitInterpreterToCallback);
-        vm.isNonImmediate = Some(pharo_vm_sys::isNonImmediate);
-        vm.platformSemaphoreNew = Some(crate::platform_semaphore::platform_semaphore_new);
-        vm.scheduleInMainThread = None;
-        vm.waitOnExternalSemaphoreIndex =
-            Some(crate::external_semaphores::waitOnExternalSemaphoreIndex);
+        // corrupted plugin call -- and a struct literal must name every
+        // field, so a dropped slot is a compile error too.
+        //
+        // Built as a value and leaked: the table lives for the whole process,
+        // exactly as the C's calloc-and-never-free did. (The C did not check
+        // calloc and would have crashed writing through null; allocation
+        // failure aborts here instead.)
+        VM = Box::leak(Box::new(VirtualMachine {
+            majorVersion: Some(major_version),
+            minorVersion: Some(minor_version),
+            pop: Some(pharo_vm_sys::pop),
+            popthenPush: Some(pharo_vm_sys::popthenPush),
+            push: Some(pharo_vm_sys::push),
+            pushBool: Some(pharo_vm_sys::pushBool),
+            pushFloat: Some(pharo_vm_sys::pushFloat),
+            pushInteger: Some(pharo_vm_sys::pushInteger),
+            stackFloatValue: Some(pharo_vm_sys::stackFloatValue),
+            stackIntegerValue: Some(pharo_vm_sys::stackIntegerValue),
+            stackObjectValue: Some(pharo_vm_sys::stackObjectValue),
+            stackValue: Some(pharo_vm_sys::stackValue),
+            argumentCountOf: Some(pharo_vm_sys::argumentCountOf),
+            arrayValueOf: Some(pharo_vm_sys::arrayValueOf),
+            byteSizeOf: Some(pharo_vm_sys::byteSizeOf),
+            fetchArrayofObject: Some(pharo_vm_sys::fetchArrayofObject),
+            fetchClassOf: Some(pharo_vm_sys::fetchClassOf),
+            fetchFloatofObject: Some(pharo_vm_sys::fetchFloatofObject),
+            fetchIntegerofObject: Some(intercept_fetch_integer_of_object),
+            fetchPointerofObject: Some(pharo_vm_sys::fetchPointerofObject),
+            obsoleteDontUseThisFetchWordofObject: Some(
+                pharo_vm_sys::obsoleteDontUseThisFetchWordofObject,
+            ),
+            firstFixedField: Some(pharo_vm_sys::firstFixedField),
+            firstIndexableField: Some(pharo_vm_sys::firstIndexableField),
+            literalofMethod: Some(pharo_vm_sys::literalofMethod),
+            literalCountOf: Some(pharo_vm_sys::literalCountOf),
+            methodArgumentCount: Some(pharo_vm_sys::methodArgumentCount),
+            methodPrimitiveIndex: Some(pharo_vm_sys::methodPrimitiveIndex),
+            primitiveIndexOf: Some(pharo_vm_sys::primitiveIndexOf),
+            primitiveMethod: Some(pharo_vm_sys::primitiveMethod),
+            sizeOfSTArrayFromCPrimitive: Some(pharo_vm_sys::sizeOfSTArrayFromCPrimitive),
+            slotSizeOf: Some(pharo_vm_sys::slotSizeOf),
+            stObjectat: Some(pharo_vm_sys::stObjectat),
+            stObjectatput: Some(pharo_vm_sys::stObjectatput),
+            stSizeOf: Some(pharo_vm_sys::stSizeOf),
+            storeIntegerofObjectwithValue: Some(pharo_vm_sys::storeIntegerofObjectwithValue),
+            storePointerofObjectwithValue: Some(pharo_vm_sys::storePointerofObjectwithValue),
+            isKindOf: Some(pharo_vm_sys::isKindOf),
+            isMemberOf: Some(pharo_vm_sys::isMemberOf),
+            isBytes: Some(pharo_vm_sys::isBytes),
+            isFloatObject: Some(pharo_vm_sys::isFloatObject),
+            isIndexable: Some(pharo_vm_sys::isIndexable),
+            isIntegerObject: Some(pharo_vm_sys::isIntegerObject),
+            isIntegerValue: Some(pharo_vm_sys::isIntegerValue),
+            isPointers: Some(pharo_vm_sys::isPointers),
+            isWeak: Some(pharo_vm_sys::isWeak),
+            isWords: Some(pharo_vm_sys::isWords),
+            isWordsOrBytes: Some(pharo_vm_sys::isWordsOrBytes),
+            booleanValueOf: Some(pharo_vm_sys::booleanValueOf),
+            checkedIntegerValueOf: Some(pharo_vm_sys::checkedIntegerValueOf),
+            floatObjectOf: Some(pharo_vm_sys::floatObjectOf),
+            floatValueOf: Some(pharo_vm_sys::floatValueOf),
+            integerObjectOf: Some(pharo_vm_sys::integerObjectOf),
+            integerValueOf: Some(pharo_vm_sys::integerValueOf),
+            positive32BitIntegerFor: Some(pharo_vm_sys::positive32BitIntegerFor),
+            positive32BitValueOf: Some(pharo_vm_sys::positive32BitValueOf),
+            falseObject: Some(pharo_vm_sys::falseObject),
+            nilObject: Some(pharo_vm_sys::nilObject),
+            trueObject: Some(pharo_vm_sys::trueObject),
+            classArray: Some(pharo_vm_sys::classArray),
+            classBitmap: Some(pharo_vm_sys::classBitmap),
+            classByteArray: Some(pharo_vm_sys::classByteArray),
+            classCharacter: Some(pharo_vm_sys::classCharacter),
+            classFloat: Some(pharo_vm_sys::classFloat),
+            classLargePositiveInteger: Some(pharo_vm_sys::classLargePositiveInteger),
+            classPoint: Some(pharo_vm_sys::classPoint),
+            classSemaphore: Some(pharo_vm_sys::classSemaphore),
+            classSmallInteger: Some(pharo_vm_sys::classSmallInteger),
+            classString: Some(pharo_vm_sys::classString),
+            clone: Some(pharo_vm_sys::clone),
+            instantiateClassindexableSize: Some(pharo_vm_sys::instantiateClassindexableSize),
+            makePointwithxValueyValue: Some(pharo_vm_sys::makePointwithxValueyValue),
+            popRemappableOop: Some(pharo_vm_sys::popRemappableOop),
+            pushRemappableOop: Some(pharo_vm_sys::pushRemappableOop),
+            becomewith: Some(pharo_vm_sys::becomewith),
+            byteSwapped: Some(pharo_vm_sys::byteSwapped),
+            failed: Some(pharo_vm_sys::failed),
+            fullGC: Some(pharo_vm_sys::fullGC),
+            primitiveFail: Some(pharo_vm_sys::primitiveFail),
+            signalSemaphoreWithIndex: Some(crate::external_semaphores::signalSemaphoreWithIndex),
+            success: Some(pharo_vm_sys::success),
+            superclassOf: Some(pharo_vm_sys::superclassOf),
+            loadBitBltFrom: Some(pharo_vm_sys::loadBitBltFrom),
+            copyBits: Some(pharo_vm_sys::copyBits),
+            copyBitsFromtoat: Some(pharo_vm_sys::copyBitsFromtoat),
+            classExternalAddress: Some(pharo_vm_sys::classExternalAddress),
+            ioLoadModuleOfLength: Some(crate::named_prims::ioLoadModuleOfLength),
+            ioLoadSymbolOfLengthFromModule: Some(
+                crate::named_prims::ioLoadSymbolOfLengthFromModule,
+            ),
+            isInMemory: Some(pharo_vm_sys::isInMemory),
+            signed32BitIntegerFor: Some(pharo_vm_sys::signed32BitIntegerFor),
+            signed32BitValueOf: Some(pharo_vm_sys::signed32BitValueOf),
+            includesBehaviorThatOf: Some(pharo_vm_sys::includesBehaviorThatOf),
+            classLargeNegativeInteger: Some(pharo_vm_sys::classLargeNegativeInteger),
+            ioLoadFunctionFrom: Some(crate::named_prims::ioLoadFunctionFrom),
+            ioMicroMSecs: Some(pharo_vm_sys::ioMicroMSecs),
+            positive64BitIntegerFor: Some(pharo_vm_sys::positive64BitIntegerFor),
+            positive64BitValueOf: Some(pharo_vm_sys::positive64BitValueOf),
+            signed64BitIntegerFor: Some(pharo_vm_sys::signed64BitIntegerFor),
+            signed64BitValueOf: Some(pharo_vm_sys::signed64BitValueOf),
+            isArray: Some(pharo_vm_sys::isArray),
+            forceInterruptCheck: Some(pharo_vm_sys::forceInterruptCheck),
+            fetchLong32ofObject: Some(pharo_vm_sys::fetchLong32ofObject),
+            getThisSessionID: Some(pharo_vm_sys::getThisSessionID),
+            ioFilenamefromStringofLengthresolveAliases: Some(
+                pharo_vm_sys::ioFilenamefromStringofLengthresolveAliases,
+            ),
+            vmEndianness: Some(pharo_vm_sys::vmEndianness),
+            addGCRoot: Some(pharo_vm_sys::addGCRoot),
+            removeGCRoot: Some(pharo_vm_sys::removeGCRoot),
+            primitiveFailFor: Some(pharo_vm_sys::primitiveFailFor),
+            isOopImmutable: Some(pharo_vm_sys::isOopImmutable),
+            isOopMutable: Some(pharo_vm_sys::isOopMutable),
+            methodReturnBool: Some(pharo_vm_sys::methodReturnBool),
+            methodReturnFloat: Some(pharo_vm_sys::methodReturnFloat),
+            methodReturnInteger: Some(pharo_vm_sys::methodReturnInteger),
+            methodReturnReceiver: Some(pharo_vm_sys::methodReturnReceiver),
+            methodReturnString: Some(pharo_vm_sys::methodReturnString),
+            methodReturnValue: Some(pharo_vm_sys::methodReturnValue),
+            topRemappableOop: Some(pharo_vm_sys::topRemappableOop),
+            addHighPriorityTickee: Some(pharo_vm_sys::addHighPriorityTickee),
+            addSynchronousTickee: Some(pharo_vm_sys::addSynchronousTickee),
+            utcMicroseconds: Some(pharo_vm_sys::ioUTCMicroseconds),
+            tenuringIncrementalGC: Some(pharo_vm_sys::tenuringIncrementalGC),
+            isYoung: Some(pharo_vm_sys::isYoung),
+            isKindOfClass: Some(pharo_vm_sys::isKindOfClass),
+            primitiveErrorTable: Some(pharo_vm_sys::primitiveErrorTable),
+            primitiveFailureCode: Some(pharo_vm_sys::primitiveFailureCode),
+            instanceSizeOf: Some(pharo_vm_sys::instanceSizeOf),
+            signedMachineIntegerValueOf: Some(pharo_vm_sys::signedMachineIntegerValueOf),
+            stackSignedMachineIntegerValue: Some(pharo_vm_sys::stackSignedMachineIntegerValue),
+            positiveMachineIntegerValueOf: Some(pharo_vm_sys::positiveMachineIntegerValueOf),
+            stackPositiveMachineIntegerValue: Some(pharo_vm_sys::stackPositiveMachineIntegerValue),
+            cStringOrNullFor: Some(pharo_vm_sys::cStringOrNullFor),
+            signalNoResume: Some(pharo_vm_sys::signalNoResume),
+            isImmediate: Some(pharo_vm_sys::isImmediate),
+            characterObjectOf: Some(pharo_vm_sys::characterObjectOf),
+            characterValueOf: Some(pharo_vm_sys::characterValueOf),
+            isCharacterObject: Some(pharo_vm_sys::isCharacterObject),
+            isCharacterValue: Some(pharo_vm_sys::isCharacterValue),
+            isPinned: Some(pharo_vm_sys::isPinned),
+            pinObject: Some(pharo_vm_sys::pinObject),
+            unpinObject: Some(pharo_vm_sys::unpinObject),
+            statNumGCs: Some(pharo_vm_sys::statNumGCs),
+            stringForCString: Some(pharo_vm_sys::stringForCString),
+            primitiveFailForOSError: Some(pharo_vm_sys::primitiveFailForOSError),
+            isBooleanObject: Some(pharo_vm_sys::isBooleanObject),
+            isPositiveMachineIntegerObject: Some(pharo_vm_sys::isPositiveMachineIntegerObject),
+            ptEnterInterpreterFromCallback: Some(pharo_vm_sys::ptEnterInterpreterFromCallback),
+            ptExitInterpreterToCallback: Some(pharo_vm_sys::ptExitInterpreterToCallback),
+            isNonImmediate: Some(pharo_vm_sys::isNonImmediate),
+            platformSemaphoreNew: Some(crate::platform_semaphore::platform_semaphore_new),
+            scheduleInMainThread: None,
+            waitOnExternalSemaphoreIndex: Some(
+                crate::external_semaphores::waitOnExternalSemaphoreIndex,
+            ),
+            // Declared by virtualMachine.h and never assigned by the C; see the
+            // module docs.
+            showDisplayBitsLeftTopRightBottom: None,
+            sendInvokeCallbackStackRegistersJmpbuf: None,
+            reestablishContextPriorToCallback: None,
+        }));
 
         VM
     }
@@ -303,12 +313,13 @@ pub unsafe extern "C" fn sqGetInterpreterProxy() -> *mut VirtualMachine {
 /// image load, 3 reports the run. Nothing prints unless phase 1 ran, which is
 /// how `-timePhases` stays off by default.
 ///
-/// # Safety
-///
-/// Not reentrant: it keeps the start time in a static. Only the start-up path
-/// calls it.
+/// Prints through `libc::printf`, not `print!`: the C build writes these
+/// lines through C stdio, and differential testing compares the interleaved
+/// output, so they must share a buffer with the rest of it.
 #[no_mangle]
-pub unsafe extern "C" fn printPhaseTime(phase: c_int) {
+pub extern "C" fn printPhaseTime(phase: c_int) {
+    use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
     /// Microseconds in a second, the C's `m`.
     const M: UsqLong = 1_000_000;
     /// Microseconds in a millisecond, the C's `k`.
@@ -320,30 +331,36 @@ pub unsafe extern "C" fn printPhaseTime(phase: c_int) {
         fn asctime(tm: *const libc::tm) -> *mut core::ffi::c_char;
     }
 
-    static mut PRINT_TIMES: bool = false;
-    static mut LAST_USECS: UsqLong = 0;
+    // Relaxed atomics: only the start-up path calls this, so there is no
+    // ordering to establish; the atomics just keep the statics safe to touch.
+    static PRINT_TIMES: AtomicBool = AtomicBool::new(false);
+    static LAST_USECS: AtomicU64 = AtomicU64::new(0);
 
-    // SAFETY: the statics are only touched here, on the start-up path, and
-    // every call below takes scalars or a literal format string.
-    unsafe {
-        if phase == 1 {
-            PRINT_TIMES = true;
+    if phase == 1 {
+        PRINT_TIMES.store(true, Ordering::Relaxed);
+        // SAFETY: time with a null out-parameter, localtime on the result,
+        // printf with a literal format string and asctime's static buffer.
+        unsafe {
             let now = libc::time(core::ptr::null_mut());
             let tm = libc::localtime(&now);
             // asctime answers a static buffer ending in a newline, which is
             // why the format string has none.
             libc::printf(c"started at %s".as_ptr(), asctime(tm));
-            LAST_USECS = pharo_vm_sys::ioUTCMicrosecondsNow();
-            return;
+            LAST_USECS.store(pharo_vm_sys::ioUTCMicrosecondsNow(), Ordering::Relaxed);
         }
+        return;
+    }
 
-        if !PRINT_TIMES {
-            return;
-        }
+    if !PRINT_TIMES.load(Ordering::Relaxed) {
+        return;
+    }
 
+    // SAFETY: interpreter time query and printf with literal format strings
+    // and scalar arguments.
+    unsafe {
         let now_usecs = pharo_vm_sys::ioUTCMicrosecondsNow();
-        let usecs = now_usecs.wrapping_sub(LAST_USECS);
-        LAST_USECS = now_usecs;
+        let usecs = now_usecs.wrapping_sub(LAST_USECS.load(Ordering::Relaxed));
+        LAST_USECS.store(now_usecs, Ordering::Relaxed);
 
         // Seconds and milliseconds, the milliseconds rounded to nearest.
         let secs = (usecs / M) as core::ffi::c_ulong;
@@ -354,7 +371,7 @@ pub unsafe extern "C" fn printPhaseTime(phase: c_int) {
         }
         if phase == 3 {
             // Cleared so an error during exit does not print twice.
-            PRINT_TIMES = false;
+            PRINT_TIMES.store(false, Ordering::Relaxed);
             if usecs >= 1u64 << 32 {
                 libc::printf(c"ran for a long time\n".as_ptr());
             } else {
@@ -1022,7 +1039,7 @@ mod tests {
     /// Reads the proxy, building it if this is the first test to ask.
     ///
     /// Safe to call from several tests at once only because the table is
-    /// idempotent: the loser of a race leaks one calloc and both answers are
+    /// idempotent: the loser of a race leaks one table and both answers are
     /// equally valid. Production has a single caller.
     fn proxy() -> &'static VirtualMachine {
         // SAFETY: every function stored is a plain pointer; nothing is called.

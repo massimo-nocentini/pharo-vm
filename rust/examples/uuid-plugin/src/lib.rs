@@ -79,9 +79,7 @@ fn make_v4() -> PrimResult<[u8; UUID_LEN]> {
 /// reach for `getrandom` and support Windows.
 fn random_bytes() -> PrimResult<[u8; UUID_LEN]> {
     let mut bytes = [0u8; UUID_LEN];
-    File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut bytes))
-        .map_err(|_| PrimErr::OSError)?;
+    File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes))?;
     Ok(bytes)
 }
 

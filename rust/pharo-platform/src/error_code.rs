@@ -4,26 +4,28 @@
 //! prove the build integration end to end (CMake -> cargo -> bindgen ->
 //! staticlib -> link -> ABI check) rather than for its own sake.
 
-use core::ffi::c_char;
+use core::ffi::{c_char, CStr};
 pub use pharo_vm_sys::VMErrorCode;
 
-/// The strings the C implementation returned, as NUL-terminated literals so
-/// they can be handed out as `const char*` with no allocation and a `'static`
-/// lifetime.
+/// The strings the C implementation returned, as `&CStr` literals so they can
+/// be handed out as `const char*` with no allocation, a `'static` lifetime,
+/// and compiler-checked NUL termination.
 ///
 /// `SUCCESS` reads "sucess" because `src/errorCode.c` did. It is a typo, and
 /// nothing depends on it (it only ever reaches a log line), but fixing it here
 /// would make this commit a behaviour change and spoil the before/after
 /// comparison this wave exists to establish. Fix it separately.
 mod strings {
-    pub const SUCCESS: &[u8] = b"sucess\0";
-    pub const OUT_OF_MEMORY: &[u8] = b"out of memory.\0";
-    pub const NULL_POINTER: &[u8] = b"null pointer.\0";
-    pub const EXIT_WITH_SUCCESS: &[u8] = b"exit with success.\0";
-    pub const INVALID_PARAMETER: &[u8] = b"invalid parameter.\0";
+    use core::ffi::CStr;
+
+    pub const SUCCESS: &CStr = c"sucess";
+    pub const OUT_OF_MEMORY: &CStr = c"out of memory.";
+    pub const NULL_POINTER: &CStr = c"null pointer.";
+    pub const EXIT_WITH_SUCCESS: &CStr = c"exit with success.";
+    pub const INVALID_PARAMETER: &CStr = c"invalid parameter.";
     /// Yes, "null" where the constant says "invalid": also copied verbatim.
-    pub const INVALID_PARAMETER_VALUE: &[u8] = b"null parameter value.\0";
-    pub const GENERIC: &[u8] = b"generic error\0";
+    pub const INVALID_PARAMETER_VALUE: &CStr = c"null parameter value.";
+    pub const GENERIC: &CStr = c"generic error";
 }
 
 /// Returns a human-readable description of `error_code`.
@@ -38,7 +40,7 @@ mod strings {
 /// of the process.
 #[no_mangle]
 pub extern "C" fn vm_error_code_to_string(error_code: VMErrorCode) -> *const c_char {
-    let s: &[u8] = match error_code {
+    let s: &'static CStr = match error_code {
         VMErrorCode::VM_SUCCESS => strings::SUCCESS,
         VMErrorCode::VM_ERROR_OUT_OF_MEMORY => strings::OUT_OF_MEMORY,
         VMErrorCode::VM_ERROR_NULL_POINTER => strings::NULL_POINTER,
@@ -50,7 +52,7 @@ pub extern "C" fn vm_error_code_to_string(error_code: VMErrorCode) -> *const c_c
         VMErrorCode::VM_ERROR => strings::GENERIC,
         _ => strings::GENERIC,
     };
-    s.as_ptr().cast::<c_char>()
+    s.as_ptr()
 }
 
 #[cfg(test)]

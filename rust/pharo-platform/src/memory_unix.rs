@@ -47,6 +47,7 @@
 //! expect.
 
 use core::ffi::{c_int, c_ulong, c_void, CStr};
+use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
 use pharo_vm_sys::{sqInt, usqInt};
 
@@ -55,13 +56,14 @@ use crate::logging::{self, site, LOG_DEBUG, LOG_ERROR};
 /// The `__FILENAME__` the C compiler would have produced for this file.
 const C_FILE: &CStr = c"src/unix/memoryUnix.c";
 
-/// Exported and initialised to 0; see the module docs.
+/// Exported and initialised to 0; see the module docs. `AtomicI32` has the
+/// size and alignment of a C `int`, so the symbol's ABI is unchanged.
 #[no_mangle]
-pub static mut overallocateMemory: c_int = 0;
+pub static overallocateMemory: AtomicI32 = AtomicI32::new(0);
 
 /// Exported; the C never assigned it either.
 #[no_mangle]
-pub static mut mmapErrno: c_int = 0;
+pub static mmapErrno: AtomicI32 = AtomicI32::new(0);
 
 /// The C's `devZero`, passed to `mmap` as the fd. Ignored under `MAP_ANON`.
 const DEV_ZERO: c_int = -1;
@@ -69,10 +71,12 @@ const DEV_ZERO: c_int = -1;
 /// `pageSize` and `pageMask`, the C's two file statics.
 ///
 /// Set by [`allocateJITMemory`] and [`sqAllocateMemory`], read by the
-/// `mprotect` pair. Plain statics rather than atomics because the C used plain
-/// `sqInt`/`usqInt`, and every writer runs on the VM thread during startup.
-static mut PAGE_SIZE: usize = 0;
-static mut PAGE_MASK: usize = 0;
+/// `mprotect` pair. Relaxed atomics: the C used plain `sqInt`/`usqInt` loads
+/// and stores, and every writer runs on the VM thread during startup, so no
+/// ordering is needed -- but the accesses stay defined even if another thread
+/// ever reads them.
+static PAGE_SIZE: AtomicUsize = AtomicUsize::new(0);
+static PAGE_MASK: AtomicUsize = AtomicUsize::new(0);
 
 /// `MAP_PROT` from the C.
 const MAP_PROT: c_int = libc::PROT_READ | libc::PROT_WRITE;
@@ -87,8 +91,7 @@ const MAP_FLAGS: c_int = libc::MAP_ANON | libc::MAP_PRIVATE;
 /// Reads `PAGE_MASK`.
 #[inline]
 fn page_mask() -> usize {
-    // SAFETY: a plain static written only during startup on the VM thread.
-    unsafe { PAGE_MASK }
+    PAGE_MASK.load(Ordering::Relaxed)
 }
 
 /// The C's `valign(x)` and `roundDownToPage(v)`, which are the same operation.
@@ -104,11 +107,8 @@ fn align_down(value: usize) -> usize {
 fn refresh_page_size() -> usize {
     // SAFETY: sysconf with a valid name; _SC_PAGESIZE cannot fail.
     let size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
-    // SAFETY: plain statics, written on the VM thread during startup.
-    unsafe {
-        PAGE_SIZE = size;
-        PAGE_MASK = !(size - 1);
-    }
+    PAGE_SIZE.store(size, Ordering::Relaxed);
+    PAGE_MASK.store(!(size - 1), Ordering::Relaxed);
     size
 }
 

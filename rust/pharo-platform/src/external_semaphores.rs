@@ -62,7 +62,7 @@
 //!   something else widens the tide.
 
 use core::ffi::{c_int, c_void};
-use core::sync::atomic::{fence, AtomicBool, AtomicI32, AtomicI64, Ordering};
+use core::sync::atomic::{fence, AtomicBool, AtomicI32, AtomicI64, AtomicPtr, Ordering};
 
 use pharo_vm_sys::{sqInt, Semaphore};
 
@@ -82,12 +82,13 @@ extern "C" {
 /// One external semaphore's counters.
 ///
 /// `requests` is incremented by signallers under the mutex; `responses` only
-/// by the VM thread.
+/// by the VM thread. Atomics because signaller and VM thread genuinely access
+/// an entry concurrently -- the C relied on `volatile` word accesses; the
+/// atomics say the same thing in defined terms, at the same cost.
 #[repr(C)]
-#[derive(Clone, Copy)]
 struct SignalRequest {
-    requests: c_int,
-    responses: c_int,
+    requests: AtomicI32,
+    responses: AtomicI32,
 }
 
 /// The VM's own thread, set by `vm_init` in [`crate::client`] on worker-thread
@@ -103,10 +104,10 @@ pub static mut ioVMThread: libc::pthread_t = 0;
 pub static mut requestMutex: *mut Semaphore = core::ptr::null_mut();
 
 /// The request table. Null until [`ioInitExternalSemaphores`] runs.
-static mut SIGNAL_REQUESTS: *mut SignalRequest = core::ptr::null_mut();
+static SIGNAL_REQUESTS: AtomicPtr<SignalRequest> = AtomicPtr::new(core::ptr::null_mut());
 
 /// How many entries [`SIGNAL_REQUESTS`] has.
-static mut NUM_SIGNAL_REQUESTS: c_int = 0;
+static NUM_SIGNAL_REQUESTS: AtomicI32 = AtomicI32::new(0);
 
 /// Set when at least one request is pending. `sqInt`-sized, as in the C.
 static CHECK_SIGNAL_REQUESTS: AtomicI64 = AtomicI64::new(0);
@@ -116,12 +117,59 @@ const MAX_TIDE: i32 = (u32::MAX >> 1) as i32;
 /// See [`MAX_TIDE`].
 const MIN_TIDE: i32 = -1;
 
+/// One low/high watermark pair. See the module docs on why there are two.
+struct TidePair {
+    low: AtomicI32,
+    high: AtomicI32,
+}
+
+impl TidePair {
+    /// A pair holding the empty interval.
+    const fn empty() -> Self {
+        Self {
+            low: AtomicI32::new(MAX_TIDE),
+            high: AtomicI32::new(MIN_TIDE),
+        }
+    }
+
+    /// Widens the interval to include `index`.
+    ///
+    /// `fetch_min`/`fetch_max` where the C loaded, compared and stored; under
+    /// the request mutex the observable behaviour is identical.
+    fn widen(&self, index: i32) {
+        self.low.fetch_min(index, Ordering::Relaxed);
+        self.high.fetch_max(index, Ordering::Relaxed);
+    }
+
+    /// Resets the interval to empty.
+    fn reset(&self) {
+        self.low.store(MAX_TIDE, Ordering::Relaxed);
+        self.high.store(MIN_TIDE, Ordering::Relaxed);
+    }
+
+    /// Reads the interval as `(low, high)`.
+    fn read(&self) -> (i32, i32) {
+        (
+            self.low.load(Ordering::Relaxed),
+            self.high.load(Ordering::Relaxed),
+        )
+    }
+}
+
+/// The two watermark pairs, A then B.
+static TIDES: [TidePair; 2] = [TidePair::empty(), TidePair::empty()];
+
 /// Which tide pair signallers are currently widening.
 static USE_TIDE_A: AtomicBool = AtomicBool::new(true);
-static LOW_TIDE_A: AtomicI32 = AtomicI32::new(MAX_TIDE);
-static HIGH_TIDE_A: AtomicI32 = AtomicI32::new(MIN_TIDE);
-static LOW_TIDE_B: AtomicI32 = AtomicI32::new(MAX_TIDE);
-static HIGH_TIDE_B: AtomicI32 = AtomicI32::new(MIN_TIDE);
+
+/// The pair signallers are widening right now.
+fn active_tide() -> &'static TidePair {
+    if USE_TIDE_A.load(Ordering::Relaxed) {
+        &TIDES[0]
+    } else {
+        &TIDES[1]
+    }
+}
 
 /// `INITIAL_EXT_SEM_TABLE_SIZE` from `sq.h`.
 const INITIAL_EXT_SEM_TABLE_SIZE: c_int = 256;
@@ -162,25 +210,58 @@ fn unblock_signals(set: &libc::sigset_t) {
     }
 }
 
-/// Takes the request mutex.
-fn lock_requests() {
-    // SAFETY: requestMutex is set by ioInitExternalSemaphores before any
-    // signaller can run, and its vtable slots are always filled.
-    unsafe {
-        let mutex = requestMutex;
-        if let Some(wait) = (*mutex).wait {
-            wait(mutex);
-        }
+/// Masks [`blocked_signal_set`] for the guard's lifetime.
+///
+/// The drop runs `SIG_UNBLOCK`, with the caveat documented on
+/// [`unblock_signals`].
+struct SignalBlock {
+    set: libc::sigset_t,
+}
+
+impl SignalBlock {
+    fn new() -> Self {
+        let set = blocked_signal_set();
+        block_signals(&set);
+        Self { set }
     }
 }
 
-/// Releases the request mutex.
-fn unlock_requests() {
-    // SAFETY: as above.
-    unsafe {
-        let mutex = requestMutex;
-        if let Some(signal) = (*mutex).signal {
-            signal(mutex);
+impl Drop for SignalBlock {
+    fn drop(&mut self) {
+        unblock_signals(&self.set);
+    }
+}
+
+/// Holds the request mutex for the guard's lifetime.
+///
+/// Declared *after* a [`SignalBlock`] so that drop order releases the mutex
+/// first and unmasks the signals second, as the C's explicit sequence did --
+/// and so that every return path releases both, which the C repeated by hand
+/// at each early return.
+struct RequestLock;
+
+impl RequestLock {
+    fn acquire() -> Self {
+        // SAFETY: requestMutex is set by ioInitExternalSemaphores before any
+        // signaller can run, and its vtable slots are always filled.
+        unsafe {
+            let mutex = requestMutex;
+            if let Some(wait) = (*mutex).wait {
+                wait(mutex);
+            }
+        }
+        Self
+    }
+}
+
+impl Drop for RequestLock {
+    fn drop(&mut self) {
+        // SAFETY: as in acquire.
+        unsafe {
+            let mutex = requestMutex;
+            if let Some(signal) = (*mutex).signal {
+                signal(mutex);
+            }
         }
     }
 }
@@ -188,8 +269,7 @@ fn unlock_requests() {
 /// The size of the request table.
 #[no_mangle]
 pub extern "C" fn ioGetMaxExtSemTableSize() -> c_int {
-    // SAFETY: read on the VM thread; only grown at start-up.
-    unsafe { NUM_SIGNAL_REQUESTS }
+    NUM_SIGNAL_REQUESTS.load(Ordering::Relaxed)
 }
 
 /// Grows the request table to at least `n` entries, rounded up to a power of
@@ -205,30 +285,32 @@ pub extern "C" fn ioGetMaxExtSemTableSize() -> c_int {
 /// Must run on the VM thread with no signaller active.
 #[no_mangle]
 pub unsafe extern "C" fn ioSetMaxExtSemTableSize(n: c_int) {
-    // SAFETY: delegated to the caller.
+    let old = NUM_SIGNAL_REQUESTS.load(Ordering::Relaxed);
+    if old >= n {
+        return;
+    }
+
+    // `1 << highBit(n - 1)`, which rounds up to a power of two.
+    // SAFETY: highBit takes and answers a plain integer.
+    let sz = 1i64 << unsafe { highBit((n - 1) as pharo_vm_sys::usqInt) };
+    let sz = sz as c_int;
+    debug_assert!(sz >= n, "the rounded size must not be smaller");
+
+    let entry = core::mem::size_of::<SignalRequest>();
+    // SAFETY: delegated to the caller -- no signaller is active -- and the
+    // grown tail is zeroed before the new count is published.
     unsafe {
-        if NUM_SIGNAL_REQUESTS >= n {
-            return;
+        let old_table = SIGNAL_REQUESTS.load(Ordering::Relaxed);
+        let grown =
+            libc::realloc(old_table.cast::<c_void>(), sz as usize * entry).cast::<SignalRequest>();
+        if grown.is_null() {
+            // The C did not check realloc and would have memset through the
+            // null; dying cleanly is the safe spelling of the same outcome.
+            libc::abort();
         }
-
-        // `1 << highBit(n - 1)`, which rounds up to a power of two.
-        let sz = 1i64 << highBit((n - 1) as pharo_vm_sys::usqInt);
-        let sz = sz as c_int;
-        debug_assert!(sz >= n, "the rounded size must not be smaller");
-
-        let entry = core::mem::size_of::<SignalRequest>();
-        let grown = libc::realloc(SIGNAL_REQUESTS.cast::<c_void>(), sz as usize * entry)
-            .cast::<SignalRequest>();
-        // The C did not check realloc either; a null here would take the
-        // memset below down with it.
-        SIGNAL_REQUESTS = grown;
-
-        core::ptr::write_bytes(
-            SIGNAL_REQUESTS.add(NUM_SIGNAL_REQUESTS as usize),
-            0,
-            (sz - NUM_SIGNAL_REQUESTS) as usize,
-        );
-        NUM_SIGNAL_REQUESTS = sz;
+        core::ptr::write_bytes(grown.add(old as usize), 0, (sz - old) as usize);
+        SIGNAL_REQUESTS.store(grown, Ordering::Relaxed);
+        NUM_SIGNAL_REQUESTS.store(sz, Ordering::Relaxed);
     }
 }
 
@@ -259,55 +341,32 @@ pub unsafe extern "C" fn ioInitExternalSemaphores() {
 pub unsafe extern "C" fn signalSemaphoreWithIndex(index: sqInt) -> sqInt {
     let i = index - 1;
 
-    let blocked = blocked_signal_set();
-
     debug_assert!(
-        // SAFETY: read on any thread; only grown at start-up.
-        index >= 0 && index <= unsafe { NUM_SIGNAL_REQUESTS } as sqInt,
+        index >= 0 && index <= NUM_SIGNAL_REQUESTS.load(Ordering::Relaxed) as sqInt,
         "external semaphore index out of range"
     );
 
-    // SAFETY: NUM_SIGNAL_REQUESTS is only grown at start-up.
-    if i < 0 || i >= unsafe { NUM_SIGNAL_REQUESTS } as sqInt {
+    if i < 0 || i >= NUM_SIGNAL_REQUESTS.load(Ordering::Relaxed) as sqInt {
         return 0;
     }
     let i = i as usize;
 
-    block_signals(&blocked);
-    lock_requests();
+    {
+        let _signals = SignalBlock::new();
+        let _lock = RequestLock::acquire();
 
-    fence(Ordering::SeqCst);
+        fence(Ordering::SeqCst);
 
-    // SAFETY: `i` is in range and the mutex is held, so no other signaller is
-    // touching this entry; the VM thread only writes `responses`.
-    unsafe {
-        let entry = SIGNAL_REQUESTS.add(i);
-        (*entry).requests += 1;
-    }
+        // SAFETY: `i` is in range, and the entry's counters are atomics.
+        let entry = unsafe { &*SIGNAL_REQUESTS.load(Ordering::Relaxed).add(i) };
+        entry.requests.fetch_add(1, Ordering::Relaxed);
 
-    let index_i32 = i as i32;
-    if USE_TIDE_A.load(Ordering::Relaxed) {
-        if LOW_TIDE_A.load(Ordering::Relaxed) > index_i32 {
-            LOW_TIDE_A.store(index_i32, Ordering::Relaxed);
-        }
-        if HIGH_TIDE_A.load(Ordering::Relaxed) < index_i32 {
-            HIGH_TIDE_A.store(index_i32, Ordering::Relaxed);
-        }
-    } else {
-        if LOW_TIDE_B.load(Ordering::Relaxed) > index_i32 {
-            LOW_TIDE_B.store(index_i32, Ordering::Relaxed);
-        }
-        if HIGH_TIDE_B.load(Ordering::Relaxed) < index_i32 {
-            HIGH_TIDE_B.store(index_i32, Ordering::Relaxed);
-        }
-    }
+        active_tide().widen(i as i32);
 
-    CHECK_SIGNAL_REQUESTS.store(1, Ordering::Relaxed);
-    // SAFETY: tells the interpreter to take its interrupt check soon.
-    unsafe { pharo_vm_sys::forceInterruptCheck() };
-
-    unlock_requests();
-    unblock_signals(&blocked);
+        CHECK_SIGNAL_REQUESTS.store(1, Ordering::Relaxed);
+        // SAFETY: tells the interpreter to take its interrupt check soon.
+        unsafe { pharo_vm_sys::forceInterruptCheck() };
+    } // Mutex released, then signals unmasked.
 
     // SAFETY: wakes the poll loop so the check happens promptly.
     unsafe { aioInterruptPoll() };
@@ -332,14 +391,12 @@ pub extern "C" fn isPendingSemaphores() -> c_int {
 /// Must run on the VM thread. [`ioInitExternalSemaphores`] must have run.
 #[no_mangle]
 pub unsafe extern "C" fn doSignalExternalSemaphores(external_semaphore_table_size: sqInt) -> sqInt {
-    let blocked = blocked_signal_set();
-    block_signals(&blocked);
-    lock_requests();
+    let _signals = SignalBlock::new();
+    let lock = RequestLock::acquire();
 
     fence(Ordering::SeqCst);
     if CHECK_SIGNAL_REQUESTS.load(Ordering::Relaxed) == 0 {
-        unlock_requests();
-        unblock_signals(&blocked);
+        // The guards release the mutex and unmask, in that order.
         return 0;
     }
 
@@ -349,52 +406,41 @@ pub unsafe extern "C" fn doSignalExternalSemaphores(external_semaphore_table_siz
     fence(Ordering::SeqCst);
     // Reset the pair that is about to become unused, flip, then read the pair
     // that was in use. See the module docs on why the order matters.
-    let (low_tide, high_tide) = if USE_TIDE_A.load(Ordering::Relaxed) {
-        LOW_TIDE_B.store(MAX_TIDE, Ordering::Relaxed);
-        HIGH_TIDE_B.store(MIN_TIDE, Ordering::Relaxed);
-        USE_TIDE_A.store(false, Ordering::Relaxed);
-        fence(Ordering::SeqCst);
-        (
-            LOW_TIDE_A.load(Ordering::Relaxed),
-            HIGH_TIDE_A.load(Ordering::Relaxed),
-        )
+    let use_a = USE_TIDE_A.load(Ordering::Relaxed);
+    let (in_use, becoming_unused) = if use_a {
+        (&TIDES[0], &TIDES[1])
     } else {
-        LOW_TIDE_A.store(MAX_TIDE, Ordering::Relaxed);
-        HIGH_TIDE_A.store(MIN_TIDE, Ordering::Relaxed);
-        USE_TIDE_A.store(true, Ordering::Relaxed);
-        fence(Ordering::SeqCst);
-        (
-            LOW_TIDE_B.load(Ordering::Relaxed),
-            HIGH_TIDE_B.load(Ordering::Relaxed),
-        )
+        (&TIDES[1], &TIDES[0])
     };
+    becoming_unused.reset();
+    USE_TIDE_A.store(!use_a, Ordering::Relaxed);
+    fence(Ordering::SeqCst);
+    let (low_tide, high_tide) = in_use.read();
     fence(Ordering::SeqCst);
 
-    unlock_requests();
+    // The mutex is released before the delivery loop, but the signals stay
+    // masked until after it -- the C's exact sequence.
+    drop(lock);
 
     let mut high_tide = high_tide;
     if high_tide as sqInt >= external_semaphore_table_size {
         high_tide = (external_semaphore_table_size - 1) as i32;
     }
 
-    // SAFETY: every index walked lies inside the table: `low_tide` is only
-    // ever set to an index a signaller validated, and `high_tide` is clamped
-    // above.
-    unsafe {
-        let mut i = low_tide;
-        while i <= high_tide {
-            let entry = SIGNAL_REQUESTS.add(i as usize);
-            while (*entry).responses != (*entry).requests {
-                if pharo_vm_sys::doSignalSemaphoreWithIndex((i + 1) as sqInt) != 0 {
-                    switched = 1;
-                }
-                (*entry).responses += 1;
+    let table = SIGNAL_REQUESTS.load(Ordering::Relaxed);
+    for i in low_tide..=high_tide {
+        // SAFETY: every index walked lies inside the table: `low_tide` is
+        // only ever set to an index a signaller validated, and `high_tide` is
+        // clamped above.
+        let entry = unsafe { &*table.add(i as usize) };
+        while entry.responses.load(Ordering::Relaxed) != entry.requests.load(Ordering::Relaxed) {
+            // SAFETY: an interpreter entry point, on the VM thread.
+            if unsafe { pharo_vm_sys::doSignalSemaphoreWithIndex((i + 1) as sqInt) } != 0 {
+                switched = 1;
             }
-            i += 1;
+            entry.responses.fetch_add(1, Ordering::Relaxed);
         }
     }
-
-    unblock_signals(&blocked);
 
     switched
 }

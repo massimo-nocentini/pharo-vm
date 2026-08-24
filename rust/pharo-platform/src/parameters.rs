@@ -85,120 +85,127 @@ fn vm_name() -> &'static str {
 }
 
 /// What a parameter does when it is seen.
-type ProcessFn = fn(Option<&CStr>, &mut VMParameters) -> VMErrorCode;
+///
+/// The arity lives in the type: a [`Handler::Value`] handler is handed the
+/// value that [`process_vm_options`] guarantees is present, so no handler has
+/// to re-check a missing argument that cannot happen, and a flag handler takes
+/// no value at all.
+enum Handler {
+    /// Recognised only so the split between VM and image arguments knows this
+    /// is a VM option; the image reads it from the vector afterwards.
+    ImageOnly,
+    /// A flag that consumes no value.
+    Flag(fn(&mut VMParameters) -> Result<(), VMErrorCode>),
+    /// An option that consumes a value, attached or following.
+    Value(fn(&CStr, &mut VMParameters) -> Result<(), VMErrorCode>),
+}
 
 /// One row of the option table.
 struct ParameterSpec {
     /// The option's name, without leading dashes.
     name: &'static str,
-    /// Whether it consumes a value.
-    has_argument: bool,
-    /// What to do with it, or `None` for options only the image cares about.
-    function: Option<ProcessFn>,
+    /// What to do with it.
+    handler: Handler,
+}
+
+impl ParameterSpec {
+    /// Whether the option consumes a value.
+    fn takes_value(&self) -> bool {
+        matches!(self.handler, Handler::Value(_))
+    }
 }
 
 /// The VM's options, in the C's order.
-///
-/// `headless`, `interactive` and `vm-display-null` have no function: they are
-/// recognised here only so that the split between VM and image arguments knows
-/// they are VM options, and the image reads them from the vector afterwards.
 const PARAMETER_SPECS: &[ParameterSpec] = &[
     ParameterSpec {
         name: "headless",
-        has_argument: false,
-        function: None,
+        handler: Handler::ImageOnly,
     },
     #[cfg(pharo_vm_in_worker_thread)]
     ParameterSpec {
         name: "worker",
-        has_argument: false,
-        function: Some(process_worker),
+        handler: Handler::Flag(process_worker),
     },
     // For pharo-ui scripts.
     ParameterSpec {
         name: "interactive",
-        has_argument: false,
-        function: None,
+        handler: Handler::ImageOnly,
     },
     // For Smalltalk CI.
     ParameterSpec {
         name: "vm-display-null",
-        has_argument: false,
-        function: None,
+        handler: Handler::ImageOnly,
     },
     ParameterSpec {
         name: "help",
-        has_argument: false,
-        function: Some(process_help),
+        handler: Handler::Flag(process_help),
     },
     ParameterSpec {
         name: "h",
-        has_argument: false,
-        function: Some(process_help),
+        handler: Handler::Flag(process_help),
     },
     ParameterSpec {
         name: "version",
-        has_argument: false,
-        function: Some(process_print_version),
+        handler: Handler::Flag(process_print_version),
     },
     ParameterSpec {
         name: "logLevel",
-        has_argument: true,
-        function: Some(process_log_level),
+        handler: Handler::Value(process_log_level),
     },
     ParameterSpec {
         name: "stackPageSize",
-        has_argument: true,
-        function: Some(process_stack_page_size),
+        handler: Handler::Value(process_stack_page_size),
     },
     ParameterSpec {
         name: "maxFramesToLog",
-        has_argument: true,
-        function: Some(process_max_frames_to_print),
+        handler: Handler::Value(process_max_frames_to_print),
     },
     ParameterSpec {
         name: "maxOldSpaceSize",
-        has_argument: true,
-        function: Some(process_max_old_space_size),
+        handler: Handler::Value(process_max_old_space_size),
     },
     ParameterSpec {
         name: "codeSize",
-        has_argument: true,
-        function: Some(process_max_code_space_size),
+        handler: Handler::Value(process_max_code_space_size),
     },
     ParameterSpec {
         name: "edenSize",
-        has_argument: true,
-        function: Some(process_eden_size),
+        handler: Handler::Value(process_eden_size),
     },
     ParameterSpec {
         name: "minPermSpaceSize",
-        has_argument: true,
-        function: Some(process_min_perm_space_size),
+        handler: Handler::Value(process_min_perm_space_size),
     },
     ParameterSpec {
         name: "maxSlotsForNewSpaceAlloc",
-        has_argument: true,
-        function: Some(process_max_slots_for_new_space_alloc),
+        handler: Handler::Value(process_max_slots_for_new_space_alloc),
     },
     ParameterSpec {
         name: "workingDirectory",
-        has_argument: true,
-        function: Some(process_working_directory),
+        handler: Handler::Value(process_working_directory),
     },
     ParameterSpec {
         name: "avoidSearchingSegmentsWithPinnedObjects",
-        has_argument: false,
-        function: Some(process_avoid_searching_segments_with_pinned_objects),
+        handler: Handler::Flag(process_avoid_searching_segments_with_pinned_objects),
     },
     // The XCode debugger passes this one.
     #[cfg(target_vendor = "apple")]
     ParameterSpec {
         name: "NSDocumentRevisionsDebugMode",
-        has_argument: false,
-        function: None,
+        handler: Handler::ImageOnly,
     },
 ];
+
+/// Converts the C convention -- `VM_SUCCESS` or an error code -- into a
+/// `Result`, so the internal helpers can propagate failure with `?`. The
+/// `extern "C"` entry points convert back at the boundary.
+fn ok(code: VMErrorCode) -> Result<(), VMErrorCode> {
+    if code == VMErrorCode::VM_SUCCESS {
+        Ok(())
+    } else {
+        Err(code)
+    }
+}
 
 /// Where an image is looked for, relative to the VM's directory.
 const IMAGE_SEARCH_SUFFIXES: &[&str] = &[
@@ -289,7 +296,7 @@ fn find_parameter_arity(parameter: &[u8]) -> usize {
     }
 
     match find_parameter_with_name(rest) {
-        Some(spec) if spec.has_argument => 1,
+        Some(spec) if spec.takes_value() => 1,
         _ => 0,
     }
 }
@@ -526,24 +533,23 @@ unsafe fn fill_up_image_name(
     argc: c_int,
     argv: *const *const c_char,
     parameters: *mut VMParameters,
-) -> VMErrorCode {
+) {
     // SAFETY: delegated to the caller.
     unsafe {
         let index = find_image_name_index(argc, argv);
         if index == argc {
-            return VMErrorCode::VM_SUCCESS;
+            return;
         }
         let args = argv_slice(argc, argv);
         let named = arg_bytes(args[index as usize]);
         if named == b"--" {
-            return VMErrorCode::VM_SUCCESS;
+            return;
         }
 
         (*parameters).imageFileName = strdup_bytes(named);
         (*parameters).isDefaultImage = false;
         (*parameters).isInteractiveSession = false;
     }
-    VMErrorCode::VM_SUCCESS
 }
 
 /// Splits `argv` into the VM's parameters and the image's.
@@ -555,7 +561,7 @@ unsafe fn split_vm_and_image_parameters(
     argc: c_int,
     argv: *const *const c_char,
     parameters: *mut VMParameters,
-) -> VMErrorCode {
+) -> Result<(), VMErrorCode> {
     // SAFETY: delegated to the caller.
     unsafe {
         let image_name_index = find_image_name_index(argc, argv);
@@ -565,46 +571,39 @@ unsafe fn split_vm_and_image_parameters(
         if (*parameters).imageFileName.is_null() {
             let args = argv_slice(argc, argv);
             let executable = args.first().copied().unwrap_or(core::ptr::null());
-            let error = vm_find_startup_image(executable, parameters);
-            if error != VMErrorCode::VM_SUCCESS {
-                return error;
-            }
+            ok(vm_find_startup_image(executable, parameters))?;
             (*parameters).isInteractiveSession = !is_in_console() && (*parameters).isDefaultImage;
         }
 
-        let error = vm_parameter_vector_insert_from(
-            core::ptr::addr_of_mut!((*parameters).imageParameters),
-            number_of_image_parameters as u32,
-            argv.add(image_name_index as usize + 1),
-        );
-        if error != VMErrorCode::VM_SUCCESS {
+        // A failed insert releases what the earlier ones allocated -- one
+        // cleanup site instead of the C's copy at every early return. (A
+        // failed vm_find_startup_image above does *not* destroy, exactly as
+        // in the C.)
+        let inserted = (|| {
+            ok(vm_parameter_vector_insert_from(
+                core::ptr::addr_of_mut!((*parameters).imageParameters),
+                number_of_image_parameters as u32,
+                argv.add(image_name_index as usize + 1),
+            ))?;
+            ok(vm_parameter_vector_insert_from(
+                core::ptr::addr_of_mut!((*parameters).vmParameters),
+                number_of_vm_parameters as u32,
+                argv,
+            ))?;
+            // Always appended: see the ALWAYS_INTERACTIVE note in the module
+            // docs.
+            let extra: *const c_char = c"--headless".as_ptr();
+            ok(vm_parameter_vector_insert_from(
+                core::ptr::addr_of_mut!((*parameters).vmParameters),
+                1,
+                &extra,
+            ))
+        })();
+        if inserted.is_err() {
             vm_parameters_destroy(parameters);
-            return error;
         }
-
-        let error = vm_parameter_vector_insert_from(
-            core::ptr::addr_of_mut!((*parameters).vmParameters),
-            number_of_vm_parameters as u32,
-            argv,
-        );
-        if error != VMErrorCode::VM_SUCCESS {
-            vm_parameters_destroy(parameters);
-            return error;
-        }
-
-        // Always appended: see the ALWAYS_INTERACTIVE note in the module docs.
-        let extra: *const c_char = c"--headless".as_ptr();
-        let error = vm_parameter_vector_insert_from(
-            core::ptr::addr_of_mut!((*parameters).vmParameters),
-            1,
-            &extra,
-        );
-        if error != VMErrorCode::VM_SUCCESS {
-            vm_parameters_destroy(parameters);
-            return error;
-        }
+        inserted
     }
-    VMErrorCode::VM_SUCCESS
 }
 
 /// Logs one parameter vector, name then each element.
@@ -767,14 +766,14 @@ pub unsafe extern "C" fn vm_printUsageTo(out: *mut c_void) {
 }
 
 /// Reports a rejected option value and prints the usage to stderr.
-fn reject(message: &'static CStr, line: c_int, function: &'static CStr, value: Option<&CStr>) {
+fn reject(message: &'static CStr, line: c_int, function: &'static CStr, value: &CStr) {
     // SAFETY: the format string has one %s and the value is NUL-terminated.
     unsafe {
         logging::message_one_string(
             LOG_ERROR,
             message,
             site!(C_FILE, function, line),
-            value.map_or(core::ptr::null(), CStr::as_ptr),
+            value.as_ptr(),
         );
         vm_printUsageTo(c_stderr().cast::<c_void>());
     }
@@ -896,10 +895,7 @@ mod c_api {
 
 /// Parses `value` as a base-10 integer the way `strtol` does: leading digits
 /// only, and 0 when there are none.
-fn strtol_like(value: Option<&CStr>) -> c_longlong {
-    let Some(value) = value else {
-        return 0;
-    };
+fn strtol_like(value: &CStr) -> c_longlong {
     let Ok(text) = value.to_str() else {
         return 0;
     };
@@ -908,12 +904,14 @@ fn strtol_like(value: Option<&CStr>) -> c_longlong {
         Some(rest) => (-1, rest),
         None => (1, text.strip_prefix('+').unwrap_or(text)),
     };
-    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    sign * digits.parse::<c_longlong>().unwrap_or(0)
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    sign * rest[..end].parse::<c_longlong>().unwrap_or(0)
 }
 
 /// `--logLevel=<n>`. Rejects 0 along with anything unparseable.
-fn process_log_level(value: Option<&CStr>, _params: &mut VMParameters) -> VMErrorCode {
+fn process_log_level(value: &CStr, _params: &mut VMParameters) -> Result<(), VMErrorCode> {
     let int_value = strtol_like(value) as c_int;
     if int_value == 0 {
         reject(
@@ -922,20 +920,19 @@ fn process_log_level(value: Option<&CStr>, _params: &mut VMParameters) -> VMErro
             c"processLogLevelOption",
             value,
         );
-        return VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE;
+        return Err(VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE);
     }
     c_api::log_level(int_value);
-    VMErrorCode::VM_SUCCESS
+    Ok(())
 }
 
 /// Parses a byte size for an option, or `None` if it is rejected.
 ///
 /// `truncate_to_int` reproduces the C's `int intValue = parseByteSize(...)`
 /// for the two options that declared an `int`.
-fn byte_size_option(value: Option<&CStr>, truncate_to_int: bool) -> Option<c_longlong> {
-    let raw = value?;
-    // SAFETY: `raw` is a live CStr for the duration of the call.
-    let parsed = unsafe { parseByteSize(raw.as_ptr()) };
+fn byte_size_option(value: &CStr, truncate_to_int: bool) -> Option<c_longlong> {
+    // SAFETY: `value` is a live CStr for the duration of the call.
+    let parsed = unsafe { parseByteSize(value.as_ptr()) };
     let parsed = if truncate_to_int {
         c_longlong::from(parsed as c_int)
     } else {
@@ -949,11 +946,11 @@ fn byte_size_option(value: Option<&CStr>, truncate_to_int: bool) -> Option<c_lon
 }
 
 /// `--stackPageSize=<size>`.
-fn process_stack_page_size(value: Option<&CStr>, params: &mut VMParameters) -> VMErrorCode {
+fn process_stack_page_size(value: &CStr, params: &mut VMParameters) -> Result<(), VMErrorCode> {
     match byte_size_option(value, true) {
         Some(size) => {
             params.stackPageSize = size as c_int;
-            VMErrorCode::VM_SUCCESS
+            Ok(())
         }
         None => {
             reject(
@@ -962,13 +959,13 @@ fn process_stack_page_size(value: Option<&CStr>, params: &mut VMParameters) -> V
                 c"processStackPageSizeOption",
                 value,
             );
-            VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE
+            Err(VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE)
         }
     }
 }
 
 /// `--maxFramesToLog=<n>`. Counted, not a byte size.
-fn process_max_frames_to_print(value: Option<&CStr>, params: &mut VMParameters) -> VMErrorCode {
+fn process_max_frames_to_print(value: &CStr, params: &mut VMParameters) -> Result<(), VMErrorCode> {
     let int_value = strtol_like(value) as c_int;
     if int_value < 0 {
         reject(
@@ -977,18 +974,18 @@ fn process_max_frames_to_print(value: Option<&CStr>, params: &mut VMParameters) 
             c"processMaxFramesToPrintOption",
             value,
         );
-        return VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE;
+        return Err(VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE);
     }
     params.maxStackFramesToPrint = int_value;
-    VMErrorCode::VM_SUCCESS
+    Ok(())
 }
 
 /// `--maxOldSpaceSize=<size>`.
-fn process_max_old_space_size(value: Option<&CStr>, params: &mut VMParameters) -> VMErrorCode {
+fn process_max_old_space_size(value: &CStr, params: &mut VMParameters) -> Result<(), VMErrorCode> {
     match byte_size_option(value, false) {
         Some(size) => {
             params.maxOldSpaceSize = size;
-            VMErrorCode::VM_SUCCESS
+            Ok(())
         }
         None => {
             reject(
@@ -997,17 +994,17 @@ fn process_max_old_space_size(value: Option<&CStr>, params: &mut VMParameters) -
                 c"processMaxOldSpaceSizeOption",
                 value,
             );
-            VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE
+            Err(VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE)
         }
     }
 }
 
 /// `--codeSize=<size>`.
-fn process_max_code_space_size(value: Option<&CStr>, params: &mut VMParameters) -> VMErrorCode {
+fn process_max_code_space_size(value: &CStr, params: &mut VMParameters) -> Result<(), VMErrorCode> {
     match byte_size_option(value, false) {
         Some(size) => {
             params.maxCodeSize = size;
-            VMErrorCode::VM_SUCCESS
+            Ok(())
         }
         None => {
             reject(
@@ -1016,17 +1013,17 @@ fn process_max_code_space_size(value: Option<&CStr>, params: &mut VMParameters) 
                 c"processMaxCodeSpaceSizeOption",
                 value,
             );
-            VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE
+            Err(VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE)
         }
     }
 }
 
 /// `--minPermSpaceSize=<size>`.
-fn process_min_perm_space_size(value: Option<&CStr>, params: &mut VMParameters) -> VMErrorCode {
+fn process_min_perm_space_size(value: &CStr, params: &mut VMParameters) -> Result<(), VMErrorCode> {
     match byte_size_option(value, false) {
         Some(size) => {
             params.minPermSpaceSize = size;
-            VMErrorCode::VM_SUCCESS
+            Ok(())
         }
         None => {
             reject(
@@ -1035,16 +1032,16 @@ fn process_min_perm_space_size(value: Option<&CStr>, params: &mut VMParameters) 
                 c"processMinPermSpaceSizeOption",
                 value,
             );
-            VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE
+            Err(VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE)
         }
     }
 }
 
 /// `--maxSlotsForNewSpaceAlloc=<words>`. A plain count, so no k/M/G suffix.
 fn process_max_slots_for_new_space_alloc(
-    value: Option<&CStr>,
+    value: &CStr,
     params: &mut VMParameters,
-) -> VMErrorCode {
+) -> Result<(), VMErrorCode> {
     let int_value = strtol_like(value);
     if int_value < 0 {
         reject(
@@ -1053,35 +1050,34 @@ fn process_max_slots_for_new_space_alloc(
             c"processMaxSlotsForNewSpaceAlloc",
             value,
         );
-        return VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE;
+        return Err(VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE);
     }
     params.maxSlotsForNewSpaceAlloc = int_value;
-    VMErrorCode::VM_SUCCESS
+    Ok(())
 }
 
 /// `--workingDirectory=<dir>`. Reports a failed `chdir` but does not fail.
-fn process_working_directory(value: Option<&CStr>, _params: &mut VMParameters) -> VMErrorCode {
+fn process_working_directory(value: &CStr, _params: &mut VMParameters) -> Result<(), VMErrorCode> {
     // SAFETY: the value is a live NUL-terminated string.
     unsafe {
         logging::message_one_string(
             LOG_DEBUG,
             c"Changing working directory to: %s",
             site!(C_FILE, c"processWorkingDirectory", 594),
-            value.map_or(core::ptr::null(), CStr::as_ptr),
+            value.as_ptr(),
         );
-        let path = value.map_or(core::ptr::null(), CStr::as_ptr);
-        if !path.is_null() && libc::chdir(path) == -1 {
+        if libc::chdir(value.as_ptr()) == -1 {
             logging::error_from_errno(
                 c"Error changing directory",
                 site!(C_FILE, c"processWorkingDirectory", 596),
             );
         }
     }
-    VMErrorCode::VM_SUCCESS
+    Ok(())
 }
 
 /// `--edenSize=<size>`, capped at 1 Gb.
-fn process_eden_size(value: Option<&CStr>, params: &mut VMParameters) -> VMErrorCode {
+fn process_eden_size(value: &CStr, params: &mut VMParameters) -> Result<(), VMErrorCode> {
     let Some(size) = byte_size_option(value, false) else {
         reject(
             c"Invalid option for eden: %s\n",
@@ -1089,7 +1085,7 @@ fn process_eden_size(value: Option<&CStr>, params: &mut VMParameters) -> VMError
             c"processEdenSizeOption",
             value,
         );
-        return VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE;
+        return Err(VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE);
     };
 
     // The cap comes from #nextCorpseOffset: in the scavenger.
@@ -1100,45 +1096,44 @@ fn process_eden_size(value: Option<&CStr>, params: &mut VMParameters) -> VMError
             c"processEdenSizeOption",
             value,
         );
-        return VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE;
+        return Err(VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE);
     }
 
     params.edenSize = size;
-    VMErrorCode::VM_SUCCESS
+    Ok(())
 }
 
 /// `--worker`.
 #[cfg(pharo_vm_in_worker_thread)]
-fn process_worker(_value: Option<&CStr>, params: &mut VMParameters) -> VMErrorCode {
+fn process_worker(params: &mut VMParameters) -> Result<(), VMErrorCode> {
     params.isWorker = true;
-    VMErrorCode::VM_SUCCESS
+    Ok(())
 }
 
 /// `--help` and `-h`. Answers the "stop, successfully" code.
-fn process_help(_value: Option<&CStr>, _params: &mut VMParameters) -> VMErrorCode {
+fn process_help(_params: &mut VMParameters) -> Result<(), VMErrorCode> {
     // SAFETY: stdout is a valid stream.
     unsafe { vm_printUsageTo(c_streams::out().cast::<c_void>()) };
-    VMErrorCode::VM_ERROR_EXIT_WITH_SUCCESS
+    Err(VMErrorCode::VM_ERROR_EXIT_WITH_SUCCESS)
 }
 
 /// `--version`.
-fn process_print_version(_value: Option<&CStr>, _params: &mut VMParameters) -> VMErrorCode {
+fn process_print_version(_params: &mut VMParameters) -> Result<(), VMErrorCode> {
     // SAFETY: both answer 'static NUL-terminated strings, and printf is given
     // one %s each time.
     unsafe {
         libc::printf(c"%s\n".as_ptr(), c_api::vm_version());
         libc::printf(c"Built from: %s\n".as_ptr(), c_api::source_version());
     }
-    VMErrorCode::VM_ERROR_EXIT_WITH_SUCCESS
+    Err(VMErrorCode::VM_ERROR_EXIT_WITH_SUCCESS)
 }
 
 /// `--avoidSearchingSegmentsWithPinnedObjects`.
 fn process_avoid_searching_segments_with_pinned_objects(
-    _value: Option<&CStr>,
     params: &mut VMParameters,
-) -> VMErrorCode {
+) -> Result<(), VMErrorCode> {
     params.avoidSearchingSegmentsWithPinnedObjects = true;
-    VMErrorCode::VM_SUCCESS
+    Ok(())
 }
 
 /// Walks the VM's parameter vector and runs each option's handler.
@@ -1148,7 +1143,7 @@ fn process_avoid_searching_segments_with_pinned_objects(
 /// # Safety
 ///
 /// `parameters` must be initialised.
-unsafe fn process_vm_options(parameters: *mut VMParameters) -> VMErrorCode {
+unsafe fn process_vm_options(parameters: *mut VMParameters) -> Result<(), VMErrorCode> {
     // SAFETY: delegated to the caller.
     unsafe {
         let vector = &(*parameters).vmParameters;
@@ -1198,40 +1193,38 @@ unsafe fn process_vm_options(parameters: *mut VMParameters) -> VMErrorCode {
                     param,
                 );
                 vm_printUsageTo(c_stderr().cast::<c_void>());
-                return VMErrorCode::VM_ERROR_INVALID_PARAMETER;
+                return Err(VMErrorCode::VM_ERROR_INVALID_PARAMETER);
             };
 
-            if spec.has_argument {
-                if argument_value.is_none() && i + 1 < count {
-                    i += 1;
-                    let next = *vector.parameters.add(i);
-                    if !next.is_null() {
-                        argument_value = Some(CStr::from_ptr(next));
+            match spec.handler {
+                Handler::ImageOnly => {}
+                Handler::Flag(function) => function(&mut *parameters)?,
+                Handler::Value(function) => {
+                    if argument_value.is_none() && i + 1 < count {
+                        i += 1;
+                        let next = *vector.parameters.add(i);
+                        if !next.is_null() {
+                            argument_value = Some(CStr::from_ptr(next));
+                        }
                     }
-                }
-                if argument_value.is_none() {
-                    logging::message_one_string(
-                        LOG_ERROR,
-                        c"VM parameter %s requires a value\n",
-                        site!(C_FILE, c"processVMOptions", 724),
-                        param,
-                    );
-                    vm_printUsageTo(c_stderr().cast::<c_void>());
-                    return VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE;
-                }
-            }
-
-            if let Some(function) = spec.function {
-                let error = function(argument_value, &mut *parameters);
-                if error != VMErrorCode::VM_SUCCESS {
-                    return error;
+                    let Some(value) = argument_value else {
+                        logging::message_one_string(
+                            LOG_ERROR,
+                            c"VM parameter %s requires a value\n",
+                            site!(C_FILE, c"processVMOptions", 724),
+                            param,
+                        );
+                        vm_printUsageTo(c_stderr().cast::<c_void>());
+                        return Err(VMErrorCode::VM_ERROR_INVALID_PARAMETER_VALUE);
+                    };
+                    function(value, &mut *parameters)?;
                 }
             }
 
             i += 1;
         }
     }
-    VMErrorCode::VM_SUCCESS
+    Ok(())
 }
 
 /// Parses `argv` into `parameters`.
@@ -1247,16 +1240,26 @@ pub unsafe extern "C" fn vm_parameters_parse(
     parameters: *mut VMParameters,
 ) -> VMErrorCode {
     // SAFETY: delegated to the caller.
-    unsafe {
-        let error = fill_up_image_name(argc, argv, parameters);
-        if error != VMErrorCode::VM_SUCCESS {
-            return error;
-        }
+    match unsafe { parse_into(argc, argv, parameters) } {
+        Ok(()) => VMErrorCode::VM_SUCCESS,
+        Err(error) => error,
+    }
+}
 
-        let error = split_vm_and_image_parameters(argc, argv, parameters);
-        if error != VMErrorCode::VM_SUCCESS {
-            return error;
-        }
+/// [`vm_parameters_parse`], in the crate's internal `Result` convention.
+///
+/// # Safety
+///
+/// As [`vm_parameters_parse`].
+unsafe fn parse_into(
+    argc: c_int,
+    argv: *const *const c_char,
+    parameters: *mut VMParameters,
+) -> Result<(), VMErrorCode> {
+    // SAFETY: delegated to the caller.
+    unsafe {
+        fill_up_image_name(argc, argv, parameters);
+        split_vm_and_image_parameters(argc, argv, parameters)?;
 
         // The VM's own location, from argv[0].
         let mut full_path_buffer = [0u8; FILENAME_MAX];
@@ -1271,15 +1274,14 @@ pub unsafe extern "C" fn vm_parameters_parse(
         // straight to setVMPath, which strcpy'd from it.
         c_api::set_vm_path(full_path);
 
-        let error = process_vm_options(parameters);
-        if error != VMErrorCode::VM_SUCCESS {
+        if let Err(error) = process_vm_options(parameters) {
             vm_parameters_destroy(parameters);
-            return error;
+            return Err(error);
         }
 
         log_parameters(parameters);
     }
-    VMErrorCode::VM_SUCCESS
+    Ok(())
 }
 
 /// Zeroes a [`VMParameters`] before parsing into it.
@@ -1431,17 +1433,16 @@ mod tests {
 
     #[test]
     fn strtol_like_matches_the_c_conversion() {
-        assert_eq!(strtol_like(Some(c"4")), 4);
-        assert_eq!(strtol_like(Some(c"-4")), -4);
-        assert_eq!(strtol_like(Some(c"+4")), 4);
-        assert_eq!(strtol_like(Some(c"  7")), 7);
+        assert_eq!(strtol_like(c"4"), 4);
+        assert_eq!(strtol_like(c"-4"), -4);
+        assert_eq!(strtol_like(c"+4"), 4);
+        assert_eq!(strtol_like(c"  7"), 7);
         // Trailing junk stops the scan rather than failing it.
-        assert_eq!(strtol_like(Some(c"4abc")), 4);
+        assert_eq!(strtol_like(c"4abc"), 4);
         // No digits at all is 0, which is why --logLevel rejects 0 and
         // garbage with the same message.
-        assert_eq!(strtol_like(Some(c"abc")), 0);
-        assert_eq!(strtol_like(Some(c"")), 0);
-        assert_eq!(strtol_like(None), 0);
+        assert_eq!(strtol_like(c"abc"), 0);
+        assert_eq!(strtol_like(c""), 0);
     }
 
     #[test]
@@ -1465,7 +1466,7 @@ mod tests {
         // are deliberately undocumented -- but anything that takes a value
         // should be findable by a reader of --help.
         let text = usage_text();
-        for spec in PARAMETER_SPECS.iter().filter(|s| s.has_argument) {
+        for spec in PARAMETER_SPECS.iter().filter(|s| s.takes_value()) {
             assert!(
                 text.contains(&format!("--{}", spec.name)),
                 "--{} takes a value but is not in the usage text",

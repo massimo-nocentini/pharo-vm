@@ -2,7 +2,7 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, ItemFn, LitInt, LitStr};
+use syn::{parse_macro_input, FnArg, ItemFn, LitInt, LitStr};
 
 /// Everything the attribute accepts.
 struct Args {
@@ -40,7 +40,19 @@ impl Args {
 /// Exports a Rust function as a Pharo named primitive.
 ///
 /// The annotated function takes `&Interp` and returns `PrimResult<T>` for any
-/// `T: IntoReturn`. The macro emits, alongside it:
+/// `T: IntoReturn`. It may also declare its Smalltalk arguments as further
+/// typed parameters (any `StackArg` types, up to eight):
+///
+/// ```ignore
+/// #[pharo_primitive]
+/// fn primitiveScale(vm: &Interp, form: Oop, factor: sqInt) -> PrimResult<()> { .. }
+/// ```
+///
+/// The generated wrapper then checks the argument count and extracts each
+/// argument -- in declaration order, first Smalltalk argument first -- before
+/// the body runs, exactly as `vm.args::<(Oop, sqInt)>()` would.
+///
+/// The macro emits, alongside the function:
 ///
 /// * `extern "C" fn <name>()` -- the symbol the VM looks up, which fetches the
 ///   stored proxy, runs the body inside `catch_unwind`, and translates the
@@ -88,13 +100,27 @@ pub fn pharo_primitive(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
     let func = parse_macro_input!(item as ItemFn);
 
-    if func.sig.inputs.len() != 1 {
+    if func.sig.inputs.is_empty() {
         return syn::Error::new_spanned(
             &func.sig,
-            "a primitive takes exactly one argument, the `&Interp`",
+            "a primitive takes the `&Interp` first, then any typed arguments",
         )
         .to_compile_error()
         .into();
+    }
+    let mut extra_types = Vec::new();
+    for input in func.sig.inputs.iter().skip(1) {
+        match input {
+            FnArg::Typed(pat) => extra_types.push((*pat.ty).clone()),
+            FnArg::Receiver(receiver) => {
+                return syn::Error::new_spanned(
+                    receiver,
+                    "a primitive is a free function, not a method",
+                )
+                .to_compile_error()
+                .into();
+            }
+        }
     }
     if let Some(asyncness) = func.sig.asyncness {
         return syn::Error::new_spanned(
@@ -130,13 +156,30 @@ pub fn pharo_primitive(attr: TokenStream, item: TokenStream) -> TokenStream {
         "Accessor depth for `{export_name}`, read by the VM when retrying a failed primitive."
     );
 
+    // With typed extra parameters, wrap the body in a closure that extracts
+    // them through `StackArgs` first; a bare `(&Interp)` body is passed as is.
+    let body = if extra_types.is_empty() {
+        quote!(#inner_ident)
+    } else {
+        let bindings: Vec<_> = (0..extra_types.len())
+            .map(|i| format_ident!("arg{i}"))
+            .collect();
+        quote! {
+            |vm: &::pharo_vm_plugin::Interp| {
+                let (#(#bindings,)*): (#(#extra_types,)*) =
+                    ::pharo_vm_plugin::StackArgs::from_stack_args(vm)?;
+                #inner_ident(vm, #(#bindings),*)
+            }
+        }
+    };
+
     quote! {
         #func
 
         #[doc = #doc_export]
         #[no_mangle]
         pub extern "C" fn #export_ident() -> ::pharo_vm_plugin::sqInt {
-            ::pharo_vm_plugin::__private::run_primitive(#inner_ident)
+            ::pharo_vm_plugin::__private::run_primitive(#body)
         }
 
         #[doc = #doc_depth]

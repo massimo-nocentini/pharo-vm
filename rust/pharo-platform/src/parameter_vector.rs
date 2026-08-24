@@ -46,7 +46,7 @@ pub unsafe extern "C" fn vm_parameter_vector_destroy(
     };
     if !vector.parameters.is_null() {
         // SAFETY: allocated by calloc in insert_from, or by the C it replaces.
-        unsafe { libc_free(vector.parameters.cast()) };
+        unsafe { libc::free(vector.parameters.cast()) };
     }
     vector.parameters = core::ptr::null_mut();
     vector.count = 0;
@@ -89,7 +89,7 @@ pub unsafe extern "C" fn vm_parameter_vector_insert_from(
     };
 
     // SAFETY: calloc zeroes, which supplies the NULL terminator.
-    let new_data = unsafe { libc_calloc(slots, core::mem::size_of::<*const c_char>()) };
+    let new_data = unsafe { libc::calloc(slots, core::mem::size_of::<*const c_char>()) };
     if new_data.is_null() {
         return VMErrorCode::VM_ERROR_OUT_OF_MEMORY;
     }
@@ -112,7 +112,7 @@ pub unsafe extern "C" fn vm_parameter_vector_insert_from(
             count as usize,
         );
         // Free of null is a no-op, as the C noted.
-        libc_free(vector.parameters.cast());
+        libc::free(vector.parameters.cast());
     }
 
     vector.count = new_count;
@@ -151,13 +151,6 @@ pub unsafe extern "C" fn vm_parameter_vector_has_element(
         }
     }
     false
-}
-
-extern "C" {
-    #[link_name = "calloc"]
-    fn libc_calloc(count: usize, size: usize) -> *mut core::ffi::c_void;
-    #[link_name = "free"]
-    fn libc_free(p: *mut core::ffi::c_void);
 }
 
 #[cfg(test)]

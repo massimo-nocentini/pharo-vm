@@ -18,9 +18,6 @@
 //! plugin how big the blob should be and hands the same blob back
 //! (`isValidDecompressionStruct:` checks nothing but the size).
 
-use core::mem::size_of;
-use core::ptr::{addr_of, addr_of_mut};
-
 /// Identifies our blob, so a stale or foreign one is rejected rather than
 /// misread. "RJPG" in ASCII.
 const MAGIC: u32 = 0x524A_5047;
@@ -29,7 +26,10 @@ const MAGIC: u32 = 0x524A_5047;
 const VERSION: u32 = 1;
 
 /// Decompression state: what `readHeader` learned, for `readImage` to use.
-#[repr(C)]
+///
+/// Serialized field by field as native-endian `u32` words -- the layout the
+/// old `#[repr(C)]` struct copy produced -- so the wire format is fixed by
+/// `to_bytes`/`from_bytes` below, not by the compiler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Decompress {
     magic: u32,
@@ -49,6 +49,12 @@ pub struct Decompress {
 }
 
 impl Decompress {
+    /// Words in the serialized blob: the six fields plus the reserve.
+    const WORDS: usize = 16;
+
+    /// Bytes in the serialized blob.
+    const SIZE: usize = Self::WORDS * 4;
+
     /// An empty blob: the state after a failed or absent header read.
     #[must_use]
     pub const fn empty() -> Self {
@@ -83,43 +89,62 @@ impl Decompress {
     /// different plugin build, or one the image never filled in.
     #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < size_of::<Self>() {
+        if bytes.len() < Self::SIZE {
             return None;
         }
-        let mut state = Self::empty();
-        // SAFETY: `state` is POD and we have just checked `bytes` is at least
-        // as long as it. Copied bytewise because the image gives no alignment
-        // guarantee beyond the object header.
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                addr_of_mut!(state).cast::<u8>(),
-                size_of::<Self>(),
-            );
-        }
+        let words = read_words::<{ Self::WORDS }>(bytes);
+        let mut state = Self {
+            magic: words[0],
+            version: words[1],
+            width: words[2],
+            height: words[3],
+            num_components: words[4],
+            out_components: words[5],
+            _reserved: [0; 10],
+        };
+        state._reserved.copy_from_slice(&words[6..]);
         (state.magic == MAGIC && state.version == VERSION).then_some(state)
     }
 
     /// The blob's bytes, for writing back into the image's ByteArray.
     #[must_use]
-    pub fn to_bytes(self) -> [u8; size_of::<Self>()] {
-        let mut out = [0u8; size_of::<Self>()];
-        // SAFETY: `Self` is POD with no padding that matters; copying its
-        // representation out is well defined.
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                addr_of!(self).cast::<u8>(),
-                out.as_mut_ptr(),
-                size_of::<Self>(),
-            );
-        }
+    pub fn to_bytes(self) -> [u8; Self::SIZE] {
+        let mut words = [0u32; Self::WORDS];
+        words[0] = self.magic;
+        words[1] = self.version;
+        words[2] = self.width;
+        words[3] = self.height;
+        words[4] = self.num_components;
+        words[5] = self.out_components;
+        words[6..].copy_from_slice(&self._reserved);
+        let mut out = [0u8; Self::SIZE];
+        write_words(&words, &mut out);
         out
     }
 
     /// Size the image should allocate for a decompression blob.
     #[must_use]
     pub const fn blob_size() -> usize {
-        size_of::<Self>()
+        Self::SIZE
+    }
+}
+
+/// Reads `N` native-endian words from the front of `bytes`, which must hold
+/// at least `4 * N` of them.
+fn read_words<const N: usize>(bytes: &[u8]) -> [u32; N] {
+    let mut words = [0u32; N];
+    for (word, chunk) in words.iter_mut().zip(bytes.chunks_exact(4)) {
+        *word = u32::from_ne_bytes(chunk.try_into().expect("chunks_exact yields 4 bytes"));
+    }
+    words
+}
+
+/// Writes words into `out` as native-endian bytes; the caller sizes `out` to
+/// four bytes per word.
+fn write_words(words: &[u32], out: &mut [u8]) {
+    debug_assert_eq!(out.len(), 4 * words.len());
+    for (chunk, word) in out.chunks_exact_mut(4).zip(words) {
+        chunk.copy_from_slice(&word.to_ne_bytes());
     }
 }
 
@@ -129,7 +154,6 @@ impl Decompress {
 /// came back through `longjmp`. Rust returns `Result`, so there is nothing to
 /// keep -- but the image still allocates one and passes it in, and
 /// `isValidErrorMessageStruct:` still checks its size, so the shape stays.
-#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct ErrorMgr {
     magic: u32,
@@ -140,10 +164,16 @@ pub struct ErrorMgr {
 }
 
 impl ErrorMgr {
+    /// Words in the serialized record: the three fields plus the reserve.
+    const WORDS: usize = 8;
+
+    /// Bytes in the serialized record.
+    const SIZE: usize = Self::WORDS * 4;
+
     /// Size the image should allocate for an error record.
     #[must_use]
     pub const fn blob_size() -> usize {
-        size_of::<Self>()
+        Self::SIZE
     }
 
     /// A record marking success or failure.
@@ -159,16 +189,14 @@ impl ErrorMgr {
 
     /// The record's bytes.
     #[must_use]
-    pub fn to_bytes(self) -> [u8; size_of::<Self>()] {
-        let mut out = [0u8; size_of::<Self>()];
-        // SAFETY: POD, as above.
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                addr_of!(self).cast::<u8>(),
-                out.as_mut_ptr(),
-                size_of::<Self>(),
-            );
-        }
+    pub fn to_bytes(self) -> [u8; Self::SIZE] {
+        let mut words = [0u32; Self::WORDS];
+        words[0] = self.magic;
+        words[1] = self.version;
+        words[2] = self.failed;
+        words[3..].copy_from_slice(&self._reserved);
+        let mut out = [0u8; Self::SIZE];
+        write_words(&words, &mut out);
         out
     }
 }
@@ -203,10 +231,11 @@ mod tests {
         assert_eq!(s.height, 0);
     }
 
-    /// The image allocates exactly what we ask for, so the two must agree.
+    /// The image allocates exactly what we ask for, so the serialized bytes
+    /// must fill it precisely.
     #[test]
-    fn blob_sizes_match_the_structs() {
-        assert_eq!(Decompress::blob_size(), size_of::<Decompress>());
-        assert_eq!(ErrorMgr::blob_size(), size_of::<ErrorMgr>());
+    fn blob_sizes_match_the_serialized_bytes() {
+        assert_eq!(Decompress::blob_size(), Decompress::empty().to_bytes().len());
+        assert_eq!(ErrorMgr::blob_size(), ErrorMgr::new(false).to_bytes().len());
     }
 }

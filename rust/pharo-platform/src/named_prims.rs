@@ -44,9 +44,10 @@
 //!   function would crash it. No generated table has one.
 //! * `ioUnloadModule` notifies every *other* module through `moduleUnloaded`,
 //!   including modules loaded for the FFI, which never had an initialiser run.
-//! * `intrinsicsModule` is created by adding it to the module list and then
-//!   immediately resetting the list head, so it is deliberately unreachable
-//!   from the chain and can never be unloaded.
+//! * `intrinsicsModule` was created in the C by adding it to the module list
+//!   and then immediately resetting the list head, so it was deliberately
+//!   unreachable from the chain and could never be unloaded. Here it is a
+//!   separate registry field, which states the same invariant directly.
 
 use core::ffi::{c_char, c_void, CStr};
 
@@ -139,13 +140,14 @@ fn pointer_for_oop(oop: usqInt) -> *mut c_char {
     oop as *mut c_char
 }
 
-/// An entry in the loaded-module chain.
+/// One loaded module.
 ///
-/// The C used a flexible array member (`char name[1]` over-allocated); here
-/// the name is a boxed `CStr`, which keeps [`ioListLoadedModule`]'s returned
-/// pointer stable for as long as the entry lives.
+/// The C used an intrusive linked list of over-allocated nodes (`char name[1]`
+/// with a `next` pointer); here each entry is a plain struct owned by the
+/// [`ModuleRegistry`]. Entries stay boxed so the addresses handed out -- the
+/// `*mut ModuleEntry` the lookups pass around, and the name pointer
+/// [`ioListLoadedModule`] returns -- remain stable while the entry lives.
 struct ModuleEntry {
-    next: *mut ModuleEntry,
     handle: *mut c_void,
     ffi_loaded: sqInt,
     name: Box<CStr>,
@@ -158,15 +160,45 @@ impl ModuleEntry {
     }
 }
 
-/// The synthetic module standing for everything statically linked in. Its
-/// handle is null.
-static mut INTRINSICS_MODULE: *mut ModuleEntry = core::ptr::null_mut();
+/// Everything the C kept in file statics: the loaded-module chain, the
+/// intrinsics entry, and the loading switch.
+///
+/// The C's chain was head-pushed, linearly searched and single-removed, which
+/// is exactly a `Vec` newest-first. The intrinsics entry was created on the
+/// chain and immediately unlinked so it could never be unloaded; the separate
+/// field says the same thing directly.
+struct ModuleRegistry {
+    /// Loaded modules, most recent first. Does not include the intrinsics.
+    ///
+    /// Boxed on purpose, against `clippy::vec_box`: the addresses handed out
+    /// as `*mut ModuleEntry` must survive the `Vec` reallocating.
+    #[allow(clippy::vec_box)]
+    modules: Vec<Box<ModuleEntry>>,
+    /// The synthetic module standing for everything statically linked in. Its
+    /// handle is null.
+    intrinsics: Option<Box<ModuleEntry>>,
+    /// Cleared for the rest of the session by [`ioDisableModuleLoading`].
+    loading_enabled: bool,
+}
 
-/// Head of the loaded-module chain. Does not include the intrinsics.
-static mut FIRST_MODULE: *mut ModuleEntry = core::ptr::null_mut();
+// SAFETY: the raw handles inside are dlopen handles and function addresses --
+// plain data owned by the process, not by any thread.
+unsafe impl Send for ModuleRegistry {}
 
-/// Cleared for the rest of the session by [`ioDisableModuleLoading`].
-static mut MODULE_LOADING_ENABLED: bool = true;
+/// The registry. In the C all access was VM-thread-only and unlocked; the
+/// mutex formalises the serialisation the tests already needed, and is held
+/// only around list operations, never across a call into plugin code (a
+/// plugin initialiser may re-enter the loader).
+static REGISTRY: std::sync::Mutex<ModuleRegistry> = std::sync::Mutex::new(ModuleRegistry {
+    modules: Vec::new(),
+    intrinsics: None,
+    loading_enabled: true,
+});
+
+/// Locks the registry. Poisoning is ignored: C callers cannot unwind.
+fn registry() -> std::sync::MutexGuard<'static, ModuleRegistry> {
+    REGISTRY.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// Borrows a C string, mapping null *and empty* to `None`.
 ///
@@ -191,14 +223,10 @@ unsafe fn canonical<'a>(p: *const c_char) -> Option<&'a CStr> {
 
 /// The handle every internal module shares.
 fn intrinsics_handle() -> *mut c_void {
-    // SAFETY: a plain static written only on the VM thread.
-    unsafe {
-        if INTRINSICS_MODULE.is_null() {
-            core::ptr::null_mut()
-        } else {
-            (*INTRINSICS_MODULE).handle
-        }
-    }
+    registry()
+        .intrinsics
+        .as_ref()
+        .map_or(core::ptr::null_mut(), |m| m.handle)
 }
 
 /// Finds an already-loaded module by name.
@@ -210,27 +238,22 @@ fn intrinsics_handle() -> *mut c_void {
 ///
 /// `plugin_name`, if non-null, must be a NUL-terminated string.
 unsafe fn find_loaded_module(plugin_name: *const c_char) -> *mut ModuleEntry {
+    let mut reg = registry();
     // SAFETY: delegated to the caller.
     let Some(wanted) = (unsafe { canonical(plugin_name) }) else {
-        // SAFETY: plain static.
-        return unsafe { INTRINSICS_MODULE };
+        return reg
+            .intrinsics
+            .as_mut()
+            .map_or(core::ptr::null_mut(), |m| &mut **m as *mut ModuleEntry);
     };
 
-    // SAFETY: the chain is only mutated on the VM thread, and every `next` is
-    // either null or a live entry.
-    unsafe {
-        let mut module = FIRST_MODULE;
-        while !module.is_null() {
-            if (*module).name.as_ref() == wanted {
-                return module;
-            }
-            module = (*module).next;
-        }
-    }
-    core::ptr::null_mut()
+    reg.modules
+        .iter_mut()
+        .find(|m| m.name.as_ref() == wanted)
+        .map_or(core::ptr::null_mut(), |m| &mut **m as *mut ModuleEntry)
 }
 
-/// Pushes a new entry onto the front of the chain.
+/// Adds a new entry at the front of the registry.
 ///
 /// # Safety
 ///
@@ -243,42 +266,30 @@ unsafe fn add_to_module_list(
     // SAFETY: delegated to the caller.
     let name: Box<CStr> = unsafe { CStr::from_ptr(plugin_name) }.into();
 
-    // SAFETY: plain statics on the VM thread.
-    unsafe {
-        let module = Box::into_raw(Box::new(ModuleEntry {
-            next: FIRST_MODULE,
-            handle,
-            ffi_loaded: ffi_flag,
-            name,
-        }));
-        FIRST_MODULE = module;
-        module
-    }
+    let mut entry = Box::new(ModuleEntry {
+        handle,
+        ffi_loaded: ffi_flag,
+        name,
+    });
+    let ptr = &mut *entry as *mut ModuleEntry;
+    registry().modules.insert(0, entry);
+    ptr
 }
 
-/// Unlinks `entry` from the chain without freeing it.
+/// Removes `entry` from the registry and drops it.
 ///
-/// # Safety
-///
-/// `entry` must be in the chain. The C walked to it without a null guard, so
-/// an entry that is *not* in the chain walked off the end; that is preserved
-/// as a debug assertion rather than a wild read.
-unsafe fn remove_from_list(entry: *mut ModuleEntry) {
-    // SAFETY: delegated to the caller.
-    unsafe {
-        if entry == FIRST_MODULE {
-            FIRST_MODULE = (*entry).next;
-            return;
-        }
-        let mut prev = FIRST_MODULE;
-        while !prev.is_null() && (*prev).next != entry {
-            prev = (*prev).next;
-        }
-        debug_assert!(!prev.is_null(), "entry was not in the module chain");
-        if !prev.is_null() {
-            (*prev).next = (*entry).next;
-        }
-    }
+/// The C unlinked by walking `prev->next` with no null guard, then freed at
+/// the call site; `retain` does both, and an entry that is not in the chain
+/// is a debug assertion rather than a wild read.
+fn remove_from_list(entry: *mut ModuleEntry) {
+    let mut reg = registry();
+    let before = reg.modules.len();
+    reg.modules
+        .retain(|m| !core::ptr::eq(&**m as *const ModuleEntry, entry));
+    debug_assert!(
+        reg.modules.len() < before,
+        "entry was not in the module chain"
+    );
 }
 
 /// Looks a primitive up in a shared library through `dlsym`.
@@ -553,10 +564,7 @@ unsafe fn call_initializers_in(module: *mut ModuleEntry) -> sqInt {
 /// Not reversible, by design.
 #[no_mangle]
 pub extern "C" fn ioDisableModuleLoading() {
-    // SAFETY: a plain static written on the VM thread.
-    unsafe {
-        MODULE_LOADING_ENABLED = false;
-    }
+    registry().loading_enabled = false;
 }
 
 /// Loads a module, externally if possible and internally otherwise, and runs
@@ -569,8 +577,7 @@ pub extern "C" fn ioDisableModuleLoading() {
 ///
 /// `plugin_name` must be a NUL-terminated string.
 unsafe fn find_and_load_module(plugin_name: *mut c_char, ffi_load: sqInt) -> *mut ModuleEntry {
-    // SAFETY: plain static.
-    if !unsafe { MODULE_LOADING_ENABLED } {
+    if !registry().loading_enabled {
         return core::ptr::null_mut();
     }
 
@@ -618,7 +625,6 @@ unsafe fn find_and_load_module(plugin_name: *mut c_char, ffi_load: sqInt) -> *mu
                 ioFreeModule(handle);
             }
             remove_from_list(module);
-            drop(Box::from_raw(module));
             return core::ptr::null_mut();
         }
         module
@@ -627,21 +633,27 @@ unsafe fn find_and_load_module(plugin_name: *mut c_char, ffi_load: sqInt) -> *mu
 
 /// Answers the module for `plugin_name`, loading it if necessary.
 ///
-/// Creates the intrinsics entry on first use, then immediately drops it off
-/// the chain so it can never be unloaded.
+/// Creates the intrinsics entry on first use. The C created it on the chain
+/// and immediately reset the head so it could never be unloaded; the
+/// registry's separate field is the same fact stated directly.
 ///
 /// # Safety
 ///
 /// `plugin_name` must be a NUL-terminated string.
 unsafe fn find_or_load_module(plugin_name: *mut c_char, ffi_load: sqInt) -> *mut ModuleEntry {
-    // SAFETY: delegated to the caller; the statics are VM-thread only.
-    unsafe {
-        if INTRINSICS_MODULE.is_null() {
-            INTRINSICS_MODULE = add_to_module_list(c"".as_ptr(), core::ptr::null_mut(), 1);
-            // Drop it off the list: it is never unloaded.
-            FIRST_MODULE = core::ptr::null_mut();
+    {
+        let mut reg = registry();
+        if reg.intrinsics.is_none() {
+            reg.intrinsics = Some(Box::new(ModuleEntry {
+                handle: core::ptr::null_mut(),
+                ffi_loaded: 1,
+                name: c"".into(),
+            }));
         }
+    }
 
+    // SAFETY: delegated to the caller.
+    unsafe {
         let module = find_loaded_module(plugin_name);
         if module.is_null() {
             find_and_load_module(plugin_name, ffi_load)
@@ -904,13 +916,16 @@ unsafe fn shutdown_module(module: *mut ModuleEntry) -> sqInt {
 /// Must run on the VM thread with no module being loaded concurrently.
 #[no_mangle]
 pub unsafe extern "C" fn ioShutdownAllModules() -> sqInt {
-    // SAFETY: delegated to the caller.
-    unsafe {
-        let mut entry = FIRST_MODULE;
-        while !entry.is_null() {
-            shutdown_module(entry);
-            entry = (*entry).next;
-        }
+    // Collected first so the lock is not held while plugin code runs.
+    let entries: Vec<*mut ModuleEntry> = registry()
+        .modules
+        .iter_mut()
+        .map(|m| &mut **m as *mut ModuleEntry)
+        .collect();
+    for entry in entries {
+        // SAFETY: delegated to the caller; the entry stays live because
+        // nothing removes modules during shutdown.
+        unsafe { shutdown_module(entry) };
     }
     1
 }
@@ -928,7 +943,7 @@ pub unsafe extern "C" fn ioShutdownAllModules() -> sqInt {
 pub unsafe extern "C" fn ioUnloadModule(module_name: *mut c_char) -> sqInt {
     // SAFETY: delegated to the caller.
     unsafe {
-        if INTRINSICS_MODULE.is_null() {
+        if registry().intrinsics.is_none() {
             return 0;
         }
         if canonical(module_name).is_none() {
@@ -944,24 +959,26 @@ pub unsafe extern "C" fn ioUnloadModule(module_name: *mut c_char) -> sqInt {
             return 0;
         }
 
-        // Tell every other module, FFI-loaded ones included.
-        let mut temp = FIRST_MODULE;
-        while !temp.is_null() {
-            if temp != entry {
-                let f = find_function_in(c"moduleUnloaded", temp);
-                if !f.is_null() {
-                    let notify: extern "C" fn(*const c_char) -> sqInt = core::mem::transmute(f);
-                    notify((*entry).name_ptr());
-                }
+        // Tell every other module, FFI-loaded ones included. Collected first
+        // so the lock is not held while plugin code runs.
+        let others: Vec<*mut ModuleEntry> = registry()
+            .modules
+            .iter_mut()
+            .map(|m| &mut **m as *mut ModuleEntry)
+            .filter(|&p| p != entry)
+            .collect();
+        for temp in others {
+            let f = find_function_in(c"moduleUnloaded", temp);
+            if !f.is_null() {
+                let notify: extern "C" fn(*const c_char) -> sqInt = core::mem::transmute(f);
+                notify((*entry).name_ptr());
             }
-            temp = (*temp).next;
         }
 
         if (*entry).handle != intrinsics_handle() {
             ioFreeModule((*entry).handle);
         }
         remove_from_list(entry);
-        drop(Box::from_raw(entry));
         1
     }
 }
@@ -1066,18 +1083,19 @@ pub unsafe extern "C" fn ioListLoadedModule(module_index: sqInt) -> *mut c_char 
         return core::ptr::null_mut();
     }
 
-    // SAFETY: the chain is VM-thread only.
-    unsafe {
-        let mut entry = FIRST_MODULE;
-        let mut index: sqInt = 1;
-        while !entry.is_null() && index < module_index {
-            entry = (*entry).next;
-            index += 1;
+    // The lock is released before getModuleName runs plugin code; the entry
+    // stays live because nothing unloads modules concurrently.
+    let entry: *mut ModuleEntry = {
+        let mut reg = registry();
+        match reg.modules.get_mut(module_index as usize - 1) {
+            Some(m) => &mut **m as *mut ModuleEntry,
+            None => return core::ptr::null_mut(),
         }
-        if entry.is_null() {
-            return core::ptr::null_mut();
-        }
+    };
 
+    // SAFETY: the entry is live, and getModuleName has the plugin ABI's
+    // signature.
+    unsafe {
         let init0 = find_function_in(c"getModuleName", entry);
         if !init0.is_null() {
             let get_module_name: extern "C" fn() -> *mut c_char = core::mem::transmute(init0);
@@ -1149,16 +1167,19 @@ mod tests {
         *INSTALLED.lock().unwrap_or_else(|e| e.into_inner()) = lists;
     }
 
-    /// Resets the module chain so each test starts from a known state.
+    /// Resets the module registry so each test starts from a known state.
     fn reset_modules() {
-        // SAFETY: the caller holds the crate-wide lock, so no other test is
-        // walking the chain. The entries are leaked rather than freed: some
-        // may have been handed out as `handle` values.
-        unsafe {
-            FIRST_MODULE = core::ptr::null_mut();
-            INTRINSICS_MODULE = core::ptr::null_mut();
-            MODULE_LOADING_ENABLED = true;
+        // The entries are leaked rather than freed, as the C's reset would
+        // have: some may have been handed out as `handle` values.
+        let mut reg = registry();
+        for entry in reg.modules.drain(..) {
+            Box::leak(entry);
         }
+        if let Some(entry) = reg.intrinsics.take() {
+            Box::leak(entry);
+        }
+        reg.loading_enabled = true;
+        drop(reg);
         *INSTALLED.lock().unwrap_or_else(|e| e.into_inner()) = 0;
     }
 
@@ -1361,8 +1382,11 @@ mod tests {
             assert_eq!(ioUnloadModule(c"Anything".as_ptr() as *mut c_char), 0);
 
             // Create the intrinsics entry the way findOrLoadModule does.
-            INTRINSICS_MODULE = add_to_module_list(c"".as_ptr(), core::ptr::null_mut(), 1);
-            FIRST_MODULE = core::ptr::null_mut();
+            registry().intrinsics = Some(Box::new(ModuleEntry {
+                handle: core::ptr::null_mut(),
+                ffi_loaded: 1,
+                name: c"".into(),
+            }));
 
             // An empty or null name is refused.
             assert_eq!(ioUnloadModule(c"".as_ptr() as *mut c_char), 0);

@@ -61,3 +61,9 @@ impl IntoReturn for &str {
         vm.return_value(oop)
     }
 }
+
+impl IntoReturn for String {
+    fn into_return(self, vm: &Interp) -> PrimResult<()> {
+        self.as_str().into_return(vm)
+    }
+}

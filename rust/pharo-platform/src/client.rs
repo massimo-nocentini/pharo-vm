@@ -87,8 +87,13 @@ extern "C" {
 
 /// Non-zero when the VM is running on a worker thread rather than the main
 /// one. Always 0 unless the build has `PHARO_VM_IN_WORKER_THREAD`.
+///
+/// `AtomicI32` has the size and alignment of a C `int`, so the exported
+/// symbol's ABI is the C's; relaxed ordering matches the plain accesses the C
+/// made (it is written once during startup, before any other thread exists).
 #[no_mangle]
-pub static mut vmRunOnWorkerThread: c_int = 0;
+pub static vmRunOnWorkerThread: core::sync::atomic::AtomicI32 =
+    core::sync::atomic::AtomicI32::new(0);
 
 /// Answers [`vmRunOnWorkerThread`].
 ///
@@ -96,8 +101,7 @@ pub static mut vmRunOnWorkerThread: c_int = 0;
 /// not.
 #[no_mangle]
 pub extern "C" fn isVMRunOnWorkerThread() -> c_int {
-    // SAFETY: written once during startup, before any other thread exists.
-    unsafe { vmRunOnWorkerThread }
+    vmRunOnWorkerThread.load(core::sync::atomic::Ordering::Relaxed)
 }
 
 /// Initialises the VM from `parameters` and reads the image in.
@@ -259,11 +263,19 @@ unsafe fn run_on_main_thread(parameters: *mut VMParameters) -> c_int {
     0
 }
 
-/// Runs the VM on a new thread with four times the main thread's stack, and
+/// Runs the VM on a new thread with four times the default thread stack, and
 /// serves the worker queue on this one.
 ///
 /// The VM's own thread cannot grow its stack the way the main thread can, so
-/// the size is taken from the main thread's attributes and multiplied.
+/// the size is taken from the platform's default thread attributes and
+/// multiplied.
+///
+/// The thread itself is spawned through [`std::thread::Builder`] rather than
+/// `pthread_create`: the builder carries the stack size, the spawned closure
+/// replaces the C trampoline, and dropping the [`std::thread::JoinHandle`]
+/// detaches, as `pthread_detach` did. On Unix the thread underneath is still
+/// a pthread, so `pthread_self()` inside it -- which [`vm_init`] records into
+/// `ioVMThread` for the crash reporter -- works unchanged.
 ///
 /// # Safety
 ///
@@ -276,48 +288,57 @@ unsafe fn run_on_worker_thread(parameters: *mut VMParameters) -> c_int {
         site!(C_FILE, c"runOnWorkerThread", 266),
     );
 
-    /// The trampoline pthread_create needs.
-    extern "C" fn thread_main(p: *mut c_void) -> *mut c_void {
-        // SAFETY: `p` is the VMParameters handed to pthread_create, which
-        // outlives the process.
-        unsafe { run_vm_thread(p.cast::<VMParameters>()) };
-        core::ptr::null_mut()
-    }
-
-    // SAFETY: the attribute object is initialised before use, and every call
-    // below is checked.
-    unsafe {
+    // std::thread's own default is a fixed 2 MiB, but the C sized the VM
+    // stack from pthread_attr_init's default -- which glibc derives from
+    // RLIMIT_STACK -- and that is the size the images are used to. std has no
+    // way to ask for that default, so the attribute is queried for the number
+    // and nothing else; no thread is created through it.
+    // SAFETY: the attribute object is initialised before it is read.
+    let default_stack_size = unsafe {
         let mut attr = core::mem::zeroed::<libc::pthread_attr_t>();
         libc::pthread_attr_init(&mut attr);
-
         let mut size: usize = 0;
         libc::pthread_attr_getstacksize(&attr, &mut size);
+        libc::pthread_attr_destroy(&mut attr);
+        size
+    };
 
-        logging::message_one_long(
-            LOG_DEBUG,
-            c"Stack size: %ld\n",
-            site!(C_FILE, c"runOnWorkerThread", 277),
-            size as core::ffi::c_long,
-        );
+    logging::message_one_long(
+        LOG_DEBUG,
+        c"Stack size: %ld\n",
+        site!(C_FILE, c"runOnWorkerThread", 277),
+        default_stack_size as core::ffi::c_long,
+    );
 
-        if libc::pthread_attr_setstacksize(&mut attr, size * 4) != 0 {
-            libc::perror(c"Setting thread stack size".as_ptr());
-            libc::exit(-1);
+    /// A raw pointer is not `Send`, but the parameters outlive the process
+    /// (see [`vm_main_with_parameters`]), so carrying the address to the VM
+    /// thread is sound.
+    struct ParametersHandle(*mut VMParameters);
+    // SAFETY: see the type's documentation.
+    unsafe impl Send for ParametersHandle {}
+    let handle = ParametersHandle(parameters);
+
+    let spawned = std::thread::Builder::new()
+        .name("pharo-vm".into())
+        .stack_size(default_stack_size * 4)
+        .spawn(move || {
+            // Capture the whole handle, not just its field: edition-2021
+            // closures capture per-field, and the field alone is not Send.
+            let ParametersHandle(parameters) = { handle };
+            // SAFETY: as run_vm_thread; the parameters outlive the process.
+            unsafe { run_vm_thread(parameters) };
+        });
+
+    match spawned {
+        // Dropping the join handle detaches the thread.
+        Ok(_) => {}
+        Err(error) => {
+            // The C perror'd and exited; io::Error prints the same strerror
+            // text. A bad stack size, which the C caught separately at
+            // pthread_attr_setstacksize, surfaces here too.
+            eprintln!("Spawning the VM thread: {error}");
+            std::process::exit(-1);
         }
-
-        let mut thread_id: libc::pthread_t = 0;
-        if libc::pthread_create(
-            &mut thread_id,
-            &attr,
-            thread_main,
-            parameters.cast::<c_void>(),
-        ) != 0
-        {
-            libc::perror(c"Spawning the VM thread".as_ptr());
-            libc::exit(-1);
-        }
-
-        libc::pthread_detach(thread_id);
     }
 
     // SAFETY: declared by pharoClient.h; serves the worker queue and does not
@@ -390,8 +411,9 @@ pub unsafe extern "C" fn vm_main_with_parameters(parameters: *mut VMParameters) 
 
         #[cfg(pharo_vm_in_worker_thread)]
         {
-            vmRunOnWorkerThread = c_int::from((*parameters).isWorker);
-            if vmRunOnWorkerThread != 0 {
+            let is_worker = c_int::from((*parameters).isWorker);
+            vmRunOnWorkerThread.store(is_worker, core::sync::atomic::Ordering::Relaxed);
+            if is_worker != 0 {
                 return run_on_worker_thread(parameters);
             }
         }
@@ -437,24 +459,7 @@ fn log_type_sizes() {
     }
 }
 
-/// `stdout`, which the `libc` crate does not expose.
-mod c_stdout_stream {
-    extern "C" {
-        #[cfg_attr(
-            any(target_os = "macos", target_os = "ios", target_os = "freebsd"),
-            link_name = "__stdoutp"
-        )]
-        static mut stdout: *mut libc::FILE;
-    }
-
-    /// The `FILE *` that C's `stdout` macro evaluates to.
-    pub fn get() -> *mut libc::FILE {
-        // SAFETY: initialised by the C runtime before main.
-        unsafe { stdout }
-    }
-}
-
-use c_stdout_stream::get as c_stdout;
+use crate::cstdio::c_stdout;
 
 /// The VM's entry point, called from `src/unix/unixMain.c`.
 ///

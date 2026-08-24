@@ -1,7 +1,7 @@
 //! A safe handle on the interpreter proxy.
 
-use core::ffi;
 use core::slice;
+use std::ffi::CString;
 
 use crate::error::{PrimErr, PrimResult};
 use crate::proxy::{sqInt, VirtualMachine, MAX_SMALL_INTEGER, MIN_SMALL_INTEGER};
@@ -145,6 +145,19 @@ impl Interp {
         Ok(v)
     }
 
+    /// Reads all of the current primitive's arguments at once, typed.
+    ///
+    /// The tuple's arity is checked against the actual argument count, and its
+    /// elements are the arguments in declaration order -- the first element is
+    /// the method's first argument, however deep it sits on the stack:
+    ///
+    /// ```ignore
+    /// let (form, quality): (Oop, sqInt) = vm.args()?;
+    /// ```
+    pub fn args<T: StackArgs>(&self) -> PrimResult<T> {
+        T::from_stack_args(self)
+    }
+
     /// Pushes an oop onto the stack.
     pub fn push(&self, oop: Oop) -> PrimResult<()> {
         call!(self, push(oop.0));
@@ -255,8 +268,7 @@ impl Interp {
         if !self.is_bytes(oop)? {
             return Err(PrimErr::BadArgument);
         }
-        let len = self.byte_size_of(oop)?;
-        let len = usize::try_from(len).map_err(|_| PrimErr::BadArgument)?;
+        let len = usize::try_from(self.byte_size_of(oop)?)?;
         let ptr = call!(self, firstIndexableField(oop.0));
         if ptr.is_null() {
             return Err(PrimErr::BadArgument);
@@ -284,16 +296,8 @@ impl Interp {
     /// Matches by class name, as the VM's own `isKindOf` does, so it does not
     /// need the class to be a well-known object.
     pub fn is_kind_of_named(&self, oop: Oop, class_name: &str) -> PrimResult<bool> {
-        if class_name.as_bytes().contains(&0) {
-            return Err(PrimErr::BadArgument);
-        }
-        let mut buf = Vec::with_capacity(class_name.len() + 1);
-        buf.extend_from_slice(class_name.as_bytes());
-        buf.push(0);
-        Ok(call!(
-            self,
-            isKindOf(oop.0, buf.as_ptr().cast::<ffi::c_char>().cast_mut())
-        ) != 0)
+        let class_name = CString::new(class_name).map_err(|_| PrimErr::BadArgument)?;
+        Ok(call!(self, isKindOf(oop.0, class_name.as_ptr().cast_mut())) != 0)
     }
 
     /// Is this a word- or byte-indexable object (Bitmap, ByteArray, ...)?
@@ -317,8 +321,7 @@ impl Interp {
         if !self.is_words_or_bytes(oop)? {
             return Err(PrimErr::BadArgument);
         }
-        let byte_len =
-            usize::try_from(self.byte_size_of(oop)?).map_err(|_| PrimErr::BadArgument)?;
+        let byte_len = usize::try_from(self.byte_size_of(oop)?)?;
         if byte_len % 4 != 0 {
             return Err(PrimErr::BadArgument);
         }
@@ -348,8 +351,7 @@ impl Interp {
         if !self.is_words_or_bytes(oop)? {
             return Err(PrimErr::BadArgument);
         }
-        let byte_len =
-            usize::try_from(self.byte_size_of(oop)?).map_err(|_| PrimErr::BadArgument)?;
+        let byte_len = usize::try_from(self.byte_size_of(oop)?)?;
         let byte_offset = word_offset.checked_mul(4).ok_or(PrimErr::BadIndex)?;
         let byte_span = src.len().checked_mul(4).ok_or(PrimErr::BadIndex)?;
         let end = byte_offset
@@ -402,13 +404,8 @@ impl Interp {
     /// Fails with `BadArgument` if `s` contains an interior NUL, since the
     /// proxy takes a C string.
     pub fn string(&self, s: &str) -> PrimResult<Oop> {
-        if s.as_bytes().contains(&0) {
-            return Err(PrimErr::BadArgument);
-        }
-        let mut buf = Vec::with_capacity(s.len() + 1);
-        buf.extend_from_slice(s.as_bytes());
-        buf.push(0);
-        let oop = call!(self, stringForCString(buf.as_ptr().cast::<ffi::c_char>()));
+        let s = CString::new(s).map_err(|_| PrimErr::BadArgument)?;
+        let oop = call!(self, stringForCString(s.as_ptr()));
         Ok(Oop(oop))
     }
 
@@ -532,3 +529,68 @@ impl Interp {
         }
     }
 }
+
+/// A single primitive argument, read from a stack slot.
+///
+/// Implemented for the handful of shapes a stack slot can be asked to take;
+/// [`StackArgs`] assembles these into whole argument lists.
+pub trait StackArg: Sized {
+    /// Reads the value `offset` slots down the stack.
+    fn from_stack(vm: &Interp, offset: sqInt) -> PrimResult<Self>;
+}
+
+impl StackArg for Oop {
+    fn from_stack(vm: &Interp, offset: sqInt) -> PrimResult<Self> {
+        vm.stack_value(offset)
+    }
+}
+
+impl StackArg for sqInt {
+    fn from_stack(vm: &Interp, offset: sqInt) -> PrimResult<Self> {
+        vm.stack_integer(offset)
+    }
+}
+
+impl StackArg for bool {
+    fn from_stack(vm: &Interp, offset: sqInt) -> PrimResult<Self> {
+        let oop = vm.stack_value(offset)?;
+        vm.boolean_value(oop)
+    }
+}
+
+impl StackArg for f64 {
+    fn from_stack(vm: &Interp, offset: sqInt) -> PrimResult<Self> {
+        vm.stack_float(offset)
+    }
+}
+
+/// A primitive's entire argument list, read and checked in one go.
+///
+/// Implemented for tuples of [`StackArg`] up to arity 8. Reading first checks
+/// the argument count against the arity, then fetches each element from its
+/// slot: argument `i` of `n` sits `n - 1 - i` slots down, because the last
+/// argument is on top. Obtain one through [`Interp::args`].
+pub trait StackArgs: Sized {
+    /// Checks the argument count and reads every argument.
+    fn from_stack_args(vm: &Interp) -> PrimResult<Self>;
+}
+
+macro_rules! impl_stack_args {
+    ($n:literal: $($ty:ident @ $offset:literal),+) => {
+        impl<$($ty: StackArg),+> StackArgs for ($($ty,)+) {
+            fn from_stack_args(vm: &Interp) -> PrimResult<Self> {
+                vm.expect_argument_count($n)?;
+                Ok(($($ty::from_stack(vm, $offset)?,)+))
+            }
+        }
+    };
+}
+
+impl_stack_args!(1: A @ 0);
+impl_stack_args!(2: A @ 1, B @ 0);
+impl_stack_args!(3: A @ 2, B @ 1, C @ 0);
+impl_stack_args!(4: A @ 3, B @ 2, C @ 1, D @ 0);
+impl_stack_args!(5: A @ 4, B @ 3, C @ 2, D @ 1, E @ 0);
+impl_stack_args!(6: A @ 5, B @ 4, C @ 3, D @ 2, E @ 1, F @ 0);
+impl_stack_args!(7: A @ 6, B @ 5, C @ 4, D @ 3, E @ 2, F @ 1, G @ 0);
+impl_stack_args!(8: A @ 7, B @ 6, C @ 5, D @ 4, E @ 3, F @ 2, G @ 1, H @ 0);

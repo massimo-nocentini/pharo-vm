@@ -31,7 +31,8 @@ use core::ffi::{c_char, CStr};
 ///
 /// `dest` must point to a writable buffer of at least `dest_buffer_size` bytes
 /// containing a NUL-terminated string, and `source` must be a valid
-/// NUL-terminated string. Neither may be null.
+/// NUL-terminated string that does not overlap the `dest` buffer. Neither may
+/// be null.
 #[no_mangle]
 pub unsafe extern "C" fn vm_string_append_into(
     dest: *mut c_char,
@@ -43,44 +44,21 @@ pub unsafe extern "C" fn vm_string_append_into(
     }
     // SAFETY: the caller guarantees a NUL-terminated string in a buffer of at
     // least dest_buffer_size bytes.
-    let used = unsafe { strnlen(dest, dest_buffer_size) };
+    let used = unsafe { libc::strnlen(dest, dest_buffer_size) };
     if used >= dest_buffer_size {
         // No room even for the terminator. The C wrote one anyway, past the end.
         return;
     }
 
-    let mut i = used;
-    // SAFETY: source is NUL-terminated, so the walk stops at or before its end.
-    let mut src = source;
-    while i < dest_buffer_size - 1 {
-        let byte = unsafe { *src };
-        if byte == 0 {
-            break;
-        }
-        // SAFETY: i < dest_buffer_size - 1, so this is in bounds.
-        unsafe { *dest.add(i) = byte };
-        src = unsafe { src.add(1) };
-        i += 1;
+    // SAFETY: source is a valid NUL-terminated string.
+    let src = unsafe { CStr::from_ptr(source) }.to_bytes();
+    let copied = src.len().min(dest_buffer_size - 1 - used);
+    // SAFETY: used + copied + 1 <= dest_buffer_size, so both the copy and the
+    // terminator are in bounds, and the caller guarantees non-overlap.
+    unsafe {
+        core::ptr::copy_nonoverlapping(src.as_ptr(), dest.add(used).cast::<u8>(), copied);
+        *dest.add(used + copied) = 0;
     }
-    // SAFETY: i <= dest_buffer_size - 1, so the terminator is in bounds.
-    unsafe { *dest.add(i) = 0 };
-}
-
-/// Length of a NUL-terminated string, giving up after `limit` bytes.
-///
-/// # Safety
-///
-/// `s` must be readable for `limit` bytes, or NUL-terminated within them.
-unsafe fn strnlen(s: *const c_char, limit: usize) -> usize {
-    let mut n = 0;
-    while n < limit {
-        // SAFETY: n < limit and the caller guarantees readability to `limit`.
-        if unsafe { *s.add(n) } == 0 {
-            return n;
-        }
-        n += 1;
-    }
-    limit
 }
 
 /// Concatenates two strings into a freshly `malloc`ed one.
@@ -113,7 +91,7 @@ pub unsafe extern "C" fn vm_string_concat(
     // Allocated with malloc, not Rust's allocator: every caller releases this
     // string with free(), and mixing the two is undefined behaviour.
     // SAFETY: total > 0, so malloc's contract is satisfied.
-    let buf = unsafe { libc_malloc(total) };
+    let buf = unsafe { libc::malloc(total) }.cast::<u8>();
     if buf.is_null() {
         return core::ptr::null_mut();
     }
@@ -138,12 +116,6 @@ unsafe fn bytes_of<'a>(s: *const c_char) -> &'a [u8] {
     }
     // SAFETY: the caller guarantees NUL termination.
     unsafe { CStr::from_ptr(s) }.to_bytes()
-}
-
-extern "C" {
-    /// The C allocator, because callers release these strings with `free`.
-    #[link_name = "malloc"]
-    fn libc_malloc(size: usize) -> *mut u8;
 }
 
 #[cfg(test)]
@@ -225,13 +197,9 @@ mod tests {
             );
             assert!(!p.is_null());
             let out = CStr::from_ptr(p).to_str().unwrap().to_owned();
-            free(p.cast());
+            libc::free(p.cast());
             out
         }
-    }
-
-    extern "C" {
-        fn free(p: *mut core::ffi::c_void);
     }
 
     #[test]

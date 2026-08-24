@@ -126,35 +126,25 @@ pub unsafe extern "C" fn pharo_semaphore_signal(semaphore: *mut Semaphore) -> c_
 /// again.
 #[no_mangle]
 pub unsafe extern "C" fn pharo_semaphore_free(semaphore: *mut Semaphore) {
-    // SAFETY: allocated with libc::malloc by pharo_semaphore_new, so it must
-    // go back to libc::free and not to Rust's allocator.
-    unsafe { libc::free(semaphore.cast::<c_void>()) }
+    // SAFETY: boxed by pharo_semaphore_new; C only ever frees a Semaphore
+    // through this vtable slot, so allocation and release stay in this module.
+    unsafe { drop(Box::from_raw(semaphore)) }
 }
 
 /// Allocates a [`Semaphore`] that signals the image semaphore at
 /// `semaphore_index`.
 ///
-/// Returns null if the allocation fails. The C did not check `malloc` and
-/// would have written through the null; returning it lets the caller fail the
-/// same way it already has to for `platform_semaphore_new`, which could
-/// return a semaphore with a null handle.
+/// The C did not check `malloc` and would have written through the null; a
+/// failed `Box` allocation aborts instead, which is the defined spelling of
+/// the same out-of-memory death.
 #[no_mangle]
 pub extern "C" fn pharo_semaphore_new(semaphore_index: sqInt) -> *mut Semaphore {
-    // SAFETY: malloc of exactly one Semaphore; every field is written before
-    // the pointer is handed out.
-    unsafe {
-        let semaphore = libc::malloc(core::mem::size_of::<Semaphore>()).cast::<Semaphore>();
-        if semaphore.is_null() {
-            return semaphore;
-        }
-        semaphore.write(Semaphore {
-            handle: semaphore_index as *mut c_void,
-            wait: Some(pharo_semaphore_wait),
-            signal: Some(pharo_semaphore_signal),
-            free: Some(pharo_semaphore_free),
-        });
-        semaphore
-    }
+    Box::into_raw(Box::new(Semaphore {
+        handle: semaphore_index as *mut c_void,
+        wait: Some(pharo_semaphore_wait),
+        signal: Some(pharo_semaphore_signal),
+        free: Some(pharo_semaphore_free),
+    }))
 }
 
 #[cfg(test)]

@@ -48,23 +48,21 @@ type PlatformSemaphore = *mut libc::sem_t;
 /// worker needs.
 #[no_mangle]
 pub extern "C" fn semaphore_new(initial_value: c_long) -> PlatformSemaphore {
-    // SAFETY: malloc of exactly one sem_t, initialised by sem_init before
-    // being handed out, and freed again if that fails.
-    unsafe {
-        let wrapper = libc::malloc(core::mem::size_of::<libc::sem_t>()).cast::<libc::sem_t>();
-        if wrapper.is_null() {
-            return core::ptr::null_mut();
-        }
-        // `initial_value` is a long but sem_init takes an unsigned int. The C
-        // let the implicit conversion happen; a negative or huge value makes
-        // sem_init fail with EINVAL, which is handled below.
-        if libc::sem_init(wrapper, 0, initial_value as libc::c_uint) != 0 {
-            // The C leaked this. See the module docs.
-            libc::free(wrapper.cast::<c_void>());
-            return core::ptr::null_mut();
-        }
-        wrapper
+    // Boxed rather than malloc'ed: the sem_t is only ever freed by
+    // semaphore_release in this module, so the allocator is an implementation
+    // detail. SAFETY: an all-zero sem_t is only ever a target for sem_init.
+    let wrapper = Box::into_raw(Box::new(unsafe { core::mem::zeroed::<libc::sem_t>() }));
+    // `initial_value` is a long but sem_init takes an unsigned int. The C
+    // let the implicit conversion happen; a negative or huge value makes
+    // sem_init fail with EINVAL, which is handled below.
+    // SAFETY: `wrapper` points at one writable sem_t.
+    if unsafe { libc::sem_init(wrapper, 0, initial_value as libc::c_uint) } != 0 {
+        // The C leaked this. See the module docs.
+        // SAFETY: allocated just above and never handed out.
+        drop(unsafe { Box::from_raw(wrapper) });
+        return core::ptr::null_mut();
     }
+    wrapper
 }
 
 /// Blocks until `sem` can be decremented.
@@ -83,8 +81,10 @@ pub unsafe extern "C" fn semaphore_wait(sem: PlatformSemaphore) -> c_int {
         if code != -1 {
             return code;
         }
-        // SAFETY: __errno_location is always valid on this thread.
-        if unsafe { *libc::__errno_location() } != libc::EINTR {
+        // last_os_error reads errno portably: `__errno_location` is the
+        // glibc/musl spelling only, and this module's scope is every
+        // non-Apple Unix.
+        if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
             return code;
         }
     }
@@ -113,10 +113,10 @@ pub unsafe extern "C" fn semaphore_signal(sem: PlatformSemaphore) -> c_int {
 pub unsafe extern "C" fn semaphore_release(sem: PlatformSemaphore) -> c_int {
     // SAFETY: delegated to the caller. The C ignored sem_destroy's result and
     // so does this; destroying a semaphore with waiters is undefined either
-    // way.
+    // way. The box came from semaphore_new.
     unsafe {
         libc::sem_destroy(sem);
-        libc::free(sem.cast::<c_void>());
+        drop(Box::from_raw(sem));
     }
     0
 }
@@ -151,38 +151,30 @@ pub unsafe extern "C" fn platform_semaphore_signal(semaphore: *mut Semaphore) ->
 /// As [`platform_semaphore_wait`], and `semaphore` must not be used again.
 #[no_mangle]
 pub unsafe extern "C" fn platform_semaphore_free(semaphore: *mut Semaphore) {
-    // SAFETY: delegated to the caller. Both allocations came from
-    // libc::malloc, so both go back to libc::free.
+    // SAFETY: delegated to the caller. Both boxes were allocated by this
+    // module -- C only ever frees a Semaphore through this vtable slot.
     unsafe {
         semaphore_release((*semaphore).handle.cast::<libc::sem_t>());
-        libc::free(semaphore.cast::<c_void>());
+        drop(Box::from_raw(semaphore));
     }
 }
 
 /// Allocates a [`Semaphore`] backed by a POSIX semaphore with
 /// `initial_value`.
 ///
-/// Returns null if the wrapper cannot be allocated. Note that the *inner*
-/// semaphore failing leaves a wrapper with a null handle rather than a null
-/// wrapper -- that is the C's behaviour, and the FFI code that calls this does
-/// not check either, so changing it here would only move where the crash
-/// happens.
+/// Note that the *inner* semaphore failing leaves a wrapper with a null
+/// handle rather than a null wrapper -- that is the C's behaviour, and the
+/// FFI code that calls this does not check either, so changing it here would
+/// only move where the crash happens. (The C could also answer null when the
+/// wrapper's own malloc failed; a failed `Box` allocation aborts instead.)
 #[no_mangle]
 pub extern "C" fn platform_semaphore_new(initial_value: c_int) -> *mut Semaphore {
-    // SAFETY: malloc of exactly one Semaphore, fully written before use.
-    unsafe {
-        let semaphore = libc::malloc(core::mem::size_of::<Semaphore>()).cast::<Semaphore>();
-        if semaphore.is_null() {
-            return semaphore;
-        }
-        semaphore.write(Semaphore {
-            handle: semaphore_new(c_long::from(initial_value)).cast::<c_void>(),
-            wait: Some(platform_semaphore_wait),
-            signal: Some(platform_semaphore_signal),
-            free: Some(platform_semaphore_free),
-        });
-        semaphore
-    }
+    Box::into_raw(Box::new(Semaphore {
+        handle: semaphore_new(c_long::from(initial_value)).cast::<c_void>(),
+        wait: Some(platform_semaphore_wait),
+        signal: Some(platform_semaphore_signal),
+        free: Some(platform_semaphore_free),
+    }))
 }
 
 #[cfg(test)]

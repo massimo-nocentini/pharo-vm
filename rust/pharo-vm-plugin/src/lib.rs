@@ -65,7 +65,7 @@ pub mod proxy;
 pub mod ret;
 
 pub use error::{PrimErr, PrimResult};
-pub use interp::{Interp, Oop};
+pub use interp::{Interp, Oop, StackArg, StackArgs};
 pub use proxy::{sqInt, VirtualMachine};
 pub use ret::IntoReturn;
 
@@ -167,24 +167,10 @@ pub mod __private {
 /// ```
 #[macro_export]
 macro_rules! pharo_plugin {
-    ($name:literal) => {
+    ($name:literal $(, init = $init:path)? $(, shutdown = $shutdown:path)?) => {
         $crate::pharo_plugin!(@common $name);
-    };
-
-    ($name:literal, init = $init:path) => {
-        $crate::pharo_plugin!(@common $name);
-        $crate::pharo_plugin!(@init $init);
-    };
-
-    ($name:literal, shutdown = $shutdown:path) => {
-        $crate::pharo_plugin!(@common $name);
-        $crate::pharo_plugin!(@shutdown $shutdown);
-    };
-
-    ($name:literal, init = $init:path, shutdown = $shutdown:path) => {
-        $crate::pharo_plugin!(@common $name);
-        $crate::pharo_plugin!(@init $init);
-        $crate::pharo_plugin!(@shutdown $shutdown);
+        $($crate::pharo_plugin!(@init $init);)?
+        $($crate::pharo_plugin!(@shutdown $shutdown);)?
     };
 
     (@common $name:literal) => {
