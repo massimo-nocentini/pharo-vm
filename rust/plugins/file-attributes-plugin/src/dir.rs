@@ -24,13 +24,14 @@
 //! handles. That is the port's memory-safety divergence; see the README.
 
 use std::collections::HashMap;
-use std::ffi::{c_int, CStr};
+use std::ffi::c_int;
+use std::fs::ReadDir;
+use std::os::unix::ffi::OsStringExt;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
-use crate::codes::{
-    FA_CANT_OPEN_DIR, FA_CANT_READ_DIR, FA_CORRUPT_VALUE, FA_UNABLE_TO_CLOSE_DIR,
-};
+use crate::codes::{FA_CANT_OPEN_DIR, FA_CANT_READ_DIR, FA_CORRUPT_VALUE};
 use crate::convert::Converters;
 use crate::fapath::FaPath;
 
@@ -43,29 +44,27 @@ pub enum ReadOutcome {
     NoMoreData,
 }
 
-/// One directory walk: the dual-encoded path and the open `DIR` stream.
+/// One directory walk: the dual-encoded path and the open directory stream.
+///
+/// `std::fs::ReadDir` replaces the raw `*mut DIR` here, and takes three
+/// things with it:
+///
+/// * the `unsafe impl Send`, because `ReadDir` is `Send` on its own;
+/// * the `Drop` impl, because `ReadDir` closes its own descriptor;
+/// * the hand-rolled `errno_location()` (which had `cfg` arms for Linux and
+///   the BSDs only, and so would not compile on Solaris or NetBSD). The C
+///   cleared errno before the loop purely to tell end-of-stream from a
+///   `readdir` failure; `Iterator::next` answering `None` versus `Some(Err)`
+///   *is* that distinction, checked by the compiler.
 #[derive(Debug)]
 pub struct DirSession {
     /// Directory prefix plus the current entry name.
     pub fa: FaPath,
-    dir: *mut libc::DIR,
-}
-
-// SAFETY: primitives run only on the interpreter thread, and every access
-// goes through the registry Mutex anyway; the DIR stream itself carries no
-// thread affinity.
-unsafe impl Send for DirSession {}
-
-#[cfg(any(target_os = "linux", target_os = "android", target_os = "emscripten"))]
-fn errno_location() -> *mut c_int {
-    // SAFETY: always valid to call; answers this thread's errno slot.
-    unsafe { libc::__errno_location() }
-}
-
-#[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
-fn errno_location() -> *mut c_int {
-    // SAFETY: as above.
-    unsafe { libc::__error() }
+    /// The directory being walked, kept so [`DirSession::rewind`] can re-open
+    /// it -- `ReadDir` has no `rewinddir`.
+    path: PathBuf,
+    /// `None` once closed; every walk method rejects that as the C did.
+    dir: Option<ReadDir>,
 }
 
 impl DirSession {
@@ -73,89 +72,70 @@ impl DirSession {
     /// entry. `Ok(None)` is an empty directory (the C closes the stream and
     /// reports `FA_NO_MORE_DATA`; `primitiveOpendir` then answers nil).
     pub fn open(fa: FaPath, conv: &Converters) -> Result<Option<Self>, i64> {
-        let cpath = fa.plat_cstring();
-        // SAFETY: `cpath` is NUL-terminated.
-        let dir = unsafe { libc::opendir(cpath.as_ptr()) };
-        if dir.is_null() {
-            return Err(FA_CANT_OPEN_DIR);
-        }
-        let mut session = DirSession { fa, dir };
+        // `plat_cstring` applies the C's embedded-NUL truncation; the bytes
+        // that survive it become the path, without a UTF-8 round trip.
+        let path = PathBuf::from(std::ffi::OsString::from_vec(
+            fa.plat_cstring().into_bytes(),
+        ));
+        let dir = std::fs::read_dir(&path).map_err(|_| FA_CANT_OPEN_DIR)?;
+        let mut session = DirSession {
+            fa,
+            path,
+            dir: Some(dir),
+        };
         match session.read(conv) {
             Ok(ReadOutcome::Entry) => Ok(Some(session)),
             Ok(ReadOutcome::NoMoreData) => {
                 session.close()?;
                 Ok(None)
             }
-            // The C returns here leaving the DIR open (a leak); Drop closes
-            // it, which the image cannot observe.
+            // The C returned here leaving the DIR open (a leak); dropping the
+            // session closes it, which the image cannot observe.
             Err(status) => Err(status),
         }
     }
 
-    /// `faReadDirectory`: the next entry, skipping `.` and `..`.
+    /// `faReadDirectory`: the next entry.
+    ///
+    /// The C's explicit `.`/`..` skip is gone because `read_dir` never yields
+    /// them -- the filtering moved into std, not out of the plugin.
     pub fn read(&mut self, conv: &Converters) -> Result<ReadOutcome, i64> {
-        if self.dir.is_null() {
-            return Err(FA_CORRUPT_VALUE);
-        }
-        // The C clears errno once before the loop: it is the only way to tell
-        // end-of-stream from a readdir failure.
-        // SAFETY: writing this thread's errno slot.
-        unsafe { *errno_location() = 0 };
-        loop {
-            // SAFETY: `self.dir` is a live stream from opendir.
-            let entry = unsafe { libc::readdir(self.dir) };
-            if entry.is_null() {
-                // SAFETY: reading this thread's errno slot.
-                let e = unsafe { *errno_location() };
-                return if e == 0 {
-                    Ok(ReadOutcome::NoMoreData)
-                } else {
-                    Err(FA_CANT_READ_DIR)
-                };
-            }
-            // SAFETY: the OS NUL-terminates d_name.
-            let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }
-                .to_bytes()
-                .to_vec();
-            if name != b"." && name != b".." {
-                self.fa.set_plat_file(&name, conv)?;
-                return Ok(ReadOutcome::Entry);
-            }
-        }
+        let dir = self.dir.as_mut().ok_or(FA_CORRUPT_VALUE)?;
+        let name = match dir.next() {
+            None => return Ok(ReadOutcome::NoMoreData),
+            Some(Err(_)) => return Err(FA_CANT_READ_DIR),
+            Some(Ok(entry)) => entry.file_name().into_vec(),
+        };
+        self.fa.set_plat_file(&name, conv)?;
+        Ok(ReadOutcome::Entry)
     }
 
     /// `faRewindDirectory`: back to the start, then read the first entry.
+    ///
+    /// `ReadDir` exposes no `rewinddir`, so this re-opens the directory by
+    /// path. Two consequences, neither reachable from image code that is not
+    /// racing itself: the path is resolved a second time (so a directory
+    /// renamed mid-walk rewinds into whatever now has that name, where
+    /// `rewinddir` stayed with the original inode), and a directory removed
+    /// mid-walk fails with `FA_CANT_READ_DIR` where the C answered
+    /// `FA_NO_MORE_DATA`.
     pub fn rewind(&mut self, conv: &Converters) -> Result<ReadOutcome, i64> {
-        if self.dir.is_null() {
+        if self.dir.is_none() {
             return Err(FA_CORRUPT_VALUE);
         }
-        // SAFETY: live stream.
-        unsafe { libc::rewinddir(self.dir) };
+        self.dir = Some(std::fs::read_dir(&self.path).map_err(|_| FA_CANT_READ_DIR)?);
         self.read(conv)
     }
 
     /// `faCloseDirectory`.
+    ///
+    /// Dropping the `ReadDir` closes the descriptor. That makes the C's
+    /// `FA_UNABLE_TO_CLOSE_DIR` unreachable: std gives no way to observe
+    /// `closedir`'s status, which on a live stream can only fail with EBADF.
+    /// Closing an already-closed session is still `FA_CORRUPT_VALUE`.
     pub fn close(&mut self) -> Result<(), i64> {
-        if self.dir.is_null() {
-            return Err(FA_CORRUPT_VALUE);
-        }
-        // SAFETY: live stream; ownership of the handle ends here whatever
-        // closedir answers, so it is nulled either way.
-        let status = unsafe { libc::closedir(self.dir) };
-        self.dir = std::ptr::null_mut();
-        if status != 0 {
-            return Err(FA_UNABLE_TO_CLOSE_DIR);
-        }
+        self.dir.take().ok_or(FA_CORRUPT_VALUE)?;
         Ok(())
-    }
-}
-
-impl Drop for DirSession {
-    fn drop(&mut self) {
-        if !self.dir.is_null() {
-            // SAFETY: still-live stream; last use of the pointer.
-            unsafe { libc::closedir(self.dir) };
-        }
     }
 }
 

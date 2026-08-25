@@ -33,6 +33,7 @@ mod fapath;
 mod stat;
 
 use std::ffi::{c_long, c_void, CStr};
+use std::os::unix::fs::PermissionsExt;
 use std::sync::OnceLock;
 
 use pharo_vm_plugin::{pharo_plugin, pharo_primitive, sqInt, Interp, Oop, PrimErr, PrimResult};
@@ -143,9 +144,11 @@ fn resolve_from_file_plugin(vm: &Interp, name: &CStr) -> Option<CConvertFn> {
     Some(unsafe { std::mem::transmute::<*mut c_void, CConvertFn>(address) })
 }
 
-/// errno as the C reads it right after a failed syscall.
-fn errno() -> i64 {
-    i64::from(std::io::Error::last_os_error().raw_os_error().unwrap_or(0))
+/// The errno behind a failed `std::fs` call -- the same number the C read
+/// from the global right after the syscall, but carried by the error value
+/// instead of raced for.
+fn io_errno(e: &std::io::Error) -> i64 {
+    i64::from(e.raw_os_error().unwrap_or(0))
 }
 
 // ---------------------------------------------------------------------------
@@ -354,11 +357,13 @@ fn validated_session_key(vm: &Interp, handle: Oop) -> PrimResult<usize> {
 fn primitiveChangeMode(vm: &Interp, file_name: Oop, new_mode: sqInt) -> PrimResult<Oop> {
     let conv = load_converters(vm);
     let fa = st_path_from(vm, &conv, file_name)?;
-    // SAFETY: NUL-terminated path; the mode truncates to mode_t as in C.
-    let status = unsafe { libc::chmod(fa.plat_cstring().as_ptr(), new_mode as libc::mode_t) };
-    if status != 0 {
-        return Err(os_error(vm, errno()));
-    }
+    // `set_permissions` is `chmod` on Unix and passes the mode through
+    // unmasked, so the truncation to mode_t is the C's.
+    std::fs::set_permissions(
+        fa.plat_fs_path(),
+        std::fs::Permissions::from_mode(new_mode as u32),
+    )
+    .map_err(|e| os_error(vm, io_errno(&e)))?;
     vm.nil()
 }
 
@@ -372,17 +377,12 @@ fn primitiveChangeOwner(
 ) -> PrimResult<Oop> {
     let conv = load_converters(vm);
     let fa = st_path_from(vm, &conv, file_name)?;
-    // SAFETY: NUL-terminated path; ids truncate to uid_t/gid_t as in C.
-    let status = unsafe {
-        libc::chown(
-            fa.plat_cstring().as_ptr(),
-            owner_id as libc::uid_t,
-            group_id as libc::gid_t,
-        )
-    };
-    if status != 0 {
-        return Err(os_error(vm, errno()));
-    }
+    std::os::unix::fs::chown(
+        fa.plat_fs_path(),
+        Some(owner_id as u32),
+        Some(group_id as u32),
+    )
+    .map_err(|e| os_error(vm, io_errno(&e)))?;
     vm.nil()
 }
 
@@ -396,17 +396,12 @@ fn primitiveSymlinkChangeOwner(
 ) -> PrimResult<Oop> {
     let conv = load_converters(vm);
     let fa = st_path_from(vm, &conv, file_name)?;
-    // SAFETY: as in primitiveChangeOwner, on the link itself.
-    let status = unsafe {
-        libc::lchown(
-            fa.plat_cstring().as_ptr(),
-            owner_id as libc::uid_t,
-            group_id as libc::gid_t,
-        )
-    };
-    if status != 0 {
-        return Err(os_error(vm, errno()));
-    }
+    std::os::unix::fs::lchown(
+        fa.plat_fs_path(),
+        Some(owner_id as u32),
+        Some(group_id as u32),
+    )
+    .map_err(|e| os_error(vm, io_errno(&e)))?;
     vm.nil()
 }
 

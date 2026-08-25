@@ -34,6 +34,7 @@
 use core::ffi::{c_int, c_void};
 use core::mem;
 use core::ptr;
+use std::time::Duration;
 
 use pharo_vm_plugin::{sqInt, PrimErr, PrimResult};
 
@@ -149,23 +150,44 @@ pub unsafe fn socket_valid(s: *mut SQSocket) -> bool {
         && (*s).session_id == resolver::current_session()
 }
 
-/// `setLinger`: linger for a second on close (or not at all).
-fn set_linger(fd: c_int, flag: c_int) {
-    let linger = libc::linger {
-        l_onoff: flag,
-        l_linger: flag * LINGER_SECS,
-    };
-    // SAFETY: plain setsockopt with a properly sized struct; errors ignored,
-    // as in C.
-    unsafe {
-        libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_LINGER,
-            &linger as *const libc::linger as *const c_void,
-            mem::size_of::<libc::linger>() as libc::socklen_t,
-        );
+/// Runs `f` with the descriptor as a borrowed `socket2` socket.
+///
+/// `PrivateSocket::fd` is the ABI-frozen `int` that `UnixOSProcessPlugin`
+/// reads out of the record, so this plugin cannot *own* a `socket2::Socket`
+/// there. `SockRef` borrows a descriptor without taking ownership of it,
+/// which is exactly the C's model: the descriptor is closed by
+/// `sqSocketDestroy`, never by a scope ending.
+///
+/// Answers `None` for a negative descriptor, which several callers do pass:
+/// the C handed `-1` straight to `setsockopt`/`getsockopt` and got `EBADF`
+/// back, whereas `BorrowedFd` cannot represent `-1` at all and panics. `None`
+/// is that `EBADF`, and each caller maps it to whatever the C did with the
+/// failure.
+///
+/// # Safety
+/// A non-negative `fd` must be an open descriptor for the duration of the
+/// call.
+unsafe fn with_socket<R>(fd: c_int, f: impl FnOnce(socket2::SockRef<'_>) -> R) -> Option<R> {
+    if fd < 0 {
+        return None;
     }
+    // SAFETY: the caller guarantees a non-negative `fd` is open, and the
+    // borrow ends with this call, so nothing can close it underneath the
+    // reference.
+    let borrowed = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
+    Some(f(socket2::SockRef::from(&borrowed)))
+}
+
+/// `setLinger`: linger for a second on close (or not at all).
+///
+/// The C built a `struct linger { l_onoff: flag, l_linger: flag * 1 }`, so a
+/// true flag is "linger one second" and a false one is "do not linger" --
+/// which is what `Option<Duration>` says directly. Errors are ignored, as in
+/// C.
+fn set_linger(fd: c_int, flag: c_int) {
+    let linger = (flag != 0).then(|| Duration::from_secs(LINGER_SECS as u64));
+    // SAFETY: callers hold an open descriptor.
+    let _ = unsafe { with_socket(fd, |s| s.set_linger(linger)) };
 }
 
 /// `socketReadable`: 1 readable, 0 would block, -1 no longer connected.
@@ -196,23 +218,18 @@ fn socket_readable(fd: c_int, socket_type: c_int) -> c_int {
 }
 
 /// `socketError`: the pending error condition on a descriptor.
+///
+/// `take_error` is `getsockopt(SO_ERROR)`, and like the C it clears the
+/// pending error as a side effect. -1 stands for a failed `getsockopt`, 0 for
+/// no pending error.
 fn socket_error_of(fd: c_int) -> c_int {
-    let mut error: c_int = 0;
-    let mut errsz = mem::size_of::<c_int>() as libc::socklen_t;
-    // SAFETY: SO_ERROR always fits an int.
-    let r = unsafe {
-        libc::getsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_ERROR,
-            &mut error as *mut c_int as *mut c_void,
-            &mut errsz,
-        )
-    };
-    if r == -1 {
-        return -1;
+    // SAFETY: callers hold an open descriptor.
+    match unsafe { with_socket(fd, |s| s.take_error()) } {
+        // No descriptor, or getsockopt itself failed: the C answered -1.
+        None | Some(Err(_)) => -1,
+        Some(Ok(None)) => 0,
+        Some(Ok(Some(e))) => e.raw_os_error().unwrap_or(0),
     }
-    error
 }
 
 /// The `notify` macro: signal the semaphores named by `mask`.
@@ -261,35 +278,45 @@ pub unsafe extern "C" fn accept_handler(fd: sqInt, data: *mut c_void, flags: c_i
         (*pss).waiting_to_send = 0;
         libc::close(fd);
     } else {
-        // accept() is ready
-        let new_sock = libc::accept(fd, ptr::null_mut(), ptr::null_mut());
-        if new_sock < 0 {
-            if last_os_error() == libc::ECONNABORTED {
-                // let's just pretend this never happened
-                aio::handle(fd, accept_handler, aio::AIO_RX);
-                return;
-            }
-            (*pss).sock_error = last_os_error();
-            (*pss).sock_state = INVALID;
-            aio::disable(fd);
-            libc::close(fd);
-        } else {
-            (*pss).sock_state = CONNECTED;
-            set_linger(new_sock, 1);
-            if (*pss).multi_listen != 0 {
-                if (*pss).accepted_sock > 0 {
-                    // an earlier accept was never collected; drop it
-                    set_linger((*pss).accepted_sock, 0);
-                    libc::close((*pss).accepted_sock);
+        // accept() is ready. `accept_raw` for the same reason as `new_raw`
+        // at socket creation: the C's accept() leaves FD_CLOEXEC clear.
+        //
+        // The error is carried out of the call rather than re-read from
+        // errno afterwards, so nothing in between can disturb it.
+        let accepted = with_socket(fd, |s| s.accept_raw())
+            .unwrap_or_else(|| Err(std::io::Error::from_raw_os_error(libc::EBADF)));
+        match accepted {
+            Err(e) => {
+                let errno = e.raw_os_error().unwrap_or(0);
+                if errno == libc::ECONNABORTED {
+                    // let's just pretend this never happened
+                    aio::handle(fd, accept_handler, aio::AIO_RX);
+                    return;
                 }
-                (*pss).accepted_sock = new_sock;
-            } else {
-                // traditional listen: replace server with client in place
+                (*pss).sock_error = errno;
+                (*pss).sock_state = INVALID;
                 aio::disable(fd);
                 libc::close(fd);
-                (*pss).fd = new_sock;
-                (*pss).waiting_to_send = 0;
-                aio::enable(new_sock, pss as *mut c_void, 0);
+            }
+            Ok((accepted, _peer)) => {
+                let new_sock = std::os::fd::IntoRawFd::into_raw_fd(accepted);
+                (*pss).sock_state = CONNECTED;
+                set_linger(new_sock, 1);
+                if (*pss).multi_listen != 0 {
+                    if (*pss).accepted_sock > 0 {
+                        // an earlier accept was never collected; drop it
+                        set_linger((*pss).accepted_sock, 0);
+                        libc::close((*pss).accepted_sock);
+                    }
+                    (*pss).accepted_sock = new_sock;
+                } else {
+                    // traditional listen: replace server with client in place
+                    aio::disable(fd);
+                    libc::close(fd);
+                    (*pss).fd = new_sock;
+                    (*pss).waiting_to_send = 0;
+                    aio::enable(new_sock, pss as *mut c_void, 0);
+                }
             }
         }
     }
@@ -422,10 +449,19 @@ pub unsafe fn create(
     let mut socket_type = socket_type as c_int;
 
     (*s).session_id = 0;
+    // `new_raw`, not `new`: socket2's `new` sets FD_CLOEXEC and the C's bare
+    // `socket()` does not. The difference is observable -- UnixOSProcessPlugin
+    // forks and execs, and a descriptor that vanished across exec would change
+    // what child processes inherit.
+    let make = |ty: socket2::Type| {
+        socket2::Socket::new_raw(socket2::Domain::from(domain), ty, None)
+            .map(std::os::fd::IntoRawFd::into_raw_fd)
+            .unwrap_or(-1)
+    };
     let new_socket = if socket_type == TCP_SOCKET_TYPE {
-        libc::socket(domain, libc::SOCK_STREAM, 0)
+        make(socket2::Type::STREAM)
     } else if socket_type == UDP_SOCKET_TYPE {
-        libc::socket(domain, libc::SOCK_DGRAM, 0)
+        make(socket2::Type::DGRAM)
     } else if socket_type == PROVIDED_TCP_SOCKET_TYPE {
         // See SD_LISTEN_FDS_START: the no-systemd stub adopts fd 3.
         socket_type = TCP_SOCKET_TYPE;
@@ -437,14 +473,8 @@ pub unsafe fn create(
         // socket() failed, or incorrect socketType
         return Err(PrimErr::GenericFailure);
     }
-    let one: c_int = 1;
-    libc::setsockopt(
-        new_socket,
-        libc::SOL_SOCKET,
-        libc::SO_REUSEADDR,
-        &one as *const c_int as *const c_void,
-        mem::size_of::<c_int>() as libc::socklen_t,
-    );
+    // Errors ignored, as in C.
+    let _ = with_socket(new_socket, |s| s.set_reuse_address(true));
 
     let pss = PrivateSocket::boxed_zeroed();
     (*pss).fd = new_socket;
@@ -570,7 +600,8 @@ pub unsafe fn listen_on_port_backlog_interface(
         mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
     );
     if (*s).socket_type == TCP_SOCKET_TYPE {
-        libc::listen((*pss).fd, backlog_size as c_int);
+        // Errors ignored here, as in C; acceptHandler surfaces them.
+        let _ = with_socket((*pss).fd, |sock| sock.listen(backlog_size as c_int));
         (*pss).sock_state = WAITING_FOR_CONNECTION;
         aio::enable((*pss).fd, pss as *mut c_void, 0);
         aio::handle((*pss).fd, accept_handler, aio::AIO_RX); // R => accept()
@@ -613,7 +644,8 @@ pub unsafe fn listen_backlog(s: *mut SQSocket, backlog_size: sqInt) -> PrimResul
     let pss = (*s).private;
     (*pss).multi_listen = c_int::from(backlog_size > 1);
     if (*s).socket_type == TCP_SOCKET_TYPE {
-        libc::listen((*pss).fd, backlog_size as c_int); // acceptHandler catches errors
+        // acceptHandler catches errors
+        let _ = with_socket((*pss).fd, |sock| sock.listen(backlog_size as c_int));
         (*pss).sock_state = WAITING_FOR_CONNECTION;
         aio::enable((*pss).fd, pss as *mut c_void, 0);
         aio::handle((*pss).fd, accept_handler, aio::AIO_RX);
@@ -760,7 +792,7 @@ pub unsafe fn close_connection(s: *mut SQSocket) -> PrimResult<()> {
         (*pss).fd = -1;
     } else {
         // asynchronous close in progress
-        libc::shutdown(fd, libc::SHUT_WR);
+        let _ = with_socket(fd, |sock| sock.shutdown(std::net::Shutdown::Write));
         (*pss).sock_state = THIS_END_CLOSED;
         aio::handle(fd, close_handler, aio::AIO_RWX); // => close() done
     }

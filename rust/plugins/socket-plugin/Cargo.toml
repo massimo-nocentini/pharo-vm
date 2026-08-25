@@ -14,6 +14,17 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 pharo-vm-plugin = { path = "../../pharo-vm-plugin" }
-# Thin syscall access: sockets, getaddrinfo/getnameinfo, getifaddrs. The C
-# plugin is a direct BSD-sockets client and this port keeps that shape.
+# Typed, fd-safe socket operations. `socket2` is what `std::net` is built on,
+# and it exposes the parts std hides but this plugin needs: SOCK_RAW, the
+# unconnected UDP calls, per-socket flags, and `SockAddr` for converting
+# between `std::net::SocketAddr` and the raw `sockaddr` bytes the image's
+# SocketAddress ByteArrays carry.
+socket2 = { version = "0.6", features = ["all"] }
+# `getaddrinfo`/`getnameinfo` as owned Rust values instead of a libc-owned
+# linked list. It also exposes the raw EAI error number, which the image reads
+# back through `sqResolverError` -- `std`'s `ToSocketAddrs` discards it.
+dns-lookup = "3"
+# Still needed for what neither covers: `poll(2)` for the VM's own event loop,
+# `getifaddrs`, `getnameinfo` on a raw image-supplied sockaddr, `gethostname`,
+# and the setsockopt-by-name table, which needs raw (level, optname) pairs.
 libc.workspace = true

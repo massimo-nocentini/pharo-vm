@@ -33,6 +33,36 @@ unexported as −1), same failure codes, and the same deliberate oddities:
 
 ## What changed underneath
 
+**Big multiplications and divisions go through `num-bigint`.** The C is
+schoolbook over 32-bit digits at every size. Past a measured threshold this
+port hands the work to [`num-bigint`](https://crates.io/crates/num-bigint)
+(MIT/Apache-2.0, from the rust-num project), whose 64-bit limbs and
+sub-quadratic algorithms are 1.1x faster at 20 digits and 17x faster at 4096.
+Below the threshold the original loops still run, because the conversion
+costs more than the limbs save — a LargeInteger just past SmallInteger range
+is two or three digits, and there num-bigint is *slower*.
+
+Both paths are kept side by side (`multiply_delegated`/`multiply_schoolbook`,
+`divide_delegated`/`divide_schoolbook`) and the tests assert they answer
+identically — same quotient digits, same quotient byte length, same
+remainder magnitude and byte length, same `None` for a zero remainder —
+across sizes either side of the dispatch point. The delegated path is
+therefore held to the digit-for-digit contract the loops were verified
+against, not merely to being mathematically correct.
+
+Why not GMP: it is LGPL (as is `rug`, the Rust wrapper) against this repo's
+MIT, so the obligation would attach to every binary Pharo ships; it re-adds a
+C toolchain dependency the port had just removed; and `mpz_t` normalises,
+while several of these primitives must answer *un*normalized results, so
+every call would need re-padding to the byte length the C produced.
+
+`primDigitMontgomeryTimesModulo` is deliberately **not** delegated. Its
+`mInvModB` argument is a single-word inverse consumed limb-by-limb by the
+CIOS loop; a bulk REDC needs the full-width `-n^-1 mod R` instead, so
+delegating would mean deriving that by Hensel lifting and re-deriving the
+C's exact reduction behaviour — more new code than it removes, on the one
+primitive where crypto code would notice a discrepancy.
+
 **No scratch objects in image memory.** The C converts every SmallInteger
 operand by allocating an intermediate LargeInteger object, and its division
 allocates shifted copies of both operands as image objects before dividing.
@@ -72,7 +102,7 @@ lookups, no state between calls, no dependencies beyond the SDK.
 
 ## Verification
 
-`cargo test -p large-integers` — 44 tests over the pure digit core:
+`cargo test -p large-integers` — 47 tests over the pure digit core:
 
 * **Cross-checks against `u128` arithmetic** for add, subtract (both signs),
   multiply, and/or/xor, both shifts, `anyBit`, and division (quotient and
@@ -91,6 +121,10 @@ lookups, no state between calls, no dependencies beyond the SDK.
 * **The C's exact conventions**: `byteSizeOfCSI:` thresholds, unnormalized
   subtraction wrap-around, result byte lengths of shifts, the trimmed-prefix
   subtraction path, digit/byte round-trips over partial words.
+* **The `num-bigint` paths against the loops they replace**, digit for digit,
+  over three size bands per operation — including the boundary where dispatch
+  switches, the dropped top carry of a partial trailing word, and the exact
+  division whose remainder must be `None` rather than zero.
 
 The exported surface of the built `libLargeIntegers.so` was diffed against
 the C's export table: all fifteen primitives, `getModuleName`,

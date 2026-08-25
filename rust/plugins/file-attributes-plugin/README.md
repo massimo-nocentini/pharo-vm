@@ -28,6 +28,29 @@ the C does.
 
 ## What changed underneath
 
+**`std::fs` replaces the raw syscalls wherever it loses nothing.**
+`MetadataExt` exposes every `struct stat` field this plugin answers as the
+raw integer the OS reported, so `stat`/`lstat` go through
+`std::fs::metadata`/`symlink_metadata` with no fidelity cost and no
+`MaybeUninit<libc::stat>`. `readlink`, `chmod`, `chown` and `lchown` likewise
+become `std::fs::read_link`, `set_permissions` and
+`std::os::unix::fs::{chown, lchown}` -- each carrying its errno in the error
+value instead of leaving it in a global to be read back.
+
+Directory walks are `std::fs::ReadDir` rather than a raw `*mut DIR`. That
+removed the `unsafe impl Send`, the manual `Drop`, and the hand-rolled
+`errno_location()` -- which had `cfg` arms for Linux and the BSDs only, and so
+would not have compiled on Solaris or NetBSD. The C cleared `errno` before its
+`readdir` loop purely to tell end-of-stream from failure; `Iterator::next`
+answering `None` versus `Some(Err)` *is* that distinction, checked by the
+compiler rather than by convention. `read_dir` also skips `.` and `..` itself,
+so the explicit filter is gone.
+
+`libc` remains for the three things std has no equivalent for: `access(2)`
+(std can test existence, not R_OK/W_OK/X_OK against the real uid), the
+`tm_gmtoff` of `localtime_r` (std has no timezone support), and the `S_IF*`
+masks.
+
 **No raw pointer in image memory.** `primitiveOpendir` hands the image a
 ByteArray shaped like the C `FAPathPtr` — `{ int sessionId; fapath *ptr; }`,
 16 bytes on 64-bit — and the walk primitives trust what comes back. In the C

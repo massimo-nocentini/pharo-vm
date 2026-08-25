@@ -52,18 +52,32 @@ pub fn payload(bytes: &[u8]) -> &[u8] {
     &bytes[ADDRESS_HEADER_SIZE..]
 }
 
-/// The `sa_family` of the payload, read the way C reads
+/// Reads a field out of the raw `sockaddr` payload by its offset and width,
+/// the way [`set_port`] writes one.
+///
+/// The payload sits at an arbitrary offset inside an image ByteArray, so it
+/// is not necessarily aligned for the struct it represents. Addressing the
+/// one field wanted -- rather than reading the whole struct unaligned and
+/// discarding the rest -- keeps every access in safe Rust and bounds-checked.
+fn payload_field<const N: usize>(bytes: &[u8], offset: usize) -> Option<[u8; N]> {
+    let at = ADDRESS_HEADER_SIZE + offset;
+    bytes.get(at..at + N)?.try_into().ok()
+}
+
+/// The `sa_family` of the payload, as C reads
 /// `socketAddress(addr)->sa_family`.
+///
+/// A payload too short to hold a `sockaddr` answers `None`; the C
+/// dereferenced whatever was there.
 fn payload_family(bytes: &[u8]) -> Option<libc::sa_family_t> {
-    let payload = bytes.get(ADDRESS_HEADER_SIZE..)?;
-    if payload.len() < mem::size_of::<libc::sockaddr>() {
-        // The C dereferences whatever is there; refusing a short payload is
-        // the memory-safe reading of the same situation.
+    if bytes.len() < ADDRESS_HEADER_SIZE + mem::size_of::<libc::sockaddr>() {
         return None;
     }
-    // SAFETY: the slice is long enough for a sockaddr, read unaligned.
-    let sa = unsafe { (payload.as_ptr() as *const libc::sockaddr).read_unaligned() };
-    Some(sa.sa_family)
+    let raw = payload_field::<{ mem::size_of::<libc::sa_family_t>() }>(
+        bytes,
+        mem::offset_of!(libc::sockaddr, sa_family),
+    )?;
+    Some(libc::sa_family_t::from_ne_bytes(raw))
 }
 
 /// `sqSocketAddressSizeGetPort`: the port of an AF_INET / AF_INET6 payload,
@@ -73,20 +87,18 @@ pub fn get_port(bytes: &[u8], session: i32) -> Option<u16> {
         return None;
     }
     let family = payload_family(bytes)?;
-    let payload = &bytes[ADDRESS_HEADER_SIZE..];
-    match family as i32 {
-        libc::AF_INET if payload.len() >= mem::size_of::<libc::sockaddr_in>() => {
-            // SAFETY: length checked; unaligned read.
-            let sin = unsafe { (payload.as_ptr() as *const libc::sockaddr_in).read_unaligned() };
-            Some(u16::from_be(sin.sin_port))
+    let payload_len = bytes.len() - ADDRESS_HEADER_SIZE;
+    let offset = match family as i32 {
+        libc::AF_INET if payload_len >= mem::size_of::<libc::sockaddr_in>() => {
+            mem::offset_of!(libc::sockaddr_in, sin_port)
         }
-        libc::AF_INET6 if payload.len() >= mem::size_of::<libc::sockaddr_in6>() => {
-            // SAFETY: length checked; unaligned read.
-            let sin6 = unsafe { (payload.as_ptr() as *const libc::sockaddr_in6).read_unaligned() };
-            Some(u16::from_be(sin6.sin6_port))
+        libc::AF_INET6 if payload_len >= mem::size_of::<libc::sockaddr_in6>() => {
+            mem::offset_of!(libc::sockaddr_in6, sin6_port)
         }
-        _ => None,
-    }
+        _ => return None,
+    };
+    // Both families store the port as a network-order u16 at that offset.
+    Some(u16::from_be_bytes(payload_field::<2>(bytes, offset)?))
 }
 
 /// `sqSocketAddressSizeSetPort`: stores `port` (host order in, network order
@@ -107,7 +119,7 @@ pub fn set_port(bytes: &mut [u8], session: i32, port: u16) -> bool {
     let Some(slot) = bytes.get_mut(at..at + 2) else {
         return false;
     };
-    slot.copy_from_slice(&port.to_be().to_ne_bytes());
+    slot.copy_from_slice(&port.to_be_bytes());
     true
 }
 

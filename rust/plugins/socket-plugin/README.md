@@ -45,6 +45,55 @@ for that header-level coupling only; it resolves no symbols from this library.
 
 ## What changed underneath
 
+**The resolver holds owned Rust values, not a libc linked list.** The C kept
+`getaddrinfo`'s `addrinfo` chain (plus a second, hand-`calloc`ed one for the
+AF_UNIX case) in globals and freed them at the top of the next lookup. Those
+are now a `Vec<ResolvedAddr>` and an index, filled from
+[`dns-lookup`](https://crates.io/crates/dns-lookup), which frees the chain
+itself. Gone with them: the `unsafe impl Send` the raw pointers forced, the
+`freeaddrinfo`, the `Box::into_raw` pair leaked for the local-socket result,
+and the `(*cursor)` dereferences in six accessor functions. `dns-lookup` was
+chosen over `std`'s `ToSocketAddrs` because it exposes the raw EAI error
+number, which the image reads back through `sqResolverError`; std discards it.
+
+The reverse lookup no longer calls `gethostbyaddr`, which the port had to
+hand-declare because it is deprecated, is not thread-safe (it answers a
+pointer into static storage) and is IPv4-only. `dns_lookup::lookup_addr` does
+the same job over `getnameinfo`. The one observable consequence: a failed
+reverse lookup always reports `HOST_NOT_FOUND` now, because `getnameinfo`
+reports EAI codes rather than `h_errno` -- and the C's own fallback already
+flattened those to `HOST_NOT_FOUND` on any platform without an `h_errno`
+accessor.
+
+**Sockets go through `socket2`.** `PrivateSocket.fd` stays the ABI-frozen
+`int` that `UnixOSProcessPlugin` reads out of the record, so this plugin
+cannot *own* a `socket2::Socket`; a `with_socket` helper borrows the
+descriptor as a `SockRef` for the duration of one call, which is exactly the
+C's model -- the descriptor is closed by `sqSocketDestroy`, never by a scope
+ending. Socket creation, `accept`, `listen`, `shutdown`, `SO_LINGER`,
+`SO_REUSEADDR` and `SO_ERROR` are typed calls now.
+
+Two details worth knowing:
+
+* creation and accept use `Socket::new_raw` and `accept_raw`, **not** `new`
+  and `accept`, because socket2's non-raw versions set `FD_CLOEXEC` and the
+  C's bare `socket()`/`accept()` do not. The difference is observable:
+  `UnixOSProcessPlugin` forks and execs, and a descriptor that vanished
+  across `exec` would change what child processes inherit.
+* `with_socket` answers `None` for a negative descriptor rather than
+  borrowing one. Several callers do pass `-1`; the C handed it straight to
+  `setsockopt`/`getsockopt` and got `EBADF` back, whereas `BorrowedFd` cannot
+  represent `-1` and panics. Each caller maps that `None` to whatever the C
+  did with the failure.
+
+`libc` remains for what neither covers: `poll(2)` for the VM's own event
+loop, `getifaddrs`, `getnameinfo` on a raw image-supplied `sockaddr` (which
+may be AF_UNIX, and whose result the C treats as bytes rather than UTF-8),
+`gethostname`, the `setsockopt`-by-name table (which needs raw
+`(level, optname)` pairs the typed setters do not expose), and the
+send/receive calls, whose buffers are raw pointers into image memory either
+way.
+
 * **Undefined behaviour removed, failures kept.** Several C shims read an
   argument's bytes with no kind check (`primitiveResolverGetNameInfo`,
   `primitiveSocketAddressGetPort`/`SetPort` and friends) -- a SmallInteger

@@ -14,3 +14,17 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 pharo-vm-plugin = { path = "../../pharo-vm-plugin" }
+# Pure-Rust arbitrary-precision arithmetic from the rust-num project
+# (MIT/Apache-2.0, so no licence entanglement with this MIT repo, and no C
+# toolchain -- unlike GMP, whose LGPL terms would attach to every binary
+# Pharo ships).
+#
+# It is used *only* above the operand sizes where its sub-quadratic
+# algorithms actually beat the schoolbook digit loops inherited from the C:
+# Karatsuba/Toom-3 multiplication and Burnikel-Ziegler division. Below those
+# thresholds num-bigint runs the same schoolbook algorithms, so delegating
+# would buy nothing and cost a representation conversion on the hot path.
+# See the threshold constants in `src/digits.rs`.
+num-bigint = "0.5"
+# `Integer::div_rem`: one division for both quotient and remainder.
+num-integer = "0.1"

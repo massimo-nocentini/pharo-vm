@@ -42,6 +42,68 @@ pub const MIN_SMALL_MAG: u64 = 1 << 30;
 /// plus the byte length they stand for.
 pub type Magnitude = (Vec<u32>, usize);
 
+// ---------------------------------------------------------------------------
+// Delegating the asymptotically bad operations to num-bigint
+// ---------------------------------------------------------------------------
+//
+// The C's multiplication and division are schoolbook over 32-bit digits.
+// `num-bigint` packs into 64-bit limbs and, for large enough operands,
+// switches to Karatsuba/Toom-3 multiplication and Burnikel-Ziegler division.
+// Its digit representation is *exactly* this module's -- `BigUint::new` takes
+// little-endian `u32` digits and `to_u32_digits` gives them back -- so handing
+// work over costs one normalising copy each way and no reinterpretation.
+//
+// Two distinct effects make it faster, and they arrive at different sizes:
+//
+// * from ~20 digits, the 64-bit limbs alone win, because a `n/2 x n/2` limb
+//   schoolbook is a quarter of the multiply-accumulates of an `n x n` digit
+//   one. This is most of the benefit at the sizes image code actually meets.
+// * from a few hundred digits, the sub-quadratic algorithms take over and the
+//   gap widens without bound.
+//
+// Below the thresholds the conversion costs more than the limb packing saves,
+// so the loops stay -- and they are the code already checked digit for digit
+// against the C. `delegated_multiply_agrees_with_the_loop` and
+// `delegated_divide_agrees_with_the_loop` keep the two from drifting.
+//
+// The thresholds are measured, not derived; re-measure before changing them.
+// On the machine this was ported on (x86-64, release build):
+//
+// ```text
+//   multiply, digits per factor    20    24    64   256  1024  4096
+//   speedup over the loop        1.12  1.30  2.74  5.04 13.05 17.57
+//
+//   divide, dividend/divisor    32/16 48/24 64/32 128/64 512/256 8192/4096
+//   speedup over the loop        1.24  1.64  1.92   2.93    4.42     13.49
+// ```
+
+/// Delegate a multiplication once the *shorter* factor passes this many
+/// 32-bit digits. Below it the loop wins: at 8-14 digits num-bigint runs
+/// 0.72-0.84x the speed of the loop, and the common image case (a
+/// LargeInteger just past SmallInteger range) is 2-3 digits.
+const MUL_DELEGATE_DIGITS: usize = 20;
+
+/// Delegate a division once *both* operands pass these digit counts.
+/// Division carries more per-call setup than multiplication, so it breaks
+/// even later: 24/12 digits still runs at 0.89x.
+const DIV_DELEGATE_DIVIDEND_DIGITS: usize = 32;
+const DIV_DELEGATE_DIVISOR_DIGITS: usize = 16;
+
+/// Borrows a digit slice as a `BigUint`. Leading zero digits are dropped by
+/// the constructor, which is what every caller wants.
+fn to_big(digits: &[u32]) -> num_bigint::BigUint {
+    num_bigint::BigUint::new(digits.to_vec())
+}
+
+/// A `BigUint` back as exactly `len` little-endian digits, zero-padded or --
+/// where the caller's contract drops a high word, as `multiply`'s does --
+/// truncated.
+fn from_big(value: &num_bigint::BigUint, len: usize) -> Vec<u32> {
+    let mut digits = value.to_u32_digits();
+    digits.resize(len, 0);
+    digits
+}
+
 /// `digitSizeOfLargeInt:` — 32-bit digits covering `byte_len` bytes.
 pub fn digit_len(byte_len: usize) -> usize {
     (byte_len + 3) / 4
@@ -184,6 +246,28 @@ pub fn multiply(short: &[u32], short_bytes: usize, long: &[u32], long_bytes: usi
     debug_assert_eq!(short.len(), digit_len(short_bytes));
     debug_assert_eq!(long.len(), digit_len(long_bytes));
     let capacity = digit_len(short_bytes + long_bytes);
+    if short.len().min(long.len()) > MUL_DELEGATE_DIGITS {
+        multiply_delegated(short, long, capacity)
+    } else {
+        multiply_schoolbook(short, long, capacity)
+    }
+}
+
+/// [`multiply`] through num-bigint, for factors large enough that Karatsuba
+/// or Toom-3 beats the schoolbook loop.
+///
+/// `capacity` is one short of `short.len() + long.len()` whenever both byte
+/// lengths have partial trailing words, so the resize inside [`from_big`]
+/// drops the same high carry digit [`multiply_schoolbook`] drops with its
+/// `if k < capacity`. It can never drop more: the true product needs at most
+/// `short.len() + long.len()` digits, and `capacity` is always at least
+/// `short.len() + long.len() - 1`.
+fn multiply_delegated(short: &[u32], long: &[u32], capacity: usize) -> Vec<u32> {
+    from_big(&(to_big(short) * to_big(long)), capacity)
+}
+
+/// [`multiply`]'s schoolbook loop, digit for digit as the C runs it.
+fn multiply_schoolbook(short: &[u32], long: &[u32], capacity: usize) -> Vec<u32> {
     let mut res = vec![0u32; capacity];
     if short.len() == 1 && short[0] == 0 {
         return res;
@@ -450,6 +534,31 @@ pub fn divide(
     let second_digit_len = digit_len(second_byte_len);
     debug_assert!(first_digit_len >= second_digit_len);
     let quo_digit_len = first_digit_len - second_digit_len + 1;
+    if first_digit_len > DIV_DELEGATE_DIVIDEND_DIGITS
+        && second_digit_len > DIV_DELEGATE_DIVISOR_DIGITS
+    {
+        divide_delegated(
+            &first[..first_digit_len],
+            &second[..second_digit_len],
+            quo_digit_len,
+        )
+    } else {
+        divide_schoolbook(
+            &first[..first_digit_len],
+            &second[..second_digit_len],
+            quo_digit_len,
+        )
+    }
+}
+
+/// [`divide`]'s shift-and-Knuth-D path, as the C runs it.
+fn divide_schoolbook(
+    first: &[u32],
+    second: &[u32],
+    quo_digit_len: usize,
+) -> (Vec<u32>, usize, Option<Magnitude>) {
+    let first_digit_len = first.len();
+    let second_digit_len = second.len();
     let d = 32 - high_bit_32(second[second_digit_len - 1]);
     // div := (second << d) grown by one zero digit (largeIntgrowTo in the C).
     let (mut div, _) = lshift(&second[..second_digit_len], d).expect("divisor is non-zero");
@@ -465,6 +574,41 @@ pub fn divide(
     let quo = div_core(&div, &mut rem, quo_digit_len);
     let rem_out = rshift(&rem, d, div.len() - 1);
     (quo, quo_digit_len * 4, rem_out)
+}
+
+/// [`divide`] for operands big enough that Burnikel-Ziegler beats Knuth D.
+///
+/// The normalisation shift the loop version needs (`d`, so the quotient-digit
+/// estimate is exact) is num-bigint's own business, so it is absent here. The
+/// output shapes are the ones `divide` documents, and they fall out of the
+/// same rules the shifted path arrives at:
+///
+/// * the quotient always occupies `quo_digit_len` digits, zero-padded;
+/// * the remainder carries the *minimal* byte length holding it, which is
+///   what `rshift` computes as `(newBitLen + 7) / 8` -- and since it right
+///   shifts by exactly the `d` bits the dividend was left shifted by,
+///   `newBitLen` is the true remainder's bit length, i.e. `BigUint::bits`;
+/// * a zero remainder is `None`, which `rshift` reports as `newBitLen <= 0`.
+fn divide_delegated(
+    first: &[u32],
+    second: &[u32],
+    quo_digit_len: usize,
+) -> (Vec<u32>, usize, Option<Magnitude>) {
+    use num_integer::Integer;
+
+    let (quotient, remainder) = to_big(first).div_rem(&to_big(second));
+    let rem_bits = remainder.bits() as usize;
+    let rem_out = if rem_bits == 0 {
+        None
+    } else {
+        let byte_len = (rem_bits + 7) / 8;
+        Some((from_big(&remainder, digit_len(byte_len)), byte_len))
+    };
+    (
+        from_big(&quotient, quo_digit_len),
+        quo_digit_len * 4,
+        rem_out,
+    )
 }
 
 /// `cDigitMontgomery:len:times:len:modulo:len:mInvModB:into:` — Montgomery
@@ -903,6 +1047,98 @@ mod tests {
     }
 
     // ---- multiplication ----------------------------------------------------
+
+    // ---- the delegated paths against the loops they replace ---------------
+
+    /// The whole safety argument for handing multiplication to num-bigint is
+    /// that the two paths are the same function. This checks that digit for
+    /// digit, at sizes on both sides of `MUL_DELEGATE_DIGITS` -- including
+    /// the partial-trailing-word shapes where `capacity` is one digit short
+    /// of the full product and the top carry is dropped.
+    #[test]
+    fn delegated_multiply_agrees_with_the_loop() {
+        let mut rng = Rng(0x5EED_1234_5678_9ABC);
+        for case in 0..300 {
+            // Three bands: tiny shapes exercise the dropped carry and the
+            // zero short-circuits, the middle band sits either side of
+            // `MUL_DELEGATE_DIGITS` where dispatch actually switches, and the
+            // large band reaches Karatsuba and Toom-3.
+            let (short_bytes, long_bytes) = match case % 3 {
+                0 => (1 + rng.below(24) as usize, 1 + rng.below(24) as usize),
+                1 => (50 + rng.below(80) as usize, 50 + rng.below(80) as usize),
+                _ => (250 + rng.below(600) as usize, 250 + rng.below(600) as usize),
+            };
+            let short: Vec<u32> = (0..digit_len(short_bytes))
+                .map(|_| rng.next() as u32)
+                .collect();
+            let long: Vec<u32> = (0..digit_len(long_bytes))
+                .map(|_| rng.next() as u32)
+                .collect();
+            let capacity = digit_len(short_bytes + long_bytes);
+
+            assert_eq!(
+                multiply_delegated(&short, &long, capacity),
+                multiply_schoolbook(&short, &long, capacity),
+                "case {case}: {short_bytes} x {long_bytes} bytes",
+            );
+        }
+    }
+
+    /// Same argument for division: quotient digits, quotient byte length and
+    /// the remainder's `(digits, byte_len)` -- including its `None` for a
+    /// zero remainder -- must match the shift-and-Knuth-D path exactly.
+    #[test]
+    fn delegated_divide_agrees_with_the_loop() {
+        let mut rng = Rng(0xD1D1_5108_ABCD_EF01);
+        for case in 0..200 {
+            let second_digits = 1 + rng.below(40) as usize;
+            let first_digits = second_digits + rng.below(40) as usize;
+            let mut second: Vec<u32> =
+                (0..second_digits).map(|_| rng.next() as u32).collect();
+            // The divisor must be normalized (non-zero top digit), which is
+            // what `divide`'s caller guarantees.
+            if second[second_digits - 1] == 0 {
+                second[second_digits - 1] = 1;
+            }
+            let first: Vec<u32> = (0..first_digits).map(|_| rng.next() as u32).collect();
+            let quo_digit_len = first_digits - second_digits + 1;
+
+            assert_eq!(
+                divide_delegated(&first, &second, quo_digit_len),
+                divide_schoolbook(&first, &second, quo_digit_len),
+                "case {case}: {first_digits} / {second_digits} digits",
+            );
+        }
+    }
+
+    /// An exact division, so the remainder is zero and both paths must answer
+    /// `None` for it rather than a zero-valued magnitude.
+    #[test]
+    fn delegated_divide_agrees_on_a_zero_remainder() {
+        let mut rng = Rng(0x0000_0000_DEAD_BEEF);
+        for _ in 0..50 {
+            let second_digits = 1 + rng.below(20) as usize;
+            let mut second: Vec<u32> =
+                (0..second_digits).map(|_| rng.next() as u32).collect();
+            if second[second_digits - 1] == 0 {
+                second[second_digits - 1] = 1;
+            }
+            let factor_digits = 1 + rng.below(20) as usize;
+            let factor: Vec<u32> = (0..factor_digits).map(|_| rng.next() as u32).collect();
+
+            // first := second * factor, so the division is exact.
+            let product = to_big(&second) * to_big(&factor);
+            let first = product.to_u32_digits();
+            if first.len() < second_digits {
+                continue;
+            }
+            let quo_digit_len = first.len() - second_digits + 1;
+
+            let delegated = divide_delegated(&first, &second, quo_digit_len);
+            assert_eq!(delegated.2, None, "an exact division has no remainder");
+            assert_eq!(delegated, divide_schoolbook(&first, &second, quo_digit_len));
+        }
+    }
 
     #[test]
     fn multiply_matches_u128() {
@@ -1398,3 +1634,4 @@ mod tests {
         );
     }
 }
+

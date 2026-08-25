@@ -2,9 +2,13 @@
 //! rules from the Unix `faSupport.c`.
 //!
 //! The image is answered the OS's raw values -- `st_mode` bit-for-bit,
-//! `time_t` seconds converted to the Squeak epoch -- so this goes through
-//! `libc` directly; `std::fs::Metadata` is used only by the tests, as an
-//! independent witness.
+//! `time_t` seconds converted to the Squeak epoch. `std::fs` supplies them:
+//! `MetadataExt` exposes every `struct stat` field this plugin answers as the
+//! raw integer the OS reported, so going through std costs no fidelity and
+//! removes the `MaybeUninit<libc::stat>` dance. `libc` remains for the three
+//! things std has no equivalent for: `access(2)` (std can test existence, not
+//! R_OK/W_OK/X_OK against the real uid), the `tm_gmtoff` of `localtime_r`
+//! (std has no timezone support) and the `S_IF*` masks.
 //!
 //! Which value is boxed how (32-bit unsigned, 64-bit unsigned, 64-bit
 //! signed, nil) is part of the plugin's contract with the image and is kept
@@ -13,9 +17,19 @@
 //! 32-bit in the attribute array but 64-bit as a single attribute.
 
 use std::ffi::{c_int, CStr};
+use std::fs::Metadata;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::fs::MetadataExt;
+use std::path::Path;
 
 use crate::codes::FA_CANT_STAT_PATH;
 use crate::fapath::FA_PATH_MAX;
+
+/// The image's paths are arbitrary bytes, and on Unix so are `Path`s: this
+/// borrows the one as the other with no allocation and no UTF-8 requirement.
+fn as_path(path: &CStr) -> &Path {
+    Path::new(std::ffi::OsStr::from_bytes(path.to_bytes()))
+}
 
 /// Seconds between the Squeak epoch (1 Jan 1901) and the Unix epoch
 /// (1 Jan 1970): 52 non-leap years and 17 leap years, as counted by
@@ -62,53 +76,47 @@ impl FileStat {
         self.mode & (libc::S_IFMT as u32) == libc::S_IFLNK as u32
     }
 
-    // The casts widen platform-dependent field types (u16/u32/i32 on some
-    // OSes) exactly as C's integer promotions to the proxy's parameter types
-    // do -- including sign-extension for a negative i32 st_dev on macOS.
-    #[allow(clippy::unnecessary_cast)]
-    fn from_raw(st: &libc::stat) -> Self {
+    /// `MetadataExt`'s accessors are the raw `struct stat` fields, already
+    /// widened to fixed-width types the same way the C's integer promotions
+    /// to the proxy's parameter types widened them -- sign-extension of a
+    /// negative i32 `st_dev` on macOS included, since std casts with `as`
+    /// too. `size` is re-narrowed to i64 (same bits) because the C answered
+    /// `st_size` signed.
+    fn from_meta(md: &Metadata) -> Self {
         Self {
-            mode: st.st_mode as u32,
-            ino: st.st_ino as u64,
-            dev: st.st_dev as u64,
-            nlink: st.st_nlink as u64,
-            uid: st.st_uid as u32,
-            gid: st.st_gid as u32,
-            size: st.st_size as i64,
-            atime: st.st_atime as i64,
-            mtime: st.st_mtime as i64,
-            ctime: st.st_ctime as i64,
+            mode: md.mode(),
+            ino: md.ino(),
+            dev: md.dev(),
+            nlink: md.nlink(),
+            uid: md.uid(),
+            gid: md.gid(),
+            size: md.size() as i64,
+            atime: md.atime(),
+            mtime: md.mtime(),
+            ctime: md.ctime(),
         }
     }
 }
 
 /// `stat()`. Any failure is `FA_CANT_STAT_PATH`, whatever errno says --
-/// that is the C's mapping.
+/// that is the C's mapping, and it is why the `io::Error` is dropped here.
 pub fn stat_path(path: &CStr) -> Result<FileStat, i64> {
-    // SAFETY: `path` is NUL-terminated and `st` is a writable out-param the
-    // call fully initialises on success.
-    let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
-    let status = unsafe { libc::stat(path.as_ptr(), st.as_mut_ptr()) };
-    if status != 0 {
-        return Err(FA_CANT_STAT_PATH);
-    }
-    // SAFETY: stat() returned 0, so the buffer is initialised.
-    Ok(FileStat::from_raw(unsafe { &st.assume_init() }))
+    std::fs::metadata(as_path(path))
+        .map(|md| FileStat::from_meta(&md))
+        .map_err(|_| FA_CANT_STAT_PATH)
 }
 
 /// `lstat()`, same error mapping.
 pub fn lstat_path(path: &CStr) -> Result<FileStat, i64> {
-    // SAFETY: as in `stat_path`.
-    let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
-    let status = unsafe { libc::lstat(path.as_ptr(), st.as_mut_ptr()) };
-    if status != 0 {
-        return Err(FA_CANT_STAT_PATH);
-    }
-    // SAFETY: lstat() returned 0, so the buffer is initialised.
-    Ok(FileStat::from_raw(unsafe { &st.assume_init() }))
+    std::fs::symlink_metadata(as_path(path))
+        .map(|md| FileStat::from_meta(&md))
+        .map_err(|_| FA_CANT_STAT_PATH)
 }
 
 /// `access(path, mode) == 0`.
+///
+/// Stays on libc: std can ask whether a path exists, but not whether *this*
+/// process's real uid may read/write/execute it, which is what the image asks.
 #[must_use]
 pub fn access_ok(path: &CStr, mode: c_int) -> bool {
     // SAFETY: `path` is NUL-terminated.
@@ -119,19 +127,18 @@ pub fn access_ok(path: &CStr, mode: c_int) -> bool {
 /// then answers the attributes with a nil target rather than failing.
 ///
 /// (The C NUL-terminates at `targetFile[status]`, one byte past the buffer
-/// when the target fills it exactly; the length-checked `Vec` removes that
-/// out-of-bounds write and nothing else.)
+/// when the target fills it exactly; that out-of-bounds write is gone.)
+///
+/// `std::fs::read_link` sizes its own buffer, so the `FA_PATH_MAX` cap is no
+/// longer forced on us by the call -- but it is kept, because a target longer
+/// than `FA_PATH_MAX` is what the C truncated and the image was built against
+/// that.
 #[must_use]
 pub fn read_link(path: &CStr) -> Option<Vec<u8>> {
-    let mut buf = vec![0u8; FA_PATH_MAX];
-    // SAFETY: `buf` provides FA_PATH_MAX writable bytes, and that is the
-    // length passed.
-    let n = unsafe { libc::readlink(path.as_ptr(), buf.as_mut_ptr().cast(), FA_PATH_MAX) };
-    if n < 0 {
-        return None;
-    }
-    buf.truncate(n as usize);
-    Some(buf)
+    let target = std::fs::read_link(as_path(path)).ok()?;
+    let mut bytes = target.into_os_string().into_vec();
+    bytes.truncate(FA_PATH_MAX);
+    Some(bytes)
 }
 
 /// `faConvertUnixToLongSqueakTime`: Unix UTC seconds to Squeak local-time

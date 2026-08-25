@@ -19,7 +19,7 @@ use core::ffi::{c_char, c_int};
 use core::mem;
 use core::ptr;
 use core::sync::atomic::{AtomicI32, AtomicIsize, Ordering};
-use std::ffi::CString;
+use std::os::unix::ffi::OsStrExt;
 use std::sync::Mutex;
 
 use pharo_vm_plugin::{sqInt, PrimErr, PrimResult};
@@ -73,24 +73,22 @@ struct ResolverState {
     last_addr: u32,
     /// `lastError`: 0 means the last lookup succeeded.
     last_error: c_int,
-    /// `addrList`: head of the current `getaddrinfo` result chain (owned by
-    /// libc, freed with `freeaddrinfo`).
-    addr_list: *mut libc::addrinfo,
-    /// `addrInfo`: cursor into `addr_list` -- or into `local_info`.
-    addr_info: *mut libc::addrinfo,
-    /// `localInfo`: a hand-built AF_UNIX result (Boxes leaked into raw
-    /// pointers; freed on the next lookup, as the C frees its callocs).
-    local_info: *mut libc::addrinfo,
+    /// `addrList` + `localInfo`: the current lookup's results.
+    ///
+    /// The C kept a libc-owned `addrinfo` linked list here (plus a second,
+    /// hand-`calloc`ed one for the AF_UNIX case) and freed it at the top of
+    /// the next lookup. These are owned Rust values instead, so the chain
+    /// walking, the `freeaddrinfo`, the leaked `Box::into_raw` pair and the
+    /// `unsafe impl Send` that all of that forced are gone.
+    results: Vec<ResolvedAddr>,
+    /// `addrInfo`: which of `results` the accessors answer about. Equal to
+    /// `results.len()` when the C's cursor would be NULL.
+    cursor: usize,
     /// `hostNameInfo` / `servNameInfo` / `nameInfoValid`.
     host_name_info: Vec<u8>,
     serv_name_info: Vec<u8>,
     name_info_valid: bool,
 }
-
-// The raw addrinfo pointers make the struct !Send by default. Every access
-// happens on the interpreter thread (or under the test lock); the mutex around
-// the state enforces exclusivity either way.
-unsafe impl Send for ResolverState {}
 
 impl ResolverState {
     const fn new() -> Self {
@@ -98,49 +96,76 @@ impl ResolverState {
             last_name: Vec::new(),
             last_addr: 0,
             last_error: 0,
-            addr_list: ptr::null_mut(),
-            addr_info: ptr::null_mut(),
-            local_info: ptr::null_mut(),
+            results: Vec::new(),
+            cursor: 0,
             host_name_info: Vec::new(),
             serv_name_info: Vec::new(),
             name_info_valid: false,
         }
     }
 
-    /// Frees the previous lookup's results, as the top of
-    /// `sqResolverGetAddressInfo...` does.
+    /// Discards the previous lookup's results, as the top of
+    /// `sqResolverGetAddressInfo...` does with its two frees.
     fn drop_results(&mut self) {
-        if !self.addr_list.is_null() {
-            // SAFETY: the pointer came from getaddrinfo and is freed once.
-            unsafe { libc::freeaddrinfo(self.addr_list) };
-            self.addr_list = ptr::null_mut();
-            self.addr_info = ptr::null_mut();
-        }
-        if !self.local_info.is_null() {
-            // SAFETY: both pointers came from Box::into_raw in the local-
-            // socket path below and are freed once, ai_addr first as in C.
-            unsafe {
-                let info = Box::from_raw(self.local_info);
-                if !info.ai_addr.is_null() {
-                    drop(Box::from_raw(info.ai_addr as *mut libc::sockaddr_un));
-                }
-                drop(info);
-            }
-            self.local_info = ptr::null_mut();
-            self.addr_info = ptr::null_mut();
-        }
+        self.results.clear();
+        self.cursor = 0;
+    }
+
+    /// The entry the accessors answer about; `None` where the C's cursor was
+    /// NULL.
+    fn current(&self) -> Option<&ResolvedAddr> {
+        self.results.get(self.cursor)
     }
 }
 
-// Two libc functions the `libc` crate does not re-export; both are in the C
-// library every Rust program already links.
+/// One node of what the C kept as an `addrinfo` chain, owned outright.
+///
+/// `sockaddr` is the raw `ai_addr` bytes, `ai_addrlen` of them, because that
+/// is what `gai_result` copies into the image's SocketAddress ByteArray
+/// verbatim -- the image round-trips those bytes back to `bind`/`connect`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ResolvedAddr {
+    family: c_int,
+    socktype: c_int,
+    protocol: c_int,
+    sockaddr: Vec<u8>,
+}
+
+/// The raw `sockaddr` bytes behind a `std::net::SocketAddr`, as `getaddrinfo`
+/// would have reported them in `ai_addr`/`ai_addrlen`.
+fn sockaddr_bytes(addr: &std::net::SocketAddr) -> Vec<u8> {
+    let sa = socket2::SockAddr::from(*addr);
+    // SAFETY: `sa` owns a `sockaddr_storage`; `as_ptr()` and `len()` delimit
+    // its initialised prefix, which for V4/V6 is exactly the `sockaddr_in` /
+    // `sockaddr_in6` the C handed over.
+    unsafe { core::slice::from_raw_parts(sa.as_ptr().cast::<u8>(), sa.len() as usize) }.to_vec()
+}
+
+/// The raw `sockaddr_un` bytes for a local-socket path -- the struct the C
+/// hand-built and reported with `ai_addrlen = sizeof(struct sockaddr_un)`.
+fn unix_sockaddr_bytes(path: &[u8]) -> Vec<u8> {
+    // SAFETY: all-zero is a valid sockaddr_un.
+    let mut saun: libc::sockaddr_un = unsafe { mem::zeroed() };
+    saun.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    for (dst, src) in saun.sun_path.iter_mut().zip(path) {
+        *dst = *src as c_char;
+    }
+    // SAFETY: reading a fully initialised POD struct as its own bytes.
+    unsafe {
+        core::slice::from_raw_parts(
+            (&saun as *const libc::sockaddr_un).cast::<u8>(),
+            mem::size_of::<libc::sockaddr_un>(),
+        )
+    }
+    .to_vec()
+}
+
+// `clock` is not re-exported by the `libc` crate, but is in the C library
+// every Rust program already links. (`gethostbyaddr` used to be declared here
+// too -- it is deprecated and not thread-safe, and `dns_lookup::lookup_addr`
+// does the same job over `getnameinfo`.)
 extern "C" {
     fn clock() -> libc::clock_t;
-    fn gethostbyaddr(
-        addr: *const libc::c_void,
-        len: libc::socklen_t,
-        addrtype: c_int,
-    ) -> *mut libc::hostent;
 }
 
 static STATE: Mutex<ResolverState> = Mutex::new(ResolverState::new());
@@ -211,46 +236,37 @@ pub fn resolver_error() -> c_int {
     state().last_error
 }
 
-/// `h_errno` after a failed `gethostbyaddr`, where the platform exposes it.
-fn last_h_errno() -> c_int {
-    #[cfg(target_os = "linux")]
-    {
-        extern "C" {
-            // glibc and musl both provide the per-thread h_errno this way.
-            fn __h_errno_location() -> *mut c_int;
-        }
-        unsafe { *__h_errno_location() }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        1 // HOST_NOT_FOUND; platforms without the accessor lose the detail
-    }
-}
+/// `<netdb.h>`'s `HOST_NOT_FOUND`: the `h_errno` value the C reported for a
+/// reverse lookup that found nothing, and now the only one it can report.
+/// See [`start_addr_lookup`].
+const HOST_NOT_FOUND: c_int = 1;
 
-/// `sqResolverStartAddrLookup`: reverse lookup via `gethostbyaddr`,
-/// synchronously; the result lands in `lastName` ("" on failure).
+/// `sqResolverStartAddrLookup`: reverse lookup, synchronously; the result
+/// lands in `lastName` ("" on failure).
+///
+/// The C called `gethostbyaddr`, which is deprecated, not thread-safe (it
+/// answers a pointer into static storage) and IPv4-only. `lookup_addr` does
+/// the same job through `getnameinfo`, which is none of those things.
+///
+/// A failure still reports `HOST_NOT_FOUND` through `sqResolverError`:
+/// `getnameinfo` reports EAI codes rather than the `h_errno` the C read, and
+/// `last_h_errno` already flattened those to `HOST_NOT_FOUND` on any platform
+/// without the accessor.
 pub fn start_addr_lookup(net_address: u32) {
     let mut st = state();
     st.last_error = 0;
-    let n_addr: u32 = net_address.to_be(); // htonl
-    // SAFETY: gethostbyaddr reads 4 bytes at the given pointer; the result
-    // points into libc-owned storage valid until the next resolver call, and
-    // is copied out immediately.
-    let he = unsafe {
-        gethostbyaddr(
-            &n_addr as *const u32 as *const libc::c_void,
-            mem::size_of::<u32>() as libc::socklen_t,
-            libc::AF_INET,
-        )
-    };
-    if he.is_null() {
-        st.last_error = last_h_errno();
-        st.last_name.clear(); // strncpy of "" clears the C buffer too
-        return;
+    let addr = std::net::IpAddr::V4(std::net::Ipv4Addr::from(net_address));
+    match dns_lookup::lookup_addr(&addr) {
+        Ok(name) => {
+            let bytes = name.into_bytes();
+            let len = bytes.len().min(MAX_HOST_NAME_LEN); // strncpy truncation
+            st.last_name = bytes[..len].to_vec();
+        }
+        Err(_) => {
+            st.last_error = HOST_NOT_FOUND;
+            st.last_name.clear(); // strncpy of "" cleared the C buffer too
+        }
     }
-    let name = unsafe { core::ffi::CStr::from_ptr((*he).h_name) }.to_bytes();
-    let len = name.len().min(MAX_HOST_NAME_LEN); // strncpy truncation
-    st.last_name = name[..len].to_vec();
 }
 
 /// `sqResolverAddrLookupResultSize`.
@@ -267,29 +283,26 @@ pub fn addr_lookup_result(dest: &mut [u8]) {
 
 /// `nameToAddr`: `getaddrinfo` with no hints, first AF_INET result, host
 /// order. Sets `last_error` on failure and answers 0.
-fn name_to_addr(st: &mut ResolverState, host: &CString) -> u32 {
-    let mut result: *mut libc::addrinfo = ptr::null_mut();
-    // SAFETY: host is a valid C string; result is freed below.
-    let error = unsafe { libc::getaddrinfo(host.as_ptr(), ptr::null(), ptr::null(), &mut result) };
-    if error != 0 {
-        st.last_error = error;
-        return 0;
-    }
-    let mut address = 0u32;
-    let mut cursor = result;
-    while !cursor.is_null() && address == 0 {
-        // SAFETY: cursor walks the chain getaddrinfo returned.
-        unsafe {
-            if (*cursor).ai_family == libc::AF_INET {
-                let sin = (*cursor).ai_addr as *const libc::sockaddr_in;
-                address = u32::from_be((*sin).sin_addr.s_addr); // ntohl
-            }
-            cursor = (*cursor).ai_next;
+///
+/// `dns_lookup::getaddrinfo` frees the chain itself and yields owned values,
+/// so the pointer walk and the `freeaddrinfo` are gone. Its `LookupError`
+/// carries the raw EAI number, which is the value the C stored in `lastError`
+/// and the image reads back through `sqResolverError`.
+fn name_to_addr(st: &mut ResolverState, host: &str) -> u32 {
+    let infos = match dns_lookup::getaddrinfo(Some(host), None, None) {
+        Ok(infos) => infos,
+        Err(e) => {
+            st.last_error = e.error_num();
+            return 0;
         }
-    }
-    // SAFETY: freed exactly once.
-    unsafe { libc::freeaddrinfo(result) };
-    address
+    };
+    infos
+        .flatten()
+        .find_map(|info| match info.sockaddr {
+            std::net::SocketAddr::V4(v4) => Some(u32::from(*v4.ip())), // ntohl
+            std::net::SocketAddr::V6(_) => None,
+        })
+        .unwrap_or(0)
 }
 
 /// `sqResolverStartNameLookup`: synchronous forward lookup; signals the
@@ -306,7 +319,9 @@ pub fn start_name_lookup(host_name: &[u8]) {
         };
         st.last_name = effective.to_vec();
         st.last_error = 0;
-        let host = CString::new(st.last_name.clone()).expect("interior NULs were stripped");
+        // The C passed a NUL-terminated buffer to getaddrinfo; a host name
+        // that is not valid UTF-8 could never have resolved anyway.
+        let host = String::from_utf8_lossy(&st.last_name).into_owned();
         st.last_addr = name_to_addr(&mut st, &host);
     }
     // "we're done before we even started"
@@ -432,24 +447,22 @@ pub fn get_address_info(
         && serv.len() < sun_path_len
         && flags & SQ_SOCKET_NUMERIC == 0
     {
-        if let Ok(path) = CString::new(serv_c.clone()) {
-            // SAFETY: plain stat on a NUL-terminated path.
-            let mut stat_buf: libc::stat = unsafe { mem::zeroed() };
-            let stated = unsafe { libc::stat(path.as_ptr(), &mut stat_buf) };
-            if stated == 0 && stat_buf.st_mode & libc::S_IFSOCK != 0 {
-                let mut saun: Box<libc::sockaddr_un> = Box::new(unsafe { mem::zeroed() });
-                saun.sun_family = libc::AF_UNIX as libc::sa_family_t;
-                for (dst, src) in saun.sun_path.iter_mut().zip(serv_c.iter()) {
-                    *dst = *src as c_char;
-                }
-                let mut info: Box<libc::addrinfo> = Box::new(unsafe { mem::zeroed() });
-                info.ai_family = libc::AF_UNIX;
-                info.ai_socktype = libc::SOCK_STREAM;
-                info.ai_addrlen = mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
-                info.ai_addr = Box::into_raw(saun) as *mut libc::sockaddr;
-                let info = Box::into_raw(info);
-                st.local_info = info;
-                st.addr_info = info;
+        {
+            use std::os::unix::fs::MetadataExt;
+            let path = std::path::Path::new(std::ffi::OsStr::from_bytes(&serv_c));
+            // `MetadataExt::mode()` is `st_mode` verbatim, so the C's bitmask
+            // intersection above is applied to exactly the same value.
+            let mode = std::fs::metadata(path).map(|md| md.mode()).unwrap_or(0);
+            if mode & libc::S_IFSOCK != 0 {
+                // The C hand-built an `addrinfo` here with `ai_protocol` left
+                // at the zero `calloc` gave it; that zero is preserved.
+                st.results = vec![ResolvedAddr {
+                    family: libc::AF_UNIX,
+                    socktype: libc::SOCK_STREAM,
+                    protocol: 0,
+                    sockaddr: unix_sockaddr_bytes(&serv_c),
+                }];
+                st.cursor = 0;
                 drop(st);
                 signal_resolver();
                 return Ok(());
@@ -457,49 +470,57 @@ pub fn get_address_info(
         }
     }
 
-    let mut request: libc::addrinfo = unsafe { mem::zeroed() };
+    let mut ai_flags = 0;
     if flags & SQ_SOCKET_NUMERIC != 0 {
-        request.ai_flags |= libc::AI_NUMERICHOST;
+        ai_flags |= libc::AI_NUMERICHOST;
     }
     if flags & SQ_SOCKET_PASSIVE != 0 {
-        request.ai_flags |= libc::AI_PASSIVE;
+        ai_flags |= libc::AI_PASSIVE;
     }
-    request.ai_family = match family {
-        SQ_SOCKET_FAMILY_LOCAL => libc::AF_UNIX,
-        SQ_SOCKET_FAMILY_INET4 => libc::AF_INET,
-        SQ_SOCKET_FAMILY_INET6 => libc::AF_INET6,
-        _ => 0,
-    };
-    request.ai_socktype = match type_ {
-        SQ_SOCKET_TYPE_STREAM => libc::SOCK_STREAM,
-        SQ_SOCKET_TYPE_DGRAM => libc::SOCK_DGRAM,
-        _ => 0,
-    };
-    request.ai_protocol = match protocol {
-        SQ_SOCKET_PROTOCOL_TCP => libc::IPPROTO_TCP,
-        SQ_SOCKET_PROTOCOL_UDP => libc::IPPROTO_UDP,
-        _ => 0,
+    let hints = dns_lookup::AddrInfoHints {
+        flags: ai_flags,
+        address: match family {
+            SQ_SOCKET_FAMILY_LOCAL => libc::AF_UNIX,
+            SQ_SOCKET_FAMILY_INET4 => libc::AF_INET,
+            SQ_SOCKET_FAMILY_INET6 => libc::AF_INET6,
+            _ => 0,
+        },
+        socktype: match type_ {
+            SQ_SOCKET_TYPE_STREAM => libc::SOCK_STREAM,
+            SQ_SOCKET_TYPE_DGRAM => libc::SOCK_DGRAM,
+            _ => 0,
+        },
+        protocol: match protocol {
+            SQ_SOCKET_PROTOCOL_TCP => libc::IPPROTO_TCP,
+            SQ_SOCKET_PROTOCOL_UDP => libc::IPPROTO_UDP,
+            _ => 0,
+        },
     };
 
-    let host_cs = CString::new(host_c).expect("interior NULs were stripped");
-    let serv_cs = CString::new(serv_c).expect("interior NULs were stripped");
-    let mut list: *mut libc::addrinfo = ptr::null_mut();
-    // SAFETY: standard getaddrinfo protocol; NULL node/service when empty, as
-    // the C passes 0 for zero sizes.
-    let gai_error = unsafe {
-        libc::getaddrinfo(
-            if host.is_empty() { ptr::null() } else { host_cs.as_ptr() },
-            if serv.is_empty() { ptr::null() } else { serv_cs.as_ptr() },
-            &request,
-            &mut list,
-        )
-    };
-    if gai_error != 0 {
-        // Succeed with zero results: see the function comment.
-        list = ptr::null_mut();
-    }
-    st.addr_list = list;
-    st.addr_info = list;
+    // NULL node/service where the image passed a zero size, as the C did.
+    let host_s = String::from_utf8_lossy(&host_c).into_owned();
+    let serv_s = String::from_utf8_lossy(&serv_c).into_owned();
+    let node = (!host.is_empty()).then_some(host_s.as_str());
+    let service = (!serv.is_empty()).then_some(serv_s.as_str());
+
+    // A getaddrinfo failure "succeeds with zero results": see the function
+    // comment. Entries whose family this plugin cannot describe are dropped
+    // the same way -- `AddrInfo::sockaddr` is V4 or V6, and the C's chain
+    // never carried anything else out of getaddrinfo either.
+    st.results = dns_lookup::getaddrinfo(node, service, Some(hints))
+        .map(|infos| {
+            infos
+                .flatten()
+                .map(|info| ResolvedAddr {
+                    family: info.address,
+                    socktype: info.socktype,
+                    protocol: info.protocol,
+                    sockaddr: sockaddr_bytes(&info.sockaddr),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    st.cursor = 0;
     drop(st);
     signal_resolver();
     Ok(())
@@ -509,45 +530,31 @@ pub fn get_address_info(
 /// failure -- the image tests for -1).
 pub fn gai_size() -> isize {
     let st = state();
-    if st.addr_info.is_null() {
-        return -1;
+    match st.current() {
+        None => -1,
+        Some(entry) => (address::ADDRESS_HEADER_SIZE + entry.sockaddr.len()) as isize,
     }
-    // SAFETY: addr_info points into the live result chain.
-    (address::ADDRESS_HEADER_SIZE + unsafe { (*st.addr_info).ai_addrlen } as usize) as isize
 }
 
 /// `sqResolverGetAddressInfoResultSize`: writes header + raw sockaddr.
 pub fn gai_result(dest: &mut [u8]) -> PrimResult<()> {
     let st = state();
-    if st.addr_info.is_null() {
-        return Err(PrimErr::GenericFailure);
-    }
-    // SAFETY: addr_info points into the live result chain; ai_addr spans
-    // ai_addrlen bytes.
-    let (addr, len) = unsafe {
-        (
-            (*st.addr_info).ai_addr as *const u8,
-            (*st.addr_info).ai_addrlen as usize,
-        )
-    };
+    let entry = st.current().ok_or(PrimErr::GenericFailure)?;
+    let len = entry.sockaddr.len();
     if dest.len() < address::ADDRESS_HEADER_SIZE + len {
         return Err(PrimErr::GenericFailure);
     }
     address::write_header(dest, current_session(), len as i32);
-    let payload = unsafe { core::slice::from_raw_parts(addr, len) };
     dest[address::ADDRESS_HEADER_SIZE..address::ADDRESS_HEADER_SIZE + len]
-        .copy_from_slice(payload);
+        .copy_from_slice(&entry.sockaddr);
     Ok(())
 }
 
 /// `sqResolverGetAddressInfoFamily`.
 pub fn gai_family() -> PrimResult<sqInt> {
     let st = state();
-    if st.addr_info.is_null() {
-        return Err(PrimErr::GenericFailure);
-    }
-    // SAFETY: live cursor.
-    Ok(match unsafe { (*st.addr_info).ai_family } {
+    let entry = st.current().ok_or(PrimErr::GenericFailure)?;
+    Ok(match entry.family {
         libc::AF_UNIX => SQ_SOCKET_FAMILY_LOCAL,
         libc::AF_INET => SQ_SOCKET_FAMILY_INET4,
         libc::AF_INET6 => SQ_SOCKET_FAMILY_INET6,
@@ -558,11 +565,8 @@ pub fn gai_family() -> PrimResult<sqInt> {
 /// `sqResolverGetAddressInfoType`.
 pub fn gai_type() -> PrimResult<sqInt> {
     let st = state();
-    if st.addr_info.is_null() {
-        return Err(PrimErr::GenericFailure);
-    }
-    // SAFETY: live cursor.
-    Ok(match unsafe { (*st.addr_info).ai_socktype } {
+    let entry = st.current().ok_or(PrimErr::GenericFailure)?;
+    Ok(match entry.socktype {
         libc::SOCK_STREAM => SQ_SOCKET_TYPE_STREAM,
         libc::SOCK_DGRAM => SQ_SOCKET_TYPE_DGRAM,
         _ => SQ_SOCKET_TYPE_UNSPECIFIED,
@@ -572,11 +576,8 @@ pub fn gai_type() -> PrimResult<sqInt> {
 /// `sqResolverGetAddressInfoProtocol`.
 pub fn gai_protocol() -> PrimResult<sqInt> {
     let st = state();
-    if st.addr_info.is_null() {
-        return Err(PrimErr::GenericFailure);
-    }
-    // SAFETY: live cursor.
-    Ok(match unsafe { (*st.addr_info).ai_protocol } {
+    let entry = st.current().ok_or(PrimErr::GenericFailure)?;
+    Ok(match entry.protocol {
         libc::IPPROTO_TCP => SQ_SOCKET_PROTOCOL_TCP,
         libc::IPPROTO_UDP => SQ_SOCKET_PROTOCOL_UDP,
         _ => SQ_SOCKET_PROTOCOL_UNSPECIFIED,
@@ -587,12 +588,12 @@ pub fn gai_protocol() -> PrimResult<sqInt> {
 /// entry remains.
 pub fn gai_next() -> bool {
     let mut st = state();
-    if st.addr_info.is_null() {
+    if st.cursor >= st.results.len() {
+        // Already past the end: the C's NULL cursor could not advance.
         return false;
     }
-    // SAFETY: live cursor.
-    st.addr_info = unsafe { (*st.addr_info).ai_next };
-    !st.addr_info.is_null()
+    st.cursor += 1;
+    st.cursor < st.results.len()
 }
 
 // ---------------------------------------------------------------------------

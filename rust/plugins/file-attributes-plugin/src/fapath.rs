@@ -11,7 +11,9 @@
 //! Nothing of this struct crosses to the image: the image only ever sees the
 //! opaque session handle built in [`crate::dir`].
 
-use std::ffi::CString;
+use std::ffi::{CString, OsStr};
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
 
 use crate::codes::FA_STRING_TOO_LONG;
 use crate::convert::Converters;
@@ -162,13 +164,28 @@ impl FaPath {
         &self.ux
     }
 
-    /// The platform path as a C string for syscalls. The C hands the raw
-    /// buffer to `stat()` and friends, so an embedded NUL truncates -- same
-    /// here.
+    /// The platform path as a C string for the syscalls std does not cover.
+    /// The C hands the raw buffer to `stat()` and friends, so an embedded NUL
+    /// truncates -- same here.
     #[must_use]
     pub fn plat_cstring(&self) -> CString {
+        CString::new(self.plat_bytes()).expect("no interior NUL after truncation")
+    }
+
+    /// The platform path as a `Path`, for the `std::fs` calls that replaced
+    /// those syscalls. Borrowed, no UTF-8 requirement (a Unix `Path` is
+    /// bytes), and truncated at an embedded NUL exactly as
+    /// [`FaPath::plat_cstring`] is -- the rule lives here so the two cannot
+    /// drift apart.
+    #[must_use]
+    pub fn plat_fs_path(&self) -> &Path {
+        Path::new(OsStr::from_bytes(self.plat_bytes()))
+    }
+
+    /// The platform path up to the first embedded NUL.
+    fn plat_bytes(&self) -> &[u8] {
         let end = self.ux.iter().position(|&b| b == 0).unwrap_or(self.ux.len());
-        CString::new(&self.ux[..end]).expect("no interior NUL after truncation")
+        &self.ux[..end]
     }
 }
 
