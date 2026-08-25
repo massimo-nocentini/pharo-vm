@@ -13,4 +13,7 @@ publish.workspace = true
 crate-type = ["rlib"]
 
 [build-dependencies]
-bindgen = "0.69"
+# 0.72 or later: 0.69 mispairs a struct's forward declaration with its later
+# definition under recent libclang (seen with Homebrew clang 22), emitting the
+# mutually-recursive FFI callback structs as opaque `_address: u8` stubs.
+bindgen = "0.72"

@@ -26,6 +26,11 @@ const TRACKED: &[&str] = &[
     // Cogit's code zone is never writable and executable at once. Set by
     // cmake/OpenBSD.cmake; read by memory_unix.rs.
     "READ_ONLY_CODE_ZONE",
+    // Whether the threaded-FFI worker is built. CMake only defines this when
+    // FEATURE_FFI and FEATURE_THREADED_FFI are both on, which is also exactly
+    // when it compiles src/ffi/worker/*.c -- so worker.rs and worker_task.rs
+    // are gated on it in lib.rs, mirroring cmake/rust.cmake.
+    "FEATURE_THREADED_FFI",
 ];
 
 /// Macros that live in the generated `config.h` rather than on the command

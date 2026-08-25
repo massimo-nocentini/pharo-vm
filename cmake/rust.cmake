@@ -66,6 +66,24 @@ if(NOT WIN32)
     )
 endif()
 
+# Unix only, and only when the threaded-FFI worker is built at all:
+# CMakeLists.txt compiles these two under FEATURE_FFI AND FEATURE_THREADED_FFI.
+# pharo-platform mirrors the same condition with a `feature_threaded_ffi` cfg
+# derived from PHAROVM_COMPILE_DEFS (see rust/pharo-platform/build.rs), so the
+# Rust modules vanish exactly when the C files do.
+#
+# This is the first slice of the FFI wave. The sigsetjmp trampolines in
+# src/ffi/sameThread/ stay C permanently -- longjmp must never cross a Rust
+# frame -- but the worker thread and its task descriptors never touch them.
+if(NOT WIN32 AND FEATURE_FFI AND FEATURE_THREADED_FFI)
+    list(APPEND RUST_REPLACED_C_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ffi/worker/workerTask.c
+                                                        # rust/pharo-platform/src/worker_task.rs
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ffi/worker/worker.c
+                                                        # rust/pharo-platform/src/worker.rs
+    )
+endif()
+
 # Non-Apple Unix only: platformSemaphore.c has three implementations, and the
 # Apple one uses dispatch semaphores because POSIX unnamed semaphores are
 # deprecated and non-functional there. platform_semaphore.rs is the sem_init
@@ -227,6 +245,24 @@ function(_configure_rust_platform_layer)
             "configure_rust_platform() must be called after the target's "
             "include directories are configured.")
     endif()
+
+    # The FFI wave binds types that reach <ffi.h> (wrapper.h includes
+    # workerTask.h), but libffi's headers arrive at the C compiler by routes
+    # the target property above does not record: as the INTERFACE include of
+    # the imported FFI::lib when a system libffi is used, or as a
+    # directory-scoped include_directories() in cmake/importLibFFI.cmake when
+    # it is built from source. Recover both so bindgen sees what the C saw.
+    if(TARGET FFI::lib)
+        get_target_property(_ffi_include_dirs FFI::lib INTERFACE_INCLUDE_DIRECTORIES)
+        if(_ffi_include_dirs)
+            list(APPEND _include_dirs ${_ffi_include_dirs})
+        endif()
+    endif()
+    get_directory_property(_directory_include_dirs INCLUDE_DIRECTORIES)
+    if(_directory_include_dirs)
+        list(APPEND _include_dirs ${_directory_include_dirs})
+    endif()
+    list(REMOVE_DUPLICATES _include_dirs)
 
     set(_defs "")
     foreach(_def IN LISTS _target_defs _dir_defs)

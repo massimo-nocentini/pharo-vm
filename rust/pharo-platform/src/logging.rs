@@ -87,6 +87,8 @@ pub(crate) enum Args {
     None,
     /// One `%d` conversion.
     OneInt(c_int),
+    /// Two `%d` conversions.
+    TwoInts(c_int, c_int),
     /// One `%p` conversion, recorded as an integer.
     OnePtr(usize),
     /// The five-argument allocation summary in `memoryUnix.c`.
@@ -259,6 +261,26 @@ pub(crate) fn message_one_int(level: c_int, fmt: &'static CStr, site: Site, i: c
             site.line,
             fmt.as_ptr(),
             i,
+        );
+    }
+}
+
+/// `logInfo(fmt, a, b)` / `logError(fmt, a, b)` where `fmt` has exactly two
+/// `%d` conversions.
+pub(crate) fn message_two_ints(level: c_int, fmt: &'static CStr, site: Site, a: c_int, b: c_int) {
+    #[cfg(test)]
+    record(level, site, fmt, Args::TwoInts(a, b));
+    #[cfg(not(test))]
+    // SAFETY: two %d conversions, two c_int arguments.
+    unsafe {
+        pharo_vm_sys::logMessage(
+            level,
+            site.file.as_ptr(),
+            site.function.as_ptr(),
+            site.line,
+            fmt.as_ptr(),
+            a,
+            b,
         );
     }
 }

@@ -83,6 +83,15 @@ pub mod string_utilities;
 pub mod thread_safe_queue;
 #[cfg(all(unix, not(target_vendor = "apple")))]
 pub mod virtual_machine;
+// The FFI worker follows CMake's FEATURE_FFI AND FEATURE_THREADED_FFI, not a
+// platform: the cfg is derived from PHAROVM_COMPILE_DEFS by build.rs, so the
+// modules exist exactly when CMake compiles (or, with the Rust platform on,
+// drops) src/ffi/worker/*.c. Unix-wide, Apple included -- the C worker is one
+// implementation for all of Unix.
+#[cfg(all(unix, feature_threaded_ffi))]
+pub mod worker;
+#[cfg(all(unix, feature_threaded_ffi))]
+pub mod worker_task;
 
 /// Shared harness state for the unit tests.
 ///

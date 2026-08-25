@@ -50,6 +50,18 @@ const ALLOWED_TYPES: &[&str] = &[
     // Wave 10. Filled in by client.c and read by the platform's file dialog,
     // which stays C.
     "VMFileDialog",
+    // Wave 13. The runner vtable that sits first in the (otherwise opaque)
+    // Worker struct: callbacks.c and callbackPrimitives.c read its fields and
+    // call through them, so the layout is a live ABI.
+    "Runner",
+    // Filled in by callbacks.c, read and answered by the worker, so the
+    // layout is a live ABI too.
+    "CallbackInvocation",
+    // The worker's task descriptor. After this wave only Rust touches its
+    // fields, but the header stays the single statement of the layout, so it
+    // is bound rather than restated.
+    "WorkerTask",
+    "WorkerTaskType",
 ];
 
 /// Only functions Rust *calls into C* belong here.
@@ -116,6 +128,12 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // does not reach, and aioInterruptPoll only inside the .c file itself.
     // external_semaphores.rs declares both, as the C did.
     "logAssert",
+    // Wave 13. libffi's call primitive; executing it from its own thread is
+    // the worker's whole job. (The queue and semaphore functions the worker
+    // also needs are NOT here: this workspace exports them on non-Apple Unix,
+    // and a symbol the workspace exports anywhere must never be bound --
+    // worker.rs declares them module-locally instead.)
+    "ffi_call",
 ];
 
 /// Functions that `interpreterProxyFunctions.h` declares but this workspace
@@ -221,6 +239,14 @@ fn main() {
         })
         .derive_debug(true)
         .derive_default(false)
+        // Generate for the workspace's rust-version, not for whatever is
+        // newest: bindgen would otherwise feel free to emit syntax the
+        // packagers' oldest supported toolchain cannot parse.
+        .rust_target(
+            "1.77"
+                .parse()
+                .expect("1.77 is a Rust version bindgen 0.72 knows"),
+        )
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()));
 
     let bindings = ALLOWED_TYPES

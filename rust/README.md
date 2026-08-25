@@ -124,7 +124,10 @@ Every wave is the same four steps, and step 3 is not optional:
   define the same symbol, which the linker cannot check.
 * **Panics must not unwind into C.** The workspace sets `panic = "abort"`.
 * **`longjmp` must never cross a Rust frame.** The FFI trampolines in
-  `src/ffi/` use `sigsetjmp`; those shims stay in C. This is the main reason
-  the FFI wave is last and may stay in C permanently.
+  `src/ffi/` use `sigsetjmp`; those shims stay in C. The FFI wave therefore
+  moves only what never touches them: the worker thread and its task
+  descriptors (`worker.rs`, `worker_task.rs`) are ported, while
+  `sameThread.c` and the callback frontend in `callbacks.c` stay C
+  permanently.
 * **Signal-handler paths must be async-signal-safe** — no allocation, no locks,
   no formatting. The heartbeat runs at real-time priority.

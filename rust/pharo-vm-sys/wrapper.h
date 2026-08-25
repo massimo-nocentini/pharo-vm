@@ -45,3 +45,16 @@
  * allowlists the whole file rather than naming them one by one, so adding an
  * entry to the proxy needs no change here. */
 #include "pharovm/common/interpreterProxyFunctions.h"
+
+/* Wave 13 -- the threaded-FFI worker.
+ *
+ * workerTask.h reaches callbacks.h and, through both, <ffi.h>: the
+ * WorkerTask, Runner and CallbackInvocation layouts plus libffi's ffi_call
+ * are what worker.rs / worker_task.rs share with the C left in src/ffi/.
+ *
+ * Guarded exactly as the C sources are: without FEATURE_FFI there is no
+ * libffi on the include path at all. Kept last on purpose -- pThreadedFFI.h
+ * #defines true, false and null, which must not leak into headers above. */
+#ifdef FEATURE_FFI
+#include "pharovm/ffi/workerTask.h"
+#endif

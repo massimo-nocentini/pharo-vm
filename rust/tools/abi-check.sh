@@ -49,13 +49,25 @@ extract_symbols() {
         exit 1
     fi
 
-    # -D reads the dynamic symbol table (what the VM actually exports);
-    # --defined-only drops undefined references to libc and friends.
-    nm -D --defined-only "$library" \
-        | awk '{print $NF}' \
+    exported_symbols "$library" \
         | grep -Ev "$RUST_INTERNAL_RE" \
-        | grep -Ev '^(_init|_fini|__bss_start|_edata|_end|__.*_impl_.*)$' \
+        | grep -Ev '^(_init|_fini|__bss_start|_edata|_end|__.*_impl_.*|__is(OS|Platform)VersionAtLeast)$' \
         | LC_ALL=C sort -u
+}
+
+# The raw exported-symbol names, one per line, in the platform's C spelling.
+#
+# ELF: -D reads the dynamic symbol table (what the VM actually exports) and
+# --defined-only drops undefined references to libc and friends. Mach-O has no
+# dynamic symbol table for nm to read; -gU (external, defined) answers the
+# same question, and the leading underscore Mach-O prepends to every C symbol
+# is stripped so baselines stay comparable with the ELF spelling.
+exported_symbols() {
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        nm -gU "$1" | awk '{print $NF}' | sed 's/^_//'
+    else
+        nm -D --defined-only "$1" | awk '{print $NF}'
+    fi
 }
 
 # Rust's own mangled symbols: `_R...` is the v0 scheme, `_ZN<len>core...` the
@@ -74,7 +86,7 @@ RUST_INTERNAL_RE='^(_R|_ZN[0-9]+(core|alloc|std|rustc)|rust_|__rust_)'
 # version script naming the intended exports; until then, this number makes the
 # cost visible instead of hiding it behind the filter.
 rust_internal_count() {
-    nm -D --defined-only "$1" | awk '{print $NF}' | grep -Ec "$RUST_INTERNAL_RE" || true
+    exported_symbols "$1" | grep -Ec "$RUST_INTERNAL_RE" || true
 }
 
 command="${1:-}"
