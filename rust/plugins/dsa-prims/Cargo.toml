@@ -1,0 +1,16 @@
+[package]
+name = "dsa-prims"
+description = "DSAPrims in Rust: big-integer and SHA-1 helper primitives for the image's DSA code."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# Must match the module name the image asks for.
+name = "DSAPrims"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pharo-vm-plugin = { path = "../../pharo-vm-plugin" }

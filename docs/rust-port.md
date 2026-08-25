@@ -50,6 +50,50 @@ Still C:
 - **`ffi/`** (1,532) — the `sigsetjmp` trampolines `rust/README.md` already
   flags as likely permanent C.
 
+## The plugin layer: all sixteen plugins have Rust replacements
+
+Distinct from the platform waves above, every C plugin under `plugins/` now
+has a native-Rust replacement built on the `pharo-vm-plugin` SDK, following
+the jpeg-plugin precedent: same module name, same primitive names, same
+accessor depths, same failure behaviour, one crate per plugin under
+`rust/plugins/` (UUIDPlugin's lives in `rust/examples/uuid-plugin`).
+`USE_RUST_PLUGINS=ON` switches them in; the default build is still all-C.
+
+| Plugin | Crate | Standalone verification |
+|---|---|---|
+| B2DPlugin | `b2d-plugin` | 22 tests; whole tiny renders asserted per-pixel |
+| BitBltPlugin | `bit-blt-plugin` | 60 tests; **550 differential scenarios against the compiled C** |
+| DSAPrims | `dsa-prims` | 19 tests; SHA-1 KATs, u128 cross-checks |
+| FileAttributesPlugin | `file-attributes-plugin` | 42 tests; `std::fs` as independent witness |
+| FilePlugin | `file-plugin` | 35 tests; tempdir ops, record-layout pin |
+| JPEGReaderPlugin | `jpeg-reader-plugin` | 38 tests; float-DCT reference for the IDCT |
+| JPEGReadWriter2Plugin | `jpeg-plugin` | 90-case corpus diff against the C (earlier work) |
+| LargeIntegers | `large-integers` | 44 tests; schoolbook + egcd references, ~3000 random division cases |
+| LocalePlugin | `locale-plugin` | 17 tests; locale-string parsing byte-for-byte |
+| MiscPrimitivePlugin | `misc-primitive-plugin` | 28 tests; every compression token kind |
+| NewFilePlugin | `new-file-plugin` | 28 tests; 5 GB offsets, full open-mode matrix |
+| SocketPlugin | `socket-plugin` | 32 tests; real TCP/UDP over loopback through the aio path |
+| SqueakSSL | `squeak-ssl` | 17 tests; live in-process TLS handshake |
+| SurfacePlugin | `surface-plugin` | 21 tests; registry sequences, dispatch ABI |
+| UnixOSProcessPlugin | `unix-os-process-plugin` | 19 tests; real fork/exec, signal→semaphore |
+| UUIDPlugin | `uuid-plugin` | proven against a live image (earlier work) |
+
+Every crate passes `cargo build`, `cargo test` and `cargo clippy --all-targets
+-- -D warnings`, and each README documents its divergences (memory-safety and
+UB removal only — C bugs with observable image-side behaviour are reproduced
+and pinned by tests) and its **Not verified** list.
+
+What the standalone tests cannot cover is owed to an image-side differential
+pass — the same discipline as the platform waves: build with
+`USE_RUST_PLUGINS=OFF` and `ON`, run the image test suite against both, diff.
+That pass has not run yet; the per-crate "Not verified" sections say exactly
+where it should look. Windows keeps the C plugins throughout, and Apple keeps
+the C for the eight POSIX-facing ports (`cmake/rust.cmake` guards the list).
+Two deliberate scope cuts: BitBlt's optional ARM SIMD fast paths are not
+ported (the generic paths are complete, so ARM loses an acceleration, not a
+capability), and SqueakSSL defaults to a vendored, statically linked
+OpenSSL 3 (`--no-default-features` restores the C plugin's system linkage).
+
 ## Wave 12: the interpreter proxy
 
 `src/common/sqVirtualMachine.c` becomes `rust/pharo-platform/src/virtual_machine.rs`.

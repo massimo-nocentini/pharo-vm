@@ -1,0 +1,16 @@
+[package]
+name = "misc-primitive-plugin"
+description = "MiscPrimitivePlugin in Rust: string comparison/search/hash, Bitmap run-length compression, 8-bit sound conversion."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# Must match the module name the image asks for.
+name = "MiscPrimitivePlugin"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pharo-vm-plugin = { path = "../../pharo-vm-plugin" }

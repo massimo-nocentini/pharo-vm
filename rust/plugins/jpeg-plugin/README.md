@@ -98,11 +98,8 @@ Reproduce with the harnesses in `rust/plugins/jpeg-plugin/tests/harness/`.
 
 ## Not done yet
 
-* **CMake wiring.** The crate builds and the plugin loads, but the build still
-  compiles the C plugin. Switching over means adding this crate to
-  `cmake/rust.cmake` and dropping `JPEGReadWriter2Plugin` from
-  `cmake/plugins.cmake` — deliberately left as a separate change, so the
-  swap is reviewed on its own.
+* ~~**CMake wiring.**~~ Done since: `USE_RUST_PLUGINS=ON` builds this crate
+  instead of the C plugin (`cmake/rust.cmake` / `cmake/plugins.cmake`).
 * **CMYK JPEGs.** `jpeg-decoder` reports `CMYK32`; the packing paths cover 1
   and 3 components, as the C did. A CMYK source decodes with the component
   offsets the C would have used, which is to say: neither implementation

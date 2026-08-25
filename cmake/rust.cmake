@@ -139,16 +139,51 @@ endif()
 # Plugins built from rust/plugins/ instead of plugins/.
 # The name is the module name, which is also the cargo lib name and therefore
 # the CMake target name -- so the C plugin of the same name must be skipped, or
-# the two would collide.
-set(RUST_REPLACED_PLUGINS
-    JPEGReadWriter2Plugin                              # rust/plugins/jpeg-plugin
-)
+# the two would collide. RUST_PLUGIN_CRATES carries the cargo *package* names
+# corrosion needs, kept pairwise with RUST_REPLACED_PLUGINS by the macro.
+set(RUST_REPLACED_PLUGINS "")
+set(RUST_PLUGIN_CRATES "")
+macro(replace_plugin_with_rust MODULE CRATE)
+    list(APPEND RUST_REPLACED_PLUGINS ${MODULE})
+    list(APPEND RUST_PLUGIN_CRATES ${CRATE})
+endmacro()
+
+# Pure computation over the interpreter proxy: no OS surface beyond what Rust's
+# std needs, so these replace the C plugin on every platform.
+replace_plugin_with_rust(JPEGReadWriter2Plugin jpeg-plugin)
+replace_plugin_with_rust(JPEGReaderPlugin      jpeg-reader-plugin)
+replace_plugin_with_rust(LargeIntegers         large-integers)
+replace_plugin_with_rust(MiscPrimitivePlugin   misc-primitive-plugin)
+replace_plugin_with_rust(DSAPrims              dsa-prims)
+replace_plugin_with_rust(BitBltPlugin          bit-blt-plugin)
+replace_plugin_with_rust(B2DPlugin             b2d-plugin)
+replace_plugin_with_rust(SurfacePlugin         surface-plugin)
+
+# POSIX ports. Windows keeps its C implementations throughout, and Apple keeps
+# the C as well: several of these had macOS-specific branches (CoreFoundation
+# path normalisation in FilePlugin, the Security-framework SqueakSSL, the
+# osx Locale variant) that the Rust ports do not reproduce, and none of them
+# has been run on a Mac. Their crates refuse to compile off Unix, so the guard
+# is belt and braces.
+if(UNIX AND NOT APPLE)
+    replace_plugin_with_rust(FilePlugin            file-plugin)
+    replace_plugin_with_rust(NewFilePlugin         new-file-plugin)
+    replace_plugin_with_rust(FileAttributesPlugin  file-attributes-plugin)
+    replace_plugin_with_rust(LocalePlugin          locale-plugin)
+    replace_plugin_with_rust(SocketPlugin          socket-plugin)
+    replace_plugin_with_rust(SqueakSSL             squeak-ssl)
+    replace_plugin_with_rust(UnixOSProcessPlugin   unix-os-process-plugin)
+    # The worked example from rust/examples, promoted to the real replacement:
+    # it reads /dev/urandom, so it is as Unix-bound as the rest of this group.
+    replace_plugin_with_rust(UUIDPlugin            uuid-plugin)
+endif()
 
 if(NOT USE_RUST_PLATFORM)
     set(RUST_REPLACED_C_SOURCES "")
 endif()
 if(NOT USE_RUST_PLUGINS)
     set(RUST_REPLACED_PLUGINS "")
+    set(RUST_PLUGIN_CRATES "")
 endif()
 
 if(NOT USE_RUST_PLATFORM AND NOT USE_RUST_PLUGINS)
@@ -194,7 +229,7 @@ function(configure_rust_platform)
         list(APPEND _crates ${RUST_PLATFORM_PACKAGE})
     endif()
     if(USE_RUST_PLUGINS)
-        list(APPEND _crates jpeg-plugin)
+        list(APPEND _crates ${RUST_PLUGIN_CRATES})
     endif()
 
     corrosion_import_crate(

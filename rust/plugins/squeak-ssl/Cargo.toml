@@ -1,0 +1,35 @@
+[package]
+name = "squeak-ssl"
+description = "SqueakSSL in Rust: TLS over OpenSSL memory BIOs, like the C Unix plugin."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# Must match the module name the image asks for.
+name = "SqueakSSL"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# `vendored` compiles OpenSSL from source (openssl-src) and links it
+# statically, so the crate builds on hosts without the OpenSSL development
+# headers. It is on by default because plain `cargo build -p squeak-ssl` must
+# work everywhere; package builds that want the C plugin's behaviour of
+# linking the system OpenSSL should use `--no-default-features` (which needs
+# the system headers, via pkg-config or OPENSSL_DIR).
+default = ["vendored"]
+vendored = ["openssl-sys/vendored"]
+
+[dependencies]
+pharo-vm-plugin = { path = "../../pharo-vm-plugin" }
+# The raw bindings, not the safe wrapper: the C plugin's OpenSSL usage
+# (memory BIOs plumbed into an SSL, hand-pumped handshakes) maps 1:1 onto
+# openssl-sys and not onto the safe crate's stream-oriented API.
+openssl-sys = "0.9"
+
+[dev-dependencies]
+# The safe wrapper is used only by the tests, to generate a throwaway
+# self-signed certificate for the in-process handshake.
+openssl = "0.10"

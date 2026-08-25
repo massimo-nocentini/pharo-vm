@@ -1,0 +1,16 @@
+[package]
+name = "surface-plugin"
+description = "SurfacePlugin in Rust: the VM's drawable-surface registry and manual surfaces."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# Must match the module name the image asks for.
+name = "SurfacePlugin"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pharo-vm-plugin = { path = "../../pharo-vm-plugin" }

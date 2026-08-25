@@ -1,0 +1,19 @@
+[package]
+name = "socket-plugin"
+description = "SocketPlugin in Rust: BSD sockets, the DNS resolver and the IPv6 address API behind the same 60 primitives."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# Must match the module name the image asks for.
+name = "SocketPlugin"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pharo-vm-plugin = { path = "../../pharo-vm-plugin" }
+# Thin syscall access: sockets, getaddrinfo/getnameinfo, getifaddrs. The C
+# plugin is a direct BSD-sockets client and this port keeps that shape.
+libc.workspace = true

@@ -1,23 +1,37 @@
 include(cmake/plugins.macros.cmake)
 
-add_vm_plugin(FilePlugin TRUE TRUE)
-if(OSX)
-    target_link_libraries(FilePlugin PRIVATE "-framework CoreFoundation")
+# Each C plugin is skipped when its Rust replacement is being built instead;
+# RUST_REPLACED_PLUGINS (cmake/rust.cmake) is empty unless USE_RUST_PLUGINS is
+# ON, so the default build is exactly the all-C one. Both define a CMake target
+# of the plugin's name, so exactly one of them may be added.
+if(NOT "FilePlugin" IN_LIST RUST_REPLACED_PLUGINS)
+    add_vm_plugin(FilePlugin TRUE TRUE)
+    if(OSX)
+        target_link_libraries(FilePlugin PRIVATE "-framework CoreFoundation")
+    endif()
+    if(WIN)
+        target_compile_definitions(FilePlugin PRIVATE "-DWIN32_FILE_SUPPORT")
+    endif()
 endif()
-if(WIN)
-    target_compile_definitions(FilePlugin PRIVATE "-DWIN32_FILE_SUPPORT")
+
+if(NOT "NewFilePlugin" IN_LIST RUST_REPLACED_PLUGINS)
+    add_vm_plugin(NewFilePlugin TRUE TRUE)
 endif()
 
-add_vm_plugin(NewFilePlugin TRUE TRUE)
 
-
-add_vm_plugin(FileAttributesPlugin FALSE TRUE)
-target_link_libraries(FileAttributesPlugin PRIVATE FilePlugin)
+# The link to FilePlugin exists for sq2uxPath/ux2sqPath; the Rust replacement
+# resolves those at runtime via ioLoadFunctionFrom instead. rust.cmake replaces
+# these two in the same platform group, so the C pairing stays consistent.
+if(NOT "FileAttributesPlugin" IN_LIST RUST_REPLACED_PLUGINS)
+    add_vm_plugin(FileAttributesPlugin FALSE TRUE)
+    target_link_libraries(FileAttributesPlugin PRIVATE FilePlugin)
+endif()
 
 
 # UUIDPlugin
 
-if(FEATURE_PLUGIN_UUID AND NOT OPENBSD)
+if(FEATURE_PLUGIN_UUID AND NOT OPENBSD
+   AND NOT "UUIDPlugin" IN_LIST RUST_REPLACED_PLUGINS)
     message(STATUS "Adding plugin: UUIDPlugin")
 
     file(GLOB UUIDPlugin_SOURCES
@@ -38,33 +52,49 @@ if(FEATURE_PLUGIN_UUID AND NOT OPENBSD)
 endif()
 
 # Socket Plugin
-if (${FEATURE_NETWORK})
+if(${FEATURE_NETWORK} AND NOT "SocketPlugin" IN_LIST RUST_REPLACED_PLUGINS)
     add_vm_plugin(SocketPlugin FALSE FALSE)
   if(WIN)
     target_link_libraries(SocketPlugin PRIVATE "-lws2_32")
   endif()
 endif()
 
-add_vm_plugin(SurfacePlugin TRUE FALSE)
+if(NOT "SurfacePlugin" IN_LIST RUST_REPLACED_PLUGINS)
+    add_vm_plugin(SurfacePlugin TRUE FALSE)
+endif()
 add_vm_plugin(FloatArrayPlugin TRUE FALSE)
-add_vm_plugin(LargeIntegers FALSE FALSE)
-add_vm_plugin(JPEGReaderPlugin FALSE FALSE)
+if(NOT "LargeIntegers" IN_LIST RUST_REPLACED_PLUGINS)
+    add_vm_plugin(LargeIntegers FALSE FALSE)
+endif()
+if(NOT "JPEGReaderPlugin" IN_LIST RUST_REPLACED_PLUGINS)
+    add_vm_plugin(JPEGReaderPlugin FALSE FALSE)
+endif()
 # Built from rust/plugins/jpeg-plugin when USE_RUST_PLUGINS is ON. Both define
 # a target of this name, so exactly one of them may be added.
 if(NOT "JPEGReadWriter2Plugin" IN_LIST RUST_REPLACED_PLUGINS)
     add_vm_plugin(JPEGReadWriter2Plugin FALSE FALSE)
 endif()
-add_vm_plugin(MiscPrimitivePlugin FALSE FALSE)
-add_vm_plugin(DSAPrims FALSE FALSE)
-add_vm_plugin(BitBltPlugin FALSE FALSE)
-add_vm_plugin(B2DPlugin FALSE FALSE)
-
-add_vm_plugin(LocalePlugin FALSE TRUE)
-if(OSX)
-	target_link_libraries(LocalePlugin PRIVATE "-framework CoreFoundation")
+if(NOT "MiscPrimitivePlugin" IN_LIST RUST_REPLACED_PLUGINS)
+    add_vm_plugin(MiscPrimitivePlugin FALSE FALSE)
+endif()
+if(NOT "DSAPrims" IN_LIST RUST_REPLACED_PLUGINS)
+    add_vm_plugin(DSAPrims FALSE FALSE)
+endif()
+if(NOT "BitBltPlugin" IN_LIST RUST_REPLACED_PLUGINS)
+    add_vm_plugin(BitBltPlugin FALSE FALSE)
+endif()
+if(NOT "B2DPlugin" IN_LIST RUST_REPLACED_PLUGINS)
+    add_vm_plugin(B2DPlugin FALSE FALSE)
 endif()
 
-if(FEATURE_PLUGIN_SSL)
+if(NOT "LocalePlugin" IN_LIST RUST_REPLACED_PLUGINS)
+    add_vm_plugin(LocalePlugin FALSE TRUE)
+    if(OSX)
+        target_link_libraries(LocalePlugin PRIVATE "-framework CoreFoundation")
+    endif()
+endif()
+
+if(FEATURE_PLUGIN_SSL AND NOT "SqueakSSL" IN_LIST RUST_REPLACED_PLUGINS)
     add_vm_plugin(SqueakSSL FALSE FALSE)
     if(OSX)
         target_link_libraries(SqueakSSL PRIVATE "-framework CoreFoundation")
@@ -83,7 +113,12 @@ if(FEATURE_PLUGIN_SSL)
 endif()
 
 # UnixOSProcessPlugin
-if(NOT WIN)
+# The FilePlugin link is real (SQFile records, sqFileStdioHandlesInto); the
+# SocketPlugin one feeds only dead code. The Rust replacement resolves its
+# FilePlugin needs at runtime via ioLoadFunctionFrom, and rust.cmake replaces
+# all three plugins in the same platform group, so the C pairing stays
+# consistent wherever this C plugin still builds.
+if(NOT WIN AND NOT "UnixOSProcessPlugin" IN_LIST RUST_REPLACED_PLUGINS)
     add_vm_plugin(UnixOSProcessPlugin FALSE FALSE)
     target_link_libraries(UnixOSProcessPlugin PRIVATE FilePlugin)
     target_link_libraries(UnixOSProcessPlugin PRIVATE SocketPlugin)

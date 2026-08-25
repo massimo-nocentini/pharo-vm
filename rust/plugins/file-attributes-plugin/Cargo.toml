@@ -1,0 +1,20 @@
+[package]
+name = "file-attributes-plugin"
+description = "FileAttributesPlugin in Rust: stat/access attributes and directory enumeration."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# Must match the module name the image asks for.
+name = "FileAttributesPlugin"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pharo-vm-plugin = { path = "../../pharo-vm-plugin" }
+# Thin syscall access: stat/lstat, opendir/readdir, access, readlink, chmod,
+# chown. std::fs is deliberately avoided where the image must see the OS's raw
+# values (mode bits, timestamps) rather than std's abstractions.
+libc.workspace = true
