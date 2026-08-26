@@ -18,7 +18,15 @@
 //!
 //! The C reads and writes whole words even over a partial trailing word,
 //! relying on allocation slack; here the same values flow through fully
-//! in-bounds vectors instead, which is the memory-safety half of the port.
+//! in-bounds buffers instead, which is the memory-safety half of the port.
+//!
+//! Most helpers take the digits as `&[u32]`, because their caller had to
+//! compute them anyway. The read-only scans — [`high_bit`], [`any_bit`],
+//! [`normalize_scan`], and comparison — also come in a `_bytes` spelling that
+//! reads an image object in place through [`digit_at`], for the primitives
+//! whose whole answer is a scan and which would otherwise copy a magnitude
+//! only to look at it. Each pair shares one `#[inline]` body, so the two
+//! domains cannot answer differently.
 
 // The index-heavy loops and the `(x + 3) / 4`-style ceilings deliberately
 // mirror the Slang line by line, because being diffable against the C is what
@@ -120,13 +128,26 @@ pub fn high_bit_32(word: u32) -> usize {
 /// `cDigitHighBit:len:` — highest set bit among the first `len` digits,
 /// 1-based, 0 if they are all zero.
 pub fn high_bit(digits: &[u32], len: usize) -> usize {
+    high_bit_core(|ix| digits[ix], len)
+}
+
+/// [`high_bit`] over an image object's bytes, read in place.
+pub fn high_bit_bytes(bytes: &[u8]) -> usize {
+    high_bit_core(|ix| digit_at(bytes, ix), digit_len(bytes.len()))
+}
+
+/// The scan both spellings share. `digit` is inlined at each call site, so
+/// neither pays for the indirection; having one body is what keeps the
+/// digit-domain and byte-domain answers from drifting apart.
+#[inline]
+fn high_bit_core(digit: impl Fn(usize) -> u32, len: usize) -> usize {
     let mut real_length = len;
     loop {
         if real_length == 0 {
             return 0;
         }
         real_length -= 1;
-        let last_digit = digits[real_length];
+        let last_digit = digit(real_length);
         if last_digit != 0 {
             return high_bit_32(last_digit) + 32 * real_length;
         }
@@ -146,6 +167,30 @@ pub fn compare(first: &[u32], second: &[u32], len: usize) -> i32 {
         let second_digit = second[ix];
         if second_digit != first_digit {
             return if second_digit < first_digit { 1 } else { -1 };
+        }
+    }
+    0
+}
+
+/// [`compare`] over two image objects' bytes, read in place.
+///
+/// `len` is the digit length both magnitudes share, as in [`compare`]; the
+/// byte lengths need not match, since two byte counts in the same word round
+/// to the same digit count. Bytes past an object's end read as zero, which is
+/// what its zero-padded trailing word holds.
+///
+/// Scanning bytes rather than words costs nothing in practice: the loop runs
+/// from the most significant byte down and all but the equal case leaves it
+/// almost immediately, whereas materialising the digits is unconditionally
+/// linear in both operands.
+pub fn compare_bytes(first: &[u8], second: &[u8], len: usize) -> i32 {
+    let mut ix = len * 4;
+    while ix > 0 {
+        ix -= 1;
+        let first_byte = first.get(ix).copied().unwrap_or(0);
+        let second_byte = second.get(ix).copied().unwrap_or(0);
+        if second_byte != first_byte {
+            return if second_byte < first_byte { 1 } else { -1 };
         }
     }
     0
@@ -171,7 +216,9 @@ pub fn small_byte_size(value: isize) -> usize {
 pub fn small_digits(value: isize) -> Vec<u32> {
     let magnitude = (value as i64).unsigned_abs();
     let count = digit_len(small_byte_size(value));
-    (0..count).map(|ix| (magnitude >> (ix * 32)) as u32).collect()
+    (0..count)
+        .map(|ix| (magnitude >> (ix * 32)) as u32)
+        .collect()
 }
 
 /// `cDigitAdd:len:with:len:into:` — magnitude addition.
@@ -225,7 +272,9 @@ pub fn subtract(first: &[u32], second: &[u32], first_negative: bool) -> (Vec<u32
     let mut res = vec![0u32; larger_len];
     let mut z: u64 = 0;
     for i in 0..smaller_len {
-        z = z.wrapping_add(larger[i] as u64).wrapping_sub(smaller[i] as u64);
+        z = z
+            .wrapping_add(larger[i] as u64)
+            .wrapping_sub(smaller[i] as u64);
         res[i] = z as u32;
         z = 0u64.wrapping_sub(z >> 63);
     }
@@ -406,7 +455,29 @@ pub fn rshift(digits: &[u32], shift: usize, look_first: usize) -> Option<(Vec<u3
 /// Bit positions are 1-based. The caller has already rejected positions below
 /// 1; `stop_arg` is clamped to the magnitude's high bit.
 pub fn any_bit(digits: &[u32], start: usize, stop_arg: usize) -> bool {
-    let stop = stop_arg.min(high_bit(digits, digits.len()));
+    any_bit_core(
+        |ix| digits[ix],
+        high_bit(digits, digits.len()),
+        start,
+        stop_arg,
+    )
+}
+
+/// [`any_bit`] over an image object's bytes, read in place.
+pub fn any_bit_bytes(bytes: &[u8], start: usize, stop_arg: usize) -> bool {
+    any_bit_core(
+        |ix| digit_at(bytes, ix),
+        high_bit_bytes(bytes),
+        start,
+        stop_arg,
+    )
+}
+
+/// The mask arithmetic both spellings share; `high` is the magnitude's high
+/// bit, which the C computes first to clamp `stop_arg`.
+#[inline]
+fn any_bit_core(digit: impl Fn(usize) -> u32, high: usize, start: usize, stop_arg: usize) -> bool {
+    let stop = stop_arg.min(high);
     if start > stop {
         return false;
     }
@@ -415,17 +486,17 @@ pub fn any_bit(digits: &[u32], start: usize, stop_arg: usize) -> bool {
     let first_mask = 0xFFFF_FFFFu32 << ((start - 1) & 0x1F);
     let last_mask = 0xFFFF_FFFFu32 >> (0x1F - ((stop - 1) & 0x1F));
     if first_digit_ix == last_digit_ix {
-        return digits[first_digit_ix] & (first_mask & last_mask) != 0;
+        return digit(first_digit_ix) & (first_mask & last_mask) != 0;
     }
-    if digits[first_digit_ix] & first_mask != 0 {
+    if digit(first_digit_ix) & first_mask != 0 {
         return true;
     }
     for ix in first_digit_ix + 1..last_digit_ix {
-        if digits[ix] != 0 {
+        if digit(ix) != 0 {
             return true;
         }
     }
-    digits[last_digit_ix] & last_mask != 0
+    digit(last_digit_ix) & last_mask != 0
 }
 
 /// `cDigitDiv:len:rem:len:quo:len:` — Knuth division, digit for digit.
@@ -490,7 +561,9 @@ pub fn div_core(div: &[u32], rem: &mut [u32], quo_len: usize) -> Vec<u32> {
             let l = j - dl + i;
             let hi = (div[i] as u64).wrapping_mul(q >> 32);
             let lo = (div[i] as u64).wrapping_mul(q & 0xFFFF_FFFF);
-            let b = (rem[l - 1] as u64).wrapping_sub(a).wrapping_sub(lo & 0xFFFF_FFFF);
+            let b = (rem[l - 1] as u64)
+                .wrapping_sub(a)
+                .wrapping_sub(lo & 0xFFFF_FFFF);
             rem[l - 1] = b as u32;
             // Arithmetic >> 32 emulated on an unsigned value, as in the C.
             let b = (b >> 32) | (0u64.wrapping_sub(b >> 63) & 0xFFFF_FFFF_0000_0000);
@@ -701,21 +774,38 @@ pub enum Normalized {
 /// Strips leading zero digits, reduces to a SmallInteger when the value fits,
 /// otherwise trims the byte length to the top digit's significant bytes.
 pub fn normalize_scan(digits: &[u32], byte_len: usize, negative: bool) -> Normalized {
+    debug_assert!(digit_len(byte_len) <= digits.len());
+    normalize_scan_core(|ix| digits[ix], byte_len, negative)
+}
+
+/// [`normalize_scan`] over an image object's bytes, read in place — the shape
+/// `primNormalizePositive` / `primNormalizeNegative` need, where the operand
+/// is an object and nothing has been computed into a buffer.
+pub fn normalize_scan_bytes(bytes: &[u8], negative: bool) -> Normalized {
+    normalize_scan_core(|ix| digit_at(bytes, ix), bytes.len(), negative)
+}
+
+/// The decision both spellings share.
+#[inline]
+fn normalize_scan_core(
+    digit: impl Fn(usize) -> u32,
+    byte_len: usize,
+    negative: bool,
+) -> Normalized {
     let mut digit_count = digit_len(byte_len);
-    debug_assert!(digit_count <= digits.len());
-    while digit_count != 0 && digits[digit_count - 1] == 0 {
+    while digit_count != 0 && digit(digit_count - 1) == 0 {
         digit_count -= 1;
     }
     if digit_count == 0 {
         return Normalized::Small(0);
     }
-    let mut val = digits[digit_count - 1] as u64;
+    let mut val = digit(digit_count - 1) as u64;
     // "SmallInteger maxVal digitLength": 2 digits on 64-bit images, 1 on 32.
     let s_len: usize = if MIN_SMALL_MAG > 0x4000_0000 { 2 } else { 1 };
     if digit_count <= s_len {
         let mut val2 = val;
         if digit_count > 1 {
-            val2 = (val2 << 32) + digits[0] as u64;
+            val2 = (val2 << 32) + digit(0) as u64;
         }
         if negative {
             if val2 <= MIN_SMALL_MAG {
@@ -738,28 +828,92 @@ pub fn normalize_scan(digits: &[u32], byte_len: usize, negative: bool) -> Normal
 }
 
 /// `isNormalized:` — a non-empty magnitude whose top byte is non-zero.
-pub fn is_normalized(digits: &[u32], byte_len: usize) -> bool {
-    if byte_len == 0 {
-        return false;
-    }
-    let ix = byte_len - 1;
-    (digits[ix / 4] >> ((ix % 4) * 8)) as u8 != 0
+///
+/// Only ever asked of an image object, whose byte length *is* the slice
+/// length, so this needs no digits at all — which is why there is no
+/// digit-domain spelling to keep in step.
+pub fn is_normalized_bytes(bytes: &[u8]) -> bool {
+    matches!(bytes.last(), Some(&top) if top != 0)
 }
 
 /// Reads a byte object's contents as little-endian digits, the trailing
 /// partial word zero-padded — the values `cDigitOf:at:` sees.
 pub fn bytes_to_digits(bytes: &[u8]) -> Vec<u32> {
-    let mut out = vec![0u32; digit_len(bytes.len())];
-    for (i, &b) in bytes.iter().enumerate() {
-        out[i / 4] |= (b as u32) << ((i % 4) * 8);
+    let mut out = Vec::with_capacity(digit_len(bytes.len()));
+    let mut words = bytes.chunks_exact(4);
+    for word in &mut words {
+        out.push(u32::from_le_bytes([word[0], word[1], word[2], word[3]]));
+    }
+    let tail = words.remainder();
+    if !tail.is_empty() {
+        let mut padded = [0u8; 4];
+        padded[..tail.len()].copy_from_slice(tail);
+        out.push(u32::from_le_bytes(padded));
     }
     out
+}
+
+/// `cDigitOf:at:` — digit `ix` of a byte object's magnitude, read in place.
+///
+/// Bytes past the object's end read as zero: that is the zero-padded trailing
+/// word the C sees in allocation slack, produced here without ever leaving
+/// the slice.
+#[inline]
+pub fn digit_at(bytes: &[u8], ix: usize) -> u32 {
+    let start = ix * 4;
+    if let Some(word) = bytes.get(start..start + 4) {
+        return u32::from_le_bytes([word[0], word[1], word[2], word[3]]);
+    }
+    let mut padded = [0u8; 4];
+    if let Some(tail) = bytes.get(start..) {
+        padded[..tail.len()].copy_from_slice(tail);
+    }
+    u32::from_le_bytes(padded)
+}
+
+/// Runs `f` on the digits' little-endian byte image, `byte_len` bytes long.
+///
+/// On a little-endian host a `[u32]` in memory already *is* that byte
+/// sequence, so the callback sees the buffer itself and nothing is copied —
+/// `write_bytes` then memcpys straight from the computed digits into the new
+/// object. On a big-endian host the bytes genuinely differ, so they are built
+/// the long way and the callback sees that.
+///
+/// `byte_len` must not exceed the digits' own byte length, and any digit
+/// bytes past it must be zero — the same contract as [`digits_to_bytes`],
+/// checked the same way.
+pub fn with_bytes<R>(digits: &[u32], byte_len: usize, f: impl FnOnce(&[u8]) -> R) -> R {
+    debug_assert!(byte_len <= digits.len() * 4);
+    debug_assert!(
+        (byte_len..digits.len() * 4).all(|i| (digits[i / 4] >> ((i % 4) * 8)) as u8 == 0),
+        "digit bytes beyond the byte length must be zero"
+    );
+    #[cfg(target_endian = "little")]
+    {
+        // SAFETY: `[u32]` is `4 * len` initialised bytes with no padding, so
+        // reinterpreting it as bytes reads only initialised memory the slice
+        // already owns; `u8` needs no alignment, and `byte_len` is in range
+        // by the assertion above. The borrow lives only for the call.
+        let all =
+            unsafe { core::slice::from_raw_parts(digits.as_ptr().cast::<u8>(), digits.len() * 4) };
+        f(&all[..byte_len])
+    }
+    #[cfg(target_endian = "big")]
+    {
+        f(&digits_to_bytes(digits, byte_len))
+    }
 }
 
 /// Serializes digits back to `byte_len` bytes, little-endian.
 ///
 /// Any digit bytes beyond `byte_len` must be zero — the C writes them into
 /// allocation slack, which only ever receives zeros.
+///
+/// This is [`with_bytes`]'s big-endian path, and the tests' independent
+/// spelling of the same conversion; on a little-endian host nothing in the
+/// plugin proper calls it, because there the digits are already their own
+/// byte image.
+#[cfg_attr(target_endian = "little", allow(dead_code))]
 pub fn digits_to_bytes(digits: &[u32], byte_len: usize) -> Vec<u8> {
     debug_assert!(byte_len <= digits.len() * 4);
     let mut out = vec![0u8; byte_len];
@@ -817,7 +971,9 @@ mod tests {
     /// A value as the (digits, byte_len) pair the plugin passes around.
     fn digits_for(v: u128) -> (Vec<u32>, usize) {
         let byte_len = min_byte_len(v);
-        let digits = (0..digit_len(byte_len)).map(|i| (v >> (i * 32)) as u32).collect();
+        let digits = (0..digit_len(byte_len))
+            .map(|i| (v >> (i * 32)) as u32)
+            .collect();
         (digits, byte_len)
     }
 
@@ -826,9 +982,7 @@ mod tests {
         let mut out = vec![0u8; a.len().max(b.len()) + 1];
         let mut carry = 0u16;
         for i in 0..out.len() {
-            let s = carry
-                + *a.get(i).unwrap_or(&0) as u16
-                + *b.get(i).unwrap_or(&0) as u16;
+            let s = carry + *a.get(i).unwrap_or(&0) as u16 + *b.get(i).unwrap_or(&0) as u16;
             out[i] = s as u8;
             carry = s >> 8;
         }
@@ -962,7 +1116,11 @@ mod tests {
             let b = rng.next() as u128 & ((1 << (rng.below(96) + 1)) - 1);
             let (da, _) = digits_for(a);
             let (db, _) = digits_for(b);
-            let (short, long) = if da.len() <= db.len() { (&da, &db) } else { (&db, &da) };
+            let (short, long) = if da.len() <= db.len() {
+                (&da, &db)
+            } else {
+                (&db, &da)
+            };
             let (sum, over) = add(short, long);
             let total = to_u128(&sum) + ((over as u128) << (32 * long.len()));
             assert_eq!(total, a + b);
@@ -1093,8 +1251,7 @@ mod tests {
         for case in 0..200 {
             let second_digits = 1 + rng.below(40) as usize;
             let first_digits = second_digits + rng.below(40) as usize;
-            let mut second: Vec<u32> =
-                (0..second_digits).map(|_| rng.next() as u32).collect();
+            let mut second: Vec<u32> = (0..second_digits).map(|_| rng.next() as u32).collect();
             // The divisor must be normalized (non-zero top digit), which is
             // what `divide`'s caller guarantees.
             if second[second_digits - 1] == 0 {
@@ -1118,8 +1275,7 @@ mod tests {
         let mut rng = Rng(0x0000_0000_DEAD_BEEF);
         for _ in 0..50 {
             let second_digits = 1 + rng.below(20) as usize;
-            let mut second: Vec<u32> =
-                (0..second_digits).map(|_| rng.next() as u32).collect();
+            let mut second: Vec<u32> = (0..second_digits).map(|_| rng.next() as u32).collect();
             if second[second_digits - 1] == 0 {
                 second[second_digits - 1] = 1;
             }
@@ -1213,7 +1369,11 @@ mod tests {
             let b = rng.next() as u128 & ((1 << (rng.below(96) + 1)) - 1);
             let (da, _) = digits_for(a);
             let (db, _) = digits_for(b);
-            let (s, l) = if da.len() <= db.len() { (&da, &db) } else { (&db, &da) };
+            let (s, l) = if da.len() <= db.len() {
+                (&da, &db)
+            } else {
+                (&db, &da)
+            };
             assert_eq!(to_u128(&bit_op(BitOp::And, s, l)), a & b);
             assert_eq!(to_u128(&bit_op(BitOp::Or, s, l)), a | b);
             assert_eq!(to_u128(&bit_op(BitOp::Xor, s, l)), a ^ b);
@@ -1222,9 +1382,18 @@ mod tests {
 
     #[test]
     fn bit_op_result_is_sized_like_the_longer_operand() {
-        assert_eq!(bit_op(BitOp::And, &[0xFF], &[0xF0F0, 3, 9]), vec![0xF0, 0, 0]);
-        assert_eq!(bit_op(BitOp::Or, &[0xFF], &[0xF0F0, 3, 9]), vec![0xF0FF, 3, 9]);
-        assert_eq!(bit_op(BitOp::Xor, &[0xFF], &[0xF0F0, 3, 9]), vec![0xF00F, 3, 9]);
+        assert_eq!(
+            bit_op(BitOp::And, &[0xFF], &[0xF0F0, 3, 9]),
+            vec![0xF0, 0, 0]
+        );
+        assert_eq!(
+            bit_op(BitOp::Or, &[0xFF], &[0xF0F0, 3, 9]),
+            vec![0xF0FF, 3, 9]
+        );
+        assert_eq!(
+            bit_op(BitOp::Xor, &[0xFF], &[0xF0F0, 3, 9]),
+            vec![0xF00F, 3, 9]
+        );
     }
 
     // ---- shifts ------------------------------------------------------------
@@ -1318,10 +1487,18 @@ mod tests {
                 false
             } else {
                 let width = stop - start + 1;
-                let mask = if width >= 128 { u128::MAX } else { ((1u128 << width) - 1) << (start - 1) };
+                let mask = if width >= 128 {
+                    u128::MAX
+                } else {
+                    ((1u128 << width) - 1) << (start - 1)
+                };
                 v & mask != 0
             };
-            assert_eq!(any_bit(&dv, start, stop), expected, "v={v} {start}..={stop}");
+            assert_eq!(
+                any_bit(&dv, start, stop),
+                expected,
+                "v={v} {start}..={stop}"
+            );
         }
     }
 
@@ -1359,7 +1536,7 @@ mod tests {
                     let r = a % b;
                     assert_ne!(r, 0);
                     assert_eq!(to_u128(&rd), r, "a={a} b={b}");
-                    assert_eq!(rb, min_byte_len(r) , "a={a} b={b}");
+                    assert_eq!(rb, min_byte_len(r), "a={a} b={b}");
                 }
             }
         }
@@ -1594,14 +1771,125 @@ mod tests {
     }
 
     #[test]
+    fn byte_domain_readers_agree_with_the_digit_domain() {
+        // Every read-only scan has two spellings -- one over a computed digit
+        // buffer, one over an image object's bytes. They share a body, so this
+        // pins the shared body's two entry points to each other, and pins
+        // `digit_at`'s zero padding to `bytes_to_digits`'.
+        let mut rng = Rng(0xF00D_BEEF);
+        for byte_len in 1..=40usize {
+            for _ in 0..40 {
+                let bytes: Vec<u8> = (0..byte_len)
+                    .map(|_| {
+                        // Plenty of zero bytes, so the leading-zero and
+                        // all-zero paths are actually exercised.
+                        if rng.below(3) == 0 {
+                            0
+                        } else {
+                            rng.below(256) as u8
+                        }
+                    })
+                    .collect();
+                let words = bytes_to_digits(&bytes);
+                assert_eq!(words.len(), digit_len(byte_len));
+                for ix in 0..words.len() {
+                    assert_eq!(digit_at(&bytes, ix), words[ix], "digit {ix} of {bytes:?}");
+                }
+                assert_eq!(high_bit_bytes(&bytes), high_bit(&words, words.len()));
+                for negative in [false, true] {
+                    assert_eq!(
+                        normalize_scan_bytes(&bytes, negative),
+                        normalize_scan(&words, byte_len, negative),
+                        "normalize {bytes:?} negative={negative}"
+                    );
+                }
+                for _ in 0..8 {
+                    let from = 1 + rng.below(byte_len as u64 * 8 + 4) as usize;
+                    let to = from + rng.below(40) as usize;
+                    assert_eq!(
+                        any_bit_bytes(&bytes, from, to),
+                        any_bit(&words, from, to),
+                        "any_bit {from}..={to} of {bytes:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn digit_at_zero_pads_past_the_end() {
+        assert_eq!(digit_at(&[0xAA], 0), 0xAA);
+        assert_eq!(digit_at(&[0x11, 0x22, 0x33], 0), 0x0033_2211);
+        assert_eq!(digit_at(&[1, 0, 0, 0, 2], 1), 2);
+        // Wholly past the end -- what a caller that rounds up to a digit
+        // boundary asks for, and what the C reads out of allocation slack.
+        assert_eq!(digit_at(&[1, 2, 3, 4], 1), 0);
+        assert_eq!(digit_at(&[], 0), 0);
+    }
+
+    #[test]
+    fn compare_bytes_agrees_with_the_digit_compare() {
+        let mut rng = Rng(0x5EED_1234);
+        for byte_len in 1..=17usize {
+            let digit_count = digit_len(byte_len);
+            for _ in 0..300 {
+                let mut a: Vec<u8> = (0..byte_len).map(|_| rng.below(256) as u8).collect();
+                let mut b: Vec<u8> = (0..byte_len).map(|_| rng.below(256) as u8).collect();
+                // Force ties often enough to reach the equal-prefix path.
+                let shared = rng.below(byte_len as u64 + 1) as usize;
+                let tie = byte_len - shared;
+                b[tie..].copy_from_slice(&a[tie..]);
+                if rng.below(8) == 0 {
+                    b.clone_from(&a);
+                }
+                // A shorter object with the same digit count must answer the
+                // same, since its missing bytes read as the zeros its trailing
+                // word holds. Dropping a zero top byte builds exactly that
+                // pair: same value, one byte shorter, same digit count.
+                if rng.below(4) == 0 && byte_len % 4 != 0 {
+                    a[byte_len - 1] = 0;
+                    a.truncate(byte_len - 1);
+                }
+                let mut da = bytes_to_digits(&a);
+                da.resize(digit_count, 0);
+                let db = bytes_to_digits(&b);
+                assert_eq!(
+                    compare_bytes(&a, &b, digit_count),
+                    compare(&da, &db, digit_count),
+                    "{a:?} vs {b:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn with_bytes_matches_the_reference_serialization() {
+        // `with_bytes` reinterprets the digit buffer's own memory on a
+        // little-endian host; `digits_to_bytes` builds the bytes arithmetically
+        // and is endian-independent. They must not disagree.
+        let mut rng = Rng(0xC0FF_EE01);
+        for byte_len in 0..=33usize {
+            for _ in 0..50 {
+                let bytes: Vec<u8> = (0..byte_len).map(|_| rng.below(256) as u8).collect();
+                let words = bytes_to_digits(&bytes);
+                assert_eq!(with_bytes(&words, byte_len, <[u8]>::to_vec), bytes);
+                assert_eq!(
+                    with_bytes(&words, byte_len, <[u8]>::to_vec),
+                    digits_to_bytes(&words, byte_len)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn is_normalized_checks_the_top_byte() {
-        assert!(!is_normalized(&[], 0));
-        assert!(is_normalized(&[0xFF], 1));
-        assert!(!is_normalized(&[0xFF], 2)); // byte 1 is zero
-        assert!(is_normalized(&[0x1FF], 2));
-        assert!(!is_normalized(&[0x1_00FF], 2)); // byte 1 is zero, byte 2 unseen
-        assert!(is_normalized(&[0, 1], 5));
-        assert!(!is_normalized(&[0, 1], 6));
+        assert!(!is_normalized_bytes(&[]));
+        assert!(is_normalized_bytes(&[0xFF]));
+        assert!(!is_normalized_bytes(&[0xFF, 0x00])); // top byte is zero
+        assert!(is_normalized_bytes(&[0xFF, 0x01]));
+        assert!(!is_normalized_bytes(&[0xFF, 0x00, 0x01, 0x00])); // ditto, 4 bytes
+        assert!(is_normalized_bytes(&[0, 0, 0, 0, 1]));
+        assert!(!is_normalized_bytes(&[0, 0, 0, 0, 1, 0]));
     }
 
     // ---- byte <-> digit plumbing -------------------------------------------
@@ -1634,4 +1922,3 @@ mod tests {
         );
     }
 }
-

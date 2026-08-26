@@ -73,11 +73,25 @@ and allocates exactly the objects the image will see. The one observable
 consequence: allocation-failure (`PrimErrNoMemory`) can strike at different
 points under memory exhaustion.
 
+A buffer is only what *computing* needs, though, not what safety needs — the
+invariant is that no borrow of image memory spans an allocation. So the
+primitives that compute nothing read the objects where they lie:
+`primDigitCompare`, `primAnyBitFromTo`, `primNormalizePositive` /
+`primNormalizeNegative` and `primDigitDivNegative`'s three guards all run
+over the byte slice, never building a magnitude. The scans they use
+(`high_bit`, `any_bit`, `normalize_scan`) have a digit-domain and a
+byte-domain spelling sharing one inlined body, so the two cannot drift;
+`byte_domain_readers_agree_with_the_digit_domain` pins them together.
+
 **No out-of-slack writes.** The C writes whole 32-bit words through partial
 trailing words into allocation slack (the carry byte in `primDigitAdd`, the
 shift loops, `largeIntgrowTo`). Those writes only ever carry zero bytes, and
 this port writes exactly `byte_len` bytes instead (debug assertions enforce
-the "beyond is zero" invariant).
+the "beyond is zero" invariant). Writing them costs no conversion: on a
+little-endian host a `[u32]` in memory already *is* the byte sequence the
+object wants, so `with_bytes` hands `write_bytes` the computed digits
+themselves. Big-endian hosts, where the two genuinely differ, keep the
+arithmetic conversion in `digits_to_bytes`.
 
 **Undefined behaviour removed** (each produced garbage or crashed in C, and
 now fails cleanly or is deterministic):

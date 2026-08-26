@@ -33,6 +33,13 @@
 //! operands, compute, then allocate exactly the answer — so no borrow ever
 //! spans an allocation and nothing is written out of bounds. See the README
 //! for the handful of undefined behaviours this removes.
+//!
+//! A buffer is what *computing* needs, not what that safety argument needs,
+//! so the primitives that compute nothing never build one: `primDigitCompare`
+//! answers from the objects' bytes, and so do `primAnyBitFromTo`,
+//! `primNormalize*` and `primDigitDivNegative`'s guards. [`IntKind`] is the
+//! classification on its own, with [`operand_of`] the step that costs a
+//! magnitude.
 
 // The crate is named for the shared library the VM loads (libLargeIntegers.so)
 // and the primitive names are fixed by the image.
@@ -128,42 +135,36 @@ mod raw {
 // Operands
 // ---------------------------------------------------------------------------
 
-/// An integer operand as the C sees it after `createLargeFromSmallInteger:`:
-/// a magnitude plus a sign, remembering where it came from.
-struct Operand {
-    /// Little-endian 32-bit digits, exactly `digit_len(byte_len)` of them.
-    digits: Vec<u32>,
-    /// The magnitude's length in bytes (`slotSizeOf` in the C).
-    byte_len: usize,
-    negative: bool,
-    /// The original object, when the operand already was a LargeInteger.
-    oop: Option<Oop>,
-    /// The unboxed value, when the operand was a SmallInteger.
-    small: Option<isize>,
+/// What an integer-kind oop *is*, before any magnitude is read: the C's
+/// `isKindOfInteger` decision on its own.
+///
+/// Several primitives need no more than this — a comparison, a bit test, a
+/// normalization check — and for them reading the operand's digits into a
+/// buffer is pure waste, so the classification is separate from [`Operand`].
+#[derive(Clone, Copy)]
+enum IntKind {
+    /// A SmallInteger, unboxed.
+    Small(isize),
+    /// A LargeInteger: the object itself, and whether its class is the
+    /// negative one.
+    Large { oop: Oop, negative: bool },
 }
 
-impl Operand {
-    fn digit_count(&self) -> usize {
-        digits::digit_len(self.byte_len)
+impl IntKind {
+    fn negative(self) -> bool {
+        match self {
+            IntKind::Small(value) => value < 0,
+            IntKind::Large { negative, .. } => negative,
+        }
     }
 }
 
-/// Reads an integer-kind oop — SmallInteger, LargePositiveInteger or
-/// LargeNegativeInteger — as an [`Operand`]. Answers `None` for anything
-/// else, mirroring the C's `isKindOfInteger`.
-///
-/// A SmallInteger becomes its unnormalized magnitude digits without the
-/// scratch LargeInteger object the C allocates for the same purpose.
-fn integer_operand(vm: &Interp, oop: Oop) -> PrimResult<Option<Operand>> {
+/// Classifies an oop as SmallInteger, LargePositiveInteger or
+/// LargeNegativeInteger. Answers `None` for anything else, mirroring the C's
+/// `isKindOfInteger`.
+fn integer_kind(vm: &Interp, oop: Oop) -> PrimResult<Option<IntKind>> {
     if vm.is_integer_object(oop)? {
-        let value = vm.integer_value(oop)?;
-        return Ok(Some(Operand {
-            digits: digits::small_digits(value),
-            byte_len: digits::small_byte_size(value),
-            negative: value < 0,
-            oop: None,
-            small: Some(value),
-        }));
+        return Ok(Some(IntKind::Small(vm.integer_value(oop)?)));
     }
     let class = raw::fetch_class_of(vm, oop)?;
     let negative = if class == raw::class_large_positive(vm)? {
@@ -173,26 +174,90 @@ fn integer_operand(vm: &Interp, oop: Oop) -> PrimResult<Option<Operand>> {
     } else {
         return Ok(None);
     };
-    let bytes = vm.bytes_of(oop)?;
-    Ok(Some(Operand {
-        digits: digits::bytes_to_digits(bytes),
-        byte_len: bytes.len(),
-        negative,
-        oop: Some(oop),
-        small: None,
-    }))
+    Ok(Some(IntKind::Large { oop, negative }))
+}
+
+/// An integer operand as the C sees it after `createLargeFromSmallInteger:`:
+/// a magnitude plus where it came from.
+struct Operand {
+    /// Little-endian 32-bit digits, exactly `digit_len(byte_len)` of them.
+    digits: Vec<u32>,
+    /// The magnitude's length in bytes (`slotSizeOf` in the C).
+    byte_len: usize,
+    kind: IntKind,
+}
+
+impl Operand {
+    fn digit_count(&self) -> usize {
+        digits::digit_len(self.byte_len)
+    }
+
+    fn negative(&self) -> bool {
+        self.kind.negative()
+    }
+
+    /// The original object, when the operand already was a LargeInteger.
+    fn oop(&self) -> Option<Oop> {
+        match self.kind {
+            IntKind::Large { oop, .. } => Some(oop),
+            IntKind::Small(_) => None,
+        }
+    }
+}
+
+/// Reads a classified oop's magnitude — the one step that costs a buffer, so
+/// the primitives that can answer without it do not call this.
+///
+/// A SmallInteger becomes its unnormalized magnitude digits without the
+/// scratch LargeInteger object the C allocates for the same purpose.
+fn operand_of(vm: &Interp, kind: IntKind) -> PrimResult<Operand> {
+    Ok(match kind {
+        IntKind::Small(value) => Operand {
+            digits: digits::small_digits(value),
+            byte_len: digits::small_byte_size(value),
+            kind,
+        },
+        IntKind::Large { oop, .. } => {
+            let bytes = vm.bytes_of(oop)?;
+            Operand {
+                digits: digits::bytes_to_digits(bytes),
+                byte_len: bytes.len(),
+                kind,
+            }
+        }
+    })
+}
+
+/// Reads an integer-kind oop as an [`Operand`], or `None` if it is not one.
+fn integer_operand(vm: &Interp, oop: Oop) -> PrimResult<Option<Operand>> {
+    match integer_kind(vm, oop)? {
+        Some(kind) => Ok(Some(operand_of(vm, kind)?)),
+        None => Ok(None),
+    }
 }
 
 /// The C's checked-argument pattern: not an integer kind fails with
 /// `PrimErrBadArgument`.
-fn argument_operand(vm: &Interp, offset: sqInt) -> PrimResult<Operand> {
-    integer_operand(vm, vm.stack_value(offset)?)?.ok_or(PrimErr::BadArgument)
+fn argument_kind(vm: &Interp, offset: sqInt) -> PrimResult<IntKind> {
+    integer_kind(vm, vm.stack_value(offset)?)?.ok_or(PrimErr::BadArgument)
 }
 
 /// The C's receiver pattern, `success(isKindOfInteger(...))`: not an integer
 /// kind fails with the generic code.
+fn receiver_kind(vm: &Interp, offset: sqInt) -> PrimResult<IntKind> {
+    integer_kind(vm, vm.stack_value(offset)?)?.ok_or(PrimErr::GenericFailure)
+}
+
+/// [`argument_kind`], magnitude included.
+fn argument_operand(vm: &Interp, offset: sqInt) -> PrimResult<Operand> {
+    let kind = argument_kind(vm, offset)?;
+    operand_of(vm, kind)
+}
+
+/// [`receiver_kind`], magnitude included.
 fn receiver_operand(vm: &Interp, offset: sqInt) -> PrimResult<Operand> {
-    integer_operand(vm, vm.stack_value(offset)?)?.ok_or(PrimErr::GenericFailure)
+    let kind = receiver_kind(vm, offset)?;
+    operand_of(vm, kind)
 }
 
 /// The LargeInteger class for a sign.
@@ -208,16 +273,18 @@ fn large_class(vm: &Interp, negative: bool) -> PrimResult<Oop> {
 /// (`fetchClassOf` in the C) for a LargeInteger, the sign's class for a
 /// converted SmallInteger.
 fn operand_class(vm: &Interp, operand: &Operand) -> PrimResult<Oop> {
-    match operand.oop {
+    match operand.oop() {
         Some(oop) => raw::fetch_class_of(vm, oop),
-        None => large_class(vm, operand.negative),
+        None => large_class(vm, operand.negative()),
     }
 }
 
 /// Instantiates a `byte_len`-byte instance of `class` holding `digits`.
 fn make_large(vm: &Interp, class: Oop, digits: &[u32], byte_len: usize) -> PrimResult<Oop> {
     let oop = vm.instantiate(class, byte_len as sqInt)?;
-    vm.write_bytes(oop, 0, &digits::digits_to_bytes(digits, byte_len))?;
+    // On a little-endian host the digits are already their own byte image, so
+    // this memcpys straight out of the computed buffer -- no second one.
+    digits::with_bytes(digits, byte_len, |bytes| vm.write_bytes(oop, 0, bytes))?;
     Ok(oop)
 }
 
@@ -249,7 +316,7 @@ fn primDigitAdd(vm: &Interp) -> PrimResult<Oop> {
     vm.expect_argument_count(1)?;
     let second = argument_operand(vm, 0)?;
     let first = receiver_operand(vm, 1)?;
-    let neg = first.negative;
+    let neg = first.negative();
     let (short, long) = if first.digits.len() <= second.digits.len() {
         (&first.digits, &second.digits)
     } else {
@@ -274,7 +341,7 @@ fn primDigitSubtract(vm: &Interp) -> PrimResult<Oop> {
     vm.expect_argument_count(1)?;
     let second = argument_operand(vm, 0)?;
     let first = receiver_operand(vm, 1)?;
-    let (res, neg) = digits::subtract(&first.digits, &second.digits, first.negative);
+    let (res, neg) = digits::subtract(&first.digits, &second.digits, first.negative());
     let byte_len = res.len() * 4;
     return_normalized(vm, &res, byte_len, neg)
 }
@@ -308,29 +375,37 @@ fn primDigitMultiplyNegative(vm: &Interp) -> PrimResult<Oop> {
 #[pharo_primitive(accessor_depth = 2)]
 fn primDigitDivNegative(vm: &Interp) -> PrimResult<Oop> {
     vm.expect_argument_count(2)?;
-    let second = integer_operand(vm, vm.stack_value(1)?)?.ok_or(PrimErr::BadArgument)?;
+    let second_kind = integer_kind(vm, vm.stack_value(1)?)?.ok_or(PrimErr::BadArgument)?;
     let neg_oop = vm.stack_value(0)?;
     if !raw::is_boolean_object(vm, neg_oop)? {
         return Err(PrimErr::BadArgument);
     }
     let neg = vm.boolean_value(neg_oop)?;
-    let first = receiver_operand(vm, 2)?;
-    if first.oop.is_some() && !digits::is_normalized(&first.digits, first.byte_len) {
+    let first_kind = receiver_kind(vm, 2)?;
+    // Every guard reads a top byte or an unboxed value, so all three run
+    // before either magnitude is read: a rejected division costs no copying.
+    if let IntKind::Large { oop, .. } = first_kind {
+        if !digits::is_normalized_bytes(vm.bytes_of(oop)?) {
+            return Err(PrimErr::GenericFailure);
+        }
+    }
+    if let IntKind::Small(0) = second_kind {
         return Err(PrimErr::GenericFailure);
     }
-    if second.small == Some(0) {
-        return Err(PrimErr::GenericFailure);
+    if let IntKind::Large { oop, .. } = second_kind {
+        if !digits::is_normalized_bytes(vm.bytes_of(oop)?) {
+            return Err(PrimErr::GenericFailure);
+        }
     }
-    if second.oop.is_some() && !digits::is_normalized(&second.digits, second.byte_len) {
-        return Err(PrimErr::GenericFailure);
-    }
+    let second = operand_of(vm, second_kind)?;
+    let first = operand_of(vm, first_kind)?;
 
     let first_class = operand_class(vm, &first)?;
     if first.digit_count() < second.digit_count() {
         // The quotient would have no digits: answer {0. dividend} directly.
         // For a SmallInteger dividend the C stores its scratch LargeInteger
         // conversion, so materialize the same object here.
-        let rem_oop = match first.oop {
+        let rem_oop = match first.oop() {
             Some(oop) => oop,
             None => make_large(vm, first_class, &first.digits, first.byte_len)?,
         };
@@ -338,8 +413,12 @@ fn primDigitDivNegative(vm: &Interp) -> PrimResult<Oop> {
         return div_result_array(vm, quo_oop, rem_oop);
     }
 
-    let (quo, quo_bytes, rem) =
-        digits::divide(&first.digits, first.byte_len, &second.digits, second.byte_len);
+    let (quo, quo_bytes, rem) = digits::divide(
+        &first.digits,
+        first.byte_len,
+        &second.digits,
+        second.byte_len,
+    );
     let quo_oop = make_large(vm, large_class(vm, neg)?, &quo, quo_bytes)?;
     let rem_oop = match rem {
         Some((rem_digits, rem_bytes)) => make_large(vm, first_class, &rem_digits, rem_bytes)?,
@@ -365,10 +444,10 @@ fn div_result_array(vm: &Interp, quo: Oop, rem: Oop) -> PrimResult<Oop> {
 #[pharo_primitive(accessor_depth = 0)]
 fn primDigitCompare(vm: &Interp) -> PrimResult<isize> {
     vm.expect_argument_count(1)?;
-    let second = argument_operand(vm, 0)?;
-    let first = receiver_operand(vm, 1)?;
-    Ok(match (first.small, second.small) {
-        (Some(f), Some(s)) => {
+    let second = argument_kind(vm, 0)?;
+    let first = receiver_kind(vm, 1)?;
+    Ok(match (first, second) {
+        (IntKind::Small(f), IntKind::Small(s)) => {
             // SmallIntegers are tagged, so their magnitudes cannot overflow.
             let (f, s) = (f.unsigned_abs(), s.unsigned_abs());
             match f.cmp(&s) {
@@ -377,10 +456,15 @@ fn primDigitCompare(vm: &Interp) -> PrimResult<isize> {
                 std::cmp::Ordering::Greater => 1,
             }
         }
-        (Some(_), None) => -1,
-        (None, Some(_)) => 1,
-        (None, None) => {
-            let (fdl, sdl) = (first.digit_count(), second.digit_count());
+        (IntKind::Small(_), IntKind::Large { .. }) => -1,
+        (IntKind::Large { .. }, IntKind::Small(_)) => 1,
+        (IntKind::Large { oop: f, .. }, IntKind::Large { oop: s, .. }) => {
+            // The answer is three values wide, so building two magnitudes to
+            // reach it was the whole cost of this primitive. Both objects are
+            // compared where they lie, most significant byte first.
+            let (first_bytes, second_bytes) = (vm.bytes_of(f)?, vm.bytes_of(s)?);
+            let fdl = digits::digit_len(first_bytes.len());
+            let sdl = digits::digit_len(second_bytes.len());
             if sdl != fdl {
                 if sdl > fdl {
                     -1
@@ -388,7 +472,7 @@ fn primDigitCompare(vm: &Interp) -> PrimResult<isize> {
                     1
                 }
             } else {
-                digits::compare(&first.digits, &second.digits, fdl) as isize
+                digits::compare_bytes(first_bytes, second_bytes, fdl) as isize
             }
         }
     })
@@ -404,7 +488,7 @@ fn digit_bit_logic(vm: &Interp, op: BitOp) -> PrimResult<Oop> {
     vm.expect_argument_count(1)?;
     let second = argument_operand(vm, 0)?;
     let first = receiver_operand(vm, 1)?;
-    if first.negative || second.negative {
+    if first.negative() || second.negative() {
         return Err(PrimErr::GenericFailure);
     }
     // The C picks short/long by byte length, second on a tie.
@@ -460,9 +544,10 @@ fn primDigitBitShiftMagnitude(vm: &Interp) -> PrimResult<Oop> {
         // fails with PrimErrNoMemory instead of first building the digits.
         let new_byte_len = (hb + shift).div_ceil(8);
         let oop = vm.instantiate(class, new_byte_len as sqInt)?;
-        let (words, byte_len) = digits::lshift(&first.digits, shift).expect("magnitude is non-zero");
+        let (words, byte_len) =
+            digits::lshift(&first.digits, shift).expect("magnitude is non-zero");
         debug_assert_eq!(byte_len, new_byte_len);
-        vm.write_bytes(oop, 0, &digits::digits_to_bytes(&words, new_byte_len))?;
+        digits::with_bytes(&words, new_byte_len, |bytes| vm.write_bytes(oop, 0, bytes))?;
         Ok(oop)
     } else {
         let shift = shift_count.unsigned_abs();
@@ -470,7 +555,7 @@ fn primDigitBitShiftMagnitude(vm: &Interp) -> PrimResult<Oop> {
             // All bits lost: the C builds a 0-length LargeInteger and
             // normalizes it, which always answers SmallInteger 0.
             None => vm.integer(0),
-            Some((words, byte_len)) => return_normalized(vm, &words, byte_len, first.negative),
+            Some((words, byte_len)) => return_normalized(vm, &words, byte_len, first.negative()),
         }
     }
 }
@@ -486,11 +571,16 @@ fn primAnyBitFromTo(vm: &Interp) -> PrimResult<bool> {
     }
     let from = vm.integer_value(from_oop)?;
     let to = vm.integer_value(to_oop)?;
-    let receiver = receiver_operand(vm, 2)?;
+    let receiver = receiver_kind(vm, 2)?;
     if from < 1 || to < 1 {
         return Err(PrimErr::GenericFailure);
     }
-    Ok(digits::any_bit(&receiver.digits, from as usize, to as usize))
+    let (from, to) = (from as usize, to as usize);
+    Ok(match receiver {
+        // A LargeInteger's magnitude is scanned where it lies.
+        IntKind::Large { oop, .. } => digits::any_bit_bytes(vm.bytes_of(oop)?, from, to),
+        IntKind::Small(value) => digits::any_bit(&digits::small_digits(value), from, to),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -542,14 +632,22 @@ fn normalize_receiver(vm: &Interp, negative: bool) -> PrimResult<Oop> {
     if class != expected {
         return Err(PrimErr::GenericFailure);
     }
-    let (words, byte_len) = {
-        let bytes = vm.bytes_of(receiver)?;
-        (digits::bytes_to_digits(bytes), bytes.len())
-    };
-    match digits::normalize_scan(&words, byte_len, negative) {
+    // The scan reads the receiver in place; only an actual trim needs a
+    // buffer, and only because the prefix has to outlive the allocation.
+    match digits::normalize_scan_bytes(vm.bytes_of(receiver)?, negative) {
         Normalized::Small(value) => vm.integer(value),
-        Normalized::Large(len) if len < byte_len => make_large(vm, class, &words, len),
-        Normalized::Large(_) => Ok(receiver),
+        Normalized::Large(len) => {
+            let prefix = {
+                let bytes = vm.bytes_of(receiver)?;
+                if len >= bytes.len() {
+                    return Ok(receiver);
+                }
+                bytes[..len].to_vec()
+            };
+            let oop = vm.instantiate(class, len as sqInt)?;
+            vm.write_bytes(oop, 0, &prefix)?;
+            Ok(oop)
+        }
     }
 }
 
@@ -607,6 +705,9 @@ mod tests {
     fn small_integer_bounds_match_the_sdk() {
         use pharo_vm_plugin::proxy::{MAX_SMALL_INTEGER, MIN_SMALL_INTEGER};
         assert_eq!(digits::MAX_SMALL, MAX_SMALL_INTEGER as u64);
-        assert_eq!(digits::MIN_SMALL_MAG, MIN_SMALL_INTEGER.unsigned_abs() as u64);
+        assert_eq!(
+            digits::MIN_SMALL_MAG,
+            MIN_SMALL_INTEGER.unsigned_abs() as u64
+        );
     }
 }
