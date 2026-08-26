@@ -137,6 +137,45 @@ which is nearly all of them. Override when you know better:
 Too high only costs a little work on the failure path; too low risks a spurious
 failure against a forwarded argument. The default errs high deliberately.
 
+## Wrapping a foreign library
+
+Two optional pieces for a plugin that fronts something other than the image.
+
+**`handles::Registry<T>`** keeps the resource on the Rust side and gives the
+image an integer. The integer carries a slot index *and* a generation counter,
+so a handle on a destroyed resource fails with `PrimErr::NotFound` rather than
+resolving to whatever took the slot:
+
+```rust
+static CONTEXTS: Registry<Context> = Registry::new();
+
+let handle = CONTEXTS.insert(Context::new()?)?;   // hand this to the image
+CONTEXTS.with(handle, |ctx| ctx.paint())?;        // and take it back later
+drop(CONTEXTS.remove(handle)?);                   // destroyed exactly once
+```
+
+Handles always fit in a SmallInteger, and 0 is never one. `handles_where` finds
+every live resource matching a predicate, for a library whose objects own each
+other and whose destroy call invalidates handles the image still holds.
+
+**`dylib`** (behind the `dylib` feature, which is off by default so the crate
+otherwise has no dependencies) opens a library the VM bundle ships beside the
+executable:
+
+```rust
+let (lib, path) = unsafe { dylib::open_first(&dylib::library_names("cairo", "2")) }?;
+let lib = dylib::leak(lib);
+let create: unsafe extern "C" fn(...) = unsafe { dylib::symbol(lib, "cairo_create") }?;
+```
+
+It looks in the executable's directory first and falls back to the system
+loader, so a bundled copy wins. Do this in the plugin's `init` hook and answer
+`false` when the library is not there: the VM then rejects the module, and the
+image can tell "not available on this VM" from "primitive not implemented".
+
+`rust/plugins/cairo-plugin` and `rust/plugins/sdl3-plugin` are both built this
+way.
+
 ## Rules the SDK enforces, and the ones it cannot
 
 **Enforced for you:**

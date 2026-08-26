@@ -27,6 +27,7 @@
 #
 #     RUST_REPLACED_C_SOURCES  src/*.c files now provided by Rust
 #     RUST_REPLACED_PLUGINS    C plugins now provided by Rust
+#     RUST_ONLY_PLUGINS        Rust plugins with no C counterpart to replace
 #     configure_rust_platform() deferred wiring; a no-op when both are off
 
 # src/ files whose symbols pharo-platform now provides.
@@ -148,6 +149,16 @@ macro(replace_plugin_with_rust MODULE CRATE)
     list(APPEND RUST_PLUGIN_CRATES ${CRATE})
 endmacro()
 
+# Plugins with no C counterpart at all: they add primitives rather than
+# replacing any, so they must not go in RUST_REPLACED_PLUGINS -- that list is
+# what cmake/plugins.cmake consults to decide which C plugin to *skip*, and
+# there is nothing to skip here.
+set(RUST_ONLY_PLUGINS "")
+macro(add_rust_only_plugin MODULE CRATE)
+    list(APPEND RUST_ONLY_PLUGINS ${MODULE})
+    list(APPEND RUST_PLUGIN_CRATES ${CRATE})
+endmacro()
+
 # Pure computation over the interpreter proxy: no OS surface beyond what Rust's
 # std needs, so these replace the C plugin on every platform.
 replace_plugin_with_rust(JPEGReadWriter2Plugin jpeg-plugin)
@@ -178,11 +189,35 @@ if(UNIX AND NOT APPLE)
     replace_plugin_with_rust(UUIDPlugin            uuid-plugin)
 endif()
 
+# Bindings for the two libraries the build downloads rather than compiles.
+#
+# Neither replaces anything: today the image reaches Cairo and SDL through its
+# own FFI, and nothing in src/ or plugins/ mentions either library. These make
+# the same libraries reachable as named primitives instead, with the plugin
+# owning the objects and the image holding integer handles.
+#
+# The download rules are untouched -- cmake/importCairo.cmake and
+# cmake/importSDL2.cmake still fetch the same binaries into
+# ${LIBRARY_OUTPUT_DIRECTORY}. The plugins dlopen whatever lands there, so they
+# are built only when the corresponding FEATURE flag says the bundle will have
+# something for them to find. Both decline to initialise when it does not,
+# which leaves the image on its FFI binding.
+if(FEATURE_LIB_CAIRO)
+    add_rust_only_plugin(CairoPlugin cairo-plugin)
+endif()
+if(FEATURE_LIB_SDL2)
+    # Named for what it binds, not for the CMake flag: importSDL2.cmake
+    # downloads SDL3-3.4.10 alongside SDL2, though on Linux it does not yet do
+    # so -- there the plugin will decline at load time until it does.
+    add_rust_only_plugin(SDL3Plugin sdl3-plugin)
+endif()
+
 if(NOT USE_RUST_PLATFORM)
     set(RUST_REPLACED_C_SOURCES "")
 endif()
 if(NOT USE_RUST_PLUGINS)
     set(RUST_REPLACED_PLUGINS "")
+    set(RUST_ONLY_PLUGINS "")
     set(RUST_PLUGIN_CRATES "")
 endif()
 
@@ -355,7 +390,7 @@ endfunction()
 function(_configure_rust_plugins)
     message(STATUS "Rust plugins: ENABLED")
 
-    foreach(_plugin IN LISTS RUST_REPLACED_PLUGINS)
+    foreach(_plugin IN LISTS RUST_REPLACED_PLUGINS RUST_ONLY_PLUGINS)
         # For a cdylib crate corrosion creates `<name>-shared` as the imported
         # library; plain `<name>` is an INTERFACE target and has no TARGET_FILE.
         if(NOT TARGET ${_plugin}-shared)
@@ -384,6 +419,10 @@ function(_configure_rust_plugins)
         # Built as part of the normal build, as add_vm_plugin arranges for the
         # C plugins.
         add_dependencies(${VM_EXECUTABLE_NAME} rust-plugin-copy_${_plugin})
-        message(STATUS "Rust plugins: ${_plugin} replaces the C plugin")
+        if("${_plugin}" IN_LIST RUST_REPLACED_PLUGINS)
+            message(STATUS "Rust plugins: ${_plugin} replaces the C plugin")
+        else()
+            message(STATUS "Rust plugins: ${_plugin} (no C counterpart)")
+        endif()
     endforeach()
 endfunction()

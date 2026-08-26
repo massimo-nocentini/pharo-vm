@@ -1,0 +1,19 @@
+[package]
+name = "cairo-plugin"
+description = "CairoPlugin: Cairo as Pharo named primitives, bound to the library the VM bundle downloads."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# Must match the module name the image asks for, and the file name the VM
+# looks up: libCairoPlugin.so / .dylib / CairoPlugin.dll.
+name = "CairoPlugin"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# `dylib` because Cairo is dlopened, not linked: cmake/importCairo.cmake
+# downloads a ready-made binary with no headers and no .pc file.
+pharo-vm-plugin = { path = "../../pharo-vm-plugin", features = ["dylib"] }

@@ -60,11 +60,15 @@
 #![warn(missing_docs)]
 
 pub mod error;
+#[cfg(feature = "dylib")]
+pub mod dylib;
+pub mod handles;
 pub mod interp;
 pub mod proxy;
 pub mod ret;
 
 pub use error::{PrimErr, PrimResult};
+pub use handles::Registry;
 pub use interp::{Interp, Oop, StackArg, StackArgs};
 pub use proxy::{sqInt, VirtualMachine};
 pub use ret::IntoReturn;

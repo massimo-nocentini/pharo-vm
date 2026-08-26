@@ -15,6 +15,7 @@ members = [
     "plugins/jpeg-plugin",
     "plugins/b2d-plugin",
     "plugins/bit-blt-plugin",
+    "plugins/cairo-plugin",
     "plugins/dsa-prims",
     "plugins/file-attributes-plugin",
     "plugins/file-plugin",
@@ -23,6 +24,7 @@ members = [
     "plugins/locale-plugin",
     "plugins/misc-primitive-plugin",
     "plugins/new-file-plugin",
+    "plugins/sdl3-plugin",
     "plugins/socket-plugin",
     "plugins/squeak-ssl",
     "plugins/surface-plugin",
@@ -43,6 +45,9 @@ pharo-vm-sys = { path = "pharo-vm-sys" }
 # uses std where it can, but a file whose handle is a `FILE *` shared with the
 # generated interpreter has to speak C stdio, not `std::fs`.
 libc = "0.2"
+# For plugins that bind a third-party library the VM bundle downloads rather
+# than links: those arrive as runtime objects, so the binding is a dlopen.
+libloading = "0.8"
 
 # A panic must never unwind across the `extern "C"` boundary into the generated
 # interpreter: that is undefined behaviour. Aborting is the only sound default.

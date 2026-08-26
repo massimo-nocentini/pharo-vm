@@ -14,6 +14,12 @@ publish.workspace = true
 # out of tree will not have. In-tree CI turns it on.
 verify-abi = ["dep:pharo-vm-sys"]
 
+# Enables `dylib`, which dlopens a third-party library the VM bundle ships.
+# Off by default so the crate keeps its "no dependencies" promise for plugins
+# that only talk to the interpreter proxy.
+dylib = ["dep:libloading"]
+
 [dependencies]
 pharo-vm-plugin-macros = { path = "../pharo-vm-plugin-macros" }
 pharo-vm-sys = { workspace = true, optional = true }
+libloading = { workspace = true, optional = true }

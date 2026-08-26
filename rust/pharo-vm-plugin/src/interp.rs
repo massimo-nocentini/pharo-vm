@@ -79,6 +79,24 @@ impl Interp {
         unsafe { &*self.vt }
     }
 
+    /// The interpreter this process's plugin was handed, if it has one yet.
+    ///
+    /// Primitives are given an `Interp` and should use that. This is for the
+    /// module hooks -- `initialiseModule`, `shutdownModule` -- which the VM
+    /// calls outside any primitive and hands nothing: a plugin that has to
+    /// release image resources on the way out has no other way to reach the
+    /// proxy. Answers `None` before `setInterpreter` has run.
+    #[must_use]
+    pub fn current() -> Option<Self> {
+        let vt = crate::__private::INTERP.load(core::sync::atomic::Ordering::Acquire);
+        if vt.is_null() {
+            return None;
+        }
+        // SAFETY: set_interpreter only ever stores the VM's own proxy table,
+        // which lives as long as the process.
+        Some(unsafe { Self::from_raw(vt) })
+    }
+
     // ---- versions ----------------------------------------------------------
 
     /// Proxy major version this VM implements.
@@ -528,6 +546,155 @@ impl Interp {
             let _ = f;
         }
     }
+
+    // ---- pinning -----------------------------------------------------------
+
+    /// Pins an object so the garbage collector will not move it.
+    ///
+    /// Needed before handing the address of an image object to a foreign
+    /// library that will keep it: a `cairo_surface_t` created over a Bitmap's
+    /// words, say, outlives the primitive that made it, and Spur's collector
+    /// is free to move an unpinned object at any allocation.
+    ///
+    /// Answers the oop, which may differ from the argument: pinning an object
+    /// that is not already in old space moves it there first.
+    pub fn pin_object(&self, oop: Oop) -> PrimResult<Oop> {
+        let pinned = call!(self, pinObject(oop.0));
+        if pinned == 0 {
+            return Err(PrimErr::ObjectMayMove);
+        }
+        Ok(Oop(pinned))
+    }
+
+    /// Releases a pin taken by [`Interp::pin_object`].
+    pub fn unpin_object(&self, oop: Oop) -> PrimResult<()> {
+        call!(self, unpinObject(oop.0));
+        Ok(())
+    }
+
+    /// Is this object pinned?
+    pub fn is_pinned(&self, oop: Oop) -> PrimResult<bool> {
+        Ok(call!(self, isPinned(oop.0)) != 0)
+    }
+
+    /// The address of an indexable object's first element.
+    ///
+    /// The escape hatch for foreign libraries that write into image memory
+    /// directly. Everything the safe accessors guarantee is now the caller's
+    /// job -- above all that the object stays put, which means
+    /// [`Interp::pin_object`] first if the pointer outlives the primitive.
+    ///
+    /// Answers the pointer and the object's size in bytes.
+    pub fn indexable_bytes_ptr(&self, oop: Oop) -> PrimResult<(*mut u8, usize)> {
+        if !self.is_words_or_bytes(oop)? {
+            return Err(PrimErr::BadArgument);
+        }
+        let len = usize::try_from(self.byte_size_of(oop)?)?;
+        let ptr = call!(self, firstIndexableField(oop.0));
+        if ptr.is_null() {
+            return Err(PrimErr::BadArgument);
+        }
+        Ok((ptr.cast::<u8>(), len))
+    }
+
+    // ---- doubles in and out of byte objects --------------------------------
+
+    /// Reads `n` native-endian `f64`s from a byte object.
+    ///
+    /// How a foreign struct of doubles -- a `cairo_matrix_t`, a set of extents
+    /// -- reaches a primitive: the image passes a ByteArray of the right size
+    /// rather than a pointer, so nothing crosses the boundary unchecked.
+    ///
+    /// Fails with `BadArgument` unless the object holds exactly `n` doubles.
+    pub fn read_f64s(&self, oop: Oop, n: usize) -> PrimResult<Vec<f64>> {
+        let bytes = self.bytes_of(oop)?;
+        let want = n.checked_mul(8).ok_or(PrimErr::BadArgument)?;
+        if bytes.len() != want {
+            return Err(PrimErr::BadArgument);
+        }
+        Ok(bytes
+            .chunks_exact(8)
+            .map(|c| f64::from_ne_bytes(c.try_into().expect("chunks_exact(8) yields 8 bytes")))
+            .collect())
+    }
+
+    /// Writes native-endian `f64`s into a byte object, filling it exactly.
+    ///
+    /// The counterpart of [`Interp::read_f64s`], for the out-parameter shape:
+    /// the image hands in a ByteArray and reads its doubles back afterwards.
+    ///
+    /// Fails with `BadArgument` if the object is not exactly `values.len()`
+    /// doubles long, so a caller who sized the buffer wrongly finds out.
+    pub fn write_f64s(&self, oop: Oop, values: &[f64]) -> PrimResult<()> {
+        let want = values.len().checked_mul(8).ok_or(PrimErr::BadArgument)?;
+        if usize::try_from(self.byte_size_of(oop)?)? != want {
+            return Err(PrimErr::BadArgument);
+        }
+        let mut buf = Vec::with_capacity(want);
+        for v in values {
+            buf.extend_from_slice(&v.to_ne_bytes());
+        }
+        self.write_bytes(oop, 0, &buf)
+    }
+
+    // ---- strings -----------------------------------------------------------
+
+    /// Reads a Smalltalk String or Symbol as Rust text.
+    ///
+    /// ByteString is a byte-indexable object whose contents the image treats
+    /// as Latin-1 unless it knows better, and modern Pharo puts UTF-8 in one
+    /// routinely. Decoded as UTF-8 when it is valid UTF-8, and as Latin-1
+    /// otherwise -- which is lossless both ways round and never fails, so a
+    /// primitive cannot be made to reject a filename it merely cannot name.
+    pub fn string_value(&self, oop: Oop) -> PrimResult<String> {
+        let bytes = self.bytes_of(oop)?;
+        Ok(match std::str::from_utf8(bytes) {
+            Ok(s) => s.to_owned(),
+            Err(_) => bytes.iter().map(|&b| char::from(b)).collect(),
+        })
+    }
+
+    /// Reads the argument at `offset` as Rust text.
+    pub fn stack_string(&self, offset: sqInt) -> PrimResult<String> {
+        let oop = self.stack_value(offset)?;
+        self.string_value(oop)
+    }
+
+    // ---- more well-known objects and constructors --------------------------
+
+    /// The class `Bitmap`.
+    pub fn class_bitmap(&self) -> PrimResult<Oop> {
+        Ok(Oop(call!(self, classBitmap())))
+    }
+
+    /// Is this `nil`?
+    pub fn is_nil(&self, oop: Oop) -> PrimResult<bool> {
+        Ok(oop == self.nil()?)
+    }
+
+    /// Makes a `Point`.
+    pub fn point(&self, x: sqInt, y: sqInt) -> PrimResult<Oop> {
+        Ok(Oop(call!(self, makePointwithxValueyValue(x, y))))
+    }
+
+    /// Stores into instance variable `index` of a pointer object.
+    pub fn store_pointer(&self, index: sqInt, oop: Oop, value: Oop) -> PrimResult<()> {
+        call!(self, storePointerofObjectwithValue(index, oop.0, value.0));
+        self.check_failed()
+    }
+
+    // ---- semaphores --------------------------------------------------------
+
+    /// Signals the external semaphore registered at `index`.
+    ///
+    /// How a plugin wakes an image-side process: the image registers a
+    /// Semaphore in its external-objects array and passes the index in, and
+    /// the plugin signals it when there is something to collect.
+    pub fn signal_semaphore(&self, index: sqInt) -> PrimResult<()> {
+        call!(self, signalSemaphoreWithIndex(index));
+        Ok(())
+    }
+
 }
 
 /// A single primitive argument, read from a stack slot.
