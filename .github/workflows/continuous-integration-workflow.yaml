@@ -3,15 +3,48 @@ on: [push, pull_request]
 
 jobs:
     build-unixes:
-        name: Build Unixes
+        name: Build ${{ matrix.variant.platform }} ${{ matrix.variant.arch }}
         runs-on: ${{ matrix.variant.os }}
         strategy:
+            # One platform breaking should not hide the state of the others.
+            fail-fast: false
             matrix:
                 variant:
-                    - os: ubuntu-18.04
+                    # `platform`/`arch` rather than `os` drive the per-step
+                    # conditions and the artifact names below, so bumping a
+                    # runner image cannot silently switch a step off or make
+                    # two jobs collide on one artifact name.
+                    #
+                    # `arch` is what CPack stamps into the package filename
+                    # (get_platform_name, cmake/macros.cmake:37) -- it is a
+                    # label here, not something passed to the build, since
+                    # every job builds natively for the runner it is on.
+                    - os: ubuntu-latest
+                      platform: linux
+                      arch: x86_64
                       appname: Pharo
                       vmExecutable: pharo
+                      # The Rust checks verify Rust-vs-C symbol parity and run
+                      # the workspace test suite; neither is arch-specific, so
+                      # they run on this variant only rather than on all four.
+                      rustChecks: true
+                    - os: ubuntu-24.04-arm
+                      platform: linux
+                      arch: aarch64
+                      appname: Pharo
+                      vmExecutable: pharo
+                    # macos-latest is Apple Silicon; macos-13 is the last
+                    # Intel image GitHub offers. Both are named explicitly so
+                    # that a future `-latest` remap cannot quietly change
+                    # which architecture a given artifact contains.
                     - os: macos-latest
+                      platform: macos
+                      arch: arm64
+                      appname: Pharo
+                      vmExecutable: Pharo
+                    - os: macos-13
+                      platform: macos
+                      arch: x86_64
                       appname: Pharo
                       vmExecutable: Pharo
         env:
@@ -21,14 +54,16 @@ jobs:
             CXX: clang++
         steps:
             - name: Install dependencies (Linux)
-              if: matrix.variant.os == 'ubuntu-18.04'
-              run: sudo apt-get install uuid-dev
+              if: matrix.variant.platform == 'linux'
+              run: |
+                sudo apt-get update
+                sudo apt-get install -y uuid-dev
 
             - name: Install dependencies (OS X)
-              if: matrix.variant.os == 'macos-latest'
+              if: matrix.variant.platform == 'macos'
               run: brew install autoconf automake libtool
 
-            - uses: actions/checkout@v1
+            - uses: actions/checkout@v4
 
             - name: CMake configuration
               run: |
@@ -49,7 +84,7 @@ jobs:
             # (GENERATED_SOURCE_DIR), so the extra cost is one configure and
             # compile rather than a second VMMaker run.
             - name: Rust platform layer -- ABI check
-              if: matrix.variant.os == 'ubuntu-18.04'
+              if: matrix.variant.rustChecks
               run: |
                 set -euo pipefail
                 LIB=build/build/vm/lib${APPNAME}VMCore.so
@@ -69,7 +104,7 @@ jobs:
                   "build-rust/build/vm/lib${APPNAME}VMCore.so" abi-baseline.txt
 
             - name: Rust platform layer -- unit tests
-              if: matrix.variant.os == 'ubuntu-18.04'
+              if: matrix.variant.rustChecks
               run: |
                 set -euo pipefail
                 # cargo needs the same header environment CMake gives bindgen;
@@ -84,7 +119,7 @@ jobs:
             # it with the header environment explicitly stripped, so that
             # promise cannot rot unnoticed.
             - name: Rust plugin SDK -- builds without the VM headers
-              if: matrix.variant.os == 'ubuntu-18.04'
+              if: matrix.variant.rustChecks
               run: |
                 set -euo pipefail
                 cd rust
@@ -106,10 +141,12 @@ jobs:
                 make package
                 mkdir -p ../artifacts
                 cp -f build/packages/*.zip build/packages/*.sha1 ../artifacts
+            # upload-artifact v4 rejects a name another job already claimed,
+            # so each platform/arch pair uploads under its own.
             - name: Upload artifacts
-              uses: actions/upload-artifact@v1
+              uses: actions/upload-artifact@v4
               with:
-                  name: build-artifacts
+                  name: build-artifacts-${{ matrix.variant.platform }}-${{ matrix.variant.arch }}
                   path: artifacts
 
             - name: Run tests
@@ -117,15 +154,19 @@ jobs:
               run: scripts/runTests.sh
             - name: Upload test results
               continue-on-error: true
-              uses: actions/upload-artifact@v1
+              uses: actions/upload-artifact@v4
               with:
-                  name: test-results
+                  name: test-results-${{ matrix.variant.platform }}-${{ matrix.variant.arch }}
                   path: test-results
+                  # A failed test run may leave the directory missing; that is
+                  # already reported by the step above, so do not fail twice.
+                  if-no-files-found: warn
 
     build-windows-cygwin:
         name: Build Windows Cygwin
-        runs-on: windows-2016
+        runs-on: windows-latest
         strategy:
+            fail-fast: false
             matrix:
                 variant:
                     - appname: Pharo
@@ -134,7 +175,7 @@ jobs:
             APPNAME: ${{matrix.variant.appname}}
             VM_EXECUTABLE_NAME: ${{ matrix.variant.vmExecutable }}
         steps:
-            - uses: actions/checkout@v1
+            - uses: actions/checkout@v4
 
             - name: Install Cygwin
               run: .\scripts\installCygwin.ps1 "setup-x86_64.exe" x86_64
@@ -162,9 +203,9 @@ jobs:
               shell: pwsh.exe -File .\scripts\runScriptInCygwinBash.ps1 {0}
 
             - name: Upload artifacts
-              uses: actions/upload-artifact@v1
+              uses: actions/upload-artifact@v4
               with:
-                  name: build-artifacts
+                  name: build-artifacts-windows-x86_64
                   path: artifacts
 
             - name: Run tests
@@ -174,7 +215,49 @@ jobs:
 
             - name: Upload test results
               continue-on-error: true
-              uses: actions/upload-artifact@v1
+              uses: actions/upload-artifact@v4
               with:
-                  name: test-results
+                  name: test-results-windows-x86_64
                   path: test-results
+                  if-no-files-found: warn
+
+    # Publishing runs only for version tags. Ordinary pushes and pull requests
+    # still build and upload run artifacts, but never create a release.
+    release:
+        name: Publish release
+        needs: [build-unixes, build-windows-cygwin]
+        if: startsWith(github.ref, 'refs/tags/v')
+        runs-on: ubuntu-latest
+        permissions:
+            # The default token is read-only; creating a release needs write.
+            contents: write
+        steps:
+            # Only the build artifacts -- test-results-* are deliberately not
+            # matched, since they are CI diagnostics rather than deliverables.
+            #
+            # merge-multiple flattens all five uploads into one directory.
+            # That is safe because CPack stamps the platform and architecture
+            # into every filename (packaging.cmake:83), so the per-arch zips
+            # and their .sha1 files cannot collide.
+            - name: Collect per-arch build artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  pattern: build-artifacts-*
+                  path: artifacts
+                  merge-multiple: true
+
+            - name: Create GitHub release
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                set -euo pipefail
+                ls -l artifacts
+                # Fail loudly rather than publishing an empty release if an
+                # upstream job produced no package.
+                if [ -z "$(ls -A artifacts)" ]; then
+                  echo "no build artifacts to publish"; exit 1
+                fi
+                gh release create "$GITHUB_REF_NAME" artifacts/* \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --title "$GITHUB_REF_NAME" \
+                  --generate-notes
