@@ -43,9 +43,58 @@ const FIX_1_77200: sqInt = 116130;
 /// A colour component with its decoded blocks: the pair of C globals
 /// (`yComponent`/`yBlocks`, ...) that `yColorComponentFrom:` and friends
 /// loaded together.
-pub struct Component {
+pub struct Component<'a> {
     pub fields: ColorComponent,
-    pub blocks: Vec<[i32; DCT_SIZE2]>,
+    pub blocks: Blocks<'a>,
+}
+
+/// The component's MCU blocks: the C's fixed 128-pointer table, as borrows
+/// of the image's WordArrays.
+///
+/// The C stored pointers here and read the samples through them, and so does
+/// this -- the blocks are only ever read, and a conversion that first copied
+/// each of them would spend more time on the copy than on the arithmetic it
+/// serves.
+pub struct Blocks<'a> {
+    entries: [&'a [i32; DCT_SIZE2]; MAX_MCU_BLOCKS],
+    len: usize,
+}
+
+/// What an entry past `len` points at. The C left its table's tail pointing
+/// at whatever the previous MCU had loaded; here the tail is unreachable --
+/// [`Blocks::get`] answers `None` past `len` -- and points at zeroes.
+static NO_BLOCK: [i32; DCT_SIZE2] = [0; DCT_SIZE2];
+
+impl<'a> Blocks<'a> {
+    /// An empty table.
+    pub fn new() -> Self {
+        Self {
+            entries: [&NO_BLOCK; MAX_MCU_BLOCKS],
+            len: 0,
+        }
+    }
+
+    /// Appends a block, answering `false` when the table is full -- the
+    /// caller's `MAX_MCU_BLOCKS` check, which the C made before loading.
+    pub fn push(&mut self, block: &'a [i32; DCT_SIZE2]) -> bool {
+        if self.len == MAX_MCU_BLOCKS {
+            return false;
+        }
+        self.entries[self.len] = block;
+        self.len += 1;
+        true
+    }
+
+    /// The `index`th block, or `None` past the loaded ones.
+    pub fn get(&self, index: usize) -> Option<&'a [i32; DCT_SIZE2]> {
+        (index < self.len).then(|| self.entries[index])
+    }
+}
+
+impl Default for Blocks<'_> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// `JPEGReaderPlugin>>#nextSampleFrom:` — the sample under the cursor,
@@ -182,13 +231,33 @@ mod tests {
 
     /// A component whose fields are (curX, curY, hScale, vScale, blockWidth,
     /// mcuWidth) with the given blocks.
-    fn component(sx: i32, sy: i32, block_width: i32, mcu_width: i32, blocks: Vec<[i32; 64]>) -> Component {
+    fn component(
+        sx: i32,
+        sy: i32,
+        block_width: i32,
+        mcu_width: i32,
+        blocks: &[[i32; 64]],
+    ) -> Component<'_> {
         let mut fields: ColorComponent = [0; MIN_COMPONENT_SIZE];
         fields[H_SCALE_INDEX] = sx;
         fields[V_SCALE_INDEX] = sy;
         fields[BLOCK_WIDTH_INDEX] = block_width;
         fields[MCU_WIDTH_INDEX] = mcu_width;
-        Component { fields, blocks }
+        let mut table = Blocks::new();
+        for block in blocks {
+            assert!(table.push(block), "test tables fit");
+        }
+        Component {
+            fields,
+            blocks: table,
+        }
+    }
+
+    /// The blocks of a test component, in memory that outlives it. Leaking
+    /// is what lets a test write them inline; an image object is borrowed
+    /// from the heap instead.
+    fn blocks(blocks: Vec<[i32; 64]>) -> &'static [[i32; 64]] {
+        Vec::leak(blocks)
     }
 
     fn flat_block(v: i32) -> [i32; 64] {
@@ -199,7 +268,7 @@ mod tests {
     fn cursor_walks_blocks_left_to_right_then_wraps() {
         // Two blocks side by side, no scaling: 16 samples per row, rows of
         // 8 from block 0 then 8 from block 1.
-        let mut c = component(0, 0, 2, 2, vec![flat_block(0), flat_block(1)]);
+        let mut c = component(0, 0, 2, 2, blocks(vec![flat_block(0), flat_block(1)]));
         let row: Vec<i32> = (0..32).map(|_| next_sample(&mut c).unwrap()).collect();
         let expected: Vec<i32> = (0..32).map(|i| (i % 16) / 8).collect();
         assert_eq!(row, expected);
@@ -216,7 +285,7 @@ mod tests {
         for (i, v) in block.iter_mut().enumerate() {
             *v = i as i32;
         }
-        let mut c = component(2, 2, 1, 2, vec![block]);
+        let mut c = component(2, 2, 1, 2, blocks(vec![block]));
         for dy in 0..4 {
             for dx in 0..16 {
                 let sample = next_sample(&mut c).unwrap();
@@ -228,10 +297,10 @@ mod tests {
     #[test]
     fn out_of_range_cursor_is_a_clean_failure() {
         // No blocks at all: the C would have read a stale pointer.
-        let mut c = component(0, 0, 1, 1, vec![]);
+        let mut c = component(0, 0, 1, 1, blocks(vec![]));
         assert_eq!(next_sample(&mut c), None);
         // Block width pushing the index past the vector.
-        let mut c = component(0, 0, 7, 1, vec![flat_block(0)]);
+        let mut c = component(0, 0, 7, 1, blocks(vec![flat_block(0)]));
         c.fields[CURRENT_Y_INDEX] = 8; // dy >> 3 = 1 -> block 7
         assert_eq!(next_sample(&mut c), None);
     }
@@ -240,18 +309,18 @@ mod tests {
     fn one_sided_zero_scale_is_a_clean_failure() {
         // The C skips the division only when BOTH scales are zero; sx=2,
         // sy=0 divided by zero there.
-        let mut c = component(2, 0, 1, 1, vec![flat_block(9)]);
+        let mut c = component(2, 0, 1, 1, blocks(vec![flat_block(9)]));
         assert_eq!(next_sample(&mut c), None);
         // Both zero means "no scaling" and works.
-        let mut c = component(0, 0, 1, 1, vec![flat_block(9)]);
+        let mut c = component(0, 0, 1, 1, blocks(vec![flat_block(9)]));
         assert_eq!(next_sample(&mut c), Some(9));
     }
 
     #[test]
     fn neutral_chroma_yields_gray_pixels() {
-        let mut y = component(0, 0, 1, 1, vec![flat_block(200)]);
-        let mut cb = component(0, 0, 1, 1, vec![flat_block(127)]);
-        let mut cr = component(0, 0, 1, 1, vec![flat_block(127)]);
+        let mut y = component(0, 0, 1, 1, blocks(vec![flat_block(200)]));
+        let mut cb = component(0, 0, 1, 1, blocks(vec![flat_block(127)]));
+        let mut cr = component(0, 0, 1, 1, blocks(vec![flat_block(127)]));
         let mut residuals = [0i32; 3];
         let mut bits = vec![0u32; 64];
         color_convert_mcu(&mut y, &mut cb, &mut cr, &mut residuals, 0, &mut bits).unwrap();
@@ -265,9 +334,9 @@ mod tests {
         //   red   = 100 + 91881*32/65536          = 100 + 44 = 144
         //   green = 100 - 22554*64/65536 - 46802*32/65536 = 100-22-22 = 56
         //   blue  = 100 + 116130*64/65536         = 100 + 113 = 213
-        let mut y = component(0, 0, 1, 1, vec![flat_block(100)]);
-        let mut cb = component(0, 0, 1, 1, vec![flat_block(127 + 64)]);
-        let mut cr = component(0, 0, 1, 1, vec![flat_block(127 + 32)]);
+        let mut y = component(0, 0, 1, 1, blocks(vec![flat_block(100)]));
+        let mut cb = component(0, 0, 1, 1, blocks(vec![flat_block(127 + 64)]));
+        let mut cr = component(0, 0, 1, 1, blocks(vec![flat_block(127 + 32)]));
         let mut residuals = [0i32; 3];
         let mut bits = vec![0u32; 4];
         color_convert_mcu(&mut y, &mut cb, &mut cr, &mut residuals, 0, &mut bits).unwrap();
@@ -278,17 +347,17 @@ mod tests {
     fn channels_clamp_high_then_floor_at_one() {
         // y=5, cr'=100: red = 5+140 = 145; green = 5-71 = -66 -> 0 -> 1;
         // blue = 5. And with y=250 the red channel saturates at 255.
-        let mut y = component(0, 0, 1, 1, vec![flat_block(5)]);
-        let mut cb = component(0, 0, 1, 1, vec![flat_block(127)]);
-        let mut cr = component(0, 0, 1, 1, vec![flat_block(227)]);
+        let mut y = component(0, 0, 1, 1, blocks(vec![flat_block(5)]));
+        let mut cb = component(0, 0, 1, 1, blocks(vec![flat_block(127)]));
+        let mut cr = component(0, 0, 1, 1, blocks(vec![flat_block(227)]));
         let mut residuals = [0i32; 3];
         let mut bits = vec![0u32; 1];
         color_convert_mcu(&mut y, &mut cb, &mut cr, &mut residuals, 0, &mut bits).unwrap();
         assert_eq!(bits[0], 0xFF91_0105);
 
-        let mut y = component(0, 0, 1, 1, vec![flat_block(250)]);
-        let mut cb = component(0, 0, 1, 1, vec![flat_block(127)]);
-        let mut cr = component(0, 0, 1, 1, vec![flat_block(227)]);
+        let mut y = component(0, 0, 1, 1, blocks(vec![flat_block(250)]));
+        let mut cb = component(0, 0, 1, 1, blocks(vec![flat_block(127)]));
+        let mut cr = component(0, 0, 1, 1, blocks(vec![flat_block(227)]));
         let mut residuals = [0i32; 3];
         color_convert_mcu(&mut y, &mut cb, &mut cr, &mut residuals, 0, &mut bits).unwrap();
         assert_eq!((bits[0] >> 16) & 0xFF, 255);
@@ -298,7 +367,7 @@ mod tests {
     fn dither_folds_masked_bits_into_the_residual() {
         // Gray value 6, mask 3: pixel 0 keeps 4 and carries 2; pixel 1 sees
         // 6+2=8, keeps 8, carries 0; and so on, alternating.
-        let mut y = component(0, 0, 1, 1, vec![flat_block(6)]);
+        let mut y = component(0, 0, 1, 1, blocks(vec![flat_block(6)]));
         let mut residuals = [0i32; 3];
         let mut bits = vec![0u32; 4];
         color_convert_grayscale_mcu(&mut y, &mut residuals, 3, &mut bits).unwrap();
@@ -311,7 +380,7 @@ mod tests {
     fn grayscale_keeps_the_missing_zero_clamp() {
         // A negative sample is NOT clamped at zero in the C's grayscale
         // path: -5 & 255 = 251.
-        let mut y = component(0, 0, 1, 1, vec![flat_block(-5)]);
+        let mut y = component(0, 0, 1, 1, blocks(vec![flat_block(-5)]));
         let mut residuals = [0i32; 3];
         let mut bits = vec![0u32; 1];
         color_convert_grayscale_mcu(&mut y, &mut residuals, 0, &mut bits).unwrap();
@@ -320,17 +389,15 @@ mod tests {
 
     #[test]
     fn conversion_reports_bad_cursors_as_errors() {
-        let mut y = component(0, 0, 1, 1, vec![]);
+        let mut y = component(0, 0, 1, 1, blocks(vec![]));
         let mut residuals = [0i32; 3];
         let mut bits = vec![0u32; 1];
         assert!(color_convert_grayscale_mcu(&mut y, &mut residuals, 0, &mut bits).is_err());
 
-        let mut y = component(0, 0, 1, 1, vec![flat_block(1)]);
-        let mut cb = component(2, 0, 1, 1, vec![flat_block(1)]);
-        let mut cr = component(0, 0, 1, 1, vec![flat_block(1)]);
-        assert!(
-            color_convert_mcu(&mut y, &mut cb, &mut cr, &mut residuals, 0, &mut bits).is_err()
-        );
+        let mut y = component(0, 0, 1, 1, blocks(vec![flat_block(1)]));
+        let mut cb = component(2, 0, 1, 1, blocks(vec![flat_block(1)]));
+        let mut cr = component(0, 0, 1, 1, blocks(vec![flat_block(1)]));
+        assert!(color_convert_mcu(&mut y, &mut cb, &mut cr, &mut residuals, 0, &mut bits).is_err());
     }
 
     #[test]
@@ -343,9 +410,9 @@ mod tests {
                 cb_block[row * 8 + col] = 127 + 64;
             }
         }
-        let mut y = component(0, 0, 2, 2, vec![flat_block(100), flat_block(100)]);
-        let mut cb = component(2, 2, 1, 2, vec![cb_block]);
-        let mut cr = component(2, 2, 1, 2, vec![flat_block(127)]);
+        let mut y = component(0, 0, 2, 2, blocks(vec![flat_block(100), flat_block(100)]));
+        let mut cb = component(2, 2, 1, 2, blocks(vec![cb_block]));
+        let mut cr = component(2, 2, 1, 2, blocks(vec![flat_block(127)]));
         let mut residuals = [0i32; 3];
         let mut bits = vec![0u32; 16]; // one 16-pixel row
         color_convert_mcu(&mut y, &mut cb, &mut cr, &mut residuals, 0, &mut bits).unwrap();

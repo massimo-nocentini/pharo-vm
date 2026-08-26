@@ -362,8 +362,7 @@ context_nullary!(
 /// Reads a `cairo_matrix_t` from a 48-byte ByteArray of native-endian doubles,
 /// in the header's field order: xx, yx, xy, yy, x0, y0.
 fn matrix_from(vm: &Interp, oop: Oop) -> PrimResult<cairo_matrix_t> {
-    let values = vm.read_f64s(oop, 6)?;
-    cairo_matrix_t::from_slice(&values).ok_or(PrimErr::BadArgument)
+    cairo_matrix_t::from_slice(&vm.read_f64_array::<6>(oop)?).ok_or(PrimErr::BadArgument)
 }
 
 /// `cairo_transform`, composing with the current matrix.
@@ -413,8 +412,7 @@ macro_rules! context_map_point {
         #[pharo_primitive]
         fn $prim(vm: &Interp, context: sqInt, point: Oop) -> PrimResult<()> {
             let c = cairo()?;
-            let values = vm.read_f64s(point, 2)?;
-            let (mut x, mut y) = (values[0], values[1]);
+            let [mut x, mut y] = vm.read_f64_array::<2>(point)?;
             with_context(context, |cr| {
                 cc!(c, $entry(cr, &mut x, &mut y));
                 Ok(())

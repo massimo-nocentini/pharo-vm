@@ -141,10 +141,33 @@ pub fn compress_bound(size: usize) -> usize {
         .saturating_add((size / 0x7C0).saturating_mul(3))
 }
 
+/// Where [`compress_into`] writes: the destination's own bytes, and how far
+/// into them the stream has got.
+///
+/// The C encoded straight into the ByteArray it was given, and so does this;
+/// the caller has already checked that it holds [`compress_bound`] bytes, so
+/// every write here is in bounds.
+struct Out<'a> {
+    buf: &'a mut [u8],
+    len: usize,
+}
+
+impl Out<'_> {
+    fn push(&mut self, byte: u8) {
+        self.buf[self.len] = byte;
+        self.len += 1;
+    }
+
+    fn extend_from_slice(&mut self, bytes: &[u8]) {
+        self.buf[self.len..self.len + bytes.len()].copy_from_slice(bytes);
+        self.len += bytes.len();
+    }
+}
+
 /// Appends the C's variable-length integer encoding (`encodeInt:in:at:`):
 /// one byte up to 223, two bytes up to 7935, else `0xFF` and four big-endian
 /// bytes (of the value truncated to 32 bits, as the C's cast does).
-fn encode_int(v: usize, out: &mut Vec<u8>) {
+fn encode_int(v: usize, out: &mut Out) {
     if v <= 223 {
         out.push(v as u8);
     } else if v <= 7935 {
@@ -164,9 +187,25 @@ fn encode_int(v: usize, out: &mut Vec<u8>) {
 /// big-endian words. The output never exceeds [`compress_bound`] of the
 /// input length -- asserted in the tests, relied on by the C, which sized
 /// its destination check with it.
+/// The reference spelling the tests compare against: [`compress_into`] a
+/// buffer of the bound, trimmed to length. The primitive encodes into the
+/// image object instead and never builds one of these.
+#[cfg(test)]
 pub fn compress(bm: &[u32]) -> Vec<u8> {
+    let mut buf = vec![0u8; compress_bound(bm.len())];
+    let len = compress_into(bm, &mut buf);
+    buf.truncate(len);
+    buf
+}
+
+/// Encodes into `dst`, answering how many bytes it took.
+///
+/// `dst` must hold at least [`compress_bound`] of `bm.len()` bytes, which is
+/// the check the C made -- and makes here -- before calling.
+pub fn compress_into(bm: &[u32], dst: &mut [u8]) -> usize {
     let size = bm.len();
-    let mut out = Vec::with_capacity(compress_bound(size));
+    debug_assert!(dst.len() >= compress_bound(size));
+    let mut out = Out { buf: dst, len: 0 };
     encode_int(size, &mut out);
     let mut k = 0;
     while k < size {
@@ -211,46 +250,50 @@ pub fn compress(bm: &[u32]) -> Vec<u8> {
             k = j;
         }
     }
-    out
+    out.len
 }
 
 /// Why [`decompress`] stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DecompressError<E> {
+pub enum DecompressError {
     /// A length or data byte lay outside the byte array. The C performs the
     /// read anyway -- out of bounds -- so this variant is this port's
     /// defined stand-in for that undefined behaviour.
     TruncatedInput,
-    /// A run would have gone past the destination's element count; the C
-    /// fails with `PrimErrBadIndex` here.
+    /// A run would have gone past the destination's element count, or past
+    /// the words the destination actually holds; the C fails with
+    /// `PrimErrBadIndex` for the first and wrote out of bounds for the
+    /// second.
     WouldOverrun,
-    /// The sink refused a write.
-    Sink(E),
 }
-
-/// Where [`decompress`] delivers each run: `(word_offset, words)`.
-pub type Sink<'a, E> = &'a mut dyn FnMut(usize, &[u32]) -> Result<(), E>;
 
 /// Decodes a [`compress`] stream, `Bitmap>>decompress:fromByteArray:at:`.
 ///
 /// `start` is the 0-based position in `ba` to decode from (the primitive's
 /// 1-based `index` minus one -- past the size header, which this function
-/// does not interpret). `past_end` is the destination's element count.
-/// Decoded runs are handed to `emit` as `(word_offset, words)` in stream
-/// order, so a mid-stream failure leaves everything already emitted in
-/// place, exactly as the C's in-place writes did.
-pub fn decompress<E>(
+/// does not interpret). `past_end` is the destination's element count as the
+/// image reports it, which the C checked each run against; `dst` is the
+/// destination itself, filled run by run in stream order, so a mid-stream
+/// failure leaves the earlier runs in place exactly as the C's in-place
+/// writes did.
+pub fn decompress(
     ba: &[u8],
     start: isize,
     past_end: usize,
-    emit: Sink<'_, E>,
-) -> Result<(), DecompressError<E>> {
+    dst: &mut [u32],
+) -> Result<(), DecompressError> {
     /// One byte at `*i`, or `None` outside the array (a negative `start`
     /// makes the very first read negative, which the C also does not check).
     fn read_byte(ba: &[u8], i: &mut isize) -> Option<u32> {
         let b = usize::try_from(*i).ok().and_then(|idx| ba.get(idx).copied())?;
         *i += 1;
         Some(u32::from(b))
+    }
+
+    /// The `n` destination words at `at`, or `WouldOverrun` if the object
+    /// is shorter than its element count promised.
+    fn run(dst: &mut [u32], at: usize, n: usize) -> Result<&mut [u32], DecompressError> {
+        dst.get_mut(at..at + n).ok_or(DecompressError::WouldOverrun)
     }
 
     let end = ba.len() as isize;
@@ -284,7 +327,7 @@ pub fn decompress<E>(
                 let b = read_byte(ba, &mut i).ok_or(DecompressError::TruncatedInput)?;
                 let data = b | (b << 8);
                 let data = data | (data << 16);
-                emit(k, &vec![data; n]).map_err(DecompressError::Sink)?;
+                run(dst, k, n)?.fill(data);
                 k += n;
             }
             2 => {
@@ -294,21 +337,24 @@ pub fn decompress<E>(
                         read_byte(ba, &mut i).ok_or(DecompressError::TruncatedInput)?;
                     data = (data << 8) | b;
                 }
-                emit(k, &vec![data; n]).map_err(DecompressError::Sink)?;
+                run(dst, k, n)?.fill(data);
                 k += n;
             }
             3 => {
-                let mut words = Vec::with_capacity(n);
-                for _ in 0..n {
+                // Word by word into the destination, as the C read and
+                // stored them; a stream that runs out mid-run leaves the
+                // words already decoded in place, where the C read on past
+                // the byte array instead.
+                let out = run(dst, k, n)?;
+                for slot in out.iter_mut() {
                     let mut data = 0u32;
                     for _ in 0..4 {
                         let b = read_byte(ba, &mut i)
                             .ok_or(DecompressError::TruncatedInput)?;
                         data = (data << 8) | b;
                     }
-                    words.push(data);
+                    *slot = data;
                 }
-                emit(k, &words).map_err(DecompressError::Sink)?;
                 k += n;
             }
             // Code 0 is "nil" in the Smalltalk original: nothing is written
@@ -322,7 +368,6 @@ pub fn decompress<E>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::convert::Infallible;
 
     // ---- collated comparison ----------------------------------------------
 
@@ -517,11 +562,7 @@ mod tests {
     /// error; roundtrip helper.
     fn decompress_to_vec(ba: &[u8], start: isize, past_end: usize) -> Vec<u32> {
         let mut out = vec![0u32; past_end];
-        decompress(ba, start, past_end, &mut |k, words| {
-            out[k..k + words.len()].copy_from_slice(words);
-            Ok::<(), Infallible>(())
-        })
-        .expect("valid stream");
+        decompress(ba, start, past_end, &mut out).expect("valid stream");
         out
     }
 
@@ -582,9 +623,14 @@ mod tests {
     #[test]
     fn encode_int_boundaries() {
         let enc = |v: usize| {
-            let mut out = Vec::new();
+            let mut buf = [0u8; 5];
+            let mut out = Out {
+                buf: &mut buf,
+                len: 0,
+            };
             encode_int(v, &mut out);
-            out
+            let len = out.len;
+            buf[..len].to_vec()
         };
         assert_eq!(enc(0), [0]);
         assert_eq!(enc(223), [223]);
@@ -671,70 +717,76 @@ mod tests {
 
     #[test]
     fn decompress_empty_and_out_of_range_starts() {
-        let touched = core::cell::Cell::new(false);
-        let mut emit = |_k: usize, _w: &[u32]| {
-            touched.set(true);
-            Ok::<(), Infallible>(())
-        };
+        let mut out = vec![0u32; 4];
         // Nothing between start and the end: the loop never runs.
-        assert_eq!(decompress(&[], 0, 4, &mut emit), Ok(()));
-        assert_eq!(decompress(&[13, 0xAA], 2, 4, &mut emit), Ok(()));
-        assert_eq!(decompress(&[13, 0xAA], 99, 4, &mut emit), Ok(()));
-        assert!(!touched.get());
+        assert_eq!(decompress(&[], 0, 4, &mut out), Ok(()));
+        assert_eq!(decompress(&[13, 0xAA], 2, 4, &mut out), Ok(()));
+        assert_eq!(decompress(&[13, 0xAA], 99, 4, &mut out), Ok(()));
+        assert!(out.iter().all(|&w| w == 0), "nothing was written");
         // A negative start makes the first read out of bounds; the C would
         // read before the array.
         assert_eq!(
-            decompress(&[13, 0xAA], -1, 4, &mut emit),
+            decompress(&[13, 0xAA], -1, 4, &mut out),
             Err(DecompressError::TruncatedInput)
         );
     }
 
     #[test]
     fn decompress_truncated_streams_fail() {
-        let mut emit =
-            |_k: usize, _w: &[u32]| Ok::<(), Infallible>(());
+        let mut out = vec![0u32; 4000];
         // Token 13 promises a fill byte that is not there.
         assert_eq!(
-            decompress(&[13], 0, 4, &mut emit),
+            decompress(&[13], 0, 4, &mut out),
             Err(DecompressError::TruncatedInput)
         );
         // Token 7 promises four word bytes; only two arrive.
         assert_eq!(
-            decompress(&[7, 0xDE, 0xAD], 0, 4, &mut emit),
+            decompress(&[7, 0xDE, 0xAD], 0, 4, &mut out),
             Err(DecompressError::TruncatedInput)
         );
         // A two-byte length cut after its first byte.
         assert_eq!(
-            decompress(&[0xE1], 0, 4000, &mut emit),
+            decompress(&[0xE1], 0, 4000, &mut out),
             Err(DecompressError::TruncatedInput)
         );
         // A five-byte length cut midway.
         assert_eq!(
-            decompress(&[0xFF, 0x00, 0x00], 0, 4, &mut emit),
+            decompress(&[0xFF, 0x00, 0x00], 0, 4, &mut out),
             Err(DecompressError::TruncatedInput)
         );
         // Code-2 token cut inside its word.
         assert_eq!(
-            decompress(&[10, 0x01, 0x02], 0, 4, &mut emit),
+            decompress(&[10, 0x01, 0x02], 0, 4, &mut out),
             Err(DecompressError::TruncatedInput)
         );
     }
 
     #[test]
     fn decompress_overrun_fails_even_for_code_0() {
-        let mut emit =
-            |_k: usize, _w: &[u32]| Ok::<(), Infallible>(());
+        let mut out = vec![0u32; 2];
         // 9 = fill of 2: does not fit in 1.
         assert_eq!(
-            decompress(&[9, 0xAA], 0, 1, &mut emit),
+            decompress(&[9, 0xAA], 0, 1, &mut out),
             Err(DecompressError::WouldOverrun)
         );
         // 8 = code 0 with n = 2: writes nothing, but the C still checks.
         assert_eq!(
-            decompress(&[8], 0, 1, &mut emit),
+            decompress(&[8], 0, 1, &mut out),
             Err(DecompressError::WouldOverrun)
         );
-        assert_eq!(decompress(&[8], 0, 2, &mut emit), Ok(()));
+        assert_eq!(decompress(&[8], 0, 2, &mut out), Ok(()));
+    }
+
+    #[test]
+    fn decompress_stops_at_the_destination_the_object_actually_holds() {
+        // The element count the image reports is what the C checked against;
+        // a destination shorter than that -- a byte object counted in bytes
+        // -- is where the C wrote out of bounds.
+        let mut out = vec![0u32; 1];
+        assert_eq!(
+            decompress(&[9, 0xAA], 0, 2, &mut out),
+            Err(DecompressError::WouldOverrun)
+        );
     }
 
     #[test]
@@ -754,19 +806,11 @@ mod tests {
         // earlier runs in the bitmap. Port keeps that.
         let mut out = vec![0u32; 3];
         let ba = [13u8, 0xAA, 9, 0xBB]; // fill 3, then fill 2 : overruns
-        let result = decompress(&ba, 0, 3, &mut |k, words| {
-            out[k..k + words.len()].copy_from_slice(words);
-            Ok::<(), Infallible>(())
-        });
-        assert_eq!(result, Err(DecompressError::WouldOverrun));
+        assert_eq!(
+            decompress(&ba, 0, 3, &mut out),
+            Err(DecompressError::WouldOverrun)
+        );
         assert_eq!(out, [0xAAAA_AAAA, 0xAAAA_AAAA, 0xAAAA_AAAA]);
-    }
-
-    #[test]
-    fn decompress_sink_error_propagates() {
-        let ba = [13u8, 0xAA];
-        let result = decompress(&ba, 0, 3, &mut |_k, _w| Err("refused"));
-        assert_eq!(result, Err(DecompressError::Sink("refused")));
     }
 
     #[test]

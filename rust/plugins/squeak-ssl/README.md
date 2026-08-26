@@ -74,10 +74,13 @@ mapped elsewhere in the VM process cannot interpose against it.
 **Smaller mechanical differences.**
 
 * The C hands the destination ByteArray's memory straight to
-  `BIO_read`/`SSL_read`; this port stages through a Rust buffer and copies
-  back exactly the bytes produced. One consequence: an *immutable*
-  destination now fails the primitive cleanly instead of being written
-  through.
+  `BIO_read`/`SSL_read`, and so does this port -- OpenSSL fills the object
+  itself, with no staging buffer between them, which is what a per-record
+  read or write of up to 16KB should cost. The source range is read where it
+  lies for the same reason. Two consequences: an *immutable* destination
+  fails the primitive cleanly instead of being written through, and one
+  object passed as both source and destination fails with
+  `PrimErrInappropriate` rather than being encrypted while it is filled.
 * Wrong arity or a non-integer argument fails with the SDK's specific codes
   (`BadNumArgs`, `BadArgument`) where the generated C used the generic
   `primitiveFail()`. The `SQSSL_*` codes the image actually inspects are

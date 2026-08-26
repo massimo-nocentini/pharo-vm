@@ -38,13 +38,22 @@ primitive failure (details below).
 read stack slots that hold the receiver or garbage. Here a wrong arity fails
 with `PrimErrBadNumArgs` before anything is read.
 
-**Reads and writes no longer interleave.** `primitiveConvert8BitSigned`
-computes all samples, then writes them (its size check makes source/target
-overlap impossible, so this is unobservable). `primitiveTranslateStringWithTable`
-keeps the C's observable behaviour even when the image passes the string as
-its *own* translation table — that case runs over a single shared buffer,
-each assignment seeing the previous ones, exactly as the C's in-place loop
-did.
+**The objects are worked on where they lie.** Every one of these primitives
+is a loop over an argument's bytes, and the C ran each loop through
+`firstIndexableField`. So does this, through the SDK's scoped in-place views:
+`primitiveTranslateStringWithTable` translates the string itself (which is
+what makes the C's string-as-its-own-table case fall out rather than needing
+a shared buffer to imitate it), `primitiveConvert8BitSigned` writes each
+sample as it converts it, `primitiveCompressToByteArray` encodes straight
+into the destination ByteArray, and `primitiveDecompressFromByteArray`
+decodes run by run into the Bitmap. Nothing is staged in a Rust buffer and
+copied back, and the decompressor no longer allocates a vector per run to
+carry a repeated word.
+
+The one thing an in-place view forbids is a second live view of the same
+bytes, which is exactly the aliasing the two `arrayValueOf`-lax primitives
+could be handed (see below): the source read inside the view fails with
+`PrimErrInappropriate` instead.
 
 ## The out-of-bounds accesses
 
@@ -73,9 +82,16 @@ failure and nothing else changes:
   and correct for every indexable class.
 * **Decompressing a byte array into itself** (`bm` and `ba` the same oop) is
   possible because of that same `arrayValueOf` laxity; the C then decodes a
-  stream it is itself overwriting. This port decodes a snapshot of the
-  input. (Reaching this case at all requires the out-of-bounds-write
-  territory above.)
+  stream it is itself overwriting. Here the destination is held as an
+  in-place view before the stream is read, so reading it fails with
+  `PrimErrInappropriate` and nothing is decoded. Compressing a byte object
+  into itself fails the same way. (Reaching either case at all requires the
+  out-of-bounds-write territory above.)
+* **A destination the image counts in bytes.** `primitiveDecompressFromByteArray`
+  now needs `bm` to hold a whole number of 32-bit words before it writes any
+  -- `PrimErrBadArgument` otherwise -- where before the first write past the
+  object's bytes failed with `PrimErrBadIndex`. Only the C's
+  out-of-bounds-write cases can tell the difference; a Bitmap never can.
 
 One naming note: the C's `getModuleName` answers
 `"MiscPrimitivePlugin VMMaker.oscog-eem.2480 (e)"`. The VM compares only the

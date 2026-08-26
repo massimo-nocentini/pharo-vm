@@ -51,10 +51,15 @@ every check fails the primitive before anything is read or written.
 * the C never checked the quotient's size and wrote past its end when it was
   smaller than `rem size - div size`.
 
-**Digits are copied out, computed on, and copied back**, rather than mutated
-in place through `firstIndexableField`. A primitive that fails therefore
-leaves the image's objects untouched, and aliased arguments (the same object
-passed as remainder and quotient, say) cannot interleave reads with writes.
+**The digits a primitive writes are copied out, computed on, and copied
+back**, rather than mutated in place through `firstIndexableField`. A
+primitive that fails therefore leaves the image's objects untouched, and
+aliased arguments (the same object passed as remainder and quotient, say)
+cannot interleave reads with writes. That is what the staging buys, so only
+the destinations pay for it: the remainder and quotient of `bigDivide` and
+the product of `bigMultiply`. The operands those two only *read* -- the
+divisor, both factors -- and the block and schedule the two SHA-1 primitives
+read are taken where they lie.
 
 **Immutable objects are refused** up front (`PrimErrNoModification`); the C
 wrote through Pharo's immutability bit.

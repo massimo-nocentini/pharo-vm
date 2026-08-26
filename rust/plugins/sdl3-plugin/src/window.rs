@@ -1,8 +1,6 @@
 //! Windows: creating, sizing, moving and showing them.
 
-use std::ffi::CString;
-
-use pharo_vm_plugin::{pharo_primitive, sqInt, Interp, Oop, PrimErr, PrimResult};
+use pharo_vm_plugin::{pharo_primitive, sqInt, Interp, Oop, PrimResult};
 
 use crate::ffi::{check, sc, sdl};
 use crate::resources::{
@@ -23,7 +21,7 @@ fn primitiveCreateWindow(
     flags: sqInt,
 ) -> PrimResult<sqInt> {
     let s = sdl()?;
-    let title = CString::new(vm.string_value(title)?).map_err(|_| PrimErr::BadArgument)?;
+    let title = vm.c_string_value(title)?;
     let ptr = sc!(
         s,
         SDL_CreateWindow(
@@ -62,7 +60,7 @@ fn primitiveGetWindowID(_vm: &Interp, window: sqInt) -> PrimResult<isize> {
 #[pharo_primitive]
 fn primitiveSetWindowTitle(vm: &Interp, window: sqInt, title: Oop) -> PrimResult<()> {
     let s = sdl()?;
-    let title = CString::new(vm.string_value(title)?).map_err(|_| PrimErr::BadArgument)?;
+    let title = vm.c_string_value(title)?;
     with_window(window, |w| {
         check(sc!(s, SDL_SetWindowTitle(w, title.as_ptr())))
     })

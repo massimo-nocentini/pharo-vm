@@ -65,21 +65,22 @@ fn buffer_primitive(
         return Err(PrimErr::GenericFailure);
     }
 
-    // Copy the input out of image memory before doing anything else; the
-    // guard above proved the range is in bounds.
+    // The C hands the whole destination object to OpenSSL to write into,
+    // and reads the input out of the source object where it lies; both stay
+    // that way here -- a TLS record is up to 16KB and every read and write
+    // the image makes passes through this. The guard above proved the source
+    // range is in bounds.
+    //
+    // The destination's view is taken first, so an image that passes one
+    // object as both source and destination fails cleanly instead of
+    // encrypting a buffer it is filling. As in the C, a failed call may
+    // leave whatever OpenSSL had already written in the destination.
     let from = (start - 1) as usize;
-    let src = vm.bytes_of(src_oop)?[from..from + src_len as usize].to_vec();
-
-    // The C hands the whole destination object to OpenSSL to write into
-    // directly; we stage in a Rust buffer and copy back what was produced.
-    let dst_len = usize::try_from(vm.byte_size_of(dst_oop)?)?;
-    let mut dst = vec![0u8; dst_len];
-
-    let result = op(handle, &src, &mut dst);
-    if result > 0 {
-        vm.write_bytes(dst_oop, 0, &dst[..result as usize])?;
-    }
-    Ok(result)
+    let len = src_len as usize;
+    vm.with_bytes_mut(dst_oop, |dst| {
+        let src = vm.bytes_of(src_oop)?;
+        PrimResult::Ok(op(handle, &src[from..from + len], dst))
+    })?
 }
 
 /// Creates a new SSL session and answers its handle.

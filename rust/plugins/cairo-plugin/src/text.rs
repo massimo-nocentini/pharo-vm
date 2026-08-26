@@ -19,7 +19,7 @@ use crate::resources::{as_c_int, with_context};
 /// An interior NUL would silently truncate the text, which is the kind of
 /// difference that shows up as a rendering bug months later.
 fn c_text(vm: &Interp, oop: Oop) -> PrimResult<CString> {
-    CString::new(vm.string_value(oop)?).map_err(|_| PrimErr::BadArgument)
+    vm.c_string_value(oop)
 }
 
 /// `cairo_select_font_face`. `slant` is 0..2, `weight` 0..1.
@@ -58,8 +58,7 @@ fn primitiveSetFontSize(_vm: &Interp, context: sqInt, size: f64) -> PrimResult<(
 #[pharo_primitive]
 fn primitiveSetFontMatrix(vm: &Interp, context: sqInt, matrix: Oop) -> PrimResult<()> {
     let c = cairo()?;
-    let values = vm.read_f64s(matrix, 6)?;
-    let m = cairo_matrix_t::from_slice(&values).ok_or(PrimErr::BadArgument)?;
+    let m = cairo_matrix_t::from_slice(&vm.read_f64_array::<6>(matrix)?).ok_or(PrimErr::BadArgument)?;
     with_context(context, |cr| {
         cc!(c, cairo_set_font_matrix(cr, &m));
         Ok(())

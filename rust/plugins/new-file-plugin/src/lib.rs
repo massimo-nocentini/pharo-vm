@@ -141,15 +141,23 @@ fn directory_handle(vm: &Interp, offset: sqInt) -> PrimResult<*mut NewDirectory>
 
 /// The path argument: any byte object, taken as `(pointer, size)`.
 ///
-/// Fails with the C's plain `primitiveFail` when it is not bytes. Answered
-/// as an owned copy so nothing borrows image memory across the allocations
-/// (`instantiateClass:`) some callers perform next.
-fn path_arg(vm: &Interp, offset: sqInt) -> PrimResult<Vec<u8>> {
+/// Fails with the C's plain `primitiveFail` when it is not bytes. Handed to
+/// the C where it lies, which is what the C shim did -- the calls that take
+/// one (`mkdir`, `rmdir`, `unlink`) do not allocate, so nothing can move the
+/// object while they run.
+fn path_ref(vm: &Interp, offset: sqInt) -> PrimResult<&[u8]> {
     let oop = vm.stack_value(offset)?;
     if !vm.is_bytes(oop)? {
         return Err(PrimErr::GenericFailure);
     }
-    Ok(vm.bytes_of(oop)?.to_vec())
+    vm.bytes_of(oop)
+}
+
+/// The path argument as an owned copy, for the two primitives that
+/// instantiate their answer *before* opening -- the shim's order, which puts
+/// an allocation between reading the path and using it.
+fn path_arg(vm: &Interp, offset: sqInt) -> PrimResult<Vec<u8>> {
+    Ok(path_ref(vm, offset)?.to_vec())
 }
 
 /// Base address of a read/write buffer object, with the span
@@ -192,16 +200,18 @@ fn buffer_base(
 /// `mkdir(path)`. Answers whether it succeeded.
 #[pharo_primitive(accessor_depth = 1)]
 fn primitiveDirectoryCreate(vm: &Interp) -> PrimResult<bool> {
-    let path = path_arg(vm, 0)?;
-    // SAFETY: path is a live local buffer of exactly path.len() bytes.
+    let path = path_ref(vm, 0)?;
+    // SAFETY: the object's own bytes, exactly path.len() of them, and the
+    // call cannot allocate.
     Ok(unsafe { newfile::NewDirectory_create(path.as_ptr().cast(), path.len()) })
 }
 
 /// `rmdir(path)`. Answers whether it succeeded.
 #[pharo_primitive(accessor_depth = 1)]
 fn primitiveDirectoryRemoveEmpty(vm: &Interp) -> PrimResult<bool> {
-    let path = path_arg(vm, 0)?;
-    // SAFETY: path is a live local buffer of exactly path.len() bytes.
+    let path = path_ref(vm, 0)?;
+    // SAFETY: the object's own bytes, exactly path.len() of them, and the
+    // call cannot allocate.
     Ok(unsafe { newfile::NewDirectory_removeEmpty(path.as_ptr().cast(), path.len()) })
 }
 
@@ -260,8 +270,9 @@ fn primitiveDirectoryClose(vm: &Interp) -> PrimResult<()> {
 /// `unlink(path)`. Answers whether it succeeded.
 #[pharo_primitive(accessor_depth = 1)]
 fn primitiveDeleteFile(vm: &Interp) -> PrimResult<bool> {
-    let path = path_arg(vm, 0)?;
-    // SAFETY: path is a live local buffer of exactly path.len() bytes.
+    let path = path_ref(vm, 0)?;
+    // SAFETY: the object's own bytes, exactly path.len() of them, and the
+    // call cannot allocate.
     Ok(unsafe { newfile::NewFile_deleteFile(path.as_ptr().cast(), path.len()) })
 }
 

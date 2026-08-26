@@ -1056,10 +1056,10 @@ fn primitiveSocketGetOptions(vm: &Interp) -> PrimResult<Answered> {
     if !vm.is_bytes(option_name_oop)? {
         return Err(PrimErr::GenericFailure); // the C's success(isBytes(...))
     }
-    // Copied out: the Array allocation below must not invalidate a borrow.
-    let option_name = vm.bytes_of(option_name_oop)?.to_vec();
+    // The name is read where it lies: `get_options` is a getsockopt call and
+    // the borrow ends with it, before the Array below is allocated.
     // SAFETY: record points into a live ByteArray, used before any allocation.
-    let (error_code, value) = unsafe { sock::get_options(record, &option_name)? };
+    let (error_code, value) = unsafe { sock::get_options(record, vm.bytes_of(option_name_oop)?)? };
     let results = vm.instantiate(vm.class_array()?, 2)?;
     store_pointer(vm, 0, results, vm.integer(error_code)?)?;
     store_pointer(vm, 1, results, vm.integer(value)?)?;
@@ -1077,10 +1077,15 @@ fn primitiveSocketSetOptions(vm: &Interp) -> PrimResult<Answered> {
     if !vm.is_bytes(option_name_oop)? || !vm.is_bytes(option_value_oop)? {
         return Err(PrimErr::GenericFailure); // the C's success(isBytes(...))
     }
-    let option_name = vm.bytes_of(option_name_oop)?.to_vec();
-    let option_value = vm.bytes_of(option_value_oop)?.to_vec();
+    // Both read where they lie, as in primitiveSocketGetOptions.
     // SAFETY: as in primitiveSocketGetOptions.
-    let (error_code, value) = unsafe { sock::set_options(record, &option_name, &option_value)? };
+    let (error_code, value) = unsafe {
+        sock::set_options(
+            record,
+            vm.bytes_of(option_name_oop)?,
+            vm.bytes_of(option_value_oop)?,
+        )?
+    };
     let results = vm.instantiate(vm.class_array()?, 2)?;
     store_pointer(vm, 0, results, vm.integer(error_code)?)?;
     store_pointer(vm, 1, results, vm.integer(value)?)?;

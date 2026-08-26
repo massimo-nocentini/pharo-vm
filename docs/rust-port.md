@@ -94,6 +94,45 @@ ported (the generic paths are complete, so ARM loses an acceleration, not a
 capability), and SqueakSSL defaults to a vendored, statically linked
 OpenSSL 3 (`--no-default-features` restores the C plugin's system linkage).
 
+### Working on the objects, not on copies of them
+
+The first plugins were written to a conservative rule -- read every argument
+into a Rust buffer, compute, write the result back -- because it makes the
+one invariant that matters easy to see: no borrow of image memory spans an
+allocation. LargeIntegers was the first crate to separate that invariant from
+the buffers (a magnitude is what *computing* needs, and the primitives that
+compute nothing never build one); this pass carried the same reading through
+the rest.
+
+The SDK gained the missing half of the story. `bytes_of` / `words_of` already
+borrowed an argument's contents in place; `with_bytes_mut` / `with_words_mut`
+now scope a `&mut` slice to a closure for the write path, which
+`Interp::write_bytes` had deliberately refused to hand out because two live
+views of one object would alias -- and the image can pass one object as two
+arguments whenever it likes. A thread-local table of the ranges currently lent
+out settles that: while a view is live, every other reader and writer of those
+bytes fails with `PrimErrInappropriate` instead of aliasing it. Sixteen tests
+in `pharo-vm-plugin/tests/inplace.rs` drive both against a fake proxy table.
+`read_f64_array::<N>` (a stack array where `read_f64s` allocated a `Vec`) and
+`c_string_value` (one copy instead of the `String` that
+`CString::new(vm.string_value(oop)?)` puts in between) came with it.
+
+Where that landed, per crate: JPEGReaderPlugin reads the huffman tables and
+coefficient blocks where they lie and converts MCUs straight into the
+destination bitmap; MiscPrimitivePlugin translates, converts, compresses and
+decompresses in place (its decompressor also no longer allocates a vector per
+run); SqueakSSL hands OpenSSL the destination ByteArray as the C did;
+JPEGReadWriter2Plugin packs each row into the Form's own words; DSAPrims stages
+only what it writes; FileAttributesPlugin, NewFilePlugin and SocketPlugin drop
+copies that had no allocation to survive. The rest were already right --
+BitBltPlugin and B2DPlugin work through raw pointers as the C does, and the
+copies left in FilePlugin, LocalePlugin and UnixOSProcessPlugin outlive an
+allocation or a `free` and have to.
+
+Each crate's README says which of its copies remain and why. The aliasing
+cases that now fail cleanly are the ones the C decoded, compressed or
+encrypted out of a buffer it was writing; each is noted as a divergence.
+
 ## Beyond the C plugins: bindings for the two downloaded libraries
 
 Everything above replaces something. These two do not.

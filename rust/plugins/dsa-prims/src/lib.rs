@@ -116,9 +116,11 @@ fn expect_large_positive_integers(vm: &Interp, oops: &[Oop]) -> PrimResult<()> {
 /// in `rem`. All three are LargePositiveIntegers; `quo` is expected to arrive
 /// zero-filled and sized to hold the quotient.
 ///
-/// The digits are copied out, divided in Rust memory, and copied back, so a
-/// failure -- or the aliasing of two arguments -- can never leave a
-/// half-subtracted remainder in the image.
+/// The two the division *writes* -- `rem`, which it subtracts into as it
+/// goes, and `quo` -- are staged in Rust memory and copied back at the end,
+/// so a failure, or the aliasing of two arguments, can never leave a
+/// half-subtracted remainder in the image. The divisor is only read, so it
+/// is read where it lies.
 #[pharo_primitive(accessor_depth = 1)]
 fn primitiveBigDivide(vm: &Interp, rem: Oop, div: Oop, quo: Oop) -> PrimResult<()> {
     expect_large_positive_integers(vm, &[rem, div, quo])?;
@@ -129,9 +131,9 @@ fn primitiveBigDivide(vm: &Interp, rem: Oop, div: Oop, quo: Oop) -> PrimResult<(
     // lengths are exactly the digit counts the C worked with.
     let mut rem_digits = vm.bytes_of(rem)?.to_vec();
     let mut quo_digits = vm.bytes_of(quo)?.to_vec();
-    let div_digits = vm.bytes_of(div)?.to_vec();
 
-    dsa::big_divide(&mut rem_digits, &div_digits, &mut quo_digits)?;
+    // The divisor's borrow ends with the call, before either write-back.
+    dsa::big_divide(&mut rem_digits, vm.bytes_of(div)?, &mut quo_digits)?;
 
     vm.write_bytes(rem, 0, &rem_digits)?;
     vm.write_bytes(quo, 0, &quo_digits)?;
@@ -141,6 +143,11 @@ fn primitiveBigDivide(vm: &Interp, rem: Oop, div: Oop, quo: Oop) -> PrimResult<(
 /// Multiplies `f1` by `f2` into `prod`. All three are LargePositiveIntegers;
 /// `prod` must be exactly `f1 size + f2 size` digits and is expected to
 /// arrive zero-filled.
+///
+/// The factors are read where they lie; the product is staged and copied
+/// back for the reason `primitiveBigDivide` stages its two, so that an
+/// argument passed twice behaves as it did in the C rather than being
+/// accumulated into while it is read.
 #[pharo_primitive(accessor_depth = 1)]
 fn primitiveBigMultiply(vm: &Interp, f1: Oop, f2: Oop, prod: Oop) -> PrimResult<()> {
     expect_large_positive_integers(vm, &[f1, f2, prod])?;
@@ -153,11 +160,9 @@ fn primitiveBigMultiply(vm: &Interp, f1: Oop, f2: Oop, prod: Oop) -> PrimResult<
     if is_immutable(vm, prod)? {
         return Err(PrimErr::NoModification);
     }
-    let f1_digits = vm.bytes_of(f1)?.to_vec();
-    let f2_digits = vm.bytes_of(f2)?.to_vec();
     let mut prod_digits = vm.bytes_of(prod)?.to_vec();
 
-    dsa::big_multiply(&f1_digits, &f2_digits, &mut prod_digits);
+    dsa::big_multiply(vm.bytes_of(f1)?, vm.bytes_of(f2)?, &mut prod_digits);
 
     vm.write_bytes(prod, 0, &prod_digits)?;
     Ok(())
@@ -178,9 +183,13 @@ fn primitiveExpandBlock(vm: &Interp, buf: Oop, expanded: Oop) -> PrimResult<()> 
     if is_immutable(vm, expanded)? {
         return Err(PrimErr::NoModification);
     }
-    let mut block = [0u8; 64];
-    block.copy_from_slice(vm.bytes_of(buf)?);
-    let words = dsa::expand_block(&block);
+    // The size check above proved the conversion; the block is expanded out
+    // of the object rather than through a copy of it.
+    let block: &[u8; 64] = vm
+        .bytes_of(buf)?
+        .try_into()
+        .map_err(|_| PrimErr::BadArgument)?;
+    let words = dsa::expand_block(block);
     vm.write_words(expanded, 0, &words)?;
     Ok(())
 }
@@ -199,12 +208,16 @@ fn primitiveHashBlock(vm: &Interp, buf: Oop, state: Oop) -> PrimResult<()> {
     if is_immutable(vm, state)? {
         return Err(PrimErr::NoModification);
     }
+    // The schedule is read where it lies; the state is the accumulator this
+    // primitive updates, so it is staged and written back in one go.
     let mut s = [0u32; 5];
     s.copy_from_slice(vm.words_of(state)?);
-    let mut w = [0u32; 80];
-    w.copy_from_slice(vm.words_of(buf)?);
+    let w: &[u32; 80] = vm
+        .words_of(buf)?
+        .try_into()
+        .map_err(|_| PrimErr::BadArgument)?;
 
-    dsa::hash_block(&mut s, &w);
+    dsa::hash_block(&mut s, w);
 
     vm.write_words(state, 0, &s)?;
     Ok(())

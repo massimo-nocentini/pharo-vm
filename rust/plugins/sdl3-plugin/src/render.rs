@@ -14,7 +14,6 @@
 //! ```
 
 use core::ffi::c_void;
-use std::ffi::CString;
 
 use pharo_vm_plugin::{pharo_primitive, sqInt, Interp, Oop, PrimErr, PrimResult};
 
@@ -31,7 +30,7 @@ fn primitiveCreateRenderer(vm: &Interp, window: sqInt, name: Oop) -> PrimResult<
     let name = if vm.is_nil(name)? {
         None
     } else {
-        Some(CString::new(vm.string_value(name)?).map_err(|_| PrimErr::BadArgument)?)
+        Some(vm.c_string_value(name)?)
     };
     let name_ptr = name.as_ref().map_or(core::ptr::null(), |n| n.as_ptr());
     let (ptr, window_ptr) =

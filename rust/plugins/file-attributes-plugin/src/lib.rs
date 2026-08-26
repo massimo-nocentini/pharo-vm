@@ -326,11 +326,13 @@ fn process_directory(vm: &Interp, conv: &Converters, fa: &FaPath) -> PrimResult<
 /// Reads a path argument and builds the whole-path `FaPath` (the
 /// `faSetStPathOop` step every path-taking primitive starts with).
 fn st_path_from(vm: &Interp, conv: &Converters, path_oop: Oop) -> PrimResult<FaPath> {
-    // bytes_of enforces the C's isBytes check (PrimErrBadArgument otherwise);
-    // copy before any allocation can move the object.
-    let bytes = vm.bytes_of(path_oop)?.to_vec();
+    // bytes_of enforces the C's isBytes check (PrimErrBadArgument otherwise).
+    // The record takes its own copy of the path -- it has to, since it grows
+    // a file name onto it -- so the borrow ends with this call, before
+    // anything allocates.
     let mut fa = FaPath::new();
-    fa.set_st_path(&bytes, conv).map_err(|s| os_error(vm, s))?;
+    fa.set_st_path(vm.bytes_of(path_oop)?, conv)
+        .map_err(|s| os_error(vm, s))?;
     Ok(fa)
 }
 
@@ -486,10 +488,12 @@ fn primitiveLogicalDrives(_vm: &Interp) -> PrimResult<Oop> {
 /// for an empty directory, or fails with `FA_CANT_OPEN_DIR`.
 #[pharo_primitive(accessor_depth = 0)]
 fn primitiveOpendir(vm: &Interp, dir_name: Oop) -> PrimResult<Oop> {
-    let bytes = vm.bytes_of(dir_name)?.to_vec();
+    // The converters are resolved first, so the path's borrow spans nothing
+    // but the record's own copy of it (see `st_path_from`).
     let conv = load_converters(vm);
     let mut fa = FaPath::new();
-    fa.set_st_dir(&bytes, &conv).map_err(|s| os_error(vm, s))?;
+    fa.set_st_dir(vm.bytes_of(dir_name)?, &conv)
+        .map_err(|s| os_error(vm, s))?;
 
     let session = match DirSession::open(fa, &conv) {
         Ok(Some(session)) => session,
@@ -562,10 +566,10 @@ fn primitivePathMax(vm: &Interp) -> PrimResult<sqInt> {
 /// Platform-encoded name to image-encoded ByteArray.
 #[pharo_primitive(accessor_depth = 0)]
 fn primitivePlatToStPath(vm: &Interp, file_name: Oop) -> PrimResult<Oop> {
-    let bytes = vm.bytes_of(file_name)?.to_vec();
     let conv = load_converters(vm);
     let mut fa = FaPath::new();
-    fa.set_plat_path(&bytes, &conv).map_err(|s| os_error(vm, s))?;
+    fa.set_plat_path(vm.bytes_of(file_name)?, &conv)
+        .map_err(|s| os_error(vm, s))?;
     let result = vm.instantiate(vm.class_byte_array()?, fa.st_path().len() as sqInt)?;
     vm.write_bytes(result, 0, fa.st_path())?;
     Ok(result)

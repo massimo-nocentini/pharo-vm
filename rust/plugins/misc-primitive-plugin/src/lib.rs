@@ -53,44 +53,6 @@ fn st_size_of(vm: &Interp, oop: Oop) -> PrimResult<sqInt> {
     Ok(unsafe { f(oop.0) })
 }
 
-/// First indexable byte of `oop`, for the two writes the safe API cannot
-/// express (16-bit lanes of a word object).
-fn first_field_ptr(vm: &Interp, oop: Oop) -> PrimResult<*mut u8> {
-    // SAFETY: as in is_oop_immutable.
-    let f = unsafe { (*vm.as_raw()).firstIndexableField }.ok_or(PrimErr::Unsupported)?;
-    // SAFETY: the entry is the VM's own; oop is a value the VM handed us.
-    let p = unsafe { f(oop.0) };
-    if p.is_null() {
-        return Err(PrimErr::BadArgument);
-    }
-    Ok(p.cast::<u8>())
-}
-
-/// Writes `values` as consecutive native-endian `u16`s from the start of
-/// `oop`'s indexable bytes -- what the C does through an `unsigned short *`.
-///
-/// The caller has checked mutability; bounds are re-checked here so the
-/// unsafe block stands on its own.
-fn write_u16s(vm: &Interp, oop: Oop, values: &[u16]) -> PrimResult<()> {
-    let byte_len = usize::try_from(vm.byte_size_of(oop)?)?;
-    let span = values.len().checked_mul(2).ok_or(PrimErr::BadIndex)?;
-    if span > byte_len {
-        return Err(PrimErr::BadIndex);
-    }
-    let base = first_field_ptr(vm, oop)?;
-    // SAFETY: base points at byte_len bytes owned by the object; the span
-    // was just checked against it; write_unaligned because only whole-word
-    // alignment is guaranteed; `values` is a Rust-owned slice, so it cannot
-    // overlap the destination.
-    unsafe {
-        let dst = base.cast::<u16>();
-        for (i, v) in values.iter().enumerate() {
-            dst.add(i).write_unaligned(*v);
-        }
-    }
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // The C's argument-fetch idioms
 // ---------------------------------------------------------------------------
@@ -258,19 +220,20 @@ fn primitiveTranslateStringWithTable(
     let (start0, stop) = (start as usize - 1, stop as usize);
     if aString == table {
         // The C tolerates the string being its own table, each assignment
-        // seeing the previous ones. One shared buffer reproduces that; only
-        // region indices are ever assigned, so writing the region back
-        // suffices. (len >= 256 here, since the table check passed.)
-        let mut buf = vm.bytes_of(aString)?.to_vec();
-        for i in start0..stop {
-            buf[i] = buf[usize::from(buf[i])];
-        }
-        vm.write_bytes(aString, start0, &buf[start0..stop])
+        // seeing the previous ones -- which is what translating it in place
+        // does. (len >= 256 here, since the table check passed.)
+        vm.with_bytes_mut(aString, |buf| {
+            for i in start0..stop {
+                buf[i] = buf[usize::from(buf[i])];
+            }
+        })
     } else {
-        let mut region = vm.bytes_of(aString)?[start0..stop].to_vec();
-        let table = vm.bytes_of(table)?;
-        algo::translate(&mut region, table);
-        vm.write_bytes(aString, start0, &region)
+        // In place too, the table read inside the view: two distinct oops
+        // cannot be one object, so the read cannot collide with the write.
+        vm.with_bytes_mut(aString, |buf| {
+            algo::translate(&mut buf[start0..stop], vm.bytes_of(table)?);
+            Ok(())
+        })?
     }
 }
 
@@ -292,15 +255,21 @@ fn primitiveConvert8BitSigned(
     if is_oop_immutable(vm, aSoundBuffer) {
         return Err(PrimErr::NoModification);
     }
-    let bytes = vm.bytes_of(aByteArray)?;
-    if vm.byte_size_of(aSoundBuffer)? < 2 * bytes.len() as sqInt {
+    let src_len = usize::try_from(vm.byte_size_of(aByteArray)?)?;
+    if usize::try_from(vm.byte_size_of(aSoundBuffer)?)? < 2 * src_len {
         return Err(PrimErr::BadArgument);
     }
-    // The size check just excluded aliasing (a buffer of at least twice the
-    // array's size cannot be the array unless both are empty), so reading
-    // everything before writing matches the C's interleaved loop.
-    let samples: Vec<u16> = bytes.iter().map(|&b| algo::sample_16(b)).collect();
-    write_u16s(vm, aSoundBuffer, &samples)
+    // Sample by sample into the buffer, as the C's interleaved loop did.
+    // The size check excluded aliasing already (a buffer of at least twice
+    // the array's size cannot be the array unless both are empty, and an
+    // empty view collides with nothing).
+    vm.with_bytes_mut(aSoundBuffer, |dst| {
+        let src = vm.bytes_of(aByteArray)?;
+        for (slot, &sample) in dst.chunks_exact_mut(2).zip(src) {
+            slot.copy_from_slice(&algo::sample_16(sample).to_ne_bytes());
+        }
+        Ok(())
+    })?
 }
 
 // ---------------------------------------------------------------------------
@@ -333,13 +302,16 @@ fn primitiveCompressToByteArray(vm: &Interp, bm: Oop, ba: Oop) -> PrimResult<isi
         Some(span) if span <= bm_bytes => {}
         _ => return Err(PrimErr::BadArgument),
     }
-    let out = {
+    // Encoded straight into the destination, as the C did. Its view is
+    // taken before the bitmap is read, so passing one byte object as both --
+    // which the C would have compressed while overwriting it -- fails here
+    // instead.
+    let written = vm.with_bytes_mut(ba, |dst| {
         let words = vm.words_of(bm)?;
-        algo::compress(&words[..size])
-    };
-    debug_assert!(out.len() <= dest_size);
-    vm.write_bytes(ba, 0, &out)?;
-    Ok(out.len() as isize)
+        PrimResult::Ok(algo::compress_into(&words[..size], dst))
+    })??;
+    debug_assert!(written <= dest_size);
+    Ok(written as isize)
 }
 
 /// `Bitmap>>decompress:fromByteArray:at:` -- fills `bm` in place; answers
@@ -366,19 +338,14 @@ fn primitiveDecompressFromByteArray(
     // 16-bit bm) fails with BadIndex instead -- runs the C wrote in bounds
     // land identically.
     let past_end = usize::try_from(st_size_of(vm, bm)?)?;
-    // Snapshot the encoded bytes: nothing stops the image passing the same
-    // byte object as both bm and ba, and the C then decodes a stream it is
-    // itself overwriting. Reading a copy keeps the borrow away from the
-    // writes; the self-overwriting case is in the C's out-of-bounds-write
-    // territory anyway (see README).
-    let encoded = vm.bytes_of(ba)?.to_vec();
-    algo::decompress(&encoded, index - 1, past_end, &mut |k, words| {
-        vm.write_words(bm, k, words)
-    })
-    .map_err(|e| match e {
-        algo::DecompressError::Sink(code) => code,
-        // WouldOverrun is the C's explicit PrimErrBadIndex; TruncatedInput
-        // is where the C reads past the byte array instead of failing.
-        _ => PrimErr::BadIndex,
-    })
+    // Decoded straight into the bitmap, run by run, as the C wrote it. The
+    // destination's view is taken first, so the image passing the same byte
+    // object as both bm and ba -- the C decoding a stream it is itself
+    // overwriting -- fails here instead of being reproduced.
+    vm.with_words_mut(bm, |dst| {
+        algo::decompress(vm.bytes_of(ba)?, index - 1, past_end, dst)
+            // WouldOverrun is the C's explicit PrimErrBadIndex; TruncatedInput
+            // is where the C reads past the byte array instead of failing.
+            .map_err(|_| PrimErr::BadIndex)
+    })?
 }

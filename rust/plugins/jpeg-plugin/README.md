@@ -38,6 +38,14 @@ port keeps the blob plain old data — 64 bytes of header fields, no pointers,
 nothing to free — and re-parses the JPEG header in `readImage`. See
 [`src/state.rs`](src/state.rs).
 
+**Rows are packed into the Form's own bitmap.** The decoder answers its
+pixels in Rust memory, but the packing loop that turns them into the image's
+1/2/4/8/16/32-bit rows writes each row straight into the Bitmap's words --
+the C's `bits` pointer -- instead of filling a row buffer and copying it
+across. The Form is held as one in-place view for the whole loop, so a row
+past the Bitmap's end still fails cleanly (`PrimErrBadIndex`) with the
+earlier rows written, as before.
+
 **An out-of-bounds read is gone.** See below.
 
 ## The out-of-bounds read

@@ -10,7 +10,6 @@
 //!   its present redraw cost.
 
 use core::ffi::c_uchar;
-use std::ffi::CString;
 
 use pharo_vm_plugin::{pharo_primitive, sqInt, Interp, Oop, PrimErr, PrimResult};
 
@@ -113,7 +112,7 @@ fn primitiveImageSurfaceCreateForBitmap(
 #[pharo_primitive]
 fn primitiveImageSurfaceCreateFromPng(vm: &Interp, filename: Oop) -> PrimResult<sqInt> {
     let c = cairo()?;
-    let path = CString::new(vm.string_value(filename)?).map_err(|_| PrimErr::BadArgument)?;
+    let path = vm.c_string_value(filename)?;
     let ptr = cc!(c, cairo_image_surface_create_from_png(path.as_ptr()));
     SURFACES.insert(Surface::adopt(ptr, None)?)
 }
@@ -122,7 +121,7 @@ fn primitiveImageSurfaceCreateFromPng(vm: &Interp, filename: Oop) -> PrimResult<
 #[pharo_primitive]
 fn primitiveSurfaceWriteToPng(vm: &Interp, surface: sqInt, filename: Oop) -> PrimResult<i32> {
     let c = cairo()?;
-    let path = CString::new(vm.string_value(filename)?).map_err(|_| PrimErr::BadArgument)?;
+    let path = vm.c_string_value(filename)?;
     with_surface(surface, |s| {
         Ok(cc!(c, cairo_surface_write_to_png(s, path.as_ptr())))
     })

@@ -266,20 +266,27 @@ fn read_image(
         dither,
     };
 
-    // Pack row by row, writing each into the bitmap as it is produced. Rows
-    // beyond the Form's height are dropped rather than overrunning it.
+    // Pack row by row, each one straight into the bitmap's own words -- what
+    // the C's `bits` pointer did -- rather than through a row buffer and a
+    // second copy. Rows beyond the Form's height are dropped rather than
+    // overrunning it.
     let rows = usize::from(info.height).min(form.height);
-    let mut words = vec![0u32; form.words_per_row];
-    for row in 0..rows {
-        let start = row * row_stride;
-        let end = (start + row_stride).min(pixels.len());
-        if start >= pixels.len() {
-            break;
+    vm.with_words_mut(form.bitmap, |bits| {
+        for row in 0..rows {
+            let start = row * row_stride;
+            let end = (start + row_stride).min(pixels.len());
+            if start >= pixels.len() {
+                break;
+            }
+            let at = row * form.words_per_row;
+            let Some(out) = bits.get_mut(at..at + form.words_per_row) else {
+                return Err(PrimErr::BadIndex);
+            };
+            out.fill(0);
+            pixels::pack_row(&pixels[start..end], row as u32, &cfg, out);
         }
-        words.fill(0);
-        pixels::pack_row(&pixels[start..end], row as u32, &cfg, &mut words);
-        vm.write_words(form.bitmap, row * form.words_per_row, &words)?;
-    }
+        Ok(())
+    })??;
 
     finish_image(vm, error, false)
 }

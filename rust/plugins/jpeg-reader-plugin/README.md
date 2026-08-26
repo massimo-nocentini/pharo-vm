@@ -33,8 +33,20 @@ accessor depths, same failure conditions in the same order.
 
 **No cached raw pointers into image memory.** The C held `int*`s to up to
 3x128 block WordArrays, the bits array, the residuals and both huffman tables
-in globals for the duration of a call. This port copies inputs out, computes
-on Rust-owned buffers, and writes results back once.
+in *globals*, which outlived the call that set them. This port borrows the
+same objects for the length of one primitive and nothing longer: the huffman
+tables, the coefficient blocks and the quantisation table are read where they
+lie (`i32` and `u32` are the same 32 bits, so the reinterpretation the C's
+`int*` performed is free), the MCU's pixels are written straight into the
+destination bitmap, and `primitiveIdctInt` transforms the block in place. A
+huffman table is hundreds of words consulted once per symbol and an MCU is a
+few thousand; copying either in and out would have cost more than the
+arithmetic it served.
+
+The three-slot residuals array is still read into a `[i32; 3]` and written
+back at the end, because the conversion carries it across the whole MCU, and
+`primitiveDecodeMCU` still decodes into a `[i32; 64]` on the stack -- see *No
+partial writes on failure* below, which is what that buys.
 
 **Undefined behaviour removed** — each was reachable from a corrupt or
 hostile image-side object, and each is now a clean primitive failure (or a
@@ -53,20 +65,30 @@ defined value) instead:
   operand width — UB in C. The port uses wrapping (count-masked) shifts,
   which is what the C binary does on the hardware this VM ships on.
 
-**No partial writes on failure.** The C decoded straight into the image's
-coefficient WordArray, so a failing `primitiveDecodeMCU` left a partially
-written block behind (the stream object itself was never stored back, so the
-Smalltalk fallback re-decodes and overwrites it — invisible in practice, but
-different). This port validates and decodes first, and only a successful
+**No partial writes on failure, where they were worth buying.** The C decoded
+straight into the image's coefficient WordArray, so a failing
+`primitiveDecodeMCU` left a partially written block behind (the stream object
+itself was never stored back, so the Smalltalk fallback re-decodes and
+overwrites it — invisible in practice, but different). This port validates
+and decodes into a 64-word block on the stack first, and only a successful
 decode touches the array, the stream and the DC predictor.
+
+The colour conversions do write as they go, as the C did: they fill the
+destination bitmap where it lies, so a failure part-way through an MCU —
+which needs a corrupt component to reach — leaves the pixels already
+converted in the Bitmap, and the residuals unwritten. A block is 64 words and
+an MCU is thousands, which is why one is staged and the other is not.
 
 **Immutability is honoured.** The C wrote through `firstIndexableField`
 regardless; the SDK's write path fails cleanly on an immutable target.
 
-**Aliasing corner.** Because inputs are copied out and outputs written back
-once, a call that passes the *same* object in two roles (e.g. the bits array
-as the residuals array) sees one final state rather than the C's interleaved
-writes. The image-side decoder never does this.
+**Aliasing fails instead of interleaving.** A call that passes the *same*
+object in two roles -- the destination bitmap as one of a component's blocks,
+the quantisation table as the coefficient array -- would have two live views
+of one object, one of them mutable. The SDK refuses the second
+(`PrimErrInappropriate`) rather than aliasing it, so such a call fails cleanly
+where the C interleaved reads with writes into the same words. The image-side
+decoder never does this.
 
 ## Verification
 

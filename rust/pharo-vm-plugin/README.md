@@ -115,6 +115,44 @@ Return any type implementing `IntoReturn`:
 | `f64` | a Float |
 | `&str` | a String |
 
+## Reading and writing what you were handed
+
+`bytes_of` and `words_of` borrow an argument's contents straight out of the
+object — no copy — for as long as you do not allocate. The write path has a
+matching pair:
+
+```rust
+vm.with_words_mut(bits_oop, |bits| {             // the object's own words
+    pack_row(&pixels, &cfg, bits);               // filled in place
+    Ok(())
+})??;
+```
+
+`with_bytes_mut` / `with_words_mut` scope a `&mut` slice to a closure, which
+is what `write_bytes` deliberately does not hand out: two live views of one
+object would alias, and the image can pass the same object as two arguments
+whenever it likes. So while the view is live, every other route into those
+bytes — `bytes_of`, `words_of`, `write_bytes`, `write_words`,
+`indexable_bytes_ptr`, a second view — fails with `PrimErr::Inappropriate`.
+That check is by address range, so views of different objects nest freely.
+
+The order matters: **take the mutable view before reading the other
+arguments.** A source read inside the view fails cleanly when it is the
+destination; a source read taken *before* the view is a borrow the SDK cannot
+see, and the rule against holding one across an allocation applies to holding
+one across a mutable view too.
+
+`write_bytes` and `write_words` remain the right answer when you have a Rust
+buffer to deliver (`memcpy` either way), or when a primitive must not touch
+the object until it knows it has succeeded — a staged buffer is how you get
+"all or nothing" out of a computation that can fail halfway.
+
+Two smaller readers worth knowing: `read_f64_array::<N>` answers a stack array
+where `read_f64s` allocates a `Vec` (a point, a matrix, a set of extents is
+nearly always a fixed `N`), and `c_string_value` builds the `CString` a
+foreign call wants straight from the object's bytes, without the `String` that
+`CString::new(vm.string_value(oop)?)` puts in between.
+
 ## Accessor depth
 
 Spur collects with *lazy forwarding*: `become:` leaves a forwarder behind
@@ -185,7 +223,11 @@ way.
   interpreter would be undefined behaviour.
 - *The accessor-depth byte exists.*
 - *`write_bytes` refuses immutable objects*, so you cannot quietly write
-  through Pharo's immutability, and bounds-checks the write.
+  through Pharo's immutability, and bounds-checks the write. So do
+  `write_words`, `with_bytes_mut` and `with_words_mut`.
+- *Two live views of one object are impossible.* An in-place view makes every
+  other reader and writer of those bytes fail while it lasts, so one object
+  passed as two arguments cannot alias a `&mut`.
 - *Integers are range-checked on the way out.* The proxy's
   `methodReturnInteger` tags without checking (`(v << 3) | 1`), so a value past
   `SmallInteger maxVal` silently wraps; return an `isize` and anything too big
@@ -195,7 +237,9 @@ way.
 
 - **Do not hold a borrow across an allocation.** `bytes_of` borrows straight
   into the object. Allocating — `vm.instantiate`, `vm.string` — can move it.
-  Read, then allocate; never interleave.
+  Read, then allocate; never interleave. The same goes for a borrow held
+  across a `with_*_mut` view of the same object: the lending table only knows
+  about the views it hands out, so take the view first.
 - **Do not call back into the image.** A primitive runs with the interpreter
   mid-flight. Talk to the OS, compute, answer.
 - **Keep it prompt.** The VM is blocked while your primitive runs, including

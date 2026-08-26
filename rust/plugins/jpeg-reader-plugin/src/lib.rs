@@ -27,6 +27,8 @@ mod huffman;
 mod idct;
 mod stream;
 
+use core::slice;
+
 use pharo_vm_plugin::{pharo_plugin, pharo_primitive, sqInt, Interp, Oop, PrimErr, PrimResult};
 
 use color::{
@@ -84,29 +86,37 @@ fn store_integer(vm: &Interp, index: sqInt, oop: Oop, value: sqInt) -> PrimResul
 // Marshalling image objects
 // ---------------------------------------------------------------------------
 
-/// Copies a WordArray's slots out as the signed 32-bit values the C read
-/// through its `int*`, after the same `isWords` check.
-fn words_object(vm: &Interp, oop: Oop) -> PrimResult<Vec<i32>> {
+/// A WordArray's slots as the signed 32-bit values the C read through its
+/// `int*`, where they lie, after the same `isWords` check.
+///
+/// A huffman table is hundreds of words and is consulted once per symbol;
+/// the C indexed the image object directly and never copied one, and neither
+/// does this. The reinterpretation is free: `i32` and `u32` have the same
+/// size and alignment and every bit pattern is a valid `i32`, so this is the
+/// same read the C's `int*` performed.
+fn ints_of(vm: &Interp, oop: Oop) -> PrimResult<&[i32]> {
     if !is_words(vm, oop)? {
         return Err(PrimErr::GenericFailure);
     }
-    Ok(vm.words_of(oop)?.iter().map(|&w| w as i32).collect())
-}
-
-/// One 64-slot WordArray as a coefficient block.
-fn block_object(vm: &Interp, oop: Oop) -> PrimResult<[i32; DCT_SIZE2]> {
     let words = vm.words_of(oop)?;
-    if words.len() != DCT_SIZE2 {
-        return Err(PrimErr::GenericFailure);
-    }
-    let mut block = [0i32; DCT_SIZE2];
-    for (dst, &w) in block.iter_mut().zip(words) {
-        *dst = w as i32;
-    }
-    Ok(block)
+    // SAFETY: same layout, same length, and no `i32` bit pattern is invalid.
+    Ok(unsafe { slice::from_raw_parts(words.as_ptr().cast::<i32>(), words.len()) })
 }
 
-/// A block's (or the IDCT output's) bit pattern for `write_words`.
+/// One 64-slot WordArray as a coefficient block, where it lies.
+fn block_of(vm: &Interp, oop: Oop) -> PrimResult<&[i32; DCT_SIZE2]> {
+    ints_of(vm, oop)?
+        .try_into()
+        .map_err(|_| PrimErr::GenericFailure)
+}
+
+/// The mutable twin of [`ints_of`], over words already borrowed in place.
+fn ints_mut(words: &mut [u32]) -> &mut [i32] {
+    // SAFETY: as in `ints_of`; the caller's `&mut` is the only live borrow.
+    unsafe { slice::from_raw_parts_mut(words.as_mut_ptr().cast::<i32>(), words.len()) }
+}
+
+/// A block's bit pattern for `write_words`.
 fn block_bits(block: &[i32; DCT_SIZE2]) -> [u32; DCT_SIZE2] {
     let mut words = [0u32; DCT_SIZE2];
     for (dst, &v) in words.iter_mut().zip(block) {
@@ -140,7 +150,7 @@ fn color_component_from(vm: &Interp, oop: Oop) -> PrimResult<color::ColorCompone
 
 /// `JPEGReaderPlugin>>#colorComponentBlocks:from:` — the component's MCU
 /// blocks, each a 64-slot WordArray, copied out.
-fn color_component_blocks_from(vm: &Interp, oop: Oop) -> PrimResult<Vec<[i32; DCT_SIZE2]>> {
+fn color_component_blocks_from<'a>(vm: &'a Interp, oop: Oop) -> PrimResult<color::Blocks<'a>> {
     if !vm.is_pointers(oop)? || vm.slot_size_of(oop)? < MIN_COMPONENT_SIZE as sqInt {
         return Err(PrimErr::GenericFailure);
     }
@@ -152,20 +162,23 @@ fn color_component_blocks_from(vm: &Interp, oop: Oop) -> PrimResult<Vec<[i32; DC
     if max > MAX_MCU_BLOCKS as sqInt {
         return Err(PrimErr::GenericFailure);
     }
-    let mut blocks = Vec::with_capacity(max.max(0) as usize);
+    let mut blocks = color::Blocks::new();
     for i in 0..max {
         let block_oop = vm.fetch_pointer(i, array_oop)?;
         if !is_words(vm, block_oop)? || vm.slot_size_of(block_oop)? != DCT_SIZE2 as sqInt {
             return Err(PrimErr::GenericFailure);
         }
-        blocks.push(block_object(vm, block_oop)?);
+        // The `max` check above already fits the table.
+        if !blocks.push(block_of(vm, block_oop)?) {
+            return Err(PrimErr::GenericFailure);
+        }
     }
     Ok(blocks)
 }
 
 /// `yColorComponentFrom:` / `cbColorComponentFrom:` / `crColorComponentFrom:`
 /// — fields, then blocks, short-circuiting like the C's `&&`.
-fn full_component(vm: &Interp, oop: Oop) -> PrimResult<Component> {
+fn full_component<'a>(vm: &'a Interp, oop: Oop) -> PrimResult<Component<'a>> {
     let fields = color_component_from(vm, oop)?;
     let blocks = color_component_blocks_from(vm, oop)?;
     Ok(Component { fields, blocks })
@@ -197,7 +210,7 @@ fn load_jpeg_stream<'a>(vm: &'a Interp, stream_oop: Oop) -> PrimResult<JpegStrea
 /// The shared head of both colour-convert primitives: ditherMask, the
 /// 3-slot residuals WordArray and the destination bits WordArray, validated
 /// in the C's order.
-fn convert_common(vm: &Interp) -> PrimResult<(sqInt, Oop, [i32; 3], Oop, usize)> {
+fn convert_common(vm: &Interp) -> PrimResult<(sqInt, Oop, [i32; 3], Oop)> {
     vm.expect_argument_count(4)?;
     let dither_mask = vm.stack_integer(0)?;
     let residuals_oop = vm.stack_value(1)?;
@@ -210,19 +223,11 @@ fn convert_common(vm: &Interp) -> PrimResult<(sqInt, Oop, [i32; 3], Oop, usize)>
     if !is_words(vm, bits_oop)? {
         return Err(PrimErr::GenericFailure);
     }
-    let bits_size = usize::try_from(vm.slot_size_of(bits_oop)?)?;
-    Ok((dither_mask, residuals_oop, residuals, bits_oop, bits_size))
+    Ok((dither_mask, residuals_oop, residuals, bits_oop))
 }
 
-/// Writes the converted pixels and the carried residuals back.
-fn finish_convert(
-    vm: &Interp,
-    bits_oop: Oop,
-    bits: &[u32],
-    residuals_oop: Oop,
-    residuals: [i32; 3],
-) -> PrimResult<()> {
-    vm.write_words(bits_oop, 0, bits)?;
+/// Writes the carried residuals back.
+fn finish_convert(vm: &Interp, residuals_oop: Oop, residuals: [i32; 3]) -> PrimResult<()> {
     let r = [
         residuals[0] as u32,
         residuals[1] as u32,
@@ -243,13 +248,20 @@ fn finish_convert(
 /// Arguments: `component bits residuals ditherMask`.
 #[pharo_primitive(accessor_depth = 2)]
 fn primitiveColorConvertGrayscaleMCU(vm: &Interp) -> PrimResult<()> {
-    let (dither_mask, residuals_oop, mut residuals, bits_oop, bits_size) = convert_common(vm)?;
-    let mut y = full_component(vm, vm.stack_value(3)?)?;
+    let (dither_mask, residuals_oop, mut residuals, bits_oop) = convert_common(vm)?;
+    let component_oop = vm.stack_value(3)?;
 
-    let mut bits = vec![0u32; bits_size];
-    color::color_convert_grayscale_mcu(&mut y, &mut residuals, dither_mask, &mut bits)
-        .map_err(|()| PrimErr::GenericFailure)?;
-    finish_convert(vm, bits_oop, &bits, residuals_oop, residuals)
+    // The destination is filled where it lies -- the C's `unsigned int
+    // *bits` -- rather than through a staging buffer the size of the whole
+    // MCU. Its view is taken before the component's blocks are borrowed, so
+    // an image that passes the bitmap as one of them fails cleanly instead
+    // of converting out of the array it is writing.
+    vm.with_words_mut(bits_oop, |bits| {
+        let mut y = full_component(vm, component_oop)?;
+        color::color_convert_grayscale_mcu(&mut y, &mut residuals, dither_mask, bits)
+            .map_err(|()| PrimErr::GenericFailure)
+    })??;
+    finish_convert(vm, residuals_oop, residuals)
 }
 
 /// Converts one Y'CbCr MCU into 32-bit ARGB pixels.
@@ -257,26 +269,21 @@ fn primitiveColorConvertGrayscaleMCU(vm: &Interp) -> PrimResult<()> {
 /// Arguments: `(Array of: 3 components) bits residuals ditherMask`.
 #[pharo_primitive(accessor_depth = 3)]
 fn primitiveColorConvertMCU(vm: &Interp) -> PrimResult<()> {
-    let (dither_mask, residuals_oop, mut residuals, bits_oop, bits_size) = convert_common(vm)?;
+    let (dither_mask, residuals_oop, mut residuals, bits_oop) = convert_common(vm)?;
     let components_oop = vm.stack_value(3)?;
     if !vm.is_pointers(components_oop)? || vm.slot_size_of(components_oop)? != 3 {
         return Err(PrimErr::GenericFailure);
     }
-    let mut y = full_component(vm, vm.fetch_pointer(0, components_oop)?)?;
-    let mut cb = full_component(vm, vm.fetch_pointer(1, components_oop)?)?;
-    let mut cr = full_component(vm, vm.fetch_pointer(2, components_oop)?)?;
 
-    let mut bits = vec![0u32; bits_size];
-    color::color_convert_mcu(
-        &mut y,
-        &mut cb,
-        &mut cr,
-        &mut residuals,
-        dither_mask,
-        &mut bits,
-    )
-    .map_err(|()| PrimErr::GenericFailure)?;
-    finish_convert(vm, bits_oop, &bits, residuals_oop, residuals)
+    // In place, blocks borrowed inside the view: see the grayscale case.
+    vm.with_words_mut(bits_oop, |bits| {
+        let mut y = full_component(vm, vm.fetch_pointer(0, components_oop)?)?;
+        let mut cb = full_component(vm, vm.fetch_pointer(1, components_oop)?)?;
+        let mut cr = full_component(vm, vm.fetch_pointer(2, components_oop)?)?;
+        color::color_convert_mcu(&mut y, &mut cb, &mut cr, &mut residuals, dither_mask, bits)
+            .map_err(|()| PrimErr::GenericFailure)
+    })??;
+    finish_convert(vm, residuals_oop, residuals)
 }
 
 /// Huffman-decodes the next 8x8 coefficient block from the stream.
@@ -289,8 +296,8 @@ fn primitiveDecodeMCU(vm: &Interp) -> PrimResult<()> {
     vm.expect_argument_count(5)?;
     let stream_oop = vm.stack_value(0)?;
     let mut stream = load_jpeg_stream(vm, stream_oop)?;
-    let ac_table = words_object(vm, vm.stack_value(1)?)?;
-    let dc_table = words_object(vm, vm.stack_value(2)?)?;
+    let ac_table = ints_of(vm, vm.stack_value(1)?)?;
+    let dc_table = ints_of(vm, vm.stack_value(2)?)?;
     let component_oop = vm.stack_value(3)?;
     let fields = color_component_from(vm, component_oop)?;
     let array_oop = vm.stack_value(4)?;
@@ -299,7 +306,7 @@ fn primitiveDecodeMCU(vm: &Interp) -> PrimResult<()> {
     }
 
     let mut prior_dc = fields[PRIOR_DC_VALUE_INDEX];
-    let coeffs = huffman::decode_block(&mut stream, &dc_table, &ac_table, &mut prior_dc)
+    let coeffs = huffman::decode_block(&mut stream, dc_table, ac_table, &mut prior_dc)
         .map_err(|()| PrimErr::GenericFailure)?;
     let (position, bit_buffer, bit_count) = (stream.position, stream.bit_buffer, stream.bit_count);
 
@@ -333,12 +340,16 @@ fn primitiveIdctInt(vm: &Interp) -> PrimResult<()> {
     if !is_words(vm, array_oop)? || vm.slot_size_of(array_oop)? != DCT_SIZE2 as sqInt {
         return Err(PrimErr::GenericFailure);
     }
-    let qt = block_object(vm, qt_oop)?;
-    let mut block = block_object(vm, array_oop)?;
-
-    idct::idct_block_int(&mut block, &qt);
-
-    vm.write_words(array_oop, 0, &block_bits(&block))?;
+    // Dequantised and transformed where it lies -- the C's `int *array`.
+    // The mutable view is taken first, so an image that passes one object as
+    // both arguments fails here instead of transforming the quantisation
+    // table into itself.
+    vm.with_words_mut(array_oop, |words| {
+        let block: &mut [i32; DCT_SIZE2] = ints_mut(words)
+            .try_into()
+            .map_err(|_| PrimErr::GenericFailure)?;
+        idct::idct_block_int(block, block_of(vm, qt_oop)?);
+        Ok(())
+    })?
     // Answering () pops the two arguments, as the C's pop(2) did.
-    Ok(())
 }

@@ -128,8 +128,8 @@ pattern_enum!(
 #[pharo_primitive]
 fn primitivePatternSetMatrix(vm: &Interp, pattern: sqInt, matrix: Oop) -> PrimResult<()> {
     let c = cairo()?;
-    let values = vm.read_f64s(matrix, 6)?;
-    let m = cairo_matrix_t::from_slice(&values).ok_or(PrimErr::BadArgument)?;
+    let m =
+        cairo_matrix_t::from_slice(&vm.read_f64_array::<6>(matrix)?).ok_or(PrimErr::BadArgument)?;
     with_pattern(pattern, |p| {
         cc!(c, cairo_pattern_set_matrix(p, &m));
         Ok(())

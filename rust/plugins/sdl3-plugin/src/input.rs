@@ -1,7 +1,5 @@
 //! Mouse, keyboard, clipboard and the clock.
 
-use std::ffi::CString;
-
 use pharo_vm_plugin::{pharo_primitive, sqInt, Interp, Oop, PrimErr, PrimResult};
 
 use crate::ffi::{borrowed_str, check, sc, sdl};
@@ -97,7 +95,7 @@ fn primitiveGetClipboardText(vm: &Interp) -> PrimResult<String> {
 #[pharo_primitive]
 fn primitiveSetClipboardText(vm: &Interp, text: Oop) -> PrimResult<()> {
     let s = sdl()?;
-    let text = CString::new(vm.string_value(text)?).map_err(|_| PrimErr::BadArgument)?;
+    let text = vm.c_string_value(text)?;
     check(sc!(s, SDL_SetClipboardText(text.as_ptr())))
 }
 

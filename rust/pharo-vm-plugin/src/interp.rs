@@ -42,6 +42,69 @@ macro_rules! call_opt {
     }};
 }
 
+/// The byte ranges of image memory currently lent out as `&mut`.
+///
+/// [`Interp::with_bytes_mut`] and [`Interp::with_words_mut`] hand a caller a
+/// mutable slice into an object it was passed; every other route into those
+/// same bytes -- a second in-place view, `bytes_of`, `words_of`,
+/// `write_bytes`, `write_words` -- has to refuse while that slice is alive,
+/// or two live paths to one byte alias each other and Rust's rules are broken
+/// even though the C API permits it. The image can pass one object as two
+/// arguments, so this is a case that arrives from outside, not a mistake a
+/// plugin author can be told not to make.
+///
+/// The VM runs primitives on one thread, and only a handful of views can be
+/// live at once, so a thread-local table of ranges is the whole bookkeeping.
+mod lent {
+    use core::cell::Cell;
+
+    /// How many in-place views may be live at once. A primitive nests a
+    /// source and a destination; the table has room to spare.
+    const CAPACITY: usize = 8;
+
+    thread_local! {
+        /// `(start, end)` of each lent range, `(0, 0)` for a free slot.
+        static REGIONS: [Cell<(usize, usize)>; CAPACITY] =
+            const { [const { Cell::new((0usize, 0usize)) }; CAPACITY] };
+    }
+
+    /// A lent range, released when dropped -- on the panic path too, since a
+    /// primitive body unwinds into the macro's `catch_unwind`.
+    pub struct Lease(usize);
+
+    impl Drop for Lease {
+        fn drop(&mut self) {
+            let slot = self.0;
+            REGIONS.with(|regions| regions[slot].set((0, 0)));
+        }
+    }
+
+    /// Records `[start, start + len)` as lent, or answers `None` when the
+    /// table is full.
+    ///
+    /// An empty range is recorded as a free slot would be, which is right:
+    /// nothing can overlap it.
+    pub fn claim(start: usize, len: usize) -> Option<Lease> {
+        let end = start.checked_add(len)?;
+        REGIONS.with(|regions| {
+            let free = regions.iter().position(|r| r.get() == (0, 0))?;
+            regions[free].set((start, end));
+            Some(Lease(free))
+        })
+    }
+
+    /// Does `[start, start + len)` touch anything currently lent out?
+    pub fn overlaps(start: usize, len: usize) -> bool {
+        let end = start.saturating_add(len);
+        REGIONS.with(|regions| {
+            regions
+                .iter()
+                .map(Cell::get)
+                .any(|(lo, hi)| start < hi && lo < end)
+        })
+    }
+}
+
 /// The interpreter, as seen from inside a primitive.
 ///
 /// Obtained by the `#[pharo_primitive]` machinery; plugin code receives one by
@@ -282,6 +345,74 @@ impl Interp {
         Ok(())
     }
 
+    /// Runs `f` over an object's bytes where they lie.
+    ///
+    /// The write path's counterpart to [`Interp::bytes_of`], for a primitive
+    /// whose destination is an object it was handed: a staging buffer plus
+    /// [`Interp::write_bytes`] costs an allocation and a second pass over
+    /// every byte, and neither buys anything when the caller is going to fill
+    /// the object anyway.
+    ///
+    /// This is the `&mut [u8]` `write_bytes` refuses to hand out, made
+    /// answerable rather than avoided: the slice is scoped to the closure,
+    /// and while it is live every other route into the same bytes --
+    /// `bytes_of`, `words_of`, `write_bytes`, `write_words`, another in-place
+    /// view -- fails with `Inappropriate`. The image can pass one object as
+    /// two arguments, so that is a case a primitive meets from outside, and
+    /// it now fails cleanly instead of aliasing.
+    ///
+    /// Fails with `BadArgument` if `oop` is not byte-indexable,
+    /// `NoModification` if it is immutable, and `LimitExceeded` if more
+    /// in-place views are live than the SDK tracks (eight).
+    ///
+    /// The same borrow caveat as `bytes_of` applies inside the closure: the
+    /// slice is valid only until the next allocation, so do not allocate
+    /// through the VM while holding it.
+    pub fn with_bytes_mut<R>(&self, oop: Oop, f: impl FnOnce(&mut [u8]) -> R) -> PrimResult<R> {
+        if call!(self, isOopImmutable(oop.0)) != 0 {
+            return Err(PrimErr::NoModification);
+        }
+        // Answers Inappropriate if this object is already lent out.
+        let (ptr, len) = self.byte_region(oop)?;
+        let _lease = lent::claim(ptr as usize, len).ok_or(PrimErr::LimitExceeded)?;
+        // SAFETY: `len` writable bytes belong to the object, it is mutable,
+        // nothing moves it while the closure runs, and the lease makes every
+        // other view of those bytes fail until it is dropped -- so this is
+        // the only live reference to them.
+        let slice = unsafe { slice::from_raw_parts_mut(ptr.cast_mut(), len) };
+        Ok(f(slice))
+    }
+
+    /// Runs `f` over an object's words where they lie.
+    ///
+    /// [`Interp::with_bytes_mut`] for the shape image bitmaps come in; the
+    /// same scoping, the same failures, and `BadArgument` when the object is
+    /// not word-indexable or its size is not a whole number of words.
+    pub fn with_words_mut<R>(&self, oop: Oop, f: impl FnOnce(&mut [u32]) -> R) -> PrimResult<R> {
+        if call!(self, isOopImmutable(oop.0)) != 0 {
+            return Err(PrimErr::NoModification);
+        }
+        if !self.is_words_or_bytes(oop)? {
+            return Err(PrimErr::BadArgument);
+        }
+        let byte_len = usize::try_from(self.byte_size_of(oop)?)?;
+        if byte_len % 4 != 0 {
+            return Err(PrimErr::BadArgument);
+        }
+        let base = call!(self, firstIndexableField(oop.0));
+        if base.is_null() {
+            return Err(PrimErr::BadArgument);
+        }
+        if lent::overlaps(base as usize, byte_len) {
+            return Err(PrimErr::Inappropriate);
+        }
+        let _lease = lent::claim(base as usize, byte_len).ok_or(PrimErr::LimitExceeded)?;
+        // SAFETY: as in `with_bytes_mut`, with `words_of`'s alignment
+        // argument: the image gives word objects word alignment.
+        let slice = unsafe { slice::from_raw_parts_mut(base.cast::<u32>(), byte_len / 4) };
+        Ok(f(slice))
+    }
+
     fn byte_region(&self, oop: Oop) -> PrimResult<(*const u8, usize)> {
         if !self.is_bytes(oop)? {
             return Err(PrimErr::BadArgument);
@@ -290,6 +421,9 @@ impl Interp {
         let ptr = call!(self, firstIndexableField(oop.0));
         if ptr.is_null() {
             return Err(PrimErr::BadArgument);
+        }
+        if lent::overlaps(ptr as usize, len) {
+            return Err(PrimErr::Inappropriate);
         }
         Ok((ptr.cast::<u8>(), len))
     }
@@ -347,6 +481,9 @@ impl Interp {
         if base.is_null() {
             return Err(PrimErr::BadArgument);
         }
+        if lent::overlaps(base as usize, byte_len) {
+            return Err(PrimErr::Inappropriate);
+        }
         // SAFETY: `byte_len` bytes belong to the object, the length is a whole
         // number of words, and the image guarantees word alignment for word
         // objects. Nothing moves it for the duration of the borrow.
@@ -382,13 +519,19 @@ impl Interp {
         if base.is_null() {
             return Err(PrimErr::BadArgument);
         }
+        if lent::overlaps(base as usize + byte_offset, byte_span) {
+            return Err(PrimErr::Inappropriate);
+        }
         // SAFETY: the destination lies wholly inside the object (checked just
-        // above) and the object is mutable. Written a word at a time through
-        // `write_unaligned` because the image only guarantees word alignment
-        // for word objects, and `src` is a Rust slice that cannot overlap.
-        let dst = base.cast::<u8>().wrapping_add(byte_offset).cast::<u32>();
-        for (i, w) in src.iter().enumerate() {
-            unsafe { dst.add(i).write_unaligned(*w) };
+        // above) and the object is mutable. Copied as bytes, which asks
+        // nothing of the destination's alignment -- the image only guarantees
+        // word alignment for word objects -- and `src` is a Rust slice that
+        // cannot overlap it. A native-endian `[u32]` in memory already is the
+        // byte sequence the object wants, so this is a `memcpy`, not a
+        // conversion.
+        let dst = base.cast::<u8>().wrapping_add(byte_offset);
+        unsafe {
+            core::ptr::copy_nonoverlapping(src.as_ptr().cast::<u8>(), dst, byte_span);
         }
         Ok(())
     }
@@ -594,6 +737,9 @@ impl Interp {
         if ptr.is_null() {
             return Err(PrimErr::BadArgument);
         }
+        if lent::overlaps(ptr as usize, len) {
+            return Err(PrimErr::Inappropriate);
+        }
         Ok((ptr.cast::<u8>(), len))
     }
 
@@ -618,6 +764,27 @@ impl Interp {
             .collect())
     }
 
+    /// Reads exactly `N` native-endian `f64`s from a byte object.
+    ///
+    /// [`Interp::read_f64s`] for the fixed-size shapes -- a point, a
+    /// `cairo_matrix_t`, a set of extents -- which is nearly all of them.
+    /// The count is known at compile time, so the answer is an array on the
+    /// stack and the call costs no allocation.
+    ///
+    /// Fails with `BadArgument` unless the object holds exactly `N` doubles.
+    pub fn read_f64_array<const N: usize>(&self, oop: Oop) -> PrimResult<[f64; N]> {
+        let bytes = self.bytes_of(oop)?;
+        let want = N.checked_mul(8).ok_or(PrimErr::BadArgument)?;
+        if bytes.len() != want {
+            return Err(PrimErr::BadArgument);
+        }
+        let mut values = [0.0f64; N];
+        for (dst, chunk) in values.iter_mut().zip(bytes.chunks_exact(8)) {
+            *dst = f64::from_ne_bytes(chunk.try_into().expect("chunks_exact(8) yields 8 bytes"));
+        }
+        Ok(values)
+    }
+
     /// Writes native-endian `f64`s into a byte object, filling it exactly.
     ///
     /// The counterpart of [`Interp::read_f64s`], for the out-parameter shape:
@@ -630,11 +797,11 @@ impl Interp {
         if usize::try_from(self.byte_size_of(oop)?)? != want {
             return Err(PrimErr::BadArgument);
         }
-        let mut buf = Vec::with_capacity(want);
-        for v in values {
-            buf.extend_from_slice(&v.to_ne_bytes());
-        }
-        self.write_bytes(oop, 0, &buf)
+        self.with_bytes_mut(oop, |dst| {
+            for (chunk, v) in dst.chunks_exact_mut(8).zip(values) {
+                chunk.copy_from_slice(&v.to_ne_bytes());
+            }
+        })
     }
 
     // ---- strings -----------------------------------------------------------
@@ -652,6 +819,20 @@ impl Interp {
             Ok(s) => s.to_owned(),
             Err(_) => bytes.iter().map(|&b| char::from(b)).collect(),
         })
+    }
+
+    /// Reads a Smalltalk String or Symbol as a NUL-terminated C string.
+    ///
+    /// What a primitive that hands a name to a C library wants, and one copy
+    /// rather than the two `CString::new(vm.string_value(oop)?)` makes: the
+    /// bytes go straight from the object into the `CString`, with no `String`
+    /// in between. Nothing is decoded on the way, which is what the library
+    /// on the other side expects anyway.
+    ///
+    /// Fails with `BadArgument` if the text contains an interior NUL, which
+    /// no C string can carry.
+    pub fn c_string_value(&self, oop: Oop) -> PrimResult<CString> {
+        CString::new(self.bytes_of(oop)?).map_err(|_| PrimErr::BadArgument)
     }
 
     /// Reads the argument at `offset` as Rust text.
