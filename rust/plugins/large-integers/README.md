@@ -73,6 +73,18 @@ and allocates exactly the objects the image will see. The one observable
 consequence: allocation-failure (`PrimErrNoMemory`) can strike at different
 points under memory exhaustion.
 
+Those buffers stay on the stack while they are small: `DigitBuf` inlines up
+to eight digits (256 bits) and spills to a `Vec` past that. Image code meets
+LargeIntegers just past SmallInteger range far more often than crypto-sized
+ones, and at two or three digits the three `malloc`s a call would otherwise
+make cost several times the arithmetic they serve — 3x to 6.5x of the whole
+primitive body, measured. The digit loops live in their own `#[inline(never)]`
+`..._into` functions so they compile once against a plain destination slice
+(which is what the C's `into:` parameter is anyway); letting one inline into a
+`DigitBuf`-aware caller costs ~10% at *every* size above the threshold.
+`bench_primitive_bodies` — `cargo test -p large-integers --release --
+--ignored --nocapture` — re-measures all of it.
+
 A buffer is only what *computing* needs, though, not what safety needs — the
 invariant is that no borrow of image memory spans an allocation. So the
 primitives that compute nothing read the objects where they lie:

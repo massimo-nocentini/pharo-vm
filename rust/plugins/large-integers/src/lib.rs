@@ -34,6 +34,9 @@
 //! spans an allocation and nothing is written out of bounds. See the README
 //! for the handful of undefined behaviours this removes.
 //!
+//! Those buffers are [`digits::DigitBuf`], which stays on the stack for
+//! magnitudes up to 256 bits — the size image code actually meets.
+//!
 //! A buffer is what *computing* needs, not what that safety argument needs,
 //! so the primitives that compute nothing never build one: `primDigitCompare`
 //! answers from the objects' bytes, and so do `primAnyBitFromTo`,
@@ -181,7 +184,7 @@ fn integer_kind(vm: &Interp, oop: Oop) -> PrimResult<Option<IntKind>> {
 /// a magnitude plus where it came from.
 struct Operand {
     /// Little-endian 32-bit digits, exactly `digit_len(byte_len)` of them.
-    digits: Vec<u32>,
+    digits: digits::DigitBuf,
     /// The magnitude's length in bytes (`slotSizeOf` in the C).
     byte_len: usize,
     kind: IntKind,

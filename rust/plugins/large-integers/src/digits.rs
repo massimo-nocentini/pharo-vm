@@ -48,7 +48,148 @@ pub const MIN_SMALL_MAG: u64 = 1 << 30;
 
 /// A magnitude as this module passes it around: little-endian 32-bit digits
 /// plus the byte length they stand for.
-pub type Magnitude = (Vec<u32>, usize);
+pub type Magnitude = (DigitBuf, usize);
+
+/// How many digits a [`DigitBuf`] holds without allocating: 8, so 256-bit
+/// operands and results stay on the stack. Measured, not derived — see the
+/// note on [`DigitBuf`].
+pub const INLINE_DIGITS: usize = 8;
+
+/// Storage for one magnitude, on the stack while it is small enough.
+///
+/// A primitive call reads two operands and writes one result, and image code
+/// meets LargeIntegers just past SmallInteger range far more often than
+/// crypto-sized ones — two or three digits, where three `malloc`s cost
+/// several times the arithmetic they serve. Up to [`INLINE_DIGITS`] the
+/// digits live in the buffer itself; past that it spills to a `Vec`, where
+/// the per-digit work dominates and the allocation is noise.
+///
+/// Measured on the `primDigitAdd` body (200k iterations, release build)
+/// against the same code over plain `Vec`s: 6.5x at 64 bits, 3.0x at 128 and
+/// 256, and level from 512 bits up. The digit loops must stay in their own
+/// `#[inline(never)]` `..._into` functions for that last part to hold: let one
+/// inline into a caller that knows the storage is a `DigitBuf` and it comes
+/// out ~10% slower at every size above the threshold, because the loop is
+/// then compiled against the enum rather than a plain destination slice.
+/// `bench_primitive_bodies` re-measures all of it.
+#[derive(Clone)]
+pub enum DigitBuf {
+    /// Small enough to live here; only the first `len` words are the value.
+    Inline {
+        words: [u32; INLINE_DIGITS],
+        len: usize,
+    },
+    /// Too long to inline.
+    Spilled(Vec<u32>),
+}
+
+impl DigitBuf {
+    /// `len` zero digits.
+    pub fn zeroed(len: usize) -> Self {
+        if len <= INLINE_DIGITS {
+            DigitBuf::Inline {
+                words: [0; INLINE_DIGITS],
+                len,
+            }
+        } else {
+            DigitBuf::Spilled(vec![0; len])
+        }
+    }
+
+    /// Takes over a `Vec` without re-examining its length — for the callers
+    /// that already have one, num-bigint's answers above all.
+    pub fn from_vec(digits: Vec<u32>) -> Self {
+        DigitBuf::Spilled(digits)
+    }
+
+    /// Copies a slice.
+    pub fn from_slice(digits: &[u32]) -> Self {
+        let mut buf = Self::zeroed(digits.len());
+        buf.copy_from_slice(digits);
+        buf
+    }
+
+    /// Appends one digit, spilling if the inline words are full.
+    pub fn push(&mut self, digit: u32) {
+        match self {
+            DigitBuf::Inline { words, len } if *len < INLINE_DIGITS => {
+                words[*len] = digit;
+                *len += 1;
+            }
+            DigitBuf::Inline { words, len } => {
+                let mut spilled = Vec::with_capacity(*len + 1);
+                spilled.extend_from_slice(&words[..*len]);
+                spilled.push(digit);
+                *self = DigitBuf::Spilled(spilled);
+            }
+            DigitBuf::Spilled(digits) => digits.push(digit),
+        }
+    }
+
+    /// Drops every digit past `len`; a no-op if there are none.
+    pub fn truncate(&mut self, new_len: usize) {
+        match self {
+            DigitBuf::Inline { len, .. } => *len = (*len).min(new_len),
+            DigitBuf::Spilled(digits) => digits.truncate(new_len),
+        }
+    }
+}
+
+impl core::ops::Deref for DigitBuf {
+    type Target = [u32];
+
+    #[inline]
+    fn deref(&self) -> &[u32] {
+        match self {
+            DigitBuf::Inline { words, len } => &words[..*len],
+            DigitBuf::Spilled(digits) => digits,
+        }
+    }
+}
+
+impl core::ops::DerefMut for DigitBuf {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut [u32] {
+        match self {
+            DigitBuf::Inline { words, len } => &mut words[..*len],
+            DigitBuf::Spilled(digits) => digits,
+        }
+    }
+}
+
+// A buffer is only ever its digits: where it stores them must not show, so
+// that a test written against `vec![...]` reads the same either way.
+impl core::fmt::Debug for DigitBuf {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Debug::fmt(&**self, f)
+    }
+}
+
+impl PartialEq for DigitBuf {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
+impl Eq for DigitBuf {}
+
+impl PartialEq<[u32]> for DigitBuf {
+    fn eq(&self, other: &[u32]) -> bool {
+        **self == *other
+    }
+}
+
+impl<const N: usize> PartialEq<[u32; N]> for DigitBuf {
+    fn eq(&self, other: &[u32; N]) -> bool {
+        **self == other[..]
+    }
+}
+
+impl PartialEq<Vec<u32>> for DigitBuf {
+    fn eq(&self, other: &Vec<u32>) -> bool {
+        **self == other[..]
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Delegating the asymptotically bad operations to num-bigint
@@ -213,21 +354,31 @@ pub fn small_byte_size(value: isize) -> usize {
 
 /// The digit part of `createLargeFromSmallInteger:` — the magnitude as
 /// exactly `digit_len(small_byte_size(value))` little-endian digits.
-pub fn small_digits(value: isize) -> Vec<u32> {
+pub fn small_digits(value: isize) -> DigitBuf {
     let magnitude = (value as i64).unsigned_abs();
     let count = digit_len(small_byte_size(value));
-    (0..count)
-        .map(|ix| (magnitude >> (ix * 32)) as u32)
-        .collect()
+    let mut out = DigitBuf::zeroed(count);
+    for (ix, digit) in out.iter_mut().enumerate() {
+        *digit = (magnitude >> (ix * 32)) as u32;
+    }
+    out
 }
 
 /// `cDigitAdd:len:with:len:into:` — magnitude addition.
 ///
 /// `short` must not be longer than `long`. Answers the digit sum sized like
 /// `long`, plus the final carry (`over` in the C, 0 or 1).
-pub fn add(short: &[u32], long: &[u32]) -> (Vec<u32>, u32) {
+pub fn add(short: &[u32], long: &[u32]) -> (DigitBuf, u32) {
     debug_assert!(short.len() <= long.len());
-    let mut res = vec![0u32; long.len()];
+    let mut res = DigitBuf::zeroed(long.len());
+    let over = add_into(short, long, &mut res);
+    (res, over)
+}
+
+/// The `into:` half of `cDigitAdd:len:with:len:into:`, kept out of line so it
+/// compiles once against a plain destination slice — see [`DigitBuf`].
+#[inline(never)]
+fn add_into(short: &[u32], long: &[u32], res: &mut [u32]) -> u32 {
     let mut accum: u64 = 0;
     for i in 0..short.len() {
         accum = (accum >> 32) + short[i] as u64 + long[i] as u64;
@@ -237,7 +388,7 @@ pub fn add(short: &[u32], long: &[u32]) -> (Vec<u32>, u32) {
         accum = (accum >> 32) + long[i] as u64;
         res[i] = accum as u32;
     }
-    (res, (accum >> 32) as u32)
+    (accum >> 32) as u32
 }
 
 /// `digitSubLarge:with:` minus the object plumbing — magnitude subtraction
@@ -248,7 +399,7 @@ pub fn add(short: &[u32], long: &[u32]) -> (Vec<u32>, u32) {
 /// digits are trimmed before comparing, exactly as the C does; the larger
 /// magnitude is decided *by top digit only*, so unnormalized garbage in gives
 /// the same mod-2³² ⁿ garbage out as the C.
-pub fn subtract(first: &[u32], second: &[u32], first_negative: bool) -> (Vec<u32>, bool) {
+pub fn subtract(first: &[u32], second: &[u32], first_negative: bool) -> (DigitBuf, bool) {
     let mut first_len = first.len();
     let mut second_len = second.len();
     if first_len == second_len {
@@ -267,9 +418,17 @@ pub fn subtract(first: &[u32], second: &[u32], first_negative: bool) -> (Vec<u32
     } else {
         (first, first_len, second, second_len, first_negative)
     };
-    // cDigitSub:len:with:len:into: -- z is the borrow, kept as the C keeps it:
-    // 0 or (as u64) -1, folded into the next step's sum.
-    let mut res = vec![0u32; larger_len];
+    let mut res = DigitBuf::zeroed(larger_len);
+    subtract_into(larger, smaller_len, smaller, &mut res);
+    (res, neg)
+}
+
+/// `cDigitSub:len:with:len:into:` — `z` is the borrow, kept as the C keeps
+/// it: 0 or (as `u64`) -1, folded into the next step's sum. Out of line for
+/// the reason [`DigitBuf`] gives.
+#[inline(never)]
+fn subtract_into(larger: &[u32], smaller_len: usize, smaller: &[u32], res: &mut [u32]) {
+    let larger_len = res.len();
     let mut z: u64 = 0;
     for i in 0..smaller_len {
         z = z
@@ -283,7 +442,6 @@ pub fn subtract(first: &[u32], second: &[u32], first_negative: bool) -> (Vec<u32
         res[i] = z as u32;
         z = 0u64.wrapping_sub(z >> 63);
     }
-    (res, neg)
 }
 
 /// `cDigitMultiply:len:with:len:into:len:` — schoolbook magnitude product.
@@ -291,7 +449,7 @@ pub fn subtract(first: &[u32], second: &[u32], first_negative: bool) -> (Vec<u32
 /// Lengths are in *bytes*, as in the C: the product is sized
 /// `digit_len(short_bytes + long_bytes)`, which can be one digit fewer than
 /// the sum of the operand digit counts, hence the guarded final carry store.
-pub fn multiply(short: &[u32], short_bytes: usize, long: &[u32], long_bytes: usize) -> Vec<u32> {
+pub fn multiply(short: &[u32], short_bytes: usize, long: &[u32], long_bytes: usize) -> DigitBuf {
     debug_assert_eq!(short.len(), digit_len(short_bytes));
     debug_assert_eq!(long.len(), digit_len(long_bytes));
     let capacity = digit_len(short_bytes + long_bytes);
@@ -311,18 +469,27 @@ pub fn multiply(short: &[u32], short_bytes: usize, long: &[u32], long_bytes: usi
 /// `if k < capacity`. It can never drop more: the true product needs at most
 /// `short.len() + long.len()` digits, and `capacity` is always at least
 /// `short.len() + long.len() - 1`.
-fn multiply_delegated(short: &[u32], long: &[u32], capacity: usize) -> Vec<u32> {
-    from_big(&(to_big(short) * to_big(long)), capacity)
+fn multiply_delegated(short: &[u32], long: &[u32], capacity: usize) -> DigitBuf {
+    DigitBuf::from_vec(from_big(&(to_big(short) * to_big(long)), capacity))
 }
 
 /// [`multiply`]'s schoolbook loop, digit for digit as the C runs it.
-fn multiply_schoolbook(short: &[u32], long: &[u32], capacity: usize) -> Vec<u32> {
-    let mut res = vec![0u32; capacity];
+fn multiply_schoolbook(short: &[u32], long: &[u32], capacity: usize) -> DigitBuf {
+    let mut res = DigitBuf::zeroed(capacity);
+    multiply_into(short, long, &mut res);
+    res
+}
+
+/// [`multiply_schoolbook`]'s loop, out of line for the reason [`DigitBuf`]
+/// gives.
+#[inline(never)]
+fn multiply_into(short: &[u32], long: &[u32], res: &mut [u32]) {
+    let capacity = res.len();
     if short.len() == 1 && short[0] == 0 {
-        return res;
+        return;
     }
     if long.len() == 1 && long[0] == 0 {
-        return res;
+        return;
     }
     for i in 0..short.len() {
         let digit = short[i] as u64;
@@ -341,7 +508,6 @@ fn multiply_schoolbook(short: &[u32], long: &[u32], capacity: usize) -> Vec<u32>
             }
         }
     }
-    res
 }
 
 /// The three ops of `cDigitOp:short:len:long:len:into:`.
@@ -358,9 +524,16 @@ pub enum BitOp {
 /// for And the high digits are zero, for Or/Xor they are copied from `long`.
 /// The C notes these are endian-neutral and works on raw words; on the
 /// value-level digits used here that is the same computation.
-pub fn bit_op(op: BitOp, short: &[u32], long: &[u32]) -> Vec<u32> {
+pub fn bit_op(op: BitOp, short: &[u32], long: &[u32]) -> DigitBuf {
     debug_assert!(short.len() <= long.len());
-    let mut res = vec![0u32; long.len()];
+    let mut res = DigitBuf::zeroed(long.len());
+    bit_op_into(op, short, long, &mut res);
+    res
+}
+
+/// [`bit_op`]'s loop, out of line for the reason [`DigitBuf`] gives.
+#[inline(never)]
+fn bit_op_into(op: BitOp, short: &[u32], long: &[u32], res: &mut [u32]) {
     for i in 0..short.len() {
         res[i] = match op {
             BitOp::And => short[i] & long[i],
@@ -371,7 +544,6 @@ pub fn bit_op(op: BitOp, short: &[u32], long: &[u32]) -> Vec<u32> {
     if op != BitOp::And {
         res[short.len()..].copy_from_slice(&long[short.len()..]);
     }
-    res
 }
 
 /// `digit:Lshift:` minus the object plumbing.
@@ -379,7 +551,7 @@ pub fn bit_op(op: BitOp, short: &[u32], long: &[u32]) -> Vec<u32> {
 /// Answers the shifted digits and the result's byte length,
 /// `(highBit + shift + 7) / 8`, or `None` when the magnitude is zero — the C
 /// answers a fresh 1-byte zero LargeInteger in that case, which needs the VM.
-pub fn lshift(digits: &[u32], shift: usize) -> Option<(Vec<u32>, usize)> {
+pub fn lshift(digits: &[u32], shift: usize) -> Option<Magnitude> {
     let old_digit_len = digits.len();
     let hb = high_bit(digits, old_digit_len);
     if hb == 0 {
@@ -392,14 +564,29 @@ pub fn lshift(digits: &[u32], shift: usize) -> Option<(Vec<u32>, usize)> {
     // The C writes whole words past newDigitLen into allocation slack when
     // the input has leading zero digits; those writes are always zero, so a
     // scratch tail truncated afterwards reproduces them safely.
-    let mut out = vec![0u32; new_digit_len.max(old_digit_len + digit_shift + 1)];
+    let mut out = DigitBuf::zeroed(new_digit_len.max(old_digit_len + digit_shift + 1));
+    lshift_into(digits, new_digit_len, digit_shift, bit_shift, &mut out);
+    debug_assert!(out[new_digit_len..].iter().all(|&w| w == 0));
+    out.truncate(new_digit_len);
+    Some((out, new_byte_len))
+}
+
+/// [`lshift`]'s loop, out of line for the reason [`DigitBuf`] gives.
+#[inline(never)]
+fn lshift_into(
+    digits: &[u32],
+    new_digit_len: usize,
+    digit_shift: usize,
+    bit_shift: usize,
+    out: &mut [u32],
+) {
     if bit_shift == 0 {
         // Fast version for digit-aligned shifts (cDigitCopyFrom:to:len:).
         out[digit_shift..new_digit_len].copy_from_slice(&digits[..new_digit_len - digit_shift]);
     } else {
         let rshift = 32 - bit_shift;
         let mut carry: u32 = 0;
-        for i in 0..old_digit_len {
+        for i in 0..digits.len() {
             let digit = digits[i];
             out[i + digit_shift] = carry | (digit << bit_shift);
             carry = digit >> rshift;
@@ -408,9 +595,6 @@ pub fn lshift(digits: &[u32], shift: usize) -> Option<(Vec<u32>, usize)> {
             out[new_digit_len - 1] = carry;
         }
     }
-    debug_assert!(out[new_digit_len..].iter().all(|&w| w == 0));
-    out.truncate(new_digit_len);
-    Some((out, new_byte_len))
 }
 
 /// `digit:Rshift:lookfirst:` minus the object plumbing.
@@ -419,7 +603,7 @@ pub fn lshift(digits: &[u32], shift: usize) -> Option<(Vec<u32>, usize)> {
 /// the division's remainder path requires), shifts right and answers the
 /// digits with their byte length `(newBitLen + 7) / 8`. `None` means all bits
 /// were lost — the C answers a 0-length LargeInteger then.
-pub fn rshift(digits: &[u32], shift: usize, look_first: usize) -> Option<(Vec<u32>, usize)> {
+pub fn rshift(digits: &[u32], shift: usize, look_first: usize) -> Option<Magnitude> {
     let old_bit_len = high_bit(digits, look_first);
     let new_bit_len = old_bit_len as isize - shift as isize;
     if new_bit_len <= 0 {
@@ -430,7 +614,21 @@ pub fn rshift(digits: &[u32], shift: usize, look_first: usize) -> Option<(Vec<u3
     let new_digit_len = digit_len(new_byte_len);
     let digit_shift = shift / 32;
     let bit_shift = shift % 32;
-    let mut out = vec![0u32; new_digit_len];
+    let mut out = DigitBuf::zeroed(new_digit_len);
+    rshift_into(digits, old_digit_len, digit_shift, bit_shift, &mut out);
+    Some((out, new_byte_len))
+}
+
+/// [`rshift`]'s loop, out of line for the reason [`DigitBuf`] gives.
+#[inline(never)]
+fn rshift_into(
+    digits: &[u32],
+    old_digit_len: usize,
+    digit_shift: usize,
+    bit_shift: usize,
+    out: &mut [u32],
+) {
+    let new_digit_len = out.len();
     if bit_shift == 0 {
         // Fast version for digit-aligned shifts (cDigitReplace...startingAt:).
         out.copy_from_slice(&digits[digit_shift..digit_shift + new_digit_len]);
@@ -447,7 +645,6 @@ pub fn rshift(digits: &[u32], shift: usize, look_first: usize) -> Option<(Vec<u3
             out[new_digit_len - 1] = carry;
         }
     }
-    Some((out, new_byte_len))
 }
 
 /// `anyBitOfLargeInt:from:to:` — any magnitude bit set in `start..=stop_arg`?
@@ -507,10 +704,10 @@ fn any_bit_core(digit: impl Fn(usize) -> u32, high: usize, start: usize, stop_ar
 ///
 /// All arithmetic wraps exactly as the C's `unsigned long long` does —
 /// including `q * dnh`, which can genuinely exceed 64 bits mid-estimate.
-pub fn div_core(div: &[u32], rem: &mut [u32], quo_len: usize) -> Vec<u32> {
+pub fn div_core(div: &[u32], rem: &mut [u32], quo_len: usize) -> DigitBuf {
     let div_len = div.len();
     let rem_len = rem.len();
-    let mut quo = vec![0u32; quo_len];
+    let mut quo = DigitBuf::zeroed(quo_len);
     let dl = div_len - 1; // last digit of actual divisor data
     let dh = div[dl - 1] as u64;
     let dnh = if dl == 1 { 0u64 } else { div[dl - 2] as u64 };
@@ -602,7 +799,7 @@ pub fn divide(
     first_byte_len: usize,
     second: &[u32],
     second_byte_len: usize,
-) -> (Vec<u32>, usize, Option<Magnitude>) {
+) -> (DigitBuf, usize, Option<Magnitude>) {
     let first_digit_len = digit_len(first_byte_len);
     let second_digit_len = digit_len(second_byte_len);
     debug_assert!(first_digit_len >= second_digit_len);
@@ -629,7 +826,7 @@ fn divide_schoolbook(
     first: &[u32],
     second: &[u32],
     quo_digit_len: usize,
-) -> (Vec<u32>, usize, Option<Magnitude>) {
+) -> (DigitBuf, usize, Option<Magnitude>) {
     let first_digit_len = first.len();
     let second_digit_len = second.len();
     let d = 32 - high_bit_32(second[second_digit_len - 1]);
@@ -639,7 +836,7 @@ fn divide_schoolbook(
     // rem := first << d; a zero dividend shifts to the C's 1-byte zero.
     let mut rem = match lshift(&first[..first_digit_len], d) {
         Some((digits, _)) => digits,
-        None => vec![0u32],
+        None => DigitBuf::from_slice(&[0]),
     };
     if rem.len() == first_digit_len {
         rem.push(0);
@@ -666,7 +863,7 @@ fn divide_delegated(
     first: &[u32],
     second: &[u32],
     quo_digit_len: usize,
-) -> (Vec<u32>, usize, Option<Magnitude>) {
+) -> (DigitBuf, usize, Option<Magnitude>) {
     use num_integer::Integer;
 
     let (quotient, remainder) = to_big(first).div_rem(&to_big(second));
@@ -675,10 +872,13 @@ fn divide_delegated(
         None
     } else {
         let byte_len = (rem_bits + 7) / 8;
-        Some((from_big(&remainder, digit_len(byte_len)), byte_len))
+        Some((
+            DigitBuf::from_vec(from_big(&remainder, digit_len(byte_len))),
+            byte_len,
+        ))
     };
     (
-        from_big(&quotient, quo_digit_len),
+        DigitBuf::from_vec(from_big(&quotient, quo_digit_len)),
         quo_digit_len * 4,
         rem_out,
     )
@@ -838,19 +1038,27 @@ pub fn is_normalized_bytes(bytes: &[u8]) -> bool {
 
 /// Reads a byte object's contents as little-endian digits, the trailing
 /// partial word zero-padded — the values `cDigitOf:at:` sees.
-pub fn bytes_to_digits(bytes: &[u8]) -> Vec<u32> {
-    let mut out = Vec::with_capacity(digit_len(bytes.len()));
+pub fn bytes_to_digits(bytes: &[u8]) -> DigitBuf {
+    let mut out = DigitBuf::zeroed(digit_len(bytes.len()));
+    bytes_into_digits(bytes, &mut out);
+    out
+}
+
+/// [`bytes_to_digits`]'s loop, out of line for the reason [`DigitBuf`] gives.
+#[inline(never)]
+fn bytes_into_digits(bytes: &[u8], out: &mut [u32]) {
     let mut words = bytes.chunks_exact(4);
+    let mut ix = 0;
     for word in &mut words {
-        out.push(u32::from_le_bytes([word[0], word[1], word[2], word[3]]));
+        out[ix] = u32::from_le_bytes([word[0], word[1], word[2], word[3]]);
+        ix += 1;
     }
     let tail = words.remainder();
     if !tail.is_empty() {
         let mut padded = [0u8; 4];
         padded[..tail.len()].copy_from_slice(tail);
-        out.push(u32::from_le_bytes(padded));
+        out[ix] = u32::from_le_bytes(padded);
     }
-    out
 }
 
 /// `cDigitOf:at:` — digit `ix` of a byte object's magnitude, read in place.
@@ -1428,9 +1636,9 @@ mod tests {
         // Unnormalized input: the result is sized from the high bit, not from
         // the input's digit count.
         let (out, byte_len) = lshift(&[1, 0], 0).unwrap();
-        assert_eq!((out, byte_len), (vec![1], 1));
+        assert_eq!((out, byte_len), (DigitBuf::from_slice(&[1]), 1));
         let (out, byte_len) = lshift(&[1, 0], 1).unwrap();
-        assert_eq!((out, byte_len), (vec![2], 1));
+        assert_eq!((out, byte_len), (DigitBuf::from_slice(&[2]), 1));
     }
 
     #[test]
@@ -1466,11 +1674,11 @@ mod tests {
         // look_first crops the magnitude before shifting: the top digit here
         // is invisible.
         let (out, byte_len) = rshift(&[0xFF, 0xAB], 4, 1).unwrap();
-        assert_eq!((out, byte_len), (vec![0xF], 1));
+        assert_eq!((out, byte_len), (DigitBuf::from_slice(&[0xF]), 1));
         // Digit-aligned path; the byte length follows the high bit (bit 34
         // of the shifted value -> 5 bytes).
         let (out, byte_len) = rshift(&[1, 2, 3], 32, 3).unwrap();
-        assert_eq!((out, byte_len), (vec![2, 3], 5));
+        assert_eq!((out, byte_len), (DigitBuf::from_slice(&[2, 3]), 5));
     }
 
     // ---- anyBit ------------------------------------------------------------
@@ -1581,7 +1789,7 @@ mod tests {
             loop {
                 let (dr, db2) = (bytes_to_digits(&r), bytes_to_digits(&b));
                 let n = digit_len(b.len());
-                let mut dr = dr;
+                let mut dr = dr.to_vec();
                 dr.resize(n, 0);
                 if compare(&db2, &dr, n) == 1 {
                     break;
@@ -1616,8 +1824,8 @@ mod tests {
     fn divide_small_known_answers() {
         // 5 / 3 = 1 rem 2; the quotient stays unnormalized at one full digit.
         let (quo, quo_bytes, rem) = divide(&[5], 1, &[3], 1);
-        assert_eq!((quo, quo_bytes), (vec![1], 4));
-        assert_eq!(rem, Some((vec![2], 1)));
+        assert_eq!((quo, quo_bytes), (DigitBuf::from_slice(&[1]), 4));
+        assert_eq!(rem, Some((DigitBuf::from_slice(&[2]), 1)));
         // 6 / 3 = 2 rem 0: the zero remainder is None (a 0-length object).
         let (quo, _, rem) = divide(&[6], 1, &[3], 1);
         assert_eq!(quo, vec![2]);
@@ -1816,6 +2024,57 @@ mod tests {
         }
     }
 
+    // ---- the magnitude buffer ----------------------------------------------
+
+    #[test]
+    fn digit_buf_reads_the_same_either_side_of_the_spill() {
+        for len in 0..=INLINE_DIGITS * 3 {
+            let value: Vec<u32> = (0..len as u32)
+                .map(|i| i.wrapping_mul(0x9E37_79B9))
+                .collect();
+            let buf = DigitBuf::from_slice(&value);
+            assert_eq!(buf.len(), len);
+            assert_eq!(buf, value);
+            assert_eq!(&*buf, &value[..]);
+            // Where it stores the digits must never show through.
+            assert_eq!(buf, DigitBuf::from_vec(value.clone()));
+            assert_eq!(format!("{buf:?}"), format!("{value:?}"));
+            assert_eq!(
+                matches!(buf, DigitBuf::Inline { .. }),
+                len <= INLINE_DIGITS,
+                "len {len} landed in the wrong variant"
+            );
+        }
+    }
+
+    #[test]
+    fn digit_buf_push_spills_when_the_inline_words_run_out() {
+        let mut buf = DigitBuf::zeroed(0);
+        let mut reference: Vec<u32> = Vec::new();
+        for digit in 1..=(INLINE_DIGITS as u32 * 2 + 1) {
+            buf.push(digit);
+            reference.push(digit);
+            // The digits crossing the boundary must survive the move to the
+            // heap -- this is `primDigitAdd`'s carry and the divisor's guard
+            // digit, both of which push onto a buffer that may be full.
+            assert_eq!(buf, reference, "after pushing {digit}");
+        }
+    }
+
+    #[test]
+    fn digit_buf_truncate_cuts_either_representation() {
+        for start in 0..=INLINE_DIGITS * 2 + 2 {
+            for end in 0..=INLINE_DIGITS * 2 + 2 {
+                let value: Vec<u32> = (0..start as u32).map(|i| i + 1).collect();
+                let mut buf = DigitBuf::from_slice(&value);
+                buf.truncate(end);
+                let mut reference = value.clone();
+                reference.truncate(end);
+                assert_eq!(buf, reference, "truncate {start} -> {end}");
+            }
+        }
+    }
+
     #[test]
     fn digit_at_zero_pads_past_the_end() {
         assert_eq!(digit_at(&[0xAA], 0), 0xAA);
@@ -1850,7 +2109,7 @@ mod tests {
                     a[byte_len - 1] = 0;
                     a.truncate(byte_len - 1);
                 }
-                let mut da = bytes_to_digits(&a);
+                let mut da = bytes_to_digits(&a).to_vec();
                 da.resize(digit_count, 0);
                 let db = bytes_to_digits(&b);
                 assert_eq!(
@@ -1920,5 +2179,111 @@ mod tests {
             digits_to_bytes(&[0xFFFF_FFFE, 1], 5),
             vec![0xFE, 0xFF, 0xFF, 0xFF, 1]
         );
+    }
+
+    // ---- timing ------------------------------------------------------------
+
+    /// Times the linear primitives' digit work, so the choices this module
+    /// makes on performance grounds — [`INLINE_DIGITS`], the `..._into`
+    /// split, the thresholds above — can be re-measured instead of trusted.
+    ///
+    /// Ignored by default; it asserts nothing, it prints. Run it with
+    ///
+    /// ```text
+    /// cargo test -p large-integers --release -- --ignored --nocapture
+    /// ```
+    ///
+    /// This is the *body* of each primitive: read the operands, compute,
+    /// serialize the answer. The VM plumbing around it — the proxy calls,
+    /// `instantiateClass:indexableSize:`, the store into the new object — is
+    /// not here, and in the running VM it adds roughly as much again to the
+    /// smaller sizes. Compare runs against each other, not against the C's
+    /// numbers directly.
+    #[test]
+    #[ignore = "a benchmark, not a test: prints timings and asserts nothing"]
+    fn bench_primitive_bodies() {
+        use std::time::Instant;
+
+        // Random operands, never powers of two: the C skips zero digits, so
+        // sparse magnitudes flatter it enormously and make any comparison
+        // against it meaningless.
+        fn operand(byte_len: usize, seed: u64) -> Vec<u8> {
+            let mut rng = Rng(seed);
+            (0..byte_len).map(|_| 1 + rng.below(255) as u8).collect()
+        }
+
+        fn time(iterations: usize, mut body: impl FnMut()) -> f64 {
+            // Discard a warm-up pass: without it the first size measured
+            // carries the whole run's cold caches and clock ramp, and reads
+            // three times slower than the sizes after it.
+            for _ in 0..iterations / 10 {
+                body();
+            }
+            let start = Instant::now();
+            for _ in 0..iterations {
+                body();
+            }
+            start.elapsed().as_secs_f64() * 1e3
+        }
+
+        let iterations = 100_000;
+        // Warm the process up before the first size is timed, or it absorbs
+        // the cold caches and the clock ramp for the whole run.
+        {
+            let warm = operand(512, 0xDEAD_BEEF);
+            let mut sink = 0u64;
+            for _ in 0..iterations / 5 {
+                let digits = bytes_to_digits(&warm);
+                let (sum, _) = add(&digits, &digits);
+                sink = sink.wrapping_add(sum[0] as u64);
+            }
+            assert!(sink != u64::MAX);
+        }
+        println!(
+            "\n{:>6}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}   ({iterations} iterations, ms)",
+            "bits", "add", "subtract", "bitAnd", "compare", "shift"
+        );
+        for bits in [64usize, 128, 256, 512, 1024, 4096] {
+            let byte_len = bits / 8;
+            let (a, b) = (
+                operand(byte_len, 0x1234_5678),
+                operand(byte_len, 0x9876_5432),
+            );
+            let mut sink = 0u64;
+
+            let add_ms = time(iterations, || {
+                let (da, db) = (bytes_to_digits(&a), bytes_to_digits(&b));
+                let (sum, over) = add(&da, &db);
+                sink = sink
+                    .wrapping_add(with_bytes(&sum, byte_len, |out| out[0] as u64) + over as u64);
+            });
+            let sub_ms = time(iterations, || {
+                let (da, db) = (bytes_to_digits(&a), bytes_to_digits(&b));
+                let (difference, negative) = subtract(&da, &db, false);
+                sink = sink.wrapping_add(
+                    with_bytes(&difference, byte_len, |out| out[0] as u64) + negative as u64,
+                );
+            });
+            let and_ms = time(iterations, || {
+                let (da, db) = (bytes_to_digits(&a), bytes_to_digits(&b));
+                let masked = bit_op(BitOp::And, &da, &db);
+                sink = sink.wrapping_add(with_bytes(&masked, byte_len, |out| out[0] as u64));
+            });
+            // The one primitive that reads no magnitude at all.
+            let cmp_ms = time(iterations, || {
+                sink = sink.wrapping_add(compare_bytes(&a, &b, digit_len(byte_len)) as u64);
+            });
+            let shift_ms = time(iterations, || {
+                let da = bytes_to_digits(&a);
+                let (shifted, len) = lshift(&da, 13).expect("non-zero");
+                sink = sink.wrapping_add(with_bytes(&shifted, len, |out| out[0] as u64));
+            });
+
+            println!(
+                "{bits:>6}  {add_ms:>8.1}  {sub_ms:>8.1}  {and_ms:>8.1}  {cmp_ms:>8.1}  \
+                 {shift_ms:>8.1}   (checksum {})",
+                sink & 0xFF
+            );
+        }
     }
 }
