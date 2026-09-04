@@ -182,6 +182,36 @@ replace_plugin_with_rust(SurfacePlugin         surface-plugin)
 if(UNIX)
     replace_plugin_with_rust(SocketPlugin          socket-plugin)
     replace_plugin_with_rust(UnixOSProcessPlugin   unix-os-process-plugin)
+    # These four needed no Darwin branch at all -- 89 tests pass unchanged on
+    # aarch64-apple-darwin. What was audited for each, since "it compiled" is
+    # not the same claim:
+    #
+    # * NewFilePlugin -- the C (src/unix/UnixFile.c) has no platform
+    #   conditional anywhere in its 306 lines, and the Rust is plain POSIX
+    #   with `libc::off_t`, which is already 64-bit on Darwin. `d_name` is
+    #   handed back as a pointer exactly as the C does, so the differing array
+    #   size between the platforms is never observed.
+    # * FileAttributesPlugin -- no `statx`, no `st_*tim`/`st_*timespec`, no
+    #   birthtime: it goes through std's MetadataExt, whose accessors are the
+    #   raw `struct stat` fields on both. It already read `libc::PATH_MAX`
+    #   rather than assuming 4096, and already reasoned about Darwin's signed
+    #   `st_dev`. Note it resolves sq2uxPath/ux2sqPath at run time from
+    #   whichever FilePlugin is loaded rather than at link time, so on macOS it
+    #   picks up the C FilePlugin's CoreFoundation normalisation -- correct
+    #   today, and the reason these two must be reasoned about together when
+    #   FilePlugin eventually moves.
+    # * LocalePlugin -- its whole libc surface exists and means the same on
+    #   Darwin. The comment below used to cite an "osx Locale variant" as the
+    #   reason to hold it back; there is none.
+    # * UUIDPlugin -- the C calls libSystem's uuid_generate on macOS, which is
+    #   uuid_generate_random, i.e. the same v4 UUID the Rust builds from
+    #   /dev/urandom. The C's sigsetjmp/SIGSEGV libuuid probe is
+    #   `#if defined(__linux__)` only, so nothing Darwin-specific is skipped.
+    replace_plugin_with_rust(NewFilePlugin         new-file-plugin)
+    replace_plugin_with_rust(FileAttributesPlugin  file-attributes-plugin)
+    replace_plugin_with_rust(LocalePlugin          locale-plugin)
+    # The worked example from rust/examples, promoted to the real replacement.
+    replace_plugin_with_rust(UUIDPlugin            uuid-plugin)
 endif()
 
 # The rest of the group, still Linux-only, for reasons now measured rather
@@ -202,21 +232,9 @@ endif()
 #   which exists on no platform here: measured against the built libcrypto,
 #   SSL_CTX_set_default_verify_paths succeeds while loading zero CA certs.
 #   That one is worth checking on the Linux artifact too.
-# * NewFilePlugin, FileAttributesPlugin, LocalePlugin, UUIDPlugin -- measured
-#   ready: 89 tests pass on aarch64-apple-darwin and no Darwin divergence was
-#   found in any of them. Held only pending a decision to move them.
-#   Note that the previous comment here cited an "osx Locale variant" as the
-#   reason to keep LocalePlugin on the C. There is none:
-#   plugins/LocalePlugin/src/ has only common/, unix/ and win/.
 if(UNIX AND NOT APPLE)
     replace_plugin_with_rust(FilePlugin            file-plugin)
-    replace_plugin_with_rust(NewFilePlugin         new-file-plugin)
-    replace_plugin_with_rust(FileAttributesPlugin  file-attributes-plugin)
-    replace_plugin_with_rust(LocalePlugin          locale-plugin)
     replace_plugin_with_rust(SqueakSSL             squeak-ssl)
-    # The worked example from rust/examples, promoted to the real replacement:
-    # it reads /dev/urandom, so it is as Unix-bound as the rest of this group.
-    replace_plugin_with_rust(UUIDPlugin            uuid-plugin)
 endif()
 
 # Bindings for third-party libraries the VM does not otherwise use.
