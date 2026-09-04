@@ -143,6 +143,20 @@ fn sockaddr_bytes(addr: &std::net::SocketAddr) -> Vec<u8> {
 
 /// The raw `sockaddr_un` bytes for a local-socket path -- the struct the C
 /// hand-built and reported with `ai_addrlen = sizeof(struct sockaddr_un)`.
+///
+/// Two things about this struct move between the platforms, and the C moved
+/// with them, so this does too. Darwin's `sockaddr_un` carries a leading
+/// `sun_len` byte and shortens `sun_path` to 104 (glibc has no length byte and
+/// 108 path bytes), which changes both the size of the answer and the bound
+/// [`get_address_info`] checks the service name against -- both are read off
+/// the real struct here rather than hard-coded. And `sun_len` is deliberately
+/// left at the zero `mem::zeroed` gives it: the C had the assignment written
+/// out and then commented away (`/*saun->sun_len= sizeof(struct
+/// sockaddr_un);*/`), so on Darwin the C shipped a `sockaddr_un` whose length
+/// byte says zero. Faithful oddity: it stays zero here. Nothing dereferences
+/// it -- the bytes travel to the image as a SocketAddress and come back to
+/// `connect`/`bind`, which take an explicit `socklen_t` -- and the C's own
+/// Darwin builds have always behaved this way.
 fn unix_sockaddr_bytes(path: &[u8]) -> Vec<u8> {
     // SAFETY: all-zero is a valid sockaddr_un.
     let mut saun: libc::sockaddr_un = unsafe { mem::zeroed() };
@@ -159,6 +173,42 @@ fn unix_sockaddr_bytes(path: &[u8]) -> Vec<u8> {
     }
     .to_vec()
 }
+
+/// `S_IFSOCK` widened to the `u32` that `MetadataExt::mode()` answers.
+///
+/// The C reads this constant out of `<sys/stat.h>` on every Unix and its
+/// *value* is `0140000` on both platforms; only its C type moves. `mode_t` is
+/// `unsigned int` in glibc and `__uint16_t` in Darwin's `<sys/_types.h>`, so
+/// the `libc` crate types `S_IFSOCK` as `u32` on Linux and `u16` on macOS,
+/// and `st_mode & S_IFSOCK` -- which compiles on both in C, where the usual
+/// arithmetic conversions widen both operands to `int` first -- is a type
+/// error in Rust on exactly one of them.
+///
+/// `From` is that widening spelled out. Deliberately not an `as` cast: `as`
+/// would compile whatever the constant's type became, truncating in silence
+/// if it ever grew, where `u32::from` accepts only types that fit.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn s_ifsock() -> u32 {
+    u32::from(libc::S_IFSOCK)
+}
+
+/// The glibc side of the split above: `mode_t` is already `unsigned int`, so
+/// there is nothing to widen.
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+fn s_ifsock() -> u32 {
+    libc::S_IFSOCK
+}
+
+// Compile-time record of both halves of what `s_ifsock` assumes, per
+// platform: the literal's suffix pins the type the `libc` crate gives the
+// constant, and the comparison pins its value -- `0140000` in both
+// `<sys/stat.h>`s, which is why the C's bitmask test means the same thing on
+// each. If either moves, this stops compiling instead of quietly changing
+// which files look like sockets.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const _: () = assert!(libc::S_IFSOCK == 0o140000u16);
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+const _: () = assert!(libc::S_IFSOCK == 0o140000u32);
 
 // `clock` is not re-exported by the `libc` crate, but is in the C library
 // every Rust program already links. (`gethostbyaddr` used to be declared here
@@ -341,7 +391,12 @@ pub fn name_lookup_result() -> PrimResult<u32> {
 /// first AF_INET address on `eth0` or `wlan0`.
 ///
 /// The C's own TODO admits this does not cope with other interface names; the
-/// walk is reproduced as is.
+/// walk is reproduced as is, and that has a blunt consequence on Darwin worth
+/// stating rather than discovering: macOS names its interfaces `en0`, `lo0`
+/// and so on, so neither name ever matches and this answers 0. The C is no
+/// better -- the interface loop is guarded by `#ifndef _WIN32`, so the macOS
+/// C plugin has always taken this same branch and always answered 0 too.
+/// Faithful, and a fix belongs in the C first.
 pub fn resolver_local_address() -> PrimResult<u32> {
     let mut ifaddrs: *mut libc::ifaddrs = ptr::null_mut();
     // SAFETY: standard getifaddrs protocol; freed before every return (the C
@@ -391,13 +446,63 @@ pub fn resolver_local_address() -> PrimResult<u32> {
 // getaddrinfo: address and service lookup
 // ---------------------------------------------------------------------------
 
+/// `EAI_BADHINTS`, from Darwin's `<netdb.h>`. The `libc` crate has no Apple
+/// definition for it, and glibc has none at all -- which is the whole point
+/// of the split below.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const EAI_BADHINTS: c_int = 12;
+
+/// Does a `getaddrinfo` failure fail the primitive, or does it "succeed with
+/// zero results"?
+///
+/// The C answers with a preprocessor conditional whose comment is worth
+/// quoting, because it explains a branch that reads like an accident
+/// (abridged -- the log lines are dropped):
+///
+/// ```text
+/// /* Linux gives you either <netdb.h> with   correct NI_* bit definitions and no  EAI_* definitions at all
+///    or                <bind/netdb.h> with incorrect NI_* bit definitions and the EAI_* definitions we need.
+///    We cannot distinguish between impossible constraints and genuine lookup failure, so err conservatively. */
+/// #    if defined(EAI_BADHINTS)
+///       if (EAI_BADHINTS != gaiError) { lastError= gaiError; goto fail; }
+/// #    else
+///       ...
+/// #    endif
+///       addrList= 0;      /* succeed with zero results for impossible constraints */
+/// ```
+///
+/// So the intended behaviour is the `#if` arm: an unsatisfiable *hint*
+/// combination is an empty answer, and everything else -- a name that does not
+/// resolve, a service that does not exist -- is an error the image sees, with
+/// `sqResolverError` carrying the EAI code and `sqResolverStatus` answering
+/// `ResolverError`. Only on Linux, where glibc defines no `EAI_BADHINTS`, did
+/// the C fall back to "err conservatively" and swallow every failure as an
+/// empty result.
+///
+/// Darwin's `<netdb.h>` does define `EAI_BADHINTS`, so the C plugin on a Mac
+/// has always taken the first arm. This port had implemented the glibc arm
+/// unconditionally, which on Darwin turned every failed lookup into a silent
+/// success with nothing in it. Each platform now gets the arm its own headers
+/// selected, which is what "faithful" means for a `#if defined(...)`.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn gai_error_is_fatal(eai: c_int) -> bool {
+    eai != EAI_BADHINTS
+}
+
+/// The glibc arm of the conditional above: no `EAI_BADHINTS` exists, so the C
+/// could not tell impossible constraints from a genuine lookup failure and
+/// treated both as zero results.
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+fn gai_error_is_fatal(_eai: c_int) -> bool {
+    false
+}
+
 /// `sqResolverGetAddressInfoHostSizeServiceSizeFlagsFamilyTypeProtocol`.
 ///
 /// Synchronous; frees the previous results, runs the lookup, signals the
-/// resolver semaphore. On Linux a `getaddrinfo` failure "succeeds with zero
-/// results" -- the C could only distinguish impossible constraints from
-/// genuine failure through `EAI_BADHINTS`, which glibc does not define, so
-/// its Linux build compiled down to exactly this.
+/// resolver semaphore. What a `getaddrinfo` failure means is decided by
+/// [`gai_error_is_fatal`], and the two platforms decide it differently --
+/// because the C did.
 pub fn get_address_info(
     host: &[u8],
     serv: &[u8],
@@ -453,7 +558,7 @@ pub fn get_address_info(
             // `MetadataExt::mode()` is `st_mode` verbatim, so the C's bitmask
             // intersection above is applied to exactly the same value.
             let mode = std::fs::metadata(path).map(|md| md.mode()).unwrap_or(0);
-            if mode & libc::S_IFSOCK != 0 {
+            if mode & s_ifsock() != 0 {
                 // The C hand-built an `addrinfo` here with `ai_protocol` left
                 // at the zero `calloc` gave it; that zero is preserved.
                 st.results = vec![ResolvedAddr {
@@ -503,23 +608,56 @@ pub fn get_address_info(
     let node = (!host.is_empty()).then_some(host_s.as_str());
     let service = (!serv.is_empty()).then_some(serv_s.as_str());
 
-    // A getaddrinfo failure "succeeds with zero results": see the function
-    // comment. Entries whose family this plugin cannot describe are dropped
-    // the same way -- `AddrInfo::sockaddr` is V4 or V6, and the C's chain
-    // never carried anything else out of getaddrinfo either.
-    st.results = dns_lookup::getaddrinfo(node, service, Some(hints))
-        .map(|infos| {
-            infos
-                .flatten()
-                .map(|info| ResolvedAddr {
-                    family: info.address,
-                    socktype: info.socktype,
-                    protocol: info.protocol,
-                    sockaddr: sockaddr_bytes(&info.sockaddr),
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    // Entries whose family this plugin cannot describe are dropped:
+    // `AddrInfo::sockaddr` is V4 or V6, and the C's chain never carried
+    // anything else out of getaddrinfo either.
+    st.results = match dns_lookup::getaddrinfo(node, service, Some(hints)) {
+        Ok(infos) => infos
+            .flatten()
+            .map(|info| ResolvedAddr {
+                family: info.address,
+                socktype: info.socktype,
+                protocol: info.protocol,
+                sockaddr: sockaddr_bytes(&info.sockaddr),
+            })
+            .collect(),
+        Err(e) => {
+            // `LookupError::error_num()` is not always an EAI code. dns-lookup
+            // short-circuits before it ever calls `getaddrinfo(3)` -- both
+            // node and service `None` (its `addrinfo.rs:218`), or a string
+            // with an interior NUL -- and `From<io::Error> for LookupError`
+            // stamps those with `err_num: 0` (its `err.rs:153`). Zero is not
+            // an EAI code at all, and the fatal test below would take it for
+            // one: on Darwin `gai_error_is_fatal(0)` is true, so the primitive
+            // would fail while storing 0 in `lastError`, after which
+            // `sqResolverStatus` answers `ResolverSuccess` and
+            // `sqResolverError` answers 0 for the lookup that just failed --
+            // and whatever error was recorded before is gone. The image can
+            // reach that in one step: `primitiveResolverGetAddressInfo` takes
+            // two ByteArrays and never checks either for emptiness.
+            //
+            // The C had no pre-flight to fail: it passed the two NULLs
+            // straight to `getaddrinfo`, which on Darwin answers `EAI_NONAME`
+            // (8 -- probed on aarch64-apple-darwin, and the same for a zeroed
+            // hints struct). Normalising to that before the test is what puts
+            // this back on the C's path. Linux is unaffected either way:
+            // `gai_error_is_fatal` is `false` there, so any failure is still
+            // swallowed as zero results.
+            let eai = match e.error_num() {
+                0 => libc::EAI_NONAME,
+                n => n,
+            };
+            if gai_error_is_fatal(eai) {
+                // The C's `goto fail`: record the EAI code, fail the
+                // primitive, and -- unlike every other exit from here --
+                // leave the resolver semaphore unsignalled.
+                st.last_error = eai;
+                return Err(PrimErr::GenericFailure);
+            }
+            // "succeed with zero results for impossible constraints"
+            Vec::new()
+        }
+    };
     st.cursor = 0;
     drop(st);
     signal_resolver();
@@ -807,6 +945,75 @@ mod tests {
         assert!(gai_family().is_err());
     }
 
+    /// The AF_UNIX shortcut: a service name that stats as a socket never
+    /// reaches `getaddrinfo` at all, it becomes a hand-built result.
+    ///
+    /// Everything this touches is a place the two platforms disagree, which is
+    /// why it is worth having as a live test rather than only a compile-time
+    /// one: [`s_ifsock`] has to widen `S_IFSOCK` from Darwin's 16-bit `mode_t`,
+    /// the `sun_path` bound the service name is measured against is 104 bytes
+    /// there and 108 on Linux, and the `sockaddr_un` handed back is 106 bytes
+    /// with a leading `sun_len` on Darwin against 110 flat bytes on Linux. The
+    /// assertions are written against the real structs so they say the right
+    /// thing on each.
+    #[test]
+    fn local_socket_service_name_is_answered_without_getaddrinfo() {
+        let _guard = net_lock();
+        network_init(0);
+
+        let path = std::env::temp_dir().join(format!("pharo-sock-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind AF_UNIX");
+        let serv = path.as_os_str().as_bytes();
+        assert!(
+            serv.len() < 104,
+            "the test path must fit Darwin's sun_path too"
+        );
+
+        get_address_info(
+            b"",
+            serv,
+            0,
+            SQ_SOCKET_FAMILY_LOCAL,
+            SQ_SOCKET_TYPE_STREAM,
+            SQ_SOCKET_PROTOCOL_TCP,
+        )
+        .unwrap();
+
+        assert_eq!(gai_family().unwrap(), SQ_SOCKET_FAMILY_LOCAL);
+        assert_eq!(gai_type().unwrap(), SQ_SOCKET_TYPE_STREAM);
+        // The C calloc'd the addrinfo and never set ai_protocol, so the
+        // requested TCP is not what comes back: zero is.
+        assert_eq!(gai_protocol().unwrap(), SQ_SOCKET_PROTOCOL_UNSPECIFIED);
+
+        let size = gai_size();
+        assert_eq!(
+            size,
+            (address::ADDRESS_HEADER_SIZE + mem::size_of::<libc::sockaddr_un>()) as isize,
+            "ai_addrlen is sizeof(struct sockaddr_un), whatever that is here"
+        );
+        let mut addr = vec![0u8; size as usize];
+        gai_result(&mut addr).unwrap();
+        let payload = address::payload(&addr);
+        assert_eq!(
+            i32::from(payload[mem::offset_of!(libc::sockaddr_un, sun_family)]),
+            libc::AF_UNIX,
+            "sun_family, wherever the platform puts it"
+        );
+        let path_at = mem::offset_of!(libc::sockaddr_un, sun_path);
+        assert_eq!(&payload[path_at..path_at + serv.len()], serv);
+        assert_eq!(payload[path_at + serv.len()], 0, "and NUL-terminated");
+
+        // Faithful oddity: the C has the sun_len assignment written out and
+        // commented away, so on Darwin the length byte stays zero.
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        assert_eq!(payload[mem::offset_of!(libc::sockaddr_un, sun_len)], 0);
+
+        drop(listener);
+        let _ = std::fs::remove_file(&path);
+        start_name_lookup(b"127.0.0.1");
+    }
+
     #[test]
     fn get_address_info_rejects_bad_enums() {
         let _guard = net_lock();
@@ -815,6 +1022,105 @@ mod tests {
         assert!(get_address_info(b"x", b"", 0, 0, SQ_SOCKET_TYPE_MAX, 0).is_err());
         assert!(get_address_info(b"x", b"", 0, 0, 0, SQ_SOCKET_PROTOCOL_MAX).is_err());
         assert!(get_address_info(&[0u8; 257], b"", 0, 0, 0, 0).is_err());
+    }
+
+    /// The `#if defined(EAI_BADHINTS)` split, from the outside.
+    ///
+    /// `AI_NUMERICHOST` (the image's `SQ_SOCKET_NUMERIC`) against a name that
+    /// is not a numeric address fails inside `getaddrinfo` without a packet
+    /// leaving the machine, so this asks the question offline: `EAI_NONAME`,
+    /// not `EAI_BADHINTS`. Darwin's `<netdb.h>` defines `EAI_BADHINTS`, so the
+    /// C plugin there takes the arm that reports the error; glibc does not,
+    /// so on Linux the C swallows it as a successful lookup with no results.
+    /// Each half is asserted on the platform it belongs to -- see
+    /// [`gai_error_is_fatal`].
+    ///
+    /// The second half of the test asks the same thing with both arguments
+    /// empty, which is the one failure dns-lookup produces *without* calling
+    /// `getaddrinfo` and so without an EAI code to report; the answer has to
+    /// come out the same.
+    #[test]
+    fn get_address_info_failure_follows_the_platforms_netdb() {
+        let _guard = net_lock();
+        network_init(0);
+        let lookup = || {
+            get_address_info(
+                b"not.a.numeric.address",
+                b"",
+                SQ_SOCKET_NUMERIC,
+                SQ_SOCKET_FAMILY_INET4,
+                SQ_SOCKET_TYPE_STREAM,
+                SQ_SOCKET_PROTOCOL_TCP,
+            )
+        };
+
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            assert!(lookup().is_err(), "the C's `goto fail`");
+            assert_ne!(resolver_error(), 0, "lastError carries the EAI code");
+            assert_ne!(
+                resolver_error(),
+                EAI_BADHINTS,
+                "only EAI_BADHINTS is the succeed-with-nothing case"
+            );
+            assert_eq!(resolver_status(), RESOLVER_ERROR);
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        {
+            assert!(lookup().is_ok(), "succeed with zero results");
+            assert_eq!(resolver_error(), 0);
+            assert_eq!(gai_size(), -1, "and there really are none");
+        }
+
+        // Both arguments empty is the same question asked through a different
+        // door. The C passed NULL/NULL to `getaddrinfo`, which answers
+        // `EAI_NONAME`; dns-lookup refuses to make the call at all and hands
+        // back an error whose `error_num()` is 0, which is not an EAI code.
+        // `get_address_info` normalises that to `EAI_NONAME` before deciding,
+        // so each platform lands on the same arm as above -- and in
+        // particular `sqResolverError` cannot answer 0 for a primitive that
+        // failed.
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            assert!(
+                get_address_info(
+                    b"",
+                    b"",
+                    0,
+                    SQ_SOCKET_FAMILY_INET4,
+                    SQ_SOCKET_TYPE_STREAM,
+                    SQ_SOCKET_PROTOCOL_TCP,
+                )
+                .is_err(),
+                "the C's `goto fail`, reached with no node and no service"
+            );
+            assert_eq!(
+                resolver_error(),
+                libc::EAI_NONAME,
+                "what getaddrinfo(NULL, NULL, ..) answers on Darwin"
+            );
+            assert_eq!(resolver_status(), RESOLVER_ERROR);
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        {
+            assert!(
+                get_address_info(
+                    b"",
+                    b"",
+                    0,
+                    SQ_SOCKET_FAMILY_INET4,
+                    SQ_SOCKET_TYPE_STREAM,
+                    SQ_SOCKET_PROTOCOL_TCP,
+                )
+                .is_ok(),
+                "succeed with zero results"
+            );
+            assert_eq!(resolver_error(), 0);
+            assert_eq!(gai_size(), -1, "and there really are none");
+        }
+
+        // Leave the shared resolver state clean for the other tests.
+        start_name_lookup(b"127.0.0.1");
     }
 
     #[test]

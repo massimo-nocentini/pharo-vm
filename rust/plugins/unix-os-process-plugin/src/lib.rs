@@ -19,6 +19,23 @@
 // names are fixed by the image.
 #![allow(non_snake_case)]
 
+// The C had no Darwin branch anywhere -- `grep -ril 'apple\|darwin\|__MACH__'`
+// over `plugins/UnixOSProcessPlugin/` finds nothing, and apart from the
+// `SQUEAK_BUILTIN_PLUGIN` switches its only conditionals are the
+// `__OpenBSD__` include block (UnixOSProcessPlugin.c:28) and four feature
+// tests: `isIntegerObject` (:310), `SA_DISABLE` (:1434), `SA_NOCLDSTOP`
+// (:4244, :4396, :4414) and `SIG_HOLD` (:4590). The port needs three arms,
+// all because Rust cannot lean on the platform's own headers: `NSIG` (signals.rs), the errno location (below) and the
+// `FILE *stdin/stdout/stderr` globals (sqfile.rs). All three key off the same
+// pair of predicates, so any other Unix -- FreeBSD, illumos -- needs a third
+// arm at each. Say that here rather than let it surface as three unresolved
+// imports.
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+compile_error!(
+    "unix-os-process-plugin supports Linux and Apple targets only: NSIG, the \
+     errno location and the stdio globals each need an arm for this target"
+);
+
 mod signals;
 mod spawn;
 mod sqfile;
@@ -97,9 +114,19 @@ fn errno() -> c_int {
     std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
 }
 
+/// The address of the calling thread's `errno`.
+///
+/// The C declared `extern int errno;` inside four primitives and read the
+/// global: `primitiveChdir` (`UnixOSProcessPlugin.c:1660`),
+/// `primitiveFileProtectionMask` (:1956), `primitiveFileStat` (:2009) and
+/// `primitiveNice` (:2850). On both platforms `errno` is
+/// really a macro over a per-thread location, spelled `__errno_location()` by
+/// glibc and `__error()` by Darwin's libc; the port calls whichever the
+/// target has, which is what the C's `errno` would have expanded to had it
+/// included `<errno.h>` instead of redeclaring the name.
 #[cfg(target_os = "linux")]
 use libc::__errno_location as errno_location;
-#[cfg(target_os = "macos")]
+#[cfg(target_vendor = "apple")]
 use libc::__error as errno_location;
 
 /// `errno = 0`, which `primitiveNice` needs before the call.
@@ -901,11 +928,42 @@ fn primitiveDupTo(vm: &Interp) -> PrimResult<sqInt> {
 // File locking
 // ===========================================================================
 
-fn lock_struct(lock_type: c_int, start: sqInt, len: sqInt) -> libc::flock {
+// `struct flock`'s `l_type` is a `short` on every Unix, but the constants
+// that go into it are not. glibc declares `F_RDLCK`/`F_WRLCK`/`F_UNLCK` as
+// `int` with the values 0/1/2; Darwin's `<sys/fcntl.h>` declares them as
+// `short` with the values 1/3/2 -- different width *and* different numbers.
+// The C never had to notice: it wrote `lockStruct.l_type = <constant>` at
+// five sites -- `F_WRLCK` at UnixOSProcessPlugin.c:2684 and :4019, `F_RDLCK`
+// at :2687 and :4022, `F_UNLCK` at :4138 -- and let each platform's own
+// compiler do the conversion. Rust will not, so the conversion is named once
+// here rather than spelled out at those call sites.
+//
+// The numbers reach the image: `primitiveTestLockableFileRegion` answers the
+// raw `l_type` of a blocking lock in slot 3, so a Mac answers 3 (F_WRLCK)
+// where Linux answers 1. The C's answer was platform-dependent in exactly the
+// same way, so the port keeps it rather than normalising -- see the crate
+// README's macOS section.
+const F_RDLCK_SHORT: libc::c_short = libc::F_RDLCK as libc::c_short;
+const F_WRLCK_SHORT: libc::c_short = libc::F_WRLCK as libc::c_short;
+const F_UNLCK_SHORT: libc::c_short = libc::F_UNLCK as libc::c_short;
+
+// Compile-time proof that the narrowing above loses nothing on this target.
+// A platform whose lock constants outgrow `l_type` stops the build here
+// instead of silently requesting a truncated lock type.
+const _: () = {
+    assert!(F_RDLCK_SHORT as i64 == libc::F_RDLCK as i64);
+    assert!(F_WRLCK_SHORT as i64 == libc::F_WRLCK as i64);
+    assert!(F_UNLCK_SHORT as i64 == libc::F_UNLCK as i64);
+};
+
+fn lock_struct(lock_type: libc::c_short, start: sqInt, len: sqInt) -> libc::flock {
     // SAFETY: flock is plain data; zero then fill, so platform-extra fields
     // stay zeroed like the C's stack struct plus explicit assignments.
+    // (Darwin orders the fields l_start, l_len, l_pid, l_type, l_whence and
+    // Linux l_type, l_whence, l_start, l_len, l_pid; every access here is by
+    // name, so only the two field *types* above needed attention.)
     let mut lock: libc::flock = unsafe { std::mem::zeroed() };
-    lock.l_type = lock_type as libc::c_short;
+    lock.l_type = lock_type;
     lock.l_whence = libc::SEEK_SET as libc::c_short;
     lock.l_start = start as libc::off_t;
     lock.l_len = len as libc::off_t;
@@ -930,7 +988,7 @@ fn primitiveLockFileRegion(vm: &Interp) -> PrimResult<sqInt> {
     let start = vm.stack_integer(2)?;
     let file_no = region_file_no(vm, vm.stack_value(3)?)?;
     let lock = lock_struct(
-        if exclusive { libc::F_WRLCK } else { libc::F_RDLCK },
+        if exclusive { F_WRLCK_SHORT } else { F_RDLCK_SHORT },
         start,
         len,
     );
@@ -946,7 +1004,7 @@ fn primitiveUnlockFileRegion(vm: &Interp) -> PrimResult<sqInt> {
     let len = vm.stack_integer(0)?;
     let start = vm.stack_integer(1)?;
     let file_no = region_file_no(vm, vm.stack_value(2)?)?;
-    let lock = lock_struct(libc::F_UNLCK, start, len);
+    let lock = lock_struct(F_UNLCK_SHORT, start, len);
     // SAFETY: as above; unlocking an unlocked region is a harmless success.
     Ok(sqint_of(unsafe {
         libc::fcntl(file_no, libc::F_SETLK, &lock)
@@ -963,7 +1021,7 @@ fn primitiveTestLockableFileRegion(vm: &Interp) -> PrimResult<Oop> {
     let start = vm.stack_integer(2)?;
     let file_no = region_file_no(vm, vm.stack_value(3)?)?;
     let mut lock = lock_struct(
-        if exclusive { libc::F_WRLCK } else { libc::F_RDLCK },
+        if exclusive { F_WRLCK_SHORT } else { F_RDLCK_SHORT },
         start,
         len,
     );
@@ -972,7 +1030,7 @@ fn primitiveTestLockableFileRegion(vm: &Interp) -> PrimResult<Oop> {
     if result == -1 {
         return vm.integer(sqint_of(result));
     }
-    let lockable = if sqint_of(lock.l_type) == sqint_of(libc::F_UNLCK as libc::c_short) {
+    let lockable = if lock.l_type == F_UNLCK_SHORT {
         vm.true_object()?
     } else {
         vm.false_object()?
@@ -1382,6 +1440,95 @@ mod tests {
         assert_eq!(mode_digits(0o0644), [0, 6, 4, 4]);
         assert_eq!(mode_digits(0o7777), [7, 7, 7, 7]);
         assert_eq!(mode_digits(0), [0, 0, 0, 0]);
+    }
+
+    /// A compile-time check dressed as a test: the two type ascriptions below
+    /// are what say `flock`'s lock fields really are `c_short` on this
+    /// target. If a platform ever widened them, the `F_*_SHORT` constants
+    /// would be narrowing something that fits and this stops building --
+    /// which is the failure mode worth catching, because at run time a
+    /// truncated `l_type` is just a lock request the kernel rejects.
+    #[test]
+    fn flock_lock_fields_are_c_short() {
+        let lock = lock_struct(F_WRLCK_SHORT, 7, 16);
+        let l_type: libc::c_short = lock.l_type;
+        let l_whence: libc::c_short = lock.l_whence;
+        assert_eq!(l_type, F_WRLCK_SHORT);
+        assert_eq!(l_whence, libc::SEEK_SET as libc::c_short);
+        assert_eq!(lock.l_start, 7);
+        assert_eq!(lock.l_len, 16);
+        assert_eq!(lock.l_pid, 0);
+    }
+
+    /// The lock-type numbers this build hands the image in slot 3 of
+    /// `primitiveTestLockableFileRegion`. They are the platform's own, as the
+    /// C's were -- Darwin numbers RDLCK/UNLCK/WRLCK 1/2/3 where glibc numbers
+    /// them 0/2/1 -- so the same conflicting lock answers a different integer
+    /// on a Mac. Pinned so that stays a decision on record rather than a
+    /// surprise during the image-side pass.
+    #[test]
+    fn lock_type_numbers_are_the_platforms_own() {
+        let triple = (F_RDLCK_SHORT, F_UNLCK_SHORT, F_WRLCK_SHORT);
+        if cfg!(target_vendor = "apple") {
+            assert_eq!(triple, (1, 2, 3));
+        } else {
+            assert_eq!(triple, (0, 2, 1));
+        }
+    }
+
+    /// End to end through `fcntl`, because the widths only matter once the
+    /// kernel sees them: take an exclusive lock, have a *child* probe it with
+    /// `F_GETLK` (a process never conflicts with its own locks, and record
+    /// locks are not inherited across `fork`), and check the `l_type` the
+    /// child reads back is the one slot 3 would report. A wrong-width
+    /// `l_type` reaches Darwin as 0, which is not a lock type there, and the
+    /// `F_SETLK` below fails outright.
+    #[test]
+    fn lock_struct_round_trips_through_fcntl() {
+        use std::os::unix::io::AsRawFd;
+
+        let _guard = crate::signals::SIGNAL_TEST_LOCK.lock().unwrap();
+
+        let path = std::env::temp_dir().join(format!("uosp-flock-{}", std::process::id()));
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("temp file");
+        let fd = file.as_raw_fd();
+
+        let lock = lock_struct(F_WRLCK_SHORT, 0, 16);
+        assert_eq!(
+            unsafe { libc::fcntl(fd, libc::F_SETLK, &lock) },
+            0,
+            "exclusive lock taken: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork");
+        if pid == 0 {
+            let mut probe = lock_struct(F_WRLCK_SHORT, 0, 16);
+            let rc = unsafe { libc::fcntl(fd, libc::F_GETLK, &mut probe) };
+            let answer = if rc == 0 { probe.l_type as c_int } else { -1 };
+            // SAFETY: async-signal-safe exit from a forked child.
+            unsafe { libc::_exit(answer) };
+        }
+        let mut status = 0;
+        assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+        assert!(libc::WIFEXITED(status));
+        assert_eq!(
+            libc::WEXITSTATUS(status),
+            F_WRLCK_SHORT as c_int,
+            "the blocking lock's l_type is what the image reads from slot 3"
+        );
+
+        let unlock = lock_struct(F_UNLCK_SHORT, 0, 16);
+        assert_eq!(unsafe { libc::fcntl(fd, libc::F_SETLK, &unlock) }, 0);
+        drop(file);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -204,6 +204,45 @@ mod tests {
         assert_eq!(get_port(&bytes, 9), Some(5353));
     }
 
+    /// Why nothing above hard-codes an offset or a width.
+    ///
+    /// The payload these functions read is a raw OS `sockaddr`, and 4.4BSD's
+    /// layout -- a `sa_len` byte first, then a one-byte `sa_family` -- is
+    /// still Darwin's, while glibc dropped the length byte and made
+    /// `sa_family` a 16-bit field at offset 0. The C got this for free by
+    /// dereferencing the struct; the Rust gets it from `offset_of!` and
+    /// `size_of`, and this pins what those answer on each platform so a wrong
+    /// answer is a failing test rather than a misread port number.
+    #[test]
+    fn sa_family_sits_where_the_platform_puts_it() {
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            assert_eq!(mem::size_of::<libc::sa_family_t>(), 1, "Darwin: __uint8_t");
+            assert_eq!(
+                mem::offset_of!(libc::sockaddr, sa_family),
+                1,
+                "Darwin: sa_len comes first"
+            );
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        {
+            assert_eq!(
+                mem::size_of::<libc::sa_family_t>(),
+                2,
+                "glibc: unsigned short"
+            );
+            assert_eq!(
+                mem::offset_of!(libc::sockaddr, sa_family),
+                0,
+                "glibc: no length byte"
+            );
+        }
+        // Either way the port lands at the same place in each family, which
+        // is the only thing get_port/set_port actually need.
+        assert_eq!(mem::offset_of!(libc::sockaddr_in, sin_port), 2);
+        assert_eq!(mem::offset_of!(libc::sockaddr_in6, sin6_port), 2);
+    }
+
     #[test]
     fn unknown_family_fails() {
         let mut bytes = inet_address(3, 0, 1);

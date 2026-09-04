@@ -248,6 +248,141 @@ unsafe fn notify(pss: *mut PrivateSocket, mask: c_int) {
     }
 }
 
+/// `sendData` for a UDP/RAW socket: one datagram to the peer recorded in
+/// [`PrivateSocket::peer`]. Answers the `ssize_t` `send`/`sendto` answered,
+/// with `errno` still set from it.
+///
+/// The C is one line -- `sendto(SOCKET(s), buf, bufSize, 0,
+/// (struct sockaddr *)&SOCKETPEER(s), sizeof(SOCKETPEER(s)))` -- and that
+/// line does not work on Darwin, for two independent reasons. Both are the
+/// primitive failing outright rather than behaving oddly, on the one platform
+/// this port had never been run on, so Darwin gets a branch; Linux keeps the
+/// C verbatim below.
+///
+/// 1. **The length.** `sizeof(SOCKETPEER(s))` is the size of the whole
+///    `union sockaddr_any` (108 bytes here, 112 on glibc), passed for what is
+///    really a 16-byte `sockaddr_in`. Linux's `move_addr_to_kernel` copies the prefix it needs
+///    and objects only when the length is too *small* for the family. Darwin
+///    stamps the argument into the kernel's copy of the address as its
+///    `sa_len`, and the source-address selection the stack runs for a socket
+///    that has no local address yet then insists on exactly
+///    `sizeof(struct sockaddr_in)` and answers `EINVAL`. Measured on
+///    aarch64-apple-darwin: that same oversized length goes through untouched
+///    once the socket *is* bound, because that path is not taken -- so this
+///    half of the bug is latent rather than constant, and shows up on the
+///    datagram a socket sends before it has acquired a local address.
+///
+/// 2. **The destination.** [`connect_to_port`] and [`connect_to_address`] call
+///    `connect(2)` on UDP sockets. On a connected socket the BSD stack refuses
+///    a `sendto` that carries a destination at all -- `EISCONN` -- where Linux
+///    accepts it and sends to the address given. This half is not latent: it
+///    is every `sendData:` after a `connectTo:port:`, which is the ordinary
+///    way an image drives a UDP socket. `send(2)` is the same operation
+///    without the redundant address, and reaches the same peer: a connected
+///    UDP socket only ever receives from the address it is connected to, so
+///    the `peer` that [`receive_data`] keeps refreshing cannot drift away from
+///    the kernel's.
+///
+/// This is a **divergence**, not a faithful port, and a deliberate one: being
+/// faithful to `sizeof(SOCKETPEER(s))` and to the redundant destination means
+/// UDP `sendData:` does not work on macOS at all. Reason 2 above is the same
+/// bug in the C, at `plugins/SocketPlugin/src/common/SocketPluginImpl.c:1334`,
+/// and is worth filing there.
+///
+/// Only this entry point is treated. `send_udp_to`
+/// (`sqSockettoHostportSendDataBufCount`, the C's line 1428, reached from
+/// `primitiveSocketSendUDPDataBufCount`) still carries the C's shape: it
+/// always passes a destination, so on Darwin it is subject to the same
+/// `EISCONN` rule if the image ever calls it on a socket `connect(2)` has been
+/// called on. Its length is already the family's own `sizeof(struct
+/// sockaddr_in)`, so reason 1 does not touch it. It is left alone because the
+/// image drives it with an explicit host and port -- the case where connecting
+/// first makes no sense -- and diverging from the C where nothing is known to
+/// be broken buys nothing.
+///
+/// The peer's family, not `PrivateSocket::peer_size`, decides the length --
+/// even though that field is the C's own "dynamic sizeof(peer)".
+/// [`receive_data`] zeroes `peer_size` before *every* `recvfrom` and restores
+/// it only after a successful one, so on the ordinary would-block polling path
+/// it reads zero while `peer` still holds a good address. The family in the
+/// union is always in step with the bytes; the size field is not.
+///
+/// # Safety
+/// `fd` is open, `peer` points at an initialised `SockAddrAny`, and `buf`
+/// spans `buf_size` readable bytes.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+unsafe fn udp_send(
+    fd: c_int,
+    peer: *const SockAddrAny,
+    buf: *const u8,
+    buf_size: usize,
+) -> libc::ssize_t {
+    // `getpeername` succeeds exactly when `connect(2)` has been called, which
+    // is the condition Darwin's `EISCONN` is really about; `sock_state` cannot
+    // stand in for it, because `create` marks every UDP socket CONNECTED at
+    // birth ("UDP sockets are born connected") without any connect(2).
+    //
+    // The probe is errno-visible, so it is bracketed. On the unconnected path
+    // it fails and leaves `errno = ENOTCONN`, and `send_data` treats every
+    // `nsent <= 0` as the error path and reads `last_os_error()` there --
+    // which a *successful* zero-length datagram reaches, because `sendto`
+    // answers 0 for one and leaves errno alone. Without the bracket the image
+    // would read `ENOTCONN` out of `sqSocketError` after a send that worked.
+    // The C ran no probe and so left whatever errno was already there; saving
+    // and restoring is the closest this can come to not having asked.
+    let saved_errno = *libc::__error();
+    let mut named: SockAddrAny = mem::zeroed();
+    let mut named_len = mem::size_of::<SockAddrAny>() as libc::socklen_t;
+    let connected = libc::getpeername(
+        fd,
+        &mut named as *mut SockAddrAny as *mut libc::sockaddr,
+        &mut named_len,
+    ) == 0;
+    *libc::__error() = saved_errno;
+    if connected {
+        return libc::send(fd, buf as *const c_void, buf_size, 0);
+    }
+    let addr_len = match i32::from((*peer).sa.sa_family) {
+        libc::AF_INET => mem::size_of::<libc::sockaddr_in>(),
+        libc::AF_INET6 => mem::size_of::<libc::sockaddr_in6>(),
+        libc::AF_UNIX => mem::size_of::<libc::sockaddr_un>(),
+        // Nothing else can reach `peer`; if it did, the C's length is still
+        // the least surprising answer.
+        _ => mem::size_of::<SockAddrAny>(),
+    };
+    libc::sendto(
+        fd,
+        buf as *const c_void,
+        buf_size,
+        0,
+        peer as *const libc::sockaddr,
+        addr_len as libc::socklen_t,
+    )
+}
+
+/// `sendData` for a UDP/RAW socket, as the C wrote it: one `sendto` to
+/// `SOCKETPEER(s)` with `sizeof(SOCKETPEER(s))` as the length. See the Darwin
+/// variant above for why the two platforms differ here at all.
+///
+/// # Safety
+/// As the Darwin variant.
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+unsafe fn udp_send(
+    fd: c_int,
+    peer: *const SockAddrAny,
+    buf: *const u8,
+    buf_size: usize,
+) -> libc::ssize_t {
+    libc::sendto(
+        fd,
+        buf as *const c_void,
+        buf_size,
+        0,
+        peer as *const libc::sockaddr,
+        mem::size_of::<SockAddrAny>() as libc::socklen_t,
+    )
+}
+
 fn make_sockaddr_in(addr: u32, port: u16) -> libc::sockaddr_in {
     // SAFETY: all-zero is a valid sockaddr_in.
     let mut sin: libc::sockaddr_in = unsafe { mem::zeroed() };
@@ -280,6 +415,10 @@ pub unsafe extern "C" fn accept_handler(fd: sqInt, data: *mut c_void, flags: c_i
     } else {
         // accept() is ready. `accept_raw` for the same reason as `new_raw`
         // at socket creation: the C's accept() leaves FD_CLOEXEC clear.
+        // (Only that reason -- socket2's `accept` goes through
+        // `set_common_accept_flags`, which sets FD_CLOEXEC and, as its own doc
+        // says, deliberately does not touch SO_NOSIGPIPE because an accepted
+        // socket inherits it from the listener.)
         //
         // The error is carried out of the call rather than re-read from
         // errno afterwards, so nothing in between can disturb it.
@@ -452,7 +591,15 @@ pub unsafe fn create(
     // `new_raw`, not `new`: socket2's `new` sets FD_CLOEXEC and the C's bare
     // `socket()` does not. The difference is observable -- UnixOSProcessPlugin
     // forks and execs, and a descriptor that vanished across exec would change
-    // what child processes inherit.
+    // what child processes inherit. FD_CLOEXEC is the whole reason, on both
+    // platforms. On Apple targets `new` also sets SO_NOSIGPIPE -- `new` only;
+    // `accept` routes through socket2's `set_common_accept_flags`, which
+    // leaves NOSIGPIPE to be inherited from the listener -- but that flag is
+    // not observable here either way: `installErrorHandlers` sets SIGPIPE to
+    // SIG_IGN for the whole process (src/unix/debugUnix.c:150-152, "Ignore all
+    // broken pipe signals. They will be reported as normal errors by send()
+    // and write()"), so a send on a broken connection reports EPIPE on Linux
+    // and on Darwin alike, with or without it.
     let make = |ty: socket2::Type| {
         socket2::Socket::new_raw(socket2::Domain::from(domain), ty, None)
             .map(std::os::fd::IntoRawFd::into_raw_fd)
@@ -1044,14 +1191,7 @@ pub unsafe fn send_data(s: *mut SQSocket, buf: *const u8, buf_size: usize) -> Pr
     let pss = (*s).private;
     if (*s).socket_type != TCP_SOCKET_TYPE {
         // UDP/RAW: send to the recorded peer
-        let nsent = libc::sendto(
-            (*pss).fd,
-            buf as *const c_void,
-            buf_size,
-            0,
-            &(*pss).peer as *const SockAddrAny as *const libc::sockaddr,
-            mem::size_of::<SockAddrAny>() as libc::socklen_t,
-        );
+        let nsent = udp_send((*pss).fd, &(*pss).peer, buf, buf_size);
         if nsent <= 0 {
             let err = last_os_error();
             if err == libc::EWOULDBLOCK {
@@ -1636,6 +1776,184 @@ mod tests {
             assert_eq!(&buf[..4], b"pong");
             // The sender's peer was recorded by the receive.
             assert_eq!(remote_address(&mut sender).unwrap(), LOCALHOST);
+
+            destroy(&mut sender).unwrap();
+            destroy(&mut receiver).unwrap();
+        }
+    }
+
+    /// The unconnected half of [`udp_send`]: replying through `sendData` to a
+    /// peer that only a `receive_data` ever recorded, on a socket `connect(2)`
+    /// was never called on.
+    ///
+    /// This is what stops the Darwin branch from simply always calling `send`:
+    /// on a socket with no peer that would be `EDESTADDRREQ`, so the
+    /// `getpeername` probe has to send this datagram through `sendto` with a
+    /// destination. It also exercises why `PrivateSocket::peer_size` is not
+    /// the source of the address length -- every `receive_data` that would
+    /// have blocked has zeroed it by the time the reply goes out, and the
+    /// assertions below pin that sequence down.
+    #[test]
+    fn udp_replies_to_the_peer_a_receive_recorded() {
+        let _guard = net_lock();
+        init_net();
+        unsafe {
+            let mut server = make_udp();
+            bind_to_port(&mut server, LOCALHOST, 0).unwrap();
+            let server_port = local_port(&mut server).unwrap();
+
+            let mut client = make_udp();
+            bind_to_port(&mut client, LOCALHOST, 0).unwrap();
+            let client_port = local_port(&mut client).unwrap();
+            assert_eq!(
+                send_udp_to(&mut client, LOCALHOST, server_port, b"ping".as_ptr(), 4).unwrap(),
+                4
+            );
+
+            // The server never connects; `receive_data` is what fills `peer`.
+            let mut buf = [0u8; 32];
+            let mut got = 0isize;
+            assert!(pump(|| {
+                if got == 0 {
+                    got = receive_data(&mut server, buf.as_mut_ptr(), buf.len()).unwrap();
+                }
+                got > 0
+            }));
+            assert_eq!(&buf[..4], b"ping");
+            assert_ne!(
+                (*server.private).peer_size,
+                0,
+                "a successful receive records the size"
+            );
+
+            // A receive that finds nothing zeroes peer_size again while
+            // leaving `peer` intact -- the state the reply below goes out in.
+            assert_eq!(
+                receive_data(&mut server, buf.as_mut_ptr(), buf.len()).unwrap(),
+                0
+            );
+            assert_eq!(
+                (*server.private).peer_size,
+                0,
+                "a blocked receive clears it"
+            );
+
+            assert_eq!(send_data(&mut server, b"pong".as_ptr(), 4).unwrap(), 4);
+            let mut back = 0isize;
+            assert!(pump(|| {
+                if back == 0 {
+                    back = receive_data(&mut client, buf.as_mut_ptr(), buf.len()).unwrap();
+                }
+                back > 0
+            }));
+            assert_eq!(&buf[..4], b"pong");
+            // It really came back to the client's own port.
+            assert_eq!(local_port(&mut client).unwrap(), client_port);
+
+            destroy(&mut client).unwrap();
+            destroy(&mut server).unwrap();
+        }
+    }
+
+    /// The two Darwin kernel rules [`udp_send`] exists for, asserted against
+    /// the kernel itself rather than taken on trust, and then shown not to
+    /// bite the helper.
+    ///
+    /// Both calls in the first half are the C's line verbatim --
+    /// `sendto(fd, .., &peer, sizeof(union sockaddr_any))`. On Linux both
+    /// succeed, which is why the C never had to think about either; on Darwin
+    /// the first is `EINVAL` (the length, on a socket that still has no local
+    /// address) and the second is `EISCONN` (the destination, on a connected
+    /// socket). If a future macOS relaxed either rule this test would fail,
+    /// and the branch could go.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[test]
+    fn darwin_rejects_the_c_udp_send_shape() {
+        let _guard = net_lock();
+        init_net();
+        unsafe {
+            let mut receiver = make_udp();
+            bind_to_port(&mut receiver, LOCALHOST, 0).unwrap();
+            let port = local_port(&mut receiver).unwrap();
+
+            let c_length = mem::size_of::<SockAddrAny>() as libc::socklen_t;
+            let c_call = |fd: c_int, peer: *const SockAddrAny| -> (libc::ssize_t, c_int) {
+                let n = libc::sendto(
+                    fd,
+                    b"x".as_ptr() as *const c_void,
+                    1,
+                    0,
+                    peer as *const libc::sockaddr,
+                    c_length,
+                );
+                (n, last_os_error())
+            };
+
+            // Rule 1: the oversized length, on a socket with no local address.
+            let mut fresh = make_udp();
+            (*fresh.private).peer.sin = make_sockaddr_in(LOCALHOST, port as u16);
+            assert_eq!(
+                c_call((*fresh.private).fd, &(*fresh.private).peer),
+                (-1, libc::EINVAL),
+                "Darwin refuses sizeof(union sockaddr_any) as an addrlen here"
+            );
+            // The helper picks the family's own length and gets through.
+            assert_eq!(send_data(&mut fresh, b"x".as_ptr(), 1).unwrap(), 1);
+
+            // Rule 2: any destination at all, on a connected socket.
+            let mut connected = make_udp();
+            connect_to_port(&mut connected, LOCALHOST, port).unwrap();
+            assert_eq!(
+                c_call((*connected.private).fd, &(*connected.private).peer),
+                (-1, libc::EISCONN),
+                "Darwin refuses a destination on a connected UDP socket"
+            );
+            // The helper drops the destination and uses send(2).
+            assert_eq!(send_data(&mut connected, b"x".as_ptr(), 1).unwrap(), 1);
+
+            destroy(&mut connected).unwrap();
+            destroy(&mut fresh).unwrap();
+            destroy(&mut receiver).unwrap();
+        }
+    }
+
+    /// The `getpeername` probe in [`udp_send`] must not be visible in `errno`.
+    ///
+    /// A zero-length datagram is the case that catches it: `sendto` answers 0
+    /// for one, `send_data` treats every `nsent <= 0` as its error path and
+    /// reads `errno` there, and the probe on an unconnected socket has just
+    /// failed with `ENOTCONN`. Unbracketed, that lands in `sqSocketError` after
+    /// a send that worked. The C ran no probe, so the sentinel planted below is
+    /// what a stale `errno` looks like and is what has to come back.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[test]
+    fn udp_send_does_not_leak_the_getpeername_errno() {
+        let _guard = net_lock();
+        init_net();
+        unsafe {
+            let mut receiver = make_udp();
+            bind_to_port(&mut receiver, LOCALHOST, 0).unwrap();
+            let port = local_port(&mut receiver).unwrap();
+
+            // Unconnected, with a peer only because something recorded one --
+            // the path where the probe fails.
+            let mut sender = make_udp();
+            bind_to_port(&mut sender, LOCALHOST, 0).unwrap();
+            (*sender.private).peer.sin = make_sockaddr_in(LOCALHOST, port as u16);
+            (*sender.private).sock_error = 0;
+
+            *libc::__error() = 0;
+            assert_eq!(
+                send_data(&mut sender, b"".as_ptr(), 0).unwrap(),
+                0,
+                "a zero-length datagram: sendto answers 0, which is not failure"
+            );
+            assert_eq!(
+                (*sender.private).sock_error,
+                0,
+                "the probe's ENOTCONN must not survive into sqSocketError"
+            );
+            assert_ne!((*sender.private).sock_error, libc::ENOTCONN);
 
             destroy(&mut sender).unwrap();
             destroy(&mut receiver).unwrap();

@@ -19,12 +19,19 @@ use pharo_vm_plugin::sqInt;
 
 use crate::support::io_load_function;
 
-/// `NSIG` as the platform's signal.h defines it: 65 on Linux (real-time
-/// signals included), 32 on macOS. The C sized its arrays `NSIG + 1` and
-/// looped `1..=NSIG`; so does this port.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+/// `NSIG` as the platform's `<signal.h>` defines it: 65 on glibc (the
+/// real-time signals `SIGRTMIN`..`SIGRTMAX` included), 32 on Darwin, which
+/// has no real-time signals at all and does not define `SIGRTMIN` (both
+/// measured with a C probe). The C sized its arrays `NSIG + 1` and looped
+/// `1..=NSIG` (`signalArraySize()` at `UnixOSProcessPlugin.c:4643`,
+/// `originalSigHandlers[NSIG + 1]` at :342); so does this port, so the
+/// smaller Darwin tables are exactly what the C would have compiled to
+/// there. Nothing leaks the bound to the image: it asks for the signal
+/// numbers it cares about one at a time (`primitiveSigChldNumber` and
+/// friends), and an out-of-range number is refused rather than indexed.
+#[cfg(target_vendor = "apple")]
 pub const NSIG: usize = 32;
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[cfg(not(target_vendor = "apple"))]
 pub const NSIG: usize = 65;
 
 /// `SIG_ERR`, the error sentinel `forwardSignal:toSemaphoreAt:` answers.
@@ -136,10 +143,62 @@ pub fn clear_semaphore_tap() {
 // sigaltstack
 // ---------------------------------------------------------------------------
 
+/// The `stack_t` handed to `sigaltstack(&sigstack, 0)` -- always with
+/// `ss_flags: 0`, so the alternate stack is really installed.
+///
+/// # Divergence: the Rust installs a stack the C does not
+///
+/// The C reused the same `stack_t` it had just filled with
+/// `sigaltstack(0, &sigstack)`, assigning only `ss_size` and `ss_sp`
+/// (`UnixOSProcessPlugin.c:1446`) and leaving `ss_flags` at whatever the
+/// query had written there. Control only reaches that line when the query
+/// answered `ss_size == 0` or `ss_flags & SS_DISABLE`, and a process with no
+/// alternate stack installed gets exactly `ss_sp = NULL, ss_size = 0,
+/// ss_flags = SS_DISABLE` back -- 4 on Darwin, 2 on Linux (both measured).
+/// So the C fed `SS_DISABLE` straight back into the install: it *disabled*
+/// the alternate stack, ignored and leaked the buffer it had just `malloc`'d,
+/// and still answered 1. Handlers then went on being installed `SA_ONSTACK`
+/// with no alternate stack to run on, which the kernel treats as "run on the
+/// normal stack".
+///
+/// **This port deliberately does not copy that.** It requests `ss_flags = 0`
+/// and a real 128 KiB (on a 64-bit build) alternate stack, so the Rust
+/// plugin installs an alternate stack where the C installs none. That is a
+/// knowing divergence, and it is what this crate did before the macOS port
+/// wave; the wave briefly changed it and it is changed back here, because a
+/// port is not the place to alter Linux's signal handling.
+///
+/// Whether to match the C's bug instead is an open question: it would change
+/// the JIT's signal delivery on Linux as well as macOS, cannot be exercised
+/// from this crate's tests (the path needs a JIT VM answering attribute
+/// 1008), and so needs its own commit and a JIT-VM differential run rather
+/// than a line folded into a porting wave.
+fn install_request(sp: *mut c_void, size: usize) -> libc::stack_t {
+    libc::stack_t {
+        ss_sp: sp,
+        ss_flags: 0,
+        ss_size: size,
+    }
+}
+
 /// `needSigaltstack`: whether handlers must run on an alternate stack (the
 /// JIT's native stack cannot take signal frames), allocating one on first
 /// need. Decided once; the cached fast path is the only one a signal handler
 /// can reach.
+///
+/// The C's `#if defined(SA_DISABLE) ... #else /* e.g. Mac OS documents
+/// SA_DISABLE but defines SS_DISABLE */` (`UnixOSProcessPlugin.c:1434-1444`)
+/// needs no counterpart: neither glibc nor Darwin defines the 4.3BSD
+/// `SA_DISABLE`, so both took the `SS_DISABLE` arm, and `libc::SS_DISABLE` is
+/// each platform's own -- 2 on Linux, 4 on Darwin, an *operating system*
+/// difference.
+///
+/// `libc::MINSIGSTKSZ` is read from `libc` too, but it varies by
+/// **architecture**, not by OS: 2048 on x86-64 glibc, 5120 on aarch64 glibc,
+/// 4096 on glibc powerpc64/s390x, 6144 on musl aarch64, 32768 on Darwin. The
+/// C's `1024 * sizeof(void *) * 16` -- 128 KiB on a 64-bit build, 64 KiB on a
+/// 32-bit one -- wins the `max` against every one of those, which is the only
+/// property this code depends on and the only one the tests assert.
 pub fn need_sigaltstack() -> bool {
     let cached = USE_SIGNAL_STACK.load(Ordering::Acquire);
     if cached >= 0 {
@@ -180,11 +239,7 @@ pub fn need_sigaltstack() -> bool {
         USE_SIGNAL_STACK.store(0, Ordering::Release);
         return false;
     }
-    let stack = libc::stack_t {
-        ss_sp: sp,
-        ss_flags: 0,
-        ss_size: size,
-    };
+    let stack = install_request(sp, size);
     if unsafe { libc::sigaltstack(&stack, std::ptr::null_mut()) } < 0 {
         log_msg("sigaltstack install failed");
         unsafe { libc::free(sp) };
@@ -410,15 +465,21 @@ fn log_errno(what: &str) {
     );
 }
 
+/// Global-state tests must not interleave, and not only inside this module:
+/// the registration slots, the semaphore tap, `VM_THREAD` and
+/// `USE_SIGNAL_STACK` are all process-wide, and so are signal dispositions.
+/// The SIGCHLD handler one test installs carries no `SA_RESTART` (the C's
+/// flags, kept), so a concurrent test's blocking `waitpid` would return
+/// `EINTR` the moment its own child exits. Every test in the crate that forks
+/// or changes a disposition takes this, which is why it lives at module level
+/// rather than inside `mod tests`.
+#[cfg(test)]
+pub(crate) static SIGNAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicIsize;
-    use std::sync::Mutex;
-
-    /// Global-state tests must not interleave: registration slots, the tap
-    /// and VM_THREAD are process-wide.
-    static SIGNAL_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     static LAST_SIGNALED: AtomicIsize = AtomicIsize::new(0);
 
@@ -499,6 +560,49 @@ mod tests {
         clear_semaphore_tap();
     }
 
+    /// The install request must never carry `SS_DISABLE`. The C's
+    /// `sigstack.ss_size = ...; sigstack.ss_sp = malloc(...)` left `ss_flags`
+    /// alone, and the only way to reach that line is a query that answered
+    /// `SS_DISABLE` -- so the C's install *disabled* the alternate stack
+    /// instead of enabling it. This port diverges deliberately; see
+    /// [`install_request`]. Pinned so the divergence cannot be undone by
+    /// accident either way round.
+    #[test]
+    fn install_request_asks_for_a_real_alternate_stack() {
+        let mut buf = [0u8; 64];
+        let sp: *mut c_void = buf.as_mut_ptr().cast();
+        let request = install_request(sp, buf.len());
+        assert_eq!(
+            request.ss_flags, 0,
+            "the request must not disable the stack it just allocated"
+        );
+        assert_eq!(request.ss_flags & libc::SS_DISABLE, 0);
+        assert_eq!(request.ss_size, buf.len());
+        assert_eq!(request.ss_sp, sp);
+    }
+
+    /// The sigaltstack constants are the platform's own, not hardcoded.
+    /// `SS_DISABLE` (4 on Darwin, 2 on Linux) and `NSIG` (32 vs 65) are
+    /// per-OS and pinned. `MINSIGSTKSZ` is *not* pinned: it is
+    /// per-architecture (2048 x86-64 glibc, 5120 aarch64 glibc, 32768
+    /// Darwin), and the only property this code depends on is that the C's
+    /// requested size wins the `max` -- which is asserted directly.
+    #[test]
+    fn sigaltstack_sizing_matches_the_c_on_this_platform() {
+        // `1024 * sizeof(void *) * 16`: 128 KiB on a 64-bit build, 64 KiB on
+        // a 32-bit one. Either way it must clear the platform minimum.
+        let wanted = 1024 * size_of::<*const c_void>() * 16;
+        assert!(wanted >= libc::MINSIGSTKSZ, "the C's size wins the max");
+        assert_ne!(libc::SS_DISABLE, 0);
+        if cfg!(target_vendor = "apple") {
+            assert_eq!(libc::SS_DISABLE, 4);
+            assert_eq!(NSIG, 32);
+        } else {
+            assert_eq!(libc::SS_DISABLE, 2);
+            assert_eq!(NSIG, 65);
+        }
+    }
+
     #[test]
     fn kill_list_replaces_and_clears() {
         set_kill_list(vec![1, 2, 3]);
@@ -508,6 +612,10 @@ mod tests {
 
     #[test]
     fn kill_on_exit_actually_signals() {
+        // Held across the fork/waitpid, not for any state this test changes:
+        // the SIGCHLD handler another test installs has no SA_RESTART, so
+        // this child's exit would interrupt the waitpid below.
+        let _guard = SIGNAL_TEST_LOCK.lock().unwrap();
         // A paused child, killed through the atexit hook's own code path.
         let pid = unsafe { libc::fork() };
         assert!(pid >= 0);

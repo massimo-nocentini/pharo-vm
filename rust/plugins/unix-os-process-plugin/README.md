@@ -130,6 +130,38 @@ VM's `logError` machinery; the child after fork uses bare `write(2)`.
   restores replaced signal handlers but leaves the registration table, as the
   C did.
 
+## Divergences
+
+Places where the port knowingly does something the C does not.
+
+* **The Rust installs an alternate signal stack the C does not.** In
+  `needSigaltstack` the C reused the same `stack_t` it had just filled with
+  `sigaltstack(0, &sigstack)`, assigning only `ss_size` and `ss_sp`
+  (`UnixOSProcessPlugin.c:1446`) and leaving `ss_flags` alone. That line is
+  only reached when the query answered `ss_size == 0` or `ss_flags &
+  SS_DISABLE`, and a process with no alternate stack gets exactly `ss_flags =
+  SS_DISABLE` back on both platforms (4 on Darwin, 2 on Linux) — so the C fed
+  `SS_DISABLE` straight back into the install. The C therefore *disables* the
+  alternate stack, leaks the buffer it just malloc'd, answers 1 anyway, and
+  goes on installing `SA_ONSTACK` handlers with no alternate stack to run on,
+  which the kernel treats as "use the normal stack".
+
+  **This port does not copy that.** `install_request` in `signals.rs` asks for
+  `ss_flags = 0` and a real 128 KiB (64-bit build) alternate stack, and a test
+  pins that it does — so on both Linux and macOS the Rust plugin has an
+  alternate stack where the C build has none. Matching the C's bug instead is
+  an open question, not a settled one: it would change the JIT's signal
+  delivery on Linux as much as on macOS, and nothing in this crate's tests can
+  exercise the path (it needs a JIT VM answering attribute 1008). It belongs
+  in its own commit, with a JIT-VM differential run behind it — not folded
+  into a port.
+
+* On `sigaction` failure `setSignalNumber:handler:` answers `SIG_ERR` where
+  the C answered the uninitialized `oldHandlerAction.sa_sigaction`; the
+  out-of-bounds accesses and unchecked stack reads listed under *What changed
+  underneath* fail the primitive instead. Those are the other places the Rust
+  is deliberately not bug-compatible.
+
 ## Not ported (dead code in the C)
 
 The generated C carried never-called static helpers: the SQSocket accessors
@@ -140,13 +172,88 @@ them; they have no Rust counterpart. Consequently this port needs nothing
 from SocketPlugin at all — the C's `#include "SocketPlugin.h"` fed only dead
 code.
 
+## macOS
+
+The C had **no Darwin branch at all**: `grep -ril 'apple\|darwin\|__MACH__'`
+over `plugins/UnixOSProcessPlugin/` finds nothing, and apart from the
+`SQUEAK_BUILTIN_PLUGIN` switches the only conditionals in its 5050 lines are
+an `__OpenBSD__` include block (`:28`) and four feature tests:
+`isIntegerObject` (`:310`, guarding an extern declaration), `SA_DISABLE`
+(`:1434`, the sigaltstack arm — neither glibc nor Darwin defines it, so both
+take the `SS_DISABLE` `#else`), `SA_NOCLDSTOP` (`:4244`, `:4396`, `:4414`) and
+`SIG_HOLD` (`:4590`). There is no macOS specification to reproduce here — the
+C simply let each platform's headers decide, which is the one thing Rust
+cannot do. Three spots therefore need an arm the C did not, and a `compile_error!` in `lib.rs` names them so a third Unix fails with
+a sentence rather than three unresolved imports:
+
+| spot | Linux | Darwin |
+|---|---|---|
+| errno location | `__errno_location()` | `__error()` |
+| `FILE *stdin/stdout/stderr` | `stdin` … | `__stdinp` … |
+| `NSIG` | 65 (real-time signals) | 32 (no `SIGRTMIN`) |
+
+Everything else that differs is a *value*, read from `libc` rather than
+hardcoded. The per-OS ones are pinned by tests; `MINSIGSTKSZ` deliberately is
+not, because it varies by architecture rather than by OS and the code depends
+only on the C's requested size winning the `max` against it:
+
+| constant | Linux | Darwin |
+|---|---|---|
+| `F_RDLCK` / `F_UNLCK` / `F_WRLCK` | `int` 0 / 2 / 1 | `short` 1 / 2 / 3 |
+| `SS_DISABLE` | 2 | 4 |
+| `MINSIGSTKSZ` | *per architecture, not per OS*: 2048 on x86-64 glibc, 5120 on aarch64 glibc, 4096 on glibc ppc64/s390x, 6144 on musl aarch64 | 32768 |
+| `getdtablesize()` | `RLIMIT_NOFILE`, 1024 by default | same, clamped to `kern.maxfilesperproc` — 245760 here |
+
+Two of those are worth carrying into the image-side differential pass:
+
+* **Lock-type numbers reach Smalltalk.** `primitiveTestLockableFileRegion`
+  answers the conflicting lock's raw `l_type` in slot 3, so the same
+  conflicting write lock reports **3** on a Mac and **1** on Linux. The C
+  answered the platform's own constants in exactly the same way, so this is
+  faithful, not a port bug — but any OSProcess image code comparing slot 3
+  against a hardcoded number will read differently on Darwin. (The `lockable`
+  boolean in slot 1 is computed against each platform's own `F_UNLCK` and is
+  correct on both.) The `l_type` field is a `short` on both platforms while
+  the constants are `int` on glibc, which is what stopped this crate
+  compiling on a Mac; the conversion now happens once, in named constants,
+  with a `const` block proving it lossless.
+* **The pre-exec close loop is ~250× longer on a Mac.** `fork_and_exec`
+  reproduces the C's `for (fd = 3; fd <= getdtablesize() - 1; fd++) close(fd)`
+  byte for byte. Both platforms answer the `RLIMIT_NOFILE` soft limit there,
+  but the defaults are worlds apart: 1024 on a stock Linux against 245760 on
+  this Mac (Darwin clamps to `kern.maxfilesperproc`; `ulimit -n` is 1048576),
+  measured at about 47 ms of `close(2)` per spawned child. Darwin
+  has neither `closefrom(3)` nor `close_range(2)`, and `proc_pidinfo` would
+  enumerate a different set, so there is no faithful shortcut and the loop
+  stays. It is if anything cheaper than the C's: under `vfork` the parent was
+  suspended for the whole sweep, under `fork` it is already running.
+
+Nothing else needed a branch. `struct flock` orders its fields differently on
+the two platforms (`l_start, l_len, l_pid, l_type, l_whence` vs `l_type,
+l_whence, l_start, l_len, l_pid`) but every access is by name; `sigset_t` is
+4 bytes on Darwin against 128 on glibc but is only ever passed by pointer;
+`libc::stat` carries the `stat$INODE64` link name where x86-64 macOS needs
+it; `wait(2)` status encoding, `setsid`/`setpgid`, and `signal()`'s BSD
+semantics are the same on both.
+
 ## Verification
 
-`cargo build`, `cargo test` (19 tests), `cargo clippy --all-targets -D
-warnings` all pass. The exported surface was diffed mechanically against the
-C: all 94 primitive symbols identical, all accessor-depth bytes equal to the
-C's exports (−1 for the ones the C left implicit), module exports present,
-`getModuleName` byte-identical.
+**On aarch64 macOS**, where this wave was done: `cargo build`, `cargo test`
+(24 tests) and `cargo clippy --all-targets -- -D warnings` all pass.
+
+**For Linux, only cross-checks were run**, from that same Mac:
+`cargo check -p unix-os-process-plugin --target aarch64-unknown-linux-gnu
+--all-targets` and the same invocation of `cargo clippy` with
+`-- -D warnings` are clean. The test suite has **not** been executed on Linux
+in this wave — no Linux binary has been run at all — so read the Linux side as
+"compiles and lints clean", not "tested". What keeps that honest rather than
+merely hopeful is that every platform difference in this crate is behind a
+`cfg` or read from `libc`; nothing changes Linux behaviour unconditionally.
+
+The exported surface was diffed mechanically against the C: all 94 primitive
+symbols identical, all accessor-depth bytes equal to the C's exports (−1 for
+the ones the C left implicit), module exports present, `getModuleName`
+byte-identical.
 
 What the tests cover without a VM:
 
@@ -169,6 +276,23 @@ What the tests cover without a VM:
   code path and reaped.
 * Environment vector fallback, errno helpers, protection-mask digit
   arithmetic, module-name agreement.
+* **Platform constants**: that `flock`'s `l_type`/`l_whence` really are
+  `c_short` here (a type ascription, so it fails at build time), that
+  narrowing the `F_*LCK` constants into them is lossless (a `const` block, so
+  it fails at build time too), that the numbers are this platform's own, and
+  a real `F_SETLK` → child `F_GETLK` → `F_UNLCK` round trip proving the
+  `l_type` a blocking lock reports is the one slot 3 will answer. Likewise
+  `SS_DISABLE` and `NSIG` per platform, that the C's requested sigaltstack
+  size clears `MINSIGSTKSZ` whatever the architecture makes it, and that
+  `needSigaltstack`'s install request asks for `ss_flags = 0` — the divergence
+  above — rather than handing `SS_DISABLE` back.
+
+Tests that fork or change a signal disposition now share one lock
+(`signals::SIGNAL_TEST_LOCK`): the SIGCHLD handler one test installs has no
+`SA_RESTART` — the C's flags, kept — so another test's blocking `waitpid`
+would return `EINTR` the moment its child exits, and `note_vm_thread` resets
+the sigaltstack decision under everyone's feet. A latent flake on Linux as
+much as on macOS; closed while the file was open.
 
 ## Not verified
 
@@ -185,9 +309,15 @@ interpreter is untested and should lead the image-side differential pass:
   "no JIT → plain `signal()`" path runs in tests.
 * Signal forwarding from a non-VM thread (the mask-and-resend path).
 * File locking against another process actually holding locks.
-* macOS build (the `__stdinp`/`__error` cfgs), and 32-bit images. Platforms
-  other than Linux/macOS would need small cfg additions (`NSIG`, the errno
-  location, the stdio globals).
+* **The test suite on Linux.** This wave ran it only on aarch64 macOS; for
+  Linux it ran `cargo check` and `cargo clippy` against
+  `aarch64-unknown-linux-gnu` from the same Mac. Executing the 24 tests on a
+  real Linux host is the cheapest thing still outstanding.
+* 32-bit images. (The macOS build is no longer on this list: the crate builds,
+  links and passes its whole suite on aarch64 macOS, `__stdinp`/`__error`
+  included. What is still untested there is everything above that needs a live
+  VM — the same list as on Linux. Platforms other than Linux and Apple are now
+  refused by a `compile_error!` rather than failing as unresolved imports.)
 
 ## Not done yet
 

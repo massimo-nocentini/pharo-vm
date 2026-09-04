@@ -19,7 +19,9 @@ looks for plugins.
 The `aioEnable` / `aioHandle` / `aioDisable` / `aioFini` calls are plain
 undefined symbols in the shared object, resolved against the VM core when the
 plugin is loaded -- exactly how the C plugin's were. There is no
-`ioLoadFunctionFrom` indirection because the C never used one either. The
+`ioLoadFunctionFrom` indirection because the C never used one either. Leaving
+them undefined is free on ELF and needs one linker flag on Mach-O; see
+[macOS](#macos). The
 connect/read/write semaphore trio and the resolver semaphore are signalled
 through the proxy's `signalSemaphoreWithIndex`, from the same aio handlers at
 the same points.
@@ -79,7 +81,13 @@ Two details worth knowing:
   and `accept`, because socket2's non-raw versions set `FD_CLOEXEC` and the
   C's bare `socket()`/`accept()` do not. The difference is observable:
   `UnixOSProcessPlugin` forks and execs, and a descriptor that vanished
-  across `exec` would change what child processes inherit.
+  across `exec` would change what child processes inherit. `FD_CLOEXEC` is
+  the entire reason, on both platforms. On Apple targets `new` -- `new` only,
+  since socket2's `accept` leaves `SO_NOSIGPIPE` to be inherited from the
+  listener -- additionally sets `SO_NOSIGPIPE`, but that flag makes no
+  difference here: `installErrorHandlers` sets `SIGPIPE` to `SIG_IGN` for the
+  whole process (`src/unix/debugUnix.c:150-152`), so `send` on a broken
+  connection reports `EPIPE` on Darwin and on Linux either way.
 * `with_socket` answers `None` for a negative descriptor rather than
   borrowing one. Several callers do pass `-1`; the C handed it straight to
   `setsockopt`/`getsockopt` and got `EBADF` back, whereas `BorrowedFd` cannot
@@ -141,12 +149,76 @@ Faithfulness beats taste; each of these is marked with a comment at the site:
   no default), and buffer-size arguments are accepted and ignored.
 * On Linux a `getaddrinfo` failure "succeeds with zero results" and leaves
   `lastError` alone -- glibc does not define `EAI_BADHINTS`, so that is what
-  the C's Linux build did. (The macOS C build behaved differently; this port
-  uses the Linux semantics everywhere.)
+  the C's Linux build did. On macOS, whose `<netdb.h>` does define it, the C
+  takes the other arm of the same `#if` and reports the error; this port now
+  follows each platform's headers rather than applying the Linux arm
+  everywhere (see `gai_error_is_fatal`).
+
+## Divergences
+
+Places where the Rust knowingly does *not* do what the C does. Unlike the
+oddities above, these are not bugs kept for faithfulness -- they are bugs
+fixed, on one platform, because faithfulness there means the primitive does
+not work.
+
+* **UDP `sendData:` on Darwin does not send the C's `sendto`.** The C is one
+  line -- `sendto(SOCKET(s), buf, bufSize, 0, &SOCKETPEER(s),
+  sizeof(SOCKETPEER(s)))`
+  (`plugins/SocketPlugin/src/common/SocketPluginImpl.c:1334`) -- and the BSD
+  stack refuses it twice over: the oversized `sizeof(union sockaddr_any)`
+  length is `EINVAL` on a socket that has no local address yet, and carrying
+  a destination at all on a socket `connect(2)` has been called on is
+  `EISCONN`. The second is not a corner: `connectTo:port:` calls `connect(2)`
+  on UDP sockets, so *every* `sendData:` after one would fail, which is the
+  ordinary way an image drives a UDP socket. `sock::udp_send` therefore
+  probes with `getpeername` and uses `send(2)` when connected and `sendto`
+  with the family's own address length when not; Linux keeps the C's line
+  verbatim, where both calls are accepted. A `cfg(macos)` test asserts both
+  kernel rules against the kernel, so if a future macOS relaxed either the
+  branch can go. The same fix is worth filing against the C at that line.
+* The sibling primitive is deliberately left alone: `send_udp_to`
+  (`sqSockettoHostportSendDataBufCount`, the C's line 1428) still passes an
+  explicit destination on every call, and so is exposed to the same `EISCONN`
+  rule on Darwin if an image ever calls it on a connected socket. Its address
+  length is already `sizeof(struct sockaddr_in)`, so only the second rule
+  could bite, and the primitive exists precisely for the unconnected case.
+
+## macOS
+
+Built, tested and green on `aarch64-apple-darwin`. Four things needed a
+platform branch, each documented at its site:
+
+* **`S_IFSOCK` is 16-bit here.** `mode_t` is `unsigned int` in glibc and
+  `__uint16_t` in Darwin's `<sys/_types.h>`, so the local-socket `stat` test
+  that the C writes as one `&` is a type error in Rust on exactly one
+  platform. `resolver::s_ifsock` widens with `From`, never `as`, and a
+  `const _: () = assert!(...)` per platform pins both the type and the value
+  the widening assumes.
+* **`getaddrinfo` failures are reported, not swallowed.** See the
+  `EAI_BADHINTS` bullet above.
+* **UDP `sendData:` cannot be the C's one line.** This one is a behaviour
+  change rather than a translation, so it is written up under
+  [Divergences](#divergences) above.
+* **The Mach-O link.** `aioEnable`/`aioHandle`/`aioDisable`/`aioFini` are
+  undefined in the shared object by design, which ELF allows and `ld64` does
+  not. The C plugin never noticed because CMake links it against the VM core
+  library; corrosion builds this crate with a bare `cargo build`, so
+  `build.rs` passes `-Wl,-U,_aio*` -- one symbol at a time, not
+  `-undefined dynamic_lookup`, so a genuine typo in an extern is still a
+  build error.
+
+Two Darwin behaviours are *not* changed, because the C behaves the same way
+there: `sqResolverLocalAddress` answers 0 (it looks for `eth0`/`wlan0`, which
+macOS does not have), and the hand-built AF_UNIX `sockaddr_un` leaves
+`sun_len` zero (the C has that assignment written out and commented away).
 
 ## Verification
 
-`cargo test -p socket-plugin` runs 32 tests with no VM:
+`cargo test -p socket-plugin` runs 38 tests with no VM (36 on Linux: two are
+Darwin-only). Those 38 were executed on aarch64-apple-darwin only. For Linux
+this wave ran `cargo check` and `cargo clippy --all-targets` for
+`aarch64-unknown-linux-gnu` from the same Mac, both clean; nothing was
+executed on Linux, so the 36 remain a compile-time claim there.
 
 * **Pure functions**: net-address round-trips; the address-header
   validate/stamp protocol; port get/set on IPv4 and IPv6 sockaddrs; the
@@ -162,7 +234,17 @@ Faithfulness beats taste; each of these is marked with a comment at the site:
   local/remote address-object round-trips, and session invalidation on
   network shutdown.
 * **Layout**: the `SQSocket` size/offsets and the fd-first invariant of the
-  private struct.
+  private struct, plus where each platform puts `sa_family` inside
+  `struct sockaddr` (offset 1 and one byte wide on Darwin, which still has
+  4.4BSD's leading `sa_len`; offset 0 and two bytes on glibc).
+* **The platform splits**: the AF_UNIX service-name shortcut end to end
+  against a real bound socket -- which exercises `S_IFSOCK`, the `sun_path`
+  bound and the `sockaddr_un` handed back, all three of which differ between
+  the two; the `getaddrinfo`-failure arm each platform's `<netdb.h>` selects,
+  including the both-arguments-empty failure `dns-lookup` produces without
+  calling `getaddrinfo` at all; and, on macOS only, the two kernel rules
+  behind `udp_send` plus the fact that its `getpeername` probe leaves `errno`
+  as it found it.
 
 The built `.so` was checked against the C plugin's export table: all 60
 primitive names identical, all 60 accessor-depth bytes identical (40 zero, 20
@@ -171,6 +253,11 @@ minus-one), `getModuleName`/`setInterpreter`/`initialiseModule`/
 imports.
 
 ## Not verified
+
+The suite has not been run on Linux in this wave -- only cross-compiled and
+linted -- so the Linux arms of the three `cfg` splits (`s_ifsock`,
+`gai_error_is_fatal`, `udp_send`) are unchanged code that nothing here
+re-executed.
 
 No VM runs in this environment, so an image-side differential pass should
 focus on:
@@ -181,7 +268,8 @@ focus on:
   semaphore reaching image-side processes through the real aio poll loop.
 * **RAW sockets** (`SOCK_RAW`/ICMP needs root) and the **provided-socket**
   type.
-* **The AF_UNIX local-socket `getaddrinfo` path** (stat-based).
+* **The AF_UNIX local-socket `getaddrinfo` path** beyond the unit test: the
+  resulting address actually being connected to.
 * **Reverse DNS** (`gethostbyaddr`) success paths -- environment-dependent
   here; only the error contract is unit-tested.
 * **Interop with `UnixOSProcessPlugin`** reading the descriptor through the

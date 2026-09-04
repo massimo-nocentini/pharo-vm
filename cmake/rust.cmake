@@ -170,20 +170,50 @@ replace_plugin_with_rust(BitBltPlugin          bit-blt-plugin)
 replace_plugin_with_rust(B2DPlugin             b2d-plugin)
 replace_plugin_with_rust(SurfacePlugin         surface-plugin)
 
-# POSIX ports. Windows keeps its C implementations throughout, and Apple keeps
-# the C as well: several of these had macOS-specific branches (CoreFoundation
-# path normalisation in FilePlugin, the Security-framework SqueakSSL, the
-# osx Locale variant) that the Rust ports do not reproduce, and none of them
-# has been run on a Mac. Their crates refuse to compile off Unix, so the guard
-# is belt and braces.
+# POSIX ports. Windows keeps its C implementations throughout.
+#
+# Apple was held back wholesale until the Darwin wave: neither of the two
+# plugins below even compiled there (`S_IFSOCK` is `u16` on Darwin and `u32`
+# on glibc; `flock.l_type` is `c_short` against glibc's `c_int`), and nothing
+# in the group had ever been run on a Mac. Both have now been ported, tested
+# on aarch64-apple-darwin, and kept `cargo check`/`clippy`-clean for
+# aarch64-unknown-linux-gnu; see each crate's README for the Darwin branches
+# and the one divergence.
+if(UNIX)
+    replace_plugin_with_rust(SocketPlugin          socket-plugin)
+    replace_plugin_with_rust(UnixOSProcessPlugin   unix-os-process-plugin)
+endif()
+
+# The rest of the group, still Linux-only, for reasons now measured rather
+# than assumed:
+#
+# * FilePlugin -- a real blocker. The C compiles its `#if defined(__MACH__)`
+#   branch on macOS, where `convertChars` calls `CFStringNormalize` so that
+#   `sq2uxPath` answers NFD and `ux2sqPath` answers NFC (sqUnixCharConv.c:130-153,
+#   :402-404). The Rust ported only the `HAVE_ICONV_H` branch and ignores the
+#   `norm` argument outright (charconv.rs:472 names it `_norm`), so on HFS+ a
+#   name the image writes as NFC reads back as a different Smalltalk string.
+#   Its `MAXPATHLEN`/`PATH_MAX` are also hard-coded 4096; both are 1024 here,
+#   so it accepts paths the C rejects.
+# * SqueakSSL -- needs a second implementation, not a branch.
+#   plugins/SqueakSSL/src/osx/sqMacSSL.c is 875 lines of SecureTransport with
+#   system-keychain trust and a different meaning for SQSSL_PROP_CERTNAME.
+#   Separately, the crate's vendored OpenSSL has OPENSSLDIR=/usr/local/ssl,
+#   which exists on no platform here: measured against the built libcrypto,
+#   SSL_CTX_set_default_verify_paths succeeds while loading zero CA certs.
+#   That one is worth checking on the Linux artifact too.
+# * NewFilePlugin, FileAttributesPlugin, LocalePlugin, UUIDPlugin -- measured
+#   ready: 89 tests pass on aarch64-apple-darwin and no Darwin divergence was
+#   found in any of them. Held only pending a decision to move them.
+#   Note that the previous comment here cited an "osx Locale variant" as the
+#   reason to keep LocalePlugin on the C. There is none:
+#   plugins/LocalePlugin/src/ has only common/, unix/ and win/.
 if(UNIX AND NOT APPLE)
     replace_plugin_with_rust(FilePlugin            file-plugin)
     replace_plugin_with_rust(NewFilePlugin         new-file-plugin)
     replace_plugin_with_rust(FileAttributesPlugin  file-attributes-plugin)
     replace_plugin_with_rust(LocalePlugin          locale-plugin)
-    replace_plugin_with_rust(SocketPlugin          socket-plugin)
     replace_plugin_with_rust(SqueakSSL             squeak-ssl)
-    replace_plugin_with_rust(UnixOSProcessPlugin   unix-os-process-plugin)
     # The worked example from rust/examples, promoted to the real replacement:
     # it reads /dev/urandom, so it is as Unix-bound as the rest of this group.
     replace_plugin_with_rust(UUIDPlugin            uuid-plugin)

@@ -131,8 +131,14 @@ pub fn session_from_bytes(bytes: &[u8]) -> Option<SessionId> {
 // ---------------------------------------------------------------------------
 
 /// The platform's `FILE *stdin/stdout/stderr` globals, which the C reached by
-/// name. macOS spells them differently under the macro.
-#[cfg(target_os = "macos")]
+/// name (`UnixOSProcessPlugin.c:497`, :533-535, :570, :2437, :2477, :2517).
+///
+/// `stdin` is a macro, not a symbol, and the two platforms expand it
+/// differently: glibc to the `stdin` object itself, Darwin's `<stdio.h>` to
+/// `__stdinp`. The C never had to know -- it wrote `stdin` and let the
+/// preprocessor pick -- so this is one of the three places where Rust, having
+/// no headers to lean on, needs the branch the C did not.
+#[cfg(target_vendor = "apple")]
 mod cstdio {
     extern "C" {
         #[link_name = "__stdinp"]
@@ -144,7 +150,7 @@ mod cstdio {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(target_vendor = "apple"))]
 mod cstdio {
     extern "C" {
         #[link_name = "stdin"]

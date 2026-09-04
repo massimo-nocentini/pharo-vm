@@ -325,11 +325,34 @@ pub unsafe fn fork_and_exec(spec: &ExecSpec) -> libc::pid_t {
         }
     }
     // Close everything but stdio, so pipes into the dead parent's other
-    // children do not linger.
+    // children do not linger. `for (fd = 3, fdLimiT = getdtablesize() - 1;
+    // fd <= fdLimiT; fd += 1) close(fd);` -- UnixOSProcessPlugin.c:890,
+    // reproduced exactly, including the `- 1` that leaves the last descriptor
+    // open.
+    //
+    // The cost is very different on the two platforms and it is worth knowing
+    // before someone reports it as a regression. Both answer the RLIMIT_NOFILE
+    // soft limit, but the ceilings are worlds apart: a stock Linux gives 1024,
+    // while Darwin clamps to `kern.maxfilesperproc` and this Mac's default
+    // session answers 245760 (measured; `ulimit -n` there is 1048576) --
+    // roughly 47 ms of `close(2)` in every child before it execs. Darwin has
+    // neither `closefrom(3)` nor `close_range(2)`, and `proc_pidinfo` would
+    // answer a different set of descriptors, so there is no faithful
+    // shortcut; the port keeps the loop. If anything it costs less: this
+    // is a `fork` child, so the parent is already running again, where under
+    // the C's `vfork` the parent stayed suspended for the whole sweep.
     let limit = unsafe { libc::getdtablesize() } - 1;
     for fd in 3..=limit {
         unsafe { libc::close(fd) };
     }
+    // Async-signal-safe only because `USE_SIGNAL_STACK` is always already
+    // decided here: `restore_original_handlers` touches `set_signal_handler`
+    // -> `need_sigaltstack`, whose undecided path would `dlopen`/`malloc`,
+    // both forbidden after fork in a threaded process (and Darwin enforces
+    // that harder than glibc). It cannot run: the loop only calls
+    // `set_signal_handler` for a signal with a registered semaphore index,
+    // and registering one goes through `need_sigaltstack` in the parent
+    // first. Keep that invariant if this loop is ever reworked.
     if spec.restore_handlers {
         restore_original_handlers();
     }
@@ -449,6 +472,10 @@ mod tests {
 
     #[test]
     fn fork_and_exec_runs_echo_through_the_image_buffer_format() {
+        // Serialised against the signal tests: the SIGCHLD handler one of
+        // them installs has no SA_RESTART, so this child's exit would
+        // interrupt the waitpid below with EINTR.
+        let _guard = crate::signals::SIGNAL_TEST_LOCK.lock().unwrap();
         // stdout of the child goes into a pipe we read; argv and env travel
         // through the same flattened-buffer + fix_pointers path the primitive
         // uses.
@@ -491,6 +518,7 @@ mod tests {
 
     #[test]
     fn fork_and_exec_missing_program_exits_255() {
+        let _guard = crate::signals::SIGNAL_TEST_LOCK.lock().unwrap();
         let (mut argbuf, argoffs) = flatten(&["/no/such/binary"]);
         let argv =
             unsafe { fix_pointers(argbuf.as_mut_ptr(), argbuf.len(), &argoffs) }.expect("argv");
