@@ -2017,3 +2017,51 @@ mod warp_differential {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Fail-fast after a panic mid-load
+// ---------------------------------------------------------------------------
+
+/// A panic while [`crate::state`] is held refuses every later lock.
+///
+/// The SDK proves the mechanism in
+/// `pharo-vm-plugin/tests/plugin_mutex_poison.rs`; this proves the *wiring* at
+/// the site with the widest window in the tree. `state()` is held across the
+/// whole of `loadBitBltFrom:warping:`, so the span in which the ~40 fields
+/// describing source, destination and clip disagree is not two instructions --
+/// it is every accessor call the load makes.
+///
+/// It shares this binary with the blitter tests above, which is safe in one
+/// direction only and deliberately: nothing else in this file calls `state()`,
+/// and a poisoned `Mutex` never unpoisons, so this test must stay the only one
+/// that takes that lock. The module-wide flag is not touched here at all --
+/// that needs `setInterpreter` to have installed the panic hook, which no unit
+/// test does.
+///
+/// The panic is raised by this test rather than injected through the proxy on
+/// purpose: every plugin-to-VM call crosses `extern "C"`, whose abort-on-unwind
+/// shim would turn an injected panic into `SIGABRT` instead of the unwind the
+/// hazard is made of.
+#[test]
+fn a_panic_while_the_blitter_state_is_loaded_refuses_every_later_lock() {
+    use pharo_vm_plugin::PrimErr;
+
+    assert!(crate::state().is_ok(), "a fresh module hands out the state");
+
+    let torn = std::panic::catch_unwind(|| {
+        let mut bb = crate::state().expect("still healthy");
+        // Half of what `loadBitBltFrom:warping:` writes: the rule now says
+        // one thing and every geometry field still says another.
+        bb.combinationRule = 3;
+        panic!("an accessor raised an error mid-load");
+    });
+    assert!(torn.is_err());
+
+    assert_eq!(
+        crate::state().err(),
+        Some(PrimErr::Unsupported),
+        "the half-loaded BitBlt must never be handed to a caller -- not to a \
+         primitive, and not to the `copyBits` the Balloon engine calls outside \
+         the primitive fence"
+    );
+}

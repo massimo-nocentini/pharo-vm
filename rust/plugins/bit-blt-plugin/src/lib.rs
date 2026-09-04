@@ -32,8 +32,9 @@ mod tests;
 
 use std::ffi::CStr;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::Mutex;
 
+use pharo_vm_plugin::poison::{self, Guarded};
 use pharo_vm_plugin::{pharo_plugin, pharo_primitive, sqInt, Interp, Oop, PrimErr, PrimResult};
 
 use state::{BitBlt, BB_DEST_X_INDEX, FORM_BITS_INDEX, FORM_DEPTH_INDEX, FORM_HEIGHT_INDEX,
@@ -53,9 +54,18 @@ fn initialiseModule_hook() -> bool {
 /// The C's file-scope statics, as one lockable value. The VM calls
 /// primitives from its single interpreter thread; the mutex only makes the
 /// global sound Rust.
-fn state() -> MutexGuard<'static, BitBlt> {
+///
+/// Through [`poison::lock`], so a panic while the state is loaded refuses
+/// every later caller instead of letting one compute on it. The lock is held
+/// across `loadBitBltFromwarping` and `copyBits`, which is exactly the window
+/// in which the ~40 fields describing source, destination and clip are
+/// mutually inconsistent: a half-loaded `BitBlt` has a new `destBits` with the
+/// old `destWidth`, and blitting through that pair writes outside the Form.
+/// There is no recovering that -- the fields the C left in file scope are only
+/// meaningful as a set -- so the answer is to refuse.
+fn state() -> PrimResult<Guarded<'static, BitBlt>> {
     static STATE: Mutex<BitBlt> = Mutex::new(BitBlt::new());
-    STATE.lock().unwrap_or_else(|e| e.into_inner())
+    poison::lock(&STATE)
 }
 
 /// The interpreter handle for the exported non-primitive entry points
@@ -86,7 +96,8 @@ fn errFromFlag(vm: &Interp) -> PrimErr {
 /// for the two diff rules (22, 32), the receiver otherwise.
 #[pharo_primitive(accessor_depth = 3)]
 fn primitiveCopyBits(vm: &Interp) -> PrimResult<Oop> {
-    let bb = &mut *state();
+    let mut guard = state()?;
+    let bb = &mut *guard;
     let rcvr = vmc::stackValue(vm, vmc::methodArgumentCount(vm));
     if !load::loadBitBltFromwarping(vm, bb, rcvr, false) {
         vmc::primitiveFail(vm);
@@ -111,7 +122,8 @@ fn primitiveCopyBits(vm: &Interp) -> PrimResult<Oop> {
 /// `primitiveWarpBits`.
 #[pharo_primitive(accessor_depth = 3)]
 fn primitiveWarpBits(vm: &Interp) -> PrimResult<()> {
-    let bb = &mut *state();
+    let mut guard = state()?;
+    let bb = &mut *guard;
     let rcvr = vmc::stackValue(vm, vmc::methodArgumentCount(vm));
     if !load::loadBitBltFromwarping(vm, bb, rcvr, true) {
         vmc::primitiveFail(vm);
@@ -131,7 +143,8 @@ fn primitiveWarpBits(vm: &Interp) -> PrimResult<()> {
 /// `primitiveDrawLoop` -- Bresenham line drawing by repeated copyBits.
 #[pharo_primitive(accessor_depth = 3)]
 fn primitiveDrawLoop(vm: &Interp) -> PrimResult<()> {
-    let bb = &mut *state();
+    let mut guard = state()?;
+    let bb = &mut *guard;
     let rcvr = vmc::stackValue(vm, 2);
     let xDelta = vmc::stackIntegerValue(vm, 1);
     let yDelta = vmc::stackIntegerValue(vm, 0);
@@ -153,7 +166,8 @@ fn primitiveDrawLoop(vm: &Interp) -> PrimResult<()> {
 /// `primitiveDisplayString` -- glyph-by-glyph blitting of a byte string.
 #[pharo_primitive(accessor_depth = 3)]
 fn primitiveDisplayString(vm: &Interp) -> PrimResult<()> {
-    let bb = &mut *state();
+    let mut guard = state()?;
+    let bb = &mut *guard;
     if vmc::methodArgumentCount(vm) != 6 {
         vmc::primitiveFail(vm);
         return Err(errFromFlag(vm));
@@ -374,7 +388,8 @@ pub static copyBitsAccessorDepth: core::ffi::c_schar = 3;
 pub extern "C" fn copyBits() -> sqInt {
     catch_unwind(AssertUnwindSafe(|| {
         with_vm(|vm| {
-            let bb = &mut *state();
+            let Ok(mut guard) = state() else { return };
+            let bb = &mut *guard;
             load::copyBits(vm, bb);
         });
     }))
@@ -387,7 +402,8 @@ pub extern "C" fn copyBits() -> sqInt {
 pub extern "C" fn copyBitsFromtoat(startX: sqInt, stopX: sqInt, yValue: sqInt) -> sqInt {
     catch_unwind(AssertUnwindSafe(|| {
         with_vm(|vm| {
-            let bb = &mut *state();
+            let Ok(mut guard) = state() else { return };
+            let bb = &mut *guard;
             bb.destX = startX;
             bb.destY = yValue;
             bb.sourceX = startX;
@@ -405,7 +421,8 @@ pub extern "C" fn copyBitsFromtoat(startX: sqInt, stopX: sqInt, yValue: sqInt) -
 pub extern "C" fn loadBitBltFrom(bbObj: sqInt) -> sqInt {
     catch_unwind(AssertUnwindSafe(|| {
         with_vm(|vm| {
-            let bb = &mut *state();
+            let Ok(mut guard) = state() else { return 0 };
+            let bb = &mut *guard;
             load::loadBitBltFromwarping(vm, bb, bbObj, false) as sqInt
         })
         .unwrap_or(0)
@@ -430,7 +447,8 @@ pub unsafe extern "C" fn moduleUnloaded(aModuleName: *const core::ffi::c_char) -
         let name = unsafe { CStr::from_ptr(aModuleName) };
         if name.to_bytes() == b"SurfacePlugin" {
             // The surface plugin just shut down. How nasty.
-            let bb = &mut *state();
+            let Ok(mut guard) = state() else { return };
+            let bb = &mut *guard;
             bb.querySurfaceFn = None;
             bb.lockSurfaceFn = None;
             bb.unlockSurfaceFn = None;

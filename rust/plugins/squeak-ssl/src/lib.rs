@@ -88,7 +88,8 @@ fn buffer_primitive(
 fn primitiveCreate(vm: &Interp) -> PrimResult<isize> {
     vm.expect_argument_count(0)?;
     let handle = ssl::create_ssl();
-    // Unreachable -- handles start at 1 -- but the C checks, so we check.
+    // 0 only when the handle table has been poisoned by an earlier panic --
+    // handles themselves start at 1 -- and the C checks for it too.
     if handle == 0 {
         return Err(PrimErr::GenericFailure);
     }

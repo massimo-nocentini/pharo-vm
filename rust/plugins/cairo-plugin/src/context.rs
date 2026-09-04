@@ -4,11 +4,13 @@
 //! C takes a `cairo_t *`. The mapping is mechanical on purpose -- an image-side
 //! backend ported from the FFI binding should read the same way it did.
 
+use pharo_vm_plugin::handles::Handle;
 use pharo_vm_plugin::{pharo_primitive, sqInt, Interp, Oop, PrimErr, PrimResult};
 
 use crate::ffi::{cairo, cairo_matrix_t, cc};
 use crate::resources::{
-    as_c_int, destroy_context, with_context, with_pattern, with_surface, Context, CONTEXTS,
+    as_c_int, destroy_context, with_context, with_pattern, with_surface, Context, Pattern,
+    CONTEXTS, PATTERNS,
 };
 
 /// Declares a primitive that takes a context handle and some `f64`s and
@@ -42,7 +44,7 @@ macro_rules! context_primitive {
 /// destroy its surface handle first -- though it should not: the surface's
 /// backing store then stays pinned, which `primitiveRetainedPinCount` counts.
 #[pharo_primitive]
-fn primitiveContextCreate(_vm: &Interp, surface: sqInt) -> PrimResult<sqInt> {
+fn primitiveContextCreate(_vm: &Interp, surface: sqInt) -> PrimResult<Handle<Context>> {
     let c = cairo()?;
     let ptr = with_surface(surface, |s| Ok(cc!(c, cairo_create(s))))?;
     CONTEXTS.insert(Context::adopt(ptr)?)
@@ -224,14 +226,36 @@ context_primitive!(
 );
 
 /// `cairo_set_source`, with a pattern.
+///
+/// The one primitive in this library that takes its handles as
+/// [`Handle`] arguments instead of reaching them through the `with_*`
+/// accessors. Both are decoded and tag-checked while their stack slots are
+/// read, so the signature is what says a Pattern may not be passed where the
+/// Context goes -- and this is the shipping call site that keeps
+/// `StackArg for Handle<R>` from being API nobody has ever run. It is
+/// deliberately one primitive rather than forty: the accessors are what keep
+/// `Handle::decode` to a single place per crate, and the two shapes are meant
+/// to coexist.
+///
+/// One visible difference from `primitiveMask` beside it, which takes the same
+/// two kinds the old way. Decoding now happens argument by argument as the
+/// stack is read, so a call that gets *both* handles structurally wrong answers
+/// for the **context**, the first argument, where `primitiveMask` answers for
+/// the pattern it resolves first. Handles that decode but name a destroyed
+/// resource still answer for the pattern, because the pattern is still resolved
+/// first below. Same two errors either way; only which argument is blamed
+/// moves.
 #[pharo_primitive]
-fn primitiveSetSource(_vm: &Interp, context: sqInt, pattern: sqInt) -> PrimResult<()> {
+fn primitiveSetSource(
+    _vm: &Interp,
+    context: Handle<Context>,
+    pattern: Handle<Pattern>,
+) -> PrimResult<()> {
     let c = cairo()?;
-    let p = with_pattern(pattern, Ok)?;
-    with_context(context, |cr| {
-        cc!(c, cairo_set_source(cr, p));
-        Ok(())
-    })
+    let p = PATTERNS.with(pattern, Pattern::as_ptr)?;
+    let cr = CONTEXTS.with(context, Context::as_ptr)?;
+    cc!(c, cairo_set_source(cr, p));
+    Ok(())
 }
 
 /// `cairo_set_source_surface`.

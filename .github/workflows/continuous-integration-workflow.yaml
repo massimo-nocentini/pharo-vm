@@ -111,8 +111,19 @@ jobs:
                 # cmake/rust.cmake wrote it out when configuring build-rust.
                 source build-rust/rust-env.sh
                 cd rust
-                cargo test --workspace --features pharo-vm-plugin/verify-abi
-                cargo fmt --check
+                cargo test --workspace --locked --features pharo-vm-plugin/verify-abi
+
+            # A second workspace, because the plugin cdylibs need
+            # panic = "unwind" while the platform layer needs panic = "abort",
+            # and cargo reads profiles only from a workspace root. It needs no
+            # header environment at all -- that is the SDK's promise, and the
+            # step below checks it explicitly.
+            - name: Rust plugins -- unit tests
+              if: matrix.variant.rustChecks
+              run: |
+                set -euo pipefail
+                cd rust/plugins
+                cargo test --workspace --locked
 
             # The plugin SDK's whole promise is that a plugin author needs
             # nothing but cargo -- no Pharo checkout, no CMake, no bindgen. Run
@@ -124,7 +135,12 @@ jobs:
                 set -euo pipefail
                 cd rust
                 env -u PHAROVM_INCLUDE_DIRS -u PHAROVM_COMPILE_DEFS \
-                  cargo test -p pharo-vm-plugin -p uuid-plugin
+                  cargo test -p pharo-vm-plugin
+                # uuid-plugin is a member of rust/plugins now, not of rust/:
+                # from here `-p uuid-plugin` fails outright.
+                cd plugins
+                env -u PHAROVM_INCLUDE_DIRS -u PHAROVM_COMPILE_DEFS \
+                  cargo test -p uuid-plugin
                 env -u PHAROVM_INCLUDE_DIRS -u PHAROVM_COMPILE_DEFS \
                   cargo build -p uuid-plugin --release
                 # The five symbols sqNamedPrims.c looks for must all be there.

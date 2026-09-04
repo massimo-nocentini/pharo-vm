@@ -5,6 +5,7 @@ use core::slice;
 use std::ffi::CString;
 
 use crate::error::{PrimErr, PrimResult};
+use crate::handles::{Handle, Resource};
 use crate::proxy::{sqInt, VirtualMachine, MAX_SMALL_INTEGER, MIN_SMALL_INTEGER};
 
 /// An ordinary object pointer: a reference to a heap object, or an immediate
@@ -564,10 +565,23 @@ impl Interp {
     /// Makes a Smalltalk String from a Rust string.
     ///
     /// Fails with `BadArgument` if `s` contains an interior NUL, since the
-    /// proxy takes a C string.
+    /// proxy takes a C string, and with `NoMemory` if the image cannot hold
+    /// the String: `stringForCString:` allocates, and answers nil -- 0 in C --
+    /// when the allocation fails
+    /// (`SpurMemoryManager>>#stringForCString:`,
+    /// `smalltalksrc/VMMaker/SpurMemoryManager.class.st:12944-12961`), the
+    /// same convention [`Interp::instantiate`] follows. The proxy's own
+    /// string-answering entry tests for it and raises `PrimErrNoMemory`
+    /// (`InterpreterProxy>>#methodReturnString:`,
+    /// `smalltalksrc/VMMaker/InterpreterProxy.class.st:687-695`), as does the
+    /// JIT (`smalltalksrc/VMMaker/Cogit.class.st:4339`). It is only the raw
+    /// proxy call that hands a plugin a bare 0.
     pub fn string(&self, s: &str) -> PrimResult<Oop> {
         let s = CString::new(s).map_err(|_| PrimErr::BadArgument)?;
         let oop = call!(self, stringForCString(s.as_ptr()));
+        if oop == 0 {
+            return Err(PrimErr::NoMemory);
+        }
         Ok(Oop(oop))
     }
 
@@ -877,6 +891,23 @@ impl Interp {
         Ok(())
     }
 
+    // ---- this run ----------------------------------------------------------
+
+    /// The VM's session id: a value that identifies *this run of this process*.
+    ///
+    /// `globalSessionID` is a VM global rather than image state, set once from
+    /// `time(NULL) + ioMSecs()` while the image is being read
+    /// (`StackInterpreter >> initializeInterpreterFromHeader:withBytes:`), and
+    /// never zero. So it changes when a snapshot is resumed in a new process
+    /// and does *not* change when an image snapshots and keeps running -- which
+    /// is exactly the distinction a handle the image saved in an inst var needs
+    /// drawn. [`crate::handles`] spends a byte of every handle on it.
+    ///
+    /// Fails with `Unsupported` on a VM whose proxy leaves the entry unset.
+    pub fn session_id(&self) -> PrimResult<sqInt> {
+        Ok(call!(self, getThisSessionID()))
+    }
+
     // ---- other plugins -----------------------------------------------------
 
     /// Looks a function up in another plugin, loading that plugin if needed.
@@ -1011,6 +1042,25 @@ impl StackArg for bool {
 impl StackArg for f64 {
     fn from_stack(vm: &Interp, offset: sqInt) -> PrimResult<Self> {
         vm.stack_float(offset)
+    }
+}
+
+/// A typed resource handle, checked while the stack slot is read.
+///
+/// This is what lets a primitive be written
+/// `fn primitiveSetSource(vm: &Interp, cr: Handle<Context>, pat: Handle<Pattern>)`
+/// and get `BadArgument` for a handle of the wrong kind and `NotFound` for a
+/// dead one -- both decided here, before any registry is even locked.
+/// CairoPlugin's `primitiveSetSource`
+/// (`rust/plugins/cairo-plugin/src/context.rs`) is written exactly that way and
+/// is the call site this impl ships behind; every other primitive in the tree
+/// takes a bare `sqInt` and decodes inside its crate's `with_*` accessor, which
+/// keeps `Handle::decode` to one place per crate. Both shapes are supported on
+/// purpose -- this one moves the kind check into the signature, that one keeps
+/// the seam greppable.
+impl<R: Resource> StackArg for Handle<R> {
+    fn from_stack(vm: &Interp, offset: sqInt) -> PrimResult<Self> {
+        Handle::decode(vm.stack_integer(offset)?)
     }
 }
 

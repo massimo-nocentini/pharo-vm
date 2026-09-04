@@ -133,6 +133,111 @@ Each crate's README says which of its copies remain and why. The aliasing
 cases that now fail cleanly are the ones the C decoded, compressed or
 encrypted out of a buffer it was writing; each is noted as a divergence.
 
+### The plugins unwind; the platform layer aborts
+
+For most of the port there was one cargo workspace and one answer to "what
+happens on a panic": `rust/Cargo.toml` set `panic = "abort"` in both profiles,
+on the reasoning that a panic must never unwind across `extern "C"` into the
+generated interpreter.
+
+That reasoning is right for the platform layer and wrong for the plugins, and
+the single workspace made it impossible to say so. Cargo reads `[profile]`
+only from a workspace **root** -- a `[profile.release]` in a member crate is
+ignored with a warning -- so the strategy could not be stated per crate. The
+consequence was that the SDK's headline promise, "every primitive body runs in
+`catch_unwind`, so a panic becomes a clean primitive failure", was **false for
+every plugin that shipped**: under abort the process is gone before the catch
+can run, and an `unwrap()` on `None` inside BitBlt took the user's image with
+it. The catch, and the two more in the `pharo_plugin!` macro's module hooks,
+were dead code.
+
+The plugin crates therefore moved to a workspace of their own,
+`rust/plugins/Cargo.toml`, which sets `panic = "unwind"`; the four crates in
+`rust/Cargo.toml` -- `pharo-vm-sys`, `pharo-platform`, `pharo-vm-plugin`,
+`pharo-vm-plugin-macros` -- keep `panic = "abort"`. Both example plugins joined
+the plugin workspace with a `workspace = "../../plugins"` line rather than
+moving on disk; one of them, `uuid-plugin`, actually ships. `cmake/rust.cmake`
+now makes one `corrosion_import_crate` call per manifest, each guarded on a
+non-empty `CRATES` list -- an empty list omits the keyword and makes corrosion
+import *every* package in the manifest, which was already latent in the single
+import.
+
+`pharo-platform` must keep aborting, and that is the point of the split rather
+than an exception to it: it is linked into `libPharoVMCore`, and its
+`#[no_mangle]` functions are reached from the generated interpreter, from the
+heartbeat at real-time priority, and from signal handlers, with nothing
+catching above them.
+
+**Nothing that aborted before this change stops aborting.** Since Rust 1.71 a
+non-`-unwind` `extern "C"` function inserts an abort-on-unwind guard at its
+boundary, and the pinned `rust-version` is 1.77, so every unfenced entry point
+keeps its old behaviour with no code:
+
+* the `sqSurfaceDispatch` slots in `surface-plugin`, called through a
+  function-pointer table by BitBlt and B2D, mid-blit, with a surface locked;
+* the aio handlers in `socket-plugin`, registered with the VM's C poll loop
+  and answering `()`, with no failure channel to fail through;
+* the signal handlers and the `atexit` hook in `unix-os-process-plugin` --
+  unwinding out of a signal frame corrupts the interrupted context;
+* the `sigsetjmp`/`siglongjmp` pair in `src/ffi/sameThread/`, which is C, stays
+  C, and is never crossed by an unwind because `run_primitive`'s catch stops it
+  far below the `jmp_buf`.
+
+What changes is that the catches already written become live: BitBlt's four
+`extern "C"` entry points, every `cairoPlugin*_v1` bridge function that Pango
+`dlsym`s, and the macro's `initialiseModule` / `shutdownModule` arms. So does
+the `Drop` on `interp.rs`'s lending table, whose own comment had anticipated
+the unwind path that could not happen yet.
+
+#### Poison: a panic mid-mutation is not a mere failure
+
+Turning a panic into a primitive failure is right for a computation and wrong
+for a torn invariant. `handles::Registry` holds its mutex across the caller's
+closure, so a panic in there leaves a slot half-written -- and `lock()` used to
+swallow the resulting `PoisonError` with `PoisonError::into_inner`, justifying
+it in a comment with the very promise that abort made vacuous. Under unwind
+that swallow would have turned "die on a broken invariant" into "carry on with
+one", which is strictly worse than aborting.
+
+Two mechanisms ship with the profile change, in the same commit:
+
+1. `Registry::lock` honours std's mutex poison instead of recovering from it.
+   A `Mutex` is poisoned precisely when a guard is dropped during an unwind, so
+   this is exact and per-registry: every later call answers
+   `PrimErr::Unsupported`, the queries answer their fail-closed values, and
+   `drain` answers nothing -- releasing a `cairo_t *` read out of a half-written
+   slot would be a double free, and leaking at teardown costs nothing.
+2. A module-wide flag in `pharo_vm_plugin::poison`, set from a
+   `std::panic::set_hook` installed by `setInterpreter` (the one entry point
+   the VM calls for every plugin, before anything else). `run_primitive` reads
+   it and fails fast, so state that is *not* behind a registry mutex is covered
+   too. The hook poisons only when a thread-local `Section` depth says a
+   critical section was open -- the hook runs before the unwind, while the
+   guard is still held, which is the only moment that distinction can be drawn.
+   A bad-argument panic deep in a computation therefore stays an ordinary
+   failure.
+
+The flag is per-dlopened-cdylib, which is the right granularity and the only
+one a `set_hook` can reach: each cdylib statically links its own libstd and its
+own copy of the SDK, so one plugin disabling itself leaves the other fifteen
+alone. The failure code is `Unsupported` (7), never `NoMemory`:
+`StackInterpreter >> retryPrimitiveOnFailure` re-dispatches an external
+primitive that failed with `PrimErrNoMemory` after a scavenge and again after a
+full GC, so a poisoned module answering `NoMemory` would provoke two
+collections per call.
+
+There is no un-poisoning. Nothing in the image can re-establish an invariant it
+cannot see -- the torn state is a half-inserted pointer in a slot table -- so
+the module fails for the life of the process, with one diagnostic line at the
+moment of poisoning. `shutdownModule` still runs, so the VM can unload cleanly.
+
+The one place this can regress is shared mutable state the SDK does not own:
+`bit-blt-plugin`'s `state()`, `b2d-plugin`'s `with_globals`, and the dlopen
+function tables in cairo/pango/sdl3 are invisible to the `Section` gate, so a
+panic mid-mutation there becomes a failure over torn state where it used to
+abort. `Section::enter()` is public precisely so that wrapping such a site is
+two lines; doing it is the follow-up.
+
 ## Beyond the C plugins: bindings for libraries no C plugin wrapped
 
 Everything above replaces something. These three do not.
@@ -176,11 +281,80 @@ only, and no Linux artifact exists on `files.pharo.org`. For Pango it is the
 only where one is installed system-wide.
 
 **The image gets handles, not pointers.** Every Cairo, SDL and Pango object
-lives in a
-`pharo_vm_plugin::handles::Registry` and the image holds a SmallInteger carrying
-a slot index and a generation counter. A stale handle fails its primitive with
-`NotFound`; a stale pointer, which is what the FFI binding passes today, is
-dereferenced. Two consequences worth knowing: the Cairo plugin *keeps* a pin on
+lives in a `pharo_vm_plugin::handles::Registry` and the image holds a
+SmallInteger — a `Handle<R>` — carrying **four** fields rather than a pointer:
+a slot index, a generation counter, a type tag, and a session byte. A stale
+pointer, which is what the FFI binding passes today, is dereferenced; each
+field turns one class of stale or mistaken handle into a clean primitive
+failure instead.
+
+* The **generation** catches a handle on a destroyed resource, which would
+  otherwise name whatever took the slot. `NotFound`.
+* The **type tag** catches a handle from another registry *in the same shared
+  library*. This was a live bug and not a hypothetical: before the tag, all
+  three Cairo registries shared one encoding, so `CONTEXTS.insert` and
+  `SURFACES.insert` answered the same integer for their first insert and a
+  context handle passed to a surface primitive resolved — a `cairo_t *` on its
+  way to `cairo_pattern_destroy`. Twelve statics were exposed (Cairo 3, Pango 6,
+  SDL3 3). `BadArgument`, distinct from `NotFound` on purpose: one says "wrong
+  kind of thing", the other says "that one is gone", and image fallback code
+  wants to tell them apart. Tags are hand-picked through the
+  `resource_tags!` macro, which proves them pairwise distinct and non-zero at
+  compile time. One library is the scope a decode can be confused within,
+  because `Handle::decode` compares against the `R::TAG` of a type belonging to
+  the library running it — *not* because a handle cannot cross a library
+  boundary. One does: `primitiveCairoCreateLayout` forwards a CairoPlugin
+  context handle to `cairoPluginBorrowContext_v1`, which is safe only because
+  the bridge is an entry point into the minting library. Where two plugins pick
+  the same literal for different kinds — CairoPlugin and PangoPlugin both use 2
+  — that bridge can be fed the wrong library's handle and resolve it; the
+  `handles` module docs scope it.
+* The **session byte** catches a handle the image saved in an inst var and
+  replayed in a later run. It is the low byte of `getThisSessionID`, a VM global
+  set once from `time(NULL) + ioMSecs()` while the image is read — so it changes
+  across a snapshot resumed in a new process and does *not* change when an image
+  snapshots and keeps running. `NotFound`, like a dead handle, because that is
+  what it is. Detection is 255/256, not certainty: the id is time-derived, so
+  two launches an exact multiple of 256 seconds apart share a byte.
+
+The budget is the SmallInteger: 60 magnitude bits in a 64-bit image, 30 in a
+32-bit one, and the split is `const fn layout(ptr_bytes)` with
+`const _: () = assert!(..)` pinning **both** widths, because no 32-bit target
+is installed to test against. 64-bit gets 24/20/8/8. **32-bit gets 14/12/4/0 —
+no session byte and a 4-bit tag** — because the fields are paid for out of the
+index and the generation, and keeping the session there would have left 2^18
+mints per registry per session, which a text-rendering image exhausts in
+minutes. That trades a rare false accept for a certain outage, which is the
+wrong way round. So on 32-bit a handle saved across a snapshot is not detected
+as stale, and a registry can mint 2^14 * (2^12 - 1) = 67,092,480 handles for the
+life of the process — down from 2^14 * (2^15 - 1) = 536,854,528 — after which
+`insert` answers `LimitExceeded` for that registry **permanently**. That is the
+part worth reading twice: it is a lifetime budget, not a rate, because a slot
+that reaches the top generation is retired rather than refilled, so releasing
+resources wins none of it back and only a restart clears it. The 64-bit wall is
+the same shape at 2^24 * (2^20 - 1) ≈ 1.8e13, which is out of reach.
+
+`Handle::decode` is the only route from a bare `sqInt` to a typed handle, and
+each plugin calls it in exactly one place: the dozen-odd `with_*` / `destroy_*`
+accessors in its `resources.rs`. The two hundred-odd primitives above them did
+not change, and Cairo's two `#[no_mangle]` bridge entry points keep their
+`sqInt` parameter — the exported C ABI is pinned — and decode internally.
+
+**What this does not close.** `surface-plugin` has its *own* hand-written
+registry and is deliberately not migrated: its IDs are an array index published
+through `SurfacePlugin.h` / `ioRegisterSurface` and read back out of a Form's
+`bits` by BitBltPlugin, so a stale ID still resolves to the slot's new occupant,
+exactly as in the C. Retagging them would break every C plugin and every image
+that computes on a surface ID. The claim is therefore precise: cross-kind
+confusion inside one library is impossible, and cross-session reuse is
+detectable on 64-bit, **for the registries the SDK owns**.
+
+One image-visible behaviour change falls out of the tag: `is_live` answers
+`false` for a live resource of the wrong kind, so `primitiveSurfaceIsLive` on a
+pattern handle now says false where it could once say true. That is the fix, not
+a regression, but it is written up under *Divergences* in `handles.rs`.
+
+Two consequences of the registries worth knowing: the Cairo plugin *keeps* a pin on
 image memory a surface is drawing into when Cairo still holds a reference to
 that surface (`primitiveRetainedPinCount` reports how many), and the SDL plugin
 invalidates a window's renderer and that renderer's textures when the window is

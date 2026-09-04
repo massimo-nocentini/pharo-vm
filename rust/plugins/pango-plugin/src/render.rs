@@ -28,7 +28,11 @@ use pharo_vm_plugin::{pharo_primitive, sqInt, Interp, PrimErr, PrimResult};
 
 use crate::cairo_bridge::with_cairo_context;
 use crate::ffi::{self, cairo_t, pango};
-use crate::resources::{register_context, register_layout, with_context, with_layout, with_line};
+use pharo_vm_plugin::handles::Handle;
+
+use crate::resources::{
+    register_context, register_layout, with_context, with_layout, with_line, Context, Layout,
+};
 
 // ---- shared helpers ------------------------------------------------------
 
@@ -67,7 +71,7 @@ fn checked_underline_extent(width: f64, height: f64) -> PrimResult<()> {
 /// Transfer full: the handle owns a reference, and
 /// `primitiveLayoutDestroy` releases it.
 #[pharo_primitive]
-fn primitiveCairoCreateLayout(vm: &Interp, context: sqInt) -> PrimResult<sqInt> {
+fn primitiveCairoCreateLayout(vm: &Interp, context: sqInt) -> PrimResult<Handle<Layout>> {
     let p = pango()?;
     with_cairo_context(vm, context, |cr| {
         let layout = ffi::pg!(
@@ -89,7 +93,7 @@ fn primitiveCairoCreateLayout(vm: &Interp, context: sqInt) -> PrimResult<sqInt> 
 /// under live layouts is the image's business, not the plugin's -- Pango's own
 /// reference from each layout keeps the object alive.
 #[pharo_primitive]
-fn primitiveCairoCreateContext(vm: &Interp, context: sqInt) -> PrimResult<sqInt> {
+fn primitiveCairoCreateContext(vm: &Interp, context: sqInt) -> PrimResult<Handle<Context>> {
     let p = pango()?;
     with_cairo_context(vm, context, |cr| {
         let ctx = ffi::pg!(

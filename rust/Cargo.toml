@@ -1,4 +1,9 @@
-# Rust components of the Pharo VM.
+# Rust components of the Pharo VM: the platform layer and the plugin SDK.
+#
+# The plugin *cdylibs* are not here. They live in their own workspace,
+# rust/plugins/Cargo.toml, for one reason: cargo reads profiles only from a
+# workspace root, and the two halves need opposite panic strategies. See the
+# [profile] comment at the bottom of this file.
 #
 # See rust/README.md for how this fits into the CMake build, and
 # docs/rust-port.md for the migration plan this workspace implements.
@@ -10,26 +15,13 @@ members = [
     "pharo-platform",
     "pharo-vm-plugin",
     "pharo-vm-plugin-macros",
-    "examples/hello-plugin",
-    "examples/uuid-plugin",
-    "plugins/jpeg-plugin",
-    "plugins/b2d-plugin",
-    "plugins/bit-blt-plugin",
-    "plugins/cairo-plugin",
-    "plugins/dsa-prims",
-    "plugins/file-attributes-plugin",
-    "plugins/file-plugin",
-    "plugins/jpeg-reader-plugin",
-    "plugins/large-integers",
-    "plugins/locale-plugin",
-    "plugins/misc-primitive-plugin",
-    "plugins/new-file-plugin",
-    "plugins/pango-plugin",
-    "plugins/sdl3-plugin",
-    "plugins/socket-plugin",
-    "plugins/squeak-ssl",
-    "plugins/surface-plugin",
-    "plugins/unix-os-process-plugin",
+]
+# Belt and braces: the plugin crates and the examples name rust/plugins as
+# their workspace, but a future glob member here would silently claim them
+# back and put them on the wrong panic strategy.
+exclude = [
+    "plugins",
+    "examples",
 ]
 
 [workspace.package]
@@ -50,10 +42,22 @@ libc = "0.2"
 # than links: those arrive as runtime objects, so the binding is a dlopen.
 libloading = "0.8"
 
-# A panic must never unwind across the `extern "C"` boundary into the generated
-# interpreter: that is undefined behaviour. Aborting is the only sound default.
-# Entry points that can fail gracefully catch the failure themselves instead of
-# relying on unwinding.
+# The platform layer aborts, and must.
+#
+# `pharo-platform` is linked *into* libPharoVMCore: its `extern "C"` functions
+# are called straight from the generated interpreter, from the heartbeat
+# thread and from signal handlers, with no `catch_unwind` anywhere above them.
+# A panic unwinding out of one of those into C is undefined behaviour, so
+# aborting is the only sound answer, and entry points that can fail gracefully
+# catch the failure themselves rather than relying on unwinding.
+#
+# This governs only the four members above. The plugin cdylibs are built from
+# rust/plugins/Cargo.toml, which sets `panic = "unwind"` because a plugin is
+# dlopened rather than linked and every primitive body is fenced by
+# `catch_unwind`. `pharo-vm-plugin` itself is a member here *and* a path
+# dependency of every plugin, so it is compiled under whichever profile belongs
+# to the workspace being built -- abort here, unwind there. That is intended:
+# the SDK's catches are only load-bearing in the cdylib.
 [profile.release]
 panic = "abort"
 

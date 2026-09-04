@@ -103,5 +103,5 @@ fn primitiveLiveResourceCounts(vm: &Interp) -> PrimResult<pharo_vm_plugin::Oop> 
 #[pharo_primitive]
 fn primitiveRetainedPinCount(vm: &Interp) -> PrimResult<isize> {
     vm.expect_argument_count(0)?;
-    Ok(isize::try_from(resources::retained_pin_count()).unwrap_or(isize::MAX))
+    Ok(isize::try_from(resources::retained_pin_count()?).unwrap_or(isize::MAX))
 }

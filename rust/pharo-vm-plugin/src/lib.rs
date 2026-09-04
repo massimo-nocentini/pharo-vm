@@ -35,7 +35,14 @@
 //! * **Panics never reach C.** Every primitive body runs inside
 //!   [`std::panic::catch_unwind`]; a panic becomes a clean primitive failure
 //!   instead of unwinding into the interpreter, which would be undefined
-//!   behaviour.
+//!   behaviour. This needs the cdylib to be built with `panic = "unwind"`,
+//!   which is what `rust/plugins/Cargo.toml` sets and what the template in
+//!   `template/Cargo.toml.template` leaves at its default: under
+//!   `panic = "abort"` there is nothing to catch and the process dies instead.
+//! * **A panic that tore shared state disables the module rather than
+//!   continuing.** A panic while a [`handles::Registry`] lock is held leaves a
+//!   slot half-written, so from then on every primitive in *that* cdylib fails
+//!   with [`PrimErr::Unsupported`] instead of computing on it. See [`poison`].
 //! * **Failures are ordinary `Result`s.** `Err(PrimErr::BadArgument)` calls
 //!   `primitiveFailFor` with the right code, so the image's Smalltalk fallback
 //!   code sees what it expects.
@@ -64,12 +71,14 @@ pub mod error;
 pub mod dylib;
 pub mod handles;
 pub mod interp;
+pub mod poison;
 pub mod proxy;
 pub mod ret;
 
 pub use error::{PrimErr, PrimResult};
-pub use handles::Registry;
+pub use handles::{Handle, Registry, Resource};
 pub use interp::{Interp, Oop, StackArg, StackArgs};
+pub use poison::{Guarded, Section};
 pub use proxy::{sqInt, VirtualMachine};
 pub use ret::IntoReturn;
 
@@ -95,10 +104,20 @@ pub mod __private {
     pub static INTERP: AtomicPtr<VirtualMachine> = AtomicPtr::new(ptr::null_mut());
 
     /// Records the proxy table. Called from the generated `setInterpreter`.
-    pub fn set_interpreter(vt: *mut VirtualMachine) -> sqInt {
+    ///
+    /// Also the one seam every plugin passes through exactly once before any
+    /// primitive runs -- the `pharo_plugin!` macro emits it from its `@common`
+    /// arm for every plugin, and `callInitializersIn` in
+    /// `src/common/sqNamedPrims.c` calls it first and rejects the library when
+    /// it is missing -- so it is where the panic hook is installed.
+    /// `initialiseModule` would be the obvious place and is the wrong one: the
+    /// macro emits it only when a plugin declares `init =`, and 8 of the 20
+    /// invocations in this tree do not.
+    pub fn set_interpreter(vt: *mut VirtualMachine, module: &'static str) -> sqInt {
         if vt.is_null() {
             return 0;
         }
+        crate::poison::install_panic_hook(module);
         INTERP.store(vt, Ordering::Release);
         1
     }
@@ -111,8 +130,22 @@ pub mod __private {
     /// * no proxy yet (primitive somehow called before `setInterpreter`)
     ///   -> nothing we can even fail through, so answer 0 and leave the stack
     ///   alone;
+    /// * this module poisoned by an earlier panic that tore shared state
+    ///   -> `primitiveFailFor(Unsupported)` without running the body at all;
     /// * `Err(code)` -> `primitiveFailFor(code)`;
     /// * panic -> `primitiveFailFor(GenericFailure)`, never an unwind into C.
+    ///
+    /// `Unsupported` for the poisoned gate rather than anything else, for a
+    /// measured reason: `StackInterpreter >> retryPrimitiveOnFailure`
+    /// re-dispatches an external primitive that failed with `PrimErrNoMemory`
+    /// after a scavenge and then again after a full GC, so a poisoned module
+    /// answering `NoMemory` would provoke two collections on every call. It is
+    /// also distinguishable in the image's fallback code from an ordinary
+    /// `GenericFailure`, which is what tells "this plugin disabled itself
+    /// after an internal error" from "bad argument". The gate is idempotent
+    /// and side-effect-free -- load a flag, fail, answer 0 -- because that same
+    /// method re-dispatches once more on any failure code when it finds a
+    /// forwarder.
     pub fn run_primitive<T, F>(body: F) -> sqInt
     where
         T: IntoReturn,
@@ -125,6 +158,11 @@ pub mod __private {
         // SAFETY: non-null, and set_interpreter only ever stores the VM's own
         // process-lifetime proxy table.
         let vm = unsafe { Interp::from_raw(vt) };
+
+        if crate::poison::is_poisoned() {
+            vm.fail_for(PrimErr::Unsupported);
+            return 0;
+        }
 
         let outcome = std::panic::catch_unwind(move || match body(&vm) {
             Ok(value) => value.into_return(&vm),
@@ -190,7 +228,7 @@ macro_rules! pharo_plugin {
         pub extern "C" fn setInterpreter(
             vt: *mut $crate::VirtualMachine,
         ) -> $crate::sqInt {
-            $crate::__private::set_interpreter(vt)
+            $crate::__private::set_interpreter(vt, $name)
         }
     };
 

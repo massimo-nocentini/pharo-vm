@@ -1,0 +1,84 @@
+# The plugin cdylibs.
+#
+# A second workspace, and the reason it exists is one line: `panic = "unwind"`
+# below. Cargo reads profiles only from a workspace *root*, so the panic
+# strategy cannot be stated per crate -- a `[profile.release]` in a member is
+# ignored with a warning. The platform layer must abort (it is linked into
+# libPharoVMCore with no catch above it) and the plugins must unwind (every
+# primitive body is fenced by `catch_unwind` in the SDK). Two requirements, one
+# setting, one knob per workspace: hence two workspaces.
+#
+# See rust/Cargo.toml for the other one, and rust/README.md for the split.
+
+[workspace]
+resolver = "2"
+members = [
+    "b2d-plugin",
+    "bit-blt-plugin",
+    "cairo-plugin",
+    "dsa-prims",
+    "file-attributes-plugin",
+    "file-plugin",
+    "jpeg-plugin",
+    "jpeg-reader-plugin",
+    "large-integers",
+    "locale-plugin",
+    "misc-primitive-plugin",
+    "new-file-plugin",
+    "pango-plugin",
+    "sdl3-plugin",
+    "socket-plugin",
+    "squeak-ssl",
+    "surface-plugin",
+    "unix-os-process-plugin",
+    # The examples are cdylibs too, and one of them ships: cmake/rust.cmake
+    # promotes uuid-plugin to replace the C UUIDPlugin on non-Apple Unix. They
+    # stay where they are -- `hello-plugin` is the crate a plugin author copies,
+    # and it should copy a crate on the profile plugins actually ship with --
+    # so each names this manifest with `workspace = "../../plugins"` in its own
+    # [package] table. Without that line cargo binds them to rust/Cargo.toml,
+    # the nearest ancestor manifest carrying [workspace], and refuses the build.
+    "../examples/uuid-plugin",
+    "../examples/hello-plugin",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+# Kept in step with the oldest toolchain we are willing to require of packagers.
+rust-version = "1.77"  # core::mem::offset_of!, used by the ABI layout test
+license = "MIT"
+publish = false
+
+# Only libc is inherited from here: it is the one dependency more than one
+# plugin shares. Anything added must be kept in step with rust/Cargo.toml's
+# copy by hand -- two workspaces mean two resolutions and two lockfiles, and
+# cargo will not tell you when they drift.
+#
+# `libloading` is deliberately *not* here. The plugins that dlopen a bundled
+# library (cairo, pango, sdl3) reach it through pharo-vm-plugin's own `dylib`
+# feature, and pharo-vm-plugin is a member of rust/Cargo.toml, so its
+# dependency inherits from there.
+[workspace.dependencies]
+libc = "0.2"
+
+# Unwind, deliberately -- and stated even though it is cargo's default, because
+# the default is the entire point of this file.
+#
+# A panic must still never cross the `extern "C"` boundary into the
+# interpreter, and it does not: `pharo_vm_plugin::__private::run_primitive`
+# wraps every primitive body in `catch_unwind`, and the module hooks the
+# `pharo_plugin!` macro emits do the same. Under `panic = "abort"` those
+# catches were dead code and an `unwrap()` on image input killed the user's
+# image; under unwind they do what the SDK's documentation always claimed.
+#
+# What still aborts, and must: `extern "C"` functions that are *not* fenced --
+# the sqSurfaceDispatch slots, the socket plugin's aio handlers, the OS-process
+# plugin's signal handlers. Since Rust 1.71 a non-`-unwind` `extern "C"` fn
+# inserts an abort-on-unwind guard at the boundary, so those keep aborting with
+# no action needed. See docs/rust-port.md.
+[profile.release]
+panic = "unwind"
+
+[profile.dev]
+panic = "unwind"

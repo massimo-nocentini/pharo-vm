@@ -1,5 +1,6 @@
 //! Windows: creating, sizing, moving and showing them.
 
+use pharo_vm_plugin::handles::Handle;
 use pharo_vm_plugin::{pharo_primitive, sqInt, Interp, Oop, PrimResult};
 
 use crate::ffi::{check, sc, sdl};
@@ -19,7 +20,7 @@ fn primitiveCreateWindow(
     width: sqInt,
     height: sqInt,
     flags: sqInt,
-) -> PrimResult<sqInt> {
+) -> PrimResult<Handle<Window>> {
     let s = sdl()?;
     let title = vm.c_string_value(title)?;
     let ptr = sc!(

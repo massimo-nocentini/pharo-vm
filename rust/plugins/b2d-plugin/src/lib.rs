@@ -30,7 +30,9 @@ use core::cell::UnsafeCell;
 use core::ffi::{c_char, c_uint, c_void};
 use std::sync::atomic::Ordering;
 
-use pharo_vm_plugin::{pharo_plugin, pharo_primitive, Interp, IntoReturn, PrimResult, VirtualMachine};
+use pharo_vm_plugin::{
+    pharo_plugin, pharo_primitive, Interp, IntoReturn, PrimResult, Section, VirtualMachine,
+};
 
 use consts::*;
 use engine::{Engine, Host, SqInt};
@@ -102,7 +104,17 @@ static GLOBALS: GlobalsCell = GlobalsCell(UnsafeCell::new(Globals {
 
 /// Short-lived access to the plugin globals. Never call back into the engine
 /// or the proxy from inside the closure.
+///
+/// There is no mutex here to poison -- the cell is a bare `UnsafeCell`
+/// asserted `Sync` on the single-interpreter-thread contract -- so the
+/// [`Section`] is the whole of the fail-fast story for these fields, and it is
+/// the two-line wrap `pharo_vm_plugin::poison` documents. It earns its place:
+/// `initialiseModule` writes `loadBBFn` and `copyBitsFn` as a pair and
+/// `moduleUnloaded` nulls them as a pair, so a panic between the two writes
+/// leaves one live pointer into a `dlclose`d BitBltPlugin for the engine to
+/// call. Poisoning the module is the only answer that stops that call.
 fn with_globals<R>(f: impl FnOnce(&mut Globals) -> R) -> R {
+    let _section = Section::enter();
     // SAFETY: single interpreter thread (see GlobalsCell), and no reentrant
     // use: closures passed here only read/write the plain fields.
     unsafe { f(&mut *GLOBALS.0.get()) }

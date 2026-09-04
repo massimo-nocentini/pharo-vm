@@ -33,7 +33,8 @@ here" from "primitive not implemented" and stay on its FFI binding.
 
 The image never sees a `cairo_t *`. Every surface, context and pattern lives
 in a registry (`pharo_vm_plugin::handles::Registry`) and the image gets a
-SmallInteger carrying a slot index and a generation counter.
+SmallInteger carrying a slot index, a generation counter, a type tag and a
+session byte.
 
 That closes a hole the FFI binding cannot close. A stale `cairo_t` address
 passed back from the image is dereferenced; a stale *handle* fails the
@@ -42,6 +43,27 @@ Destroying twice fails the second time instead of freeing twice. And because
 the generation counter moves on when a slot is reused, an old handle never
 resolves to whatever took its place — unlike SurfacePlugin's surface IDs,
 where it does.
+
+### Divergences: what the handle encoding does and does not promise
+
+A handle carries a **type tag** as well as a slot index and a generation, so a
+pattern handle passed to a surface primitive fails with
+`PrimErr::BadArgument` instead of resolving. Before the tag every registry here
+shared one encoding, and the first insert into each answered the *same*
+integer — a live bug, reproducible on the first two objects of every session.
+The tags are declared once in `resources.rs` through
+`pharo_vm_plugin::resource_tags!`, which proves them distinct at compile time.
+
+Two consequences worth knowing:
+
+* **`primitiveSurfaceIsLive` answers `false` for a live resource of the wrong
+  kind.** An image that used to read `true` there now reads `false`. That is the
+  fix rather than a regression — a pattern is not a live surface — but it is image-visible.
+* **On a 32-bit image there is no session byte.** A handle the image saved in an
+  inst var and replayed after a restart is caught on 64-bit (the handle carries
+  the low byte of `getThisSessionID`, 255/256 detection) and is **not** caught on
+  32-bit, where the 30 available magnitude bits go entirely to index, generation
+  and a 4-bit tag. See `pharo_vm_plugin::handles` for the arithmetic.
 
 ```smalltalk
 surface := self primImageSurfaceCreate: 0 width: 100 height: 100.

@@ -393,8 +393,8 @@ fn the_default_font_map_survives_being_destroyed_by_the_image() {
     // SAFETY: borrowed for the call only; nothing here takes a reference.
     let map = unsafe { (p.pango_cairo_font_map_get_default.unwrap())() };
     let handle = resources::register_font_map_borrowed(map).expect("registered");
-    assert!(resources::font_map_is_borrowed(handle).unwrap());
-    resources::destroy_font_map(handle).expect("destroyed");
+    assert!(resources::font_map_is_borrowed(handle.raw()).unwrap());
+    resources::destroy_font_map(handle.raw()).expect("destroyed");
 
     // If the borrow had been mishandled the map is freed and this is a
     // use-after-free, which on a real Pango is a crash -- exactly the signal
@@ -424,8 +424,8 @@ fn a_thousand_layouts_created_and_destroyed_leave_no_registry_entries() {
         };
         let layout_handle = resources::register_layout(layout).expect("registered");
         let ctx_handle = resources::register_context(ctx).expect("registered");
-        resources::destroy_layout(layout_handle).expect("destroyed");
-        resources::destroy_context(ctx_handle).expect("destroyed");
+        resources::destroy_layout(layout_handle.raw()).expect("destroyed");
+        resources::destroy_context(ctx_handle.raw()).expect("destroyed");
     }
 
     assert_eq!(

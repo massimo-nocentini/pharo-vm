@@ -58,7 +58,8 @@ it would have no way to decide whether to fall back to its own FFI binding.
 The image never sees a `PangoLayout *`. Six registries
 (`pharo_vm_plugin::handles::Registry`) hold font maps, contexts, layouts, font
 descriptions, attribute lists and tab arrays, and the image gets a SmallInteger
-carrying a slot index and a generation counter. A stale handle fails its
+carrying a slot index, a generation counter, a type tag and a session byte. A
+stale handle fails its
 primitive with `NotFound`; a stale pointer, which is what an FFI binding passes
 today, is dereferenced. Handle 0 is never live and always means NULL.
 
@@ -102,6 +103,28 @@ self primLayoutDestroy: layout.
 self primContextDestroy: context.
 self primFontMapDestroy: fontMap.              "borrowed: releases nothing"
 ```
+
+### Divergences: what the handle encoding does and does not promise
+
+A handle carries a **type tag** as well as a slot index and a generation, so a
+layout handle passed to a context primitive fails with
+`PrimErr::BadArgument` instead of resolving. Before the tag every registry here
+shared one encoding, and the first insert into each answered the *same*
+integer — a live bug, reproducible on the first two objects of every session.
+The tags are declared once in `resources.rs` through
+`pharo_vm_plugin::resource_tags!`, which proves them distinct at compile time.
+
+Two consequences worth knowing:
+
+* **A wrong-kind handle fails as `BadArgument`, not `NotFound`.** This plugin
+  exports no `isLive` primitive, so the only image-visible change is the failure
+  code: fallback code switching on it can now tell "you passed a layout where a
+  context was wanted" from "that context is gone".
+* **On a 32-bit image there is no session byte.** A handle the image saved in an
+  inst var and replayed after a restart is caught on 64-bit (the handle carries
+  the low byte of `getThisSessionID`, 255/256 detection) and is **not** caught on
+  32-bit, where the 30 available magnitude bits go entirely to index, generation
+  and a 4-bit tag. See `pharo_vm_plugin::handles` for the arithmetic.
 
 ## Conventions
 

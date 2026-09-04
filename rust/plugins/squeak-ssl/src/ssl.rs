@@ -27,6 +27,7 @@ use std::ptr;
 use std::sync::Mutex;
 
 use openssl_sys as ffi;
+use pharo_vm_plugin::poison;
 
 /// Missing from `openssl-sys`: declared here against the same libcrypto.
 /// All three exist unchanged in OpenSSL 1.1 and 3.x.
@@ -188,7 +189,12 @@ fn allocate_handle<T>(table: &mut Vec<Option<T>>, value: T) -> usize {
 /// negative handle reads out of bounds. Here anything outside the table is
 /// simply invalid.
 fn with_session<R>(handle: isize, f: impl FnOnce(&mut SqSsl) -> R) -> Option<R> {
-    let mut table = TABLE.lock().expect("SSL handle table poisoned");
+    // Through `poison::lock`, which also replaces an `expect` that turned a
+    // poisoned table into a second panic. A refused table reads as an invalid
+    // handle, which is what every caller already handles; recovering it would
+    // hand `f` an `SqSsl` whose `ssl`, `ctx` and BIO pointers a torn write may
+    // have left inconsistent, and the next call would `SSL_free` one twice.
+    let mut table = poison::lock(&TABLE).ok()?;
     let slot = usize::try_from(handle).ok()?;
     table.get_mut(slot)?.as_mut().map(f)
 }
@@ -447,13 +453,20 @@ pub fn create_ssl() -> isize {
             bio_write,
         }
     };
-    let mut table = TABLE.lock().expect("SSL handle table poisoned");
+    // A refused table answers 0, the C's "could not create"; `session` is
+    // dropped here, so its two BIOs are freed rather than leaked.
+    let Ok(mut table) = poison::lock(&TABLE) else {
+        return 0;
+    };
     allocate_handle(&mut table, session) as isize
 }
 
 /// `sqDestroySSL`: answers non-zero if the handle was valid.
 pub fn destroy_ssl(handle: isize) -> isize {
-    let mut table = TABLE.lock().expect("SSL handle table poisoned");
+    // A refused table answers 0, exactly as an unknown handle does.
+    let Ok(mut table) = poison::lock(&TABLE) else {
+        return 0;
+    };
     let taken = usize::try_from(handle)
         .ok()
         .and_then(|slot| table.get_mut(slot)?.take());
@@ -685,6 +698,26 @@ pub fn set_int_property_ssl(handle: isize, prop_id: isize, value: isize) -> isiz
 mod tests {
     use super::*;
 
+    /// Serialises the tests that use the process-wide `TABLE`.
+    ///
+    /// `allocate_handle` reuses the lowest free slot, exactly as the C's linear
+    /// scan does, and cargo runs these tests on many threads in one process. So
+    /// one test's `destroy_ssl` frees a slot that another's `create_ssl` hands
+    /// straight back out, and an assertion that a destroyed handle is dead
+    /// reads a live session instead -- which is what
+    /// `destroy_invalidates_the_handle` and `invalid_handles_answer_the_c_error_codes`
+    /// were failing on, intermittently and in either direction.
+    ///
+    /// Held for a whole test rather than for one call: what has to be exclusive
+    /// is the create/use/destroy *sequence*, not any single locking of `TABLE`.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    fn exclusive() -> std::sync::MutexGuard<'static, ()> {
+        SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// The C's numbering: first handle is 1, slot 0 never handed out.
     #[test]
     fn handles_start_at_one() {
@@ -723,6 +756,7 @@ mod tests {
     /// The invalid-handle codes the image relies on, per SqueakSSL.h.
     #[test]
     fn invalid_handles_answer_the_c_error_codes() {
+        let _serial = exclusive();
         let mut buf = [0u8; 16];
         for bad in [-1, 0, 999_999] {
             assert_eq!(connect_ssl(bad, &[], &mut buf), SQSSL_INVALID_STATE);
@@ -740,6 +774,7 @@ mod tests {
     /// Encrypt and decrypt demand an established session.
     #[test]
     fn encrypt_and_decrypt_require_connected_state() {
+        let _serial = exclusive();
         let handle = create_ssl();
         let mut buf = [0u8; 16];
         assert_eq!(encrypt_ssl(handle, b"data", &mut buf), SQSSL_INVALID_STATE);
@@ -750,6 +785,7 @@ mod tests {
     /// Destroy invalidates the handle; a second destroy fails.
     #[test]
     fn destroy_invalidates_the_handle() {
+        let _serial = exclusive();
         let handle = create_ssl();
         assert_eq!(destroy_ssl(handle), 1);
         assert_eq!(destroy_ssl(handle), 0);
@@ -760,6 +796,7 @@ mod tests {
     /// Integer properties: version, log level, unknown IDs.
     #[test]
     fn int_properties_behave_like_the_c() {
+        let _serial = exclusive();
         let handle = create_ssl();
         assert_eq!(get_int_property_ssl(handle, SQSSL_PROP_VERSION), 3);
         assert_eq!(get_int_property_ssl(handle, SQSSL_PROP_SSLSTATE), SQSSL_UNUSED);
@@ -777,6 +814,7 @@ mod tests {
     /// values stop at the first NUL; a zero-length write clears to nil.
     #[test]
     fn string_properties_behave_like_the_c() {
+        let _serial = exclusive();
         let handle = create_ssl();
         assert_eq!(
             get_string_property_ssl(handle, SQSSL_PROP_PEERNAME),
@@ -818,6 +856,7 @@ mod tests {
     /// pumping a session that is already connected.
     #[test]
     fn mixed_roles_are_an_invalid_state() {
+        let _serial = exclusive();
         let handle = create_ssl();
         let mut buf = vec![0u8; 1 << 14];
         // Starting a client handshake moves the state to CONNECTING...
@@ -837,6 +876,7 @@ mod tests {
     /// in the BIO for a retry with a bigger buffer.
     #[test]
     fn too_small_destination_answers_minus_one_and_preserves_data() {
+        let _serial = exclusive();
         let handle = create_ssl();
         let mut tiny = [0u8; 4];
         assert_eq!(connect_ssl(handle, &[], &mut tiny), -1);

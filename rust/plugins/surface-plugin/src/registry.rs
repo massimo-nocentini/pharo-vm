@@ -15,6 +15,23 @@
 //! The registry itself never calls through the dispatch tables it stores; it
 //! only hands the `(handle, dispatch)` pair back to the callers in `lib.rs`,
 //! which invoke the client's functions outside the registry lock.
+//!
+//! # Why this is not `pharo_vm_plugin::handles::Registry`
+//!
+//! The SDK's registry closes exactly the hole listed third above: its handles
+//! carry a generation, a type tag and a session byte, so a stale ID fails with
+//! `NotFound` instead of naming the slot's new occupant. This registry is
+//! deliberately **not** migrated to it, and the difference is not an oversight.
+//!
+//! These IDs are a published C ABI. `ioRegisterSurface` hands one out through
+//! `SurfacePlugin.h`, the `sqSurfaceDispatch` table is keyed by it, and
+//! BitBltPlugin reads one straight out of a Form's `bits` field and feeds it to
+//! `ioGetSurfaceFormat` (`bit-blt-plugin/src/load.rs`, the `destBits` /
+//! `sourceBits` paths). Re-encoding them would break every C plugin that
+//! registers a surface and every image that computes on a surface ID. So the
+//! stale-ID reuse documented above stays open **by design**, and the guarantee
+//! `pharo_vm_plugin::handles::Handle` makes stops at the registries the SDK
+//! owns -- Cairo's, Pango's and SDL3's.
 
 use core::ffi::c_int;
 use core::ptr;
@@ -234,6 +251,11 @@ impl Default for Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::PoisonError;
+
+    use pharo_vm_plugin::PrimErr;
 
     /// A dispatch table with no functions; enough for identity and version
     /// checks. Leaked on purpose: registered tables must outlive the registry.
@@ -465,5 +487,153 @@ mod tests {
         // showSurface was left null: the caller answers -1 for that, so the
         // registry just reports it as absent.
         assert!(table.showSurface.is_none());
+    }
+
+    // -- fail-fast after a panic mid-registration -----------------------------
+
+    /// Records that a dispatch table nothing should reach was called through.
+    static STALE_CALLED: AtomicBool = AtomicBool::new(false);
+
+    unsafe extern "C" fn stale_lock(
+        _handle: sqIntptr_t,
+        pitch: *mut c_int,
+        _x: c_int,
+        _y: c_int,
+        _w: c_int,
+        _h: c_int,
+    ) -> sqIntptr_t {
+        STALE_CALLED.store(true, Ordering::SeqCst);
+        // Deliberately not 0: `ioLockSurface` answers 0 when it refuses, so a
+        // nonzero answer here is proof the call went through.
+        unsafe { *pitch = -1 };
+        0x0bad
+    }
+
+    /// A panic while [`crate::with_registry`] holds the registry refuses every
+    /// later lock.
+    ///
+    /// The SDK proves the mechanism in
+    /// `pharo-vm-plugin/tests/plugin_mutex_poison.rs`; this proves the
+    /// *wiring* at `crate::with_registry`, which is the half a
+    /// `REGISTRY.clear_poison()` slipped in front of the `poison::lock` would
+    /// silently undo while all 21 tests in the crate stayed green.
+    ///
+    /// The tear is the invariant a [`Slot`] *is*: a client handle and the
+    /// `sqSurfaceDispatch` table that knows how to interpret it, written
+    /// together by `register` and only meaningful together. Once they
+    /// disagree, `ioGetSurfaceFormat`, `ioLockSurface`, `ioUnlockSurface` and
+    /// `ioShowSurface` each copy the pair out and call the *stale* table's
+    /// function with the *other* surface's handle -- handing it four
+    /// out-parameters to write through, in the VM's address space, on behalf
+    /// of a surface that table has never seen. That is what a recovered lock
+    /// would permit, and it is why this registry refuses instead.
+    ///
+    /// It runs in `registry.rs` rather than beside `with_registry` in `lib.rs`
+    /// because `Slot`'s two fields are private to this module and tearing them
+    /// apart individually is the whole point; a child module may reach its
+    /// ancestors' private items, so `crate::with_registry` and
+    /// `crate::REGISTRY` are both in scope here.
+    ///
+    /// The panic is raised by this test rather than injected through a client
+    /// dispatch function on purpose: those are called across `extern "C"`,
+    /// whose abort-on-unwind shim would turn an injected panic into `SIGABRT`
+    /// instead of the unwind the hazard is made of.
+    #[test]
+    fn a_panic_while_the_surface_registry_is_held_refuses_every_later_lock() {
+        let _serial = crate::testing::registry_lock();
+
+        let mut probe = Probe::default();
+        let handle = &mut probe as *mut Probe as usqIntptr_t;
+        let live = Box::into_raw(Box::new(sqSurfaceDispatch {
+            majorVersion: 1,
+            minorVersion: 0,
+            getSurfaceFormat: Some(probe_format),
+            lockSurface: Some(probe_lock),
+            unlockSurface: Some(probe_unlock),
+            showSurface: None,
+        }));
+        // The table of some other surface: registered nowhere, and the thing
+        // a torn slot would point at.
+        let stale = Box::into_raw(Box::new(sqSurfaceDispatch {
+            majorVersion: 1,
+            minorVersion: 0,
+            getSurfaceFormat: None,
+            lockSurface: Some(stale_lock),
+            unlockSurface: None,
+            showSurface: None,
+        }));
+
+        // --- healthy -------------------------------------------------------
+        let id = crate::with_registry(|r| unsafe { r.register(handle, live) })
+            .expect("a fresh module hands out the registry")
+            .expect("a slot");
+        assert_eq!(
+            crate::with_registry(|r| r.dispatch_entry(id)),
+            Ok(Some((handle, live))),
+            "the pair the client registered, as one"
+        );
+
+        // --- a panic between the two halves of a slot ----------------------
+        let torn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::with_registry(|r| {
+                // Half of a re-registration: the dispatch table is replaced,
+                // the handle beside it is not.
+                r.slots[id as usize].dispatch = stale;
+                panic!("the client's dispatch table could not be read");
+            })
+        }));
+        assert!(torn.is_err());
+
+        // The slot really is torn, which is what makes the assertions below
+        // mean something. Reached the way the old code reached it -- and this
+        // is the only place in the crate that may still do so.
+        {
+            let recovered = crate::REGISTRY
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            assert_eq!(
+                recovered.dispatch_entry(id),
+                Some((handle, stale)),
+                "a swallowed poison hands back exactly this mismatched pair"
+            );
+        }
+
+        // --- the fix -------------------------------------------------------
+        assert_eq!(
+            crate::with_registry(|r| r.surface_count()).err(),
+            Some(PrimErr::Unsupported),
+            "a slot whose handle and dispatch table disagree must never be \
+             handed to a caller"
+        );
+
+        // The image-visible half: the dispatcher refuses instead of calling
+        // the stale table with this surface's handle and four out-pointers.
+        STALE_CALLED.store(false, Ordering::SeqCst);
+        let mut pitch: c_int = 0;
+        // SAFETY: `pitch` is writable; nothing else is dereferenced on the
+        // path this must take.
+        let locked = unsafe { crate::ioLockSurface(id, &mut pitch, 0, 0, 1, 1) };
+        assert_eq!(locked, 0, "the dispatcher answers its failure value");
+        assert!(
+            !STALE_CALLED.load(Ordering::SeqCst),
+            "and never reached the stale sqSurfaceDispatch entry"
+        );
+        assert_eq!(pitch, 0, "nothing wrote through the out-parameter");
+
+        // --- teardown ------------------------------------------------------
+        //
+        // The assertions are made; this restores the binary for the other
+        // test that shares `registry_lock`, which is still blocked on the
+        // guard held above. It is the only `clear_poison` in the crate, it is
+        // `#[cfg(test)]`, and no image can reach it -- `with_registry` is
+        // still the only way in from a primitive, and it still refuses.
+        crate::REGISTRY.clear_poison();
+        crate::with_registry(Registry::reset).expect("cleared");
+        // SAFETY: both tables came from `Box::into_raw` just above, and the
+        // reset registry no longer refers to either.
+        unsafe {
+            drop(Box::from_raw(live));
+            drop(Box::from_raw(stale));
+        }
     }
 }

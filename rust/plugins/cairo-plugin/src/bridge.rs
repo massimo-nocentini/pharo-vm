@@ -42,6 +42,8 @@ use std::sync::OnceLock;
 use pharo_vm_plugin::sqInt;
 
 use crate::ffi::cairo;
+use pharo_vm_plugin::handles::Handle;
+
 use crate::resources::{Context, CONTEXTS};
 
 /// The bridge ABI this library implements.
@@ -188,8 +190,11 @@ pub unsafe extern "C" fn cairoPluginBorrowContext_v1(
         };
         // Resolved every time, never cached. A destroyed context answers
         // NotFound here rather than a dangling pointer, which is the whole
-        // point of the registry's generation counter.
-        let Ok(cr) = CONTEXTS.with(handle, Context::as_ptr) else {
+        // point of the registry's generation counter -- and the handle is
+        // decoded rather than trusted, because this entry point takes a raw
+        // `sqInt` from another shared library, so a value the stack could
+        // never carry can arrive here.
+        let Ok(cr) = Handle::decode(handle).and_then(|h| CONTEXTS.with(h, Context::as_ptr)) else {
             return 0;
         };
         if cr.is_null() {
@@ -232,7 +237,7 @@ pub extern "C" fn cairoPluginContextStatus_v1(handle: sqInt) -> c_int {
         let Some(status_of) = c.cairo_status else {
             return -1;
         };
-        let Ok(cr) = CONTEXTS.with(handle, Context::as_ptr) else {
+        let Ok(cr) = Handle::decode(handle).and_then(|h| CONTEXTS.with(h, Context::as_ptr)) else {
             return -1;
         };
         if cr.is_null() {

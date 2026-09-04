@@ -621,3 +621,147 @@ fn an_external_edge_stops_rendering_with_the_get_entry_reason() {
     assert_eq!(e.wb_at(GWStopReason), GErrorGETEntry);
     assert_eq!(e.wb_at(GWState), GEStateWaitingForEdge);
 }
+
+// ---------------------------------------------------------------------------
+// Fail-fast after a panic mid-mutation of the plugin globals
+// ---------------------------------------------------------------------------
+
+/// The `Section` around [`crate::with_globals`], and what deleting it costs.
+///
+/// This site is not like the others in the tree. There is no mutex here for
+/// `std` to poison: [`crate::GLOBALS`] is a bare `UnsafeCell` asserted `Sync`
+/// on the single-interpreter-thread contract, exactly as the C left those
+/// globals in file scope. So `Section::enter` is not an addition to a mutex's
+/// own poison -- it is the *whole* of the fail-fast story, and deleting the one
+/// line
+///
+/// ```ignore
+/// let _section = Section::enter();
+/// ```
+///
+/// leaves nothing at all behind it. The SDK proves the mechanism in
+/// `pharo-vm-plugin/tests/section_without_a_mutex.rs`; this proves the wiring
+/// at the real site, on the real globals, through a real exported primitive.
+///
+/// The invariant is the one `with_globals`' own doc names: `initialiseModule`
+/// writes `loadBBFn` and `copyBitsFn` as a pair and `moduleUnloaded` nulls
+/// them as a pair, so a panic between the two leaves one live function pointer
+/// into a `dlclose`d BitBltPlugin -- which `loadBitBltFrom` and the engine's
+/// span blitter then call. Nothing downstream can tell that pointer from a
+/// good one; poisoning the module so no later primitive body runs is the only
+/// thing that stops the call.
+///
+/// This module owns the panic hook for the whole test binary, which is safe
+/// because nothing else in `tests.rs` opens a `Section` (no other test calls
+/// `with_globals` or any primitive) and because `poison::is_poisoned` is
+/// per-cdylib and never cleared -- so this test may set it, and must be the
+/// only one that cares.
+#[cfg(test)]
+mod poison_wiring {
+    use core::ffi::c_void;
+    use std::sync::atomic::{AtomicIsize, Ordering};
+
+    use pharo_vm_plugin::{poison, sqInt, PrimErr, VirtualMachine};
+
+    /// The code the last refused primitive reported through the proxy.
+    static FAILED_WITH: AtomicIsize = AtomicIsize::new(-1);
+
+    unsafe extern "C" fn primitiveFailFor(code: sqInt) -> sqInt {
+        FAILED_WITH.store(code, Ordering::SeqCst);
+        code
+    }
+
+    unsafe extern "C" fn methodReturnReceiver() -> sqInt {
+        0
+    }
+
+    /// A stand-in for a `BitBltPlugin` entry point `ioLoadFunctionFrom` found.
+    const A_LOADED_FN: *const c_void = 0x1000 as *const c_void;
+
+    #[test]
+    fn a_panic_inside_with_globals_disables_the_module() {
+        // SAFETY: every field is an `Option<fn>`, whose all-zero bit pattern
+        // is `None`; only the two entries filled in below are called through,
+        // and the gate under test is what guarantees no other one is reached.
+        let mut vt: VirtualMachine = unsafe { core::mem::zeroed() };
+        vt.primitiveFailFor = Some(primitiveFailFor);
+        vt.methodReturnReceiver = Some(methodReturnReceiver);
+        let vt: &'static mut VirtualMachine = Box::leak(Box::new(vt));
+        // Installs the panic hook, which is what this whole test depends on.
+        assert_eq!(
+            pharo_vm_plugin::__private::set_interpreter(vt, "B2DPlugin"),
+            1
+        );
+
+        // --- healthy -------------------------------------------------------
+        //
+        // The pair as `initialiseModule` leaves it: both entry points found.
+        crate::with_globals(|g| {
+            g.loadBBFn = A_LOADED_FN;
+            g.copyBitsFn = A_LOADED_FN;
+        });
+        assert!(
+            !poison::is_poisoned(),
+            "a module whose globals nothing has torn"
+        );
+
+        // --- a panic outside every section ---------------------------------
+        //
+        // No `Section` open, so this is an ordinary primitive failure and the
+        // module carries on. Anything else would let one bad argument deep in
+        // a rasterizer loop disable the plugin for the rest of the session.
+        let outside = std::panic::catch_unwind(|| panic!("nothing is mid-mutation"));
+        assert!(outside.is_err());
+        assert!(!poison::is_poisoned(), "a panic over nothing is not poison");
+
+        // --- a panic between the two writes --------------------------------
+        let inside = std::panic::catch_unwind(|| {
+            crate::with_globals(|g| {
+                // `moduleUnloaded` nulls the two together; this is the first
+                // of them.
+                g.loadBBFn = core::ptr::null();
+                panic!("the proxy raised an error mid-unload");
+            });
+        });
+        assert!(inside.is_err());
+
+        assert!(
+            poison::is_poisoned(),
+            "with no mutex to poison, the Section is the only thing that can \
+             tell the hook this panic tore something"
+        );
+
+        // The globals really are torn, which is what makes the gate matter.
+        crate::with_globals(|g| {
+            assert!(g.loadBBFn.is_null(), "one half nulled");
+            assert_eq!(
+                g.copyBitsFn, A_LOADED_FN,
+                "and the other still a live pointer into a dlclose'd library"
+            );
+        });
+
+        // --- so the next primitive fails fast, without running its body ----
+        //
+        // `primitiveDoProfileStats` is the shortest body that reaches these
+        // globals: it reads `doProfileStats`, asks the proxy for the new
+        // value, and writes it back. The proxy table above has no
+        // `stackObjectValue`, so if the body ran it would panic into the
+        // wrapper's fence and report `GenericFailure` -- which is why the code
+        // asserted here also proves the gate is *before* the body and not
+        // after it.
+        let before = crate::with_globals(|g| g.doProfileStats);
+        FAILED_WITH.store(-1, Ordering::SeqCst);
+        assert_eq!(crate::primitiveDoProfileStats(), 0);
+        assert_eq!(
+            FAILED_WITH.load(Ordering::SeqCst),
+            PrimErr::Unsupported.code(),
+            "Unsupported, never NoMemory: the image retries NoMemory after a \
+             scavenge and then a full GC, on every single call"
+        );
+        assert_eq!(
+            crate::with_globals(|g| g.doProfileStats),
+            before,
+            "nothing read or wrote the torn globals"
+        );
+    }
+}

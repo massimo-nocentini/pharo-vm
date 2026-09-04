@@ -15,7 +15,14 @@ crate-type = ["cdylib"]
 # on crates.io this becomes `pharo-vm-plugin = "0.1"`.
 pharo-vm-plugin = { path = "/path/to/pharo-vm/rust/pharo-vm-plugin" }
 
-[profile.release]
-# A panic must never unwind into the interpreter. The SDK catches panics at
-# every primitive boundary; aborting is the belt to that pair of braces.
-panic = "abort"
+# Deliberately no `[profile.release] panic = "abort"` here.
+#
+# The SDK fences every primitive body in `catch_unwind`, which is what turns a
+# panic into a clean primitive failure instead of a dead image. `panic =
+# "abort"` makes that catch dead code -- the process is gone before it can run
+# -- so it defeats the very guarantee it looks like it is reinforcing. Leave
+# the default (unwind).
+#
+# Panics still never reach C: the catch is at the `extern "C"` boundary, and
+# any of your own `extern "C"` entry points *outside* that fence keep aborting
+# on unwind anyway, which rustc arranges for you.

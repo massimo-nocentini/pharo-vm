@@ -36,6 +36,7 @@ use core::ffi::{c_char, c_int, c_void};
 use core::marker::PhantomData;
 use std::sync::Mutex;
 
+use pharo_vm_plugin::poison::{self, Guarded};
 use pharo_vm_plugin::{pharo_primitive, sqInt, Interp, PrimErr, PrimResult};
 
 use crate::ffi::pango;
@@ -188,10 +189,14 @@ enum State {
 
 static BRIDGE: Mutex<State> = Mutex::new(State::Unresolved);
 
-fn state() -> std::sync::MutexGuard<'static, State> {
-    BRIDGE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+/// The cached lookup, refused once a panic has torn it.
+///
+/// Through [`poison::lock`]: `State::Ready` holds three raw addresses taken
+/// out of another `dlopen`ed library, and a half-written one is a function
+/// pointer this plugin would go on to call. There is no local recovery worth
+/// having for that.
+fn state() -> PrimResult<Guarded<'static, State>> {
+    poison::lock(&BRIDGE)
 }
 
 /// Forgets whatever was resolved, so the next call looks again.
@@ -200,7 +205,13 @@ fn state() -> std::sync::MutexGuard<'static, State> {
 /// `dlclose`s it (`src/common/sqNamedPrims.c:517`), so every pointer taken out
 /// of it dangles -- and from the image, to retry after installing it.
 pub fn forget() {
-    *state() = State::Unresolved;
+    // A refused lock leaves the stale `Bridge` cached, and nothing can reach
+    // it: `poison::lock` only refuses after a panic under this same lock, and
+    // that panic poisoned the module, so `run_primitive` fails every primitive
+    // before `bridge` -- the sole reader -- can run again.
+    if let Ok(mut guard) = state() {
+        *guard = State::Unresolved;
+    }
 }
 
 /// Why the bridge is unavailable, or `None` when it is available.
@@ -243,7 +254,12 @@ pub fn cairo_plugin_library_path(vm: &Interp) -> String {
 /// Copied out rather than borrowed so the registry lock is not held across the
 /// Pango call.
 fn bridge(vm: &Interp) -> Result<Bridge, Absent> {
-    let mut guard = state();
+    // A refused lock is reported as "no bridge": the image gets the same
+    // fallback path as an uninstalled CairoPlugin, which is the honest answer
+    // when the cache cannot be consulted.
+    let Ok(mut guard) = state() else {
+        return Err(Absent::NoBridge);
+    };
     match &*guard {
         State::Ready(b) => return Ok(*b),
         State::Absent(why) => return Err(*why),

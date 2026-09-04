@@ -502,9 +502,11 @@ fn primitiveOpendir(vm: &Interp, dir_name: Oop) -> PrimResult<Oop> {
     };
     let result = process_directory(vm, &conv, &session.fa)?;
     let handle = vm.instantiate(vm.class_byte_array()?, dir::HANDLE_BYTES as sqInt)?;
-    let key = dir::register(session);
+    let key = dir::register(session)?;
     if let Err(e) = vm.write_bytes(handle, 0, &dir::encode_handle(key)) {
-        dir::take(key);
+        // Best effort: a refused registry means the module is poisoned and
+        // this session is unreachable anyway.
+        let _ = dir::take(key);
         return Err(e);
     }
     store_pointer(vm, 2, result, handle)?;
@@ -516,7 +518,7 @@ fn primitiveOpendir(vm: &Interp, dir_name: Oop) -> PrimResult<Oop> {
 fn primitiveReaddir(vm: &Interp, dir_pointer: Oop) -> PrimResult<Oop> {
     let key = validated_session_key(vm, dir_pointer)?;
     let conv = load_converters(vm);
-    let mut sessions = dir::lock();
+    let mut sessions = dir::lock()?;
     let session = sessions
         .get_mut(&key)
         .ok_or_else(|| os_error(vm, FA_BAD_SESSION_ID))?;
@@ -532,7 +534,7 @@ fn primitiveReaddir(vm: &Interp, dir_pointer: Oop) -> PrimResult<Oop> {
 fn primitiveRewinddir(vm: &Interp, dir_pointer: Oop) -> PrimResult<Oop> {
     let key = validated_session_key(vm, dir_pointer)?;
     let conv = load_converters(vm);
-    let mut sessions = dir::lock();
+    let mut sessions = dir::lock()?;
     let session = sessions
         .get_mut(&key)
         .ok_or_else(|| os_error(vm, FA_BAD_SESSION_ID))?;
@@ -551,7 +553,7 @@ fn primitiveClosedir(vm: &Interp, dir_pointer: Oop) -> PrimResult<Oop> {
     let key = validated_session_key(vm, dir_pointer)?;
     // Removing first mirrors the C, which invalidates the session before
     // checking closedir's status; a close failure still ends the session.
-    let mut session = dir::take(key).ok_or_else(|| os_error(vm, FA_BAD_SESSION_ID))?;
+    let mut session = dir::take(key)?.ok_or_else(|| os_error(vm, FA_BAD_SESSION_ID))?;
     session.close().map_err(|s| os_error(vm, s))?;
     Ok(dir_pointer)
 }

@@ -22,6 +22,7 @@ use core::sync::atomic::{AtomicI32, AtomicIsize, Ordering};
 use std::os::unix::ffi::OsStrExt;
 use std::sync::Mutex;
 
+use pharo_vm_plugin::poison::{self, Guarded};
 use pharo_vm_plugin::{sqInt, PrimErr, PrimResult};
 
 use crate::address;
@@ -220,10 +221,18 @@ extern "C" {
 
 static STATE: Mutex<ResolverState> = Mutex::new(ResolverState::new());
 
-fn state() -> std::sync::MutexGuard<'static, ResolverState> {
-    // A poisoned lock is unreachable: no code below panics while holding it,
-    // and the workspace aborts on panic anyway.
-    STATE.lock().unwrap_or_else(|e| e.into_inner())
+/// The resolver state, refused once a panic has torn it.
+///
+/// Through [`poison::lock`]. The previous note here -- "a poisoned lock is
+/// unreachable ... the workspace aborts on panic anyway" -- stopped being true
+/// when the plugin cdylibs moved to their own workspace with
+/// `panic = "unwind"` (`rust/plugins/Cargo.toml`): a panic under this lock now
+/// unwinds past the guard and poisons it. What it would leave behind is a
+/// `results` vector re-filled by `get_address_info` with `cursor` still
+/// pointing into the old one, and `gai_result` copies `entry.sockaddr` bytes
+/// straight into an image ByteArray from there.
+fn state() -> PrimResult<Guarded<'static, ResolverState>> {
+    poison::lock(&STATE)
 }
 
 /// The current network session, 0 when uninitialised.
@@ -271,19 +280,19 @@ pub fn network_shutdown() {
 pub fn resolver_abort() {}
 
 /// `sqResolverStatus`.
-pub fn resolver_status() -> i32 {
+pub fn resolver_status() -> PrimResult<i32> {
     if current_session() == 0 {
-        return RESOLVER_UNINITIALISED;
+        return Ok(RESOLVER_UNINITIALISED);
     }
-    if state().last_error != 0 {
-        return RESOLVER_ERROR;
+    if state()?.last_error != 0 {
+        return Ok(RESOLVER_ERROR);
     }
-    RESOLVER_SUCCESS
+    Ok(RESOLVER_SUCCESS)
 }
 
 /// `sqResolverError`.
-pub fn resolver_error() -> c_int {
-    state().last_error
+pub fn resolver_error() -> PrimResult<c_int> {
+    Ok(state()?.last_error)
 }
 
 /// `<netdb.h>`'s `HOST_NOT_FOUND`: the `h_errno` value the C reported for a
@@ -302,8 +311,8 @@ const HOST_NOT_FOUND: c_int = 1;
 /// `getnameinfo` reports EAI codes rather than the `h_errno` the C read, and
 /// `last_h_errno` already flattened those to `HOST_NOT_FOUND` on any platform
 /// without the accessor.
-pub fn start_addr_lookup(net_address: u32) {
-    let mut st = state();
+pub fn start_addr_lookup(net_address: u32) -> PrimResult<()> {
+    let mut st = state()?;
     st.last_error = 0;
     let addr = std::net::IpAddr::V4(std::net::Ipv4Addr::from(net_address));
     match dns_lookup::lookup_addr(&addr) {
@@ -317,18 +326,20 @@ pub fn start_addr_lookup(net_address: u32) {
             st.last_name.clear(); // strncpy of "" cleared the C buffer too
         }
     }
+    Ok(())
 }
 
 /// `sqResolverAddrLookupResultSize`.
-pub fn addr_lookup_result_size() -> usize {
-    state().last_name.len()
+pub fn addr_lookup_result_size() -> PrimResult<usize> {
+    Ok(state()?.last_name.len())
 }
 
 /// `sqResolverAddrLookupResult`: copies `lastName` into the answer String.
-pub fn addr_lookup_result(dest: &mut [u8]) {
-    let st = state();
+pub fn addr_lookup_result(dest: &mut [u8]) -> PrimResult<()> {
+    let st = state()?;
     let n = st.last_name.len().min(dest.len());
     dest[..n].copy_from_slice(&st.last_name[..n]);
+    Ok(())
 }
 
 /// `nameToAddr`: `getaddrinfo` with no hints, first AF_INET result, host
@@ -357,9 +368,9 @@ fn name_to_addr(st: &mut ResolverState, host: &str) -> u32 {
 
 /// `sqResolverStartNameLookup`: synchronous forward lookup; signals the
 /// resolver semaphore before returning.
-pub fn start_name_lookup(host_name: &[u8]) {
+pub fn start_name_lookup(host_name: &[u8]) -> PrimResult<()> {
     {
-        let mut st = state();
+        let mut st = state()?;
         let len = host_name.len().min(MAX_HOST_NAME_LEN);
         // The C copies into a NUL-terminated buffer, so an interior NUL
         // truncates what getaddrinfo sees.
@@ -376,11 +387,12 @@ pub fn start_name_lookup(host_name: &[u8]) {
     }
     // "we're done before we even started"
     signal_resolver();
+    Ok(())
 }
 
 /// `sqResolverNameLookupResult`: fails if the last lookup failed.
 pub fn name_lookup_result() -> PrimResult<u32> {
-    let st = state();
+    let st = state()?;
     if st.last_error != 0 {
         return Err(PrimErr::GenericFailure);
     }
@@ -511,7 +523,7 @@ pub fn get_address_info(
     type_: sqInt,
     protocol: sqInt,
 ) -> PrimResult<()> {
-    let mut st = state();
+    let mut st = state()?;
     st.drop_results();
 
     if current_session() == 0
@@ -666,17 +678,17 @@ pub fn get_address_info(
 
 /// `sqResolverGetAddressInfoSize`: -1 when the cursor is exhausted (not a
 /// failure -- the image tests for -1).
-pub fn gai_size() -> isize {
-    let st = state();
-    match st.current() {
+pub fn gai_size() -> PrimResult<isize> {
+    let st = state()?;
+    Ok(match st.current() {
         None => -1,
         Some(entry) => (address::ADDRESS_HEADER_SIZE + entry.sockaddr.len()) as isize,
-    }
+    })
 }
 
 /// `sqResolverGetAddressInfoResultSize`: writes header + raw sockaddr.
 pub fn gai_result(dest: &mut [u8]) -> PrimResult<()> {
-    let st = state();
+    let st = state()?;
     let entry = st.current().ok_or(PrimErr::GenericFailure)?;
     let len = entry.sockaddr.len();
     if dest.len() < address::ADDRESS_HEADER_SIZE + len {
@@ -690,7 +702,7 @@ pub fn gai_result(dest: &mut [u8]) -> PrimResult<()> {
 
 /// `sqResolverGetAddressInfoFamily`.
 pub fn gai_family() -> PrimResult<sqInt> {
-    let st = state();
+    let st = state()?;
     let entry = st.current().ok_or(PrimErr::GenericFailure)?;
     Ok(match entry.family {
         libc::AF_UNIX => SQ_SOCKET_FAMILY_LOCAL,
@@ -702,7 +714,7 @@ pub fn gai_family() -> PrimResult<sqInt> {
 
 /// `sqResolverGetAddressInfoType`.
 pub fn gai_type() -> PrimResult<sqInt> {
-    let st = state();
+    let st = state()?;
     let entry = st.current().ok_or(PrimErr::GenericFailure)?;
     Ok(match entry.socktype {
         libc::SOCK_STREAM => SQ_SOCKET_TYPE_STREAM,
@@ -713,7 +725,7 @@ pub fn gai_type() -> PrimResult<sqInt> {
 
 /// `sqResolverGetAddressInfoProtocol`.
 pub fn gai_protocol() -> PrimResult<sqInt> {
-    let st = state();
+    let st = state()?;
     let entry = st.current().ok_or(PrimErr::GenericFailure)?;
     Ok(match entry.protocol {
         libc::IPPROTO_TCP => SQ_SOCKET_PROTOCOL_TCP,
@@ -724,14 +736,14 @@ pub fn gai_protocol() -> PrimResult<sqInt> {
 
 /// `sqResolverGetAddressInfoNext`: advances the cursor, answers whether an
 /// entry remains.
-pub fn gai_next() -> bool {
-    let mut st = state();
+pub fn gai_next() -> PrimResult<bool> {
+    let mut st = state()?;
     if st.cursor >= st.results.len() {
         // Already past the end: the C's NULL cursor could not advance.
-        return false;
+        return Ok(false);
     }
     st.cursor += 1;
-    st.cursor < st.results.len()
+    Ok(st.cursor < st.results.len())
 }
 
 // ---------------------------------------------------------------------------
@@ -741,7 +753,7 @@ pub fn gai_next() -> bool {
 /// `sqResolverGetNameInfoSizeFlags`.
 pub fn get_name_info(addr: &[u8], flags: sqInt) -> PrimResult<()> {
     {
-        let mut st = state();
+        let mut st = state()?;
         st.name_info_valid = false;
 
         if !address::address_valid(addr, current_session()) {
@@ -791,7 +803,7 @@ pub fn get_name_info(addr: &[u8], flags: sqInt) -> PrimResult<()> {
 
 /// `sqResolverGetNameInfoHostSize`.
 pub fn ni_host_size() -> PrimResult<usize> {
-    let st = state();
+    let st = state()?;
     if !st.name_info_valid {
         return Err(PrimErr::GenericFailure);
     }
@@ -800,7 +812,7 @@ pub fn ni_host_size() -> PrimResult<usize> {
 
 /// `sqResolverGetNameInfoHostResultSize`.
 pub fn ni_host_result(dest: &mut [u8]) -> PrimResult<()> {
-    let st = state();
+    let st = state()?;
     if !st.name_info_valid || dest.len() < st.host_name_info.len() {
         return Err(PrimErr::GenericFailure);
     }
@@ -810,7 +822,7 @@ pub fn ni_host_result(dest: &mut [u8]) -> PrimResult<()> {
 
 /// `sqResolverGetNameInfoServiceSize`.
 pub fn ni_service_size() -> PrimResult<usize> {
-    let st = state();
+    let st = state()?;
     if !st.name_info_valid {
         return Err(PrimErr::GenericFailure);
     }
@@ -819,7 +831,7 @@ pub fn ni_service_size() -> PrimResult<usize> {
 
 /// `sqResolverGetNameInfoServiceResultSize`.
 pub fn ni_service_result(dest: &mut [u8]) -> PrimResult<()> {
-    let st = state();
+    let st = state()?;
     if !st.name_info_valid || dest.len() < st.serv_name_info.len() {
         return Err(PrimErr::GenericFailure);
     }
@@ -868,11 +880,11 @@ mod tests {
     fn session_starts_and_stops() {
         let _guard = net_lock();
         network_shutdown();
-        assert_eq!(resolver_status(), RESOLVER_UNINITIALISED);
+        assert_eq!(resolver_status().unwrap(), RESOLVER_UNINITIALISED);
         assert_eq!(network_init(5), 0);
         assert_ne!(current_session(), 0);
         assert_eq!(network_init(6), 0, "re-init is not an error");
-        assert_eq!(resolver_status(), RESOLVER_SUCCESS);
+        assert_eq!(resolver_status().unwrap(), RESOLVER_SUCCESS);
         network_shutdown();
         assert_eq!(current_session(), 0);
         network_init(5);
@@ -882,13 +894,13 @@ mod tests {
     fn numeric_name_lookup() {
         let _guard = net_lock();
         network_init(0);
-        start_name_lookup(b"127.0.0.1");
-        assert_eq!(resolver_error(), 0);
+        start_name_lookup(b"127.0.0.1").unwrap();
+        assert_eq!(resolver_error().unwrap(), 0);
         assert_eq!(name_lookup_result().unwrap(), 0x7f00_0001);
         // The looked-up name is what addr-lookup-result answers afterwards.
-        assert_eq!(addr_lookup_result_size(), 9);
+        assert_eq!(addr_lookup_result_size().unwrap(), 9);
         let mut buf = vec![0u8; 9];
-        addr_lookup_result(&mut buf);
+        addr_lookup_result(&mut buf).unwrap();
         assert_eq!(&buf, b"127.0.0.1");
     }
 
@@ -897,12 +909,12 @@ mod tests {
         let _guard = net_lock();
         network_init(0);
         // RFC 6761 reserves .invalid: this cannot resolve.
-        start_name_lookup(b"does-not-exist.invalid");
-        assert_ne!(resolver_error(), 0);
+        start_name_lookup(b"does-not-exist.invalid").unwrap();
+        assert_ne!(resolver_error().unwrap(), 0);
         assert!(name_lookup_result().is_err());
-        assert_eq!(resolver_status(), RESOLVER_ERROR);
+        assert_eq!(resolver_status().unwrap(), RESOLVER_ERROR);
         // Clean up for the next test.
-        start_name_lookup(b"127.0.0.1");
+        start_name_lookup(b"127.0.0.1").unwrap();
     }
 
     #[test]
@@ -919,7 +931,7 @@ mod tests {
         )
         .unwrap();
 
-        let size = gai_size();
+        let size = gai_size().unwrap();
         assert!(size >= (address::ADDRESS_HEADER_SIZE + 8) as isize);
         assert_eq!(gai_family().unwrap(), SQ_SOCKET_FAMILY_INET4);
         assert_eq!(gai_type().unwrap(), SQ_SOCKET_TYPE_STREAM);
@@ -940,8 +952,8 @@ mod tests {
         assert_eq!(&serv, b"80");
 
         // Exhaust the cursor.
-        while gai_next() {}
-        assert_eq!(gai_size(), -1);
+        while gai_next().unwrap() {}
+        assert_eq!(gai_size().unwrap(), -1);
         assert!(gai_family().is_err());
     }
 
@@ -986,7 +998,7 @@ mod tests {
         // requested TCP is not what comes back: zero is.
         assert_eq!(gai_protocol().unwrap(), SQ_SOCKET_PROTOCOL_UNSPECIFIED);
 
-        let size = gai_size();
+        let size = gai_size().unwrap();
         assert_eq!(
             size,
             (address::ADDRESS_HEADER_SIZE + mem::size_of::<libc::sockaddr_un>()) as isize,
@@ -1011,7 +1023,7 @@ mod tests {
 
         drop(listener);
         let _ = std::fs::remove_file(&path);
-        start_name_lookup(b"127.0.0.1");
+        start_name_lookup(b"127.0.0.1").unwrap();
     }
 
     #[test]
@@ -1057,19 +1069,23 @@ mod tests {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
             assert!(lookup().is_err(), "the C's `goto fail`");
-            assert_ne!(resolver_error(), 0, "lastError carries the EAI code");
             assert_ne!(
-                resolver_error(),
+                resolver_error().unwrap(),
+                0,
+                "lastError carries the EAI code"
+            );
+            assert_ne!(
+                resolver_error().unwrap(),
                 EAI_BADHINTS,
                 "only EAI_BADHINTS is the succeed-with-nothing case"
             );
-            assert_eq!(resolver_status(), RESOLVER_ERROR);
+            assert_eq!(resolver_status().unwrap(), RESOLVER_ERROR);
         }
         #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         {
             assert!(lookup().is_ok(), "succeed with zero results");
-            assert_eq!(resolver_error(), 0);
-            assert_eq!(gai_size(), -1, "and there really are none");
+            assert_eq!(resolver_error().unwrap(), 0);
+            assert_eq!(gai_size().unwrap(), -1, "and there really are none");
         }
 
         // Both arguments empty is the same question asked through a different
@@ -1095,11 +1111,11 @@ mod tests {
                 "the C's `goto fail`, reached with no node and no service"
             );
             assert_eq!(
-                resolver_error(),
+                resolver_error().unwrap(),
                 libc::EAI_NONAME,
                 "what getaddrinfo(NULL, NULL, ..) answers on Darwin"
             );
-            assert_eq!(resolver_status(), RESOLVER_ERROR);
+            assert_eq!(resolver_status().unwrap(), RESOLVER_ERROR);
         }
         #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         {
@@ -1115,12 +1131,12 @@ mod tests {
                 .is_ok(),
                 "succeed with zero results"
             );
-            assert_eq!(resolver_error(), 0);
-            assert_eq!(gai_size(), -1, "and there really are none");
+            assert_eq!(resolver_error().unwrap(), 0);
+            assert_eq!(gai_size().unwrap(), -1, "and there really are none");
         }
 
         // Leave the shared resolver state clean for the other tests.
-        start_name_lookup(b"127.0.0.1");
+        start_name_lookup(b"127.0.0.1").unwrap();
     }
 
     #[test]
@@ -1150,17 +1166,155 @@ mod tests {
     fn reverse_lookup_records_a_result_or_an_error() {
         let _guard = net_lock();
         network_init(0);
-        start_addr_lookup(0x7f00_0001);
+        start_addr_lookup(0x7f00_0001).unwrap();
         // Whether the sandbox can reverse-resolve 127.0.0.1 is environment-
         // dependent; the contract is: either a name arrived and no error, or
         // no name and an error.
-        let size = addr_lookup_result_size();
+        let size = addr_lookup_result_size().unwrap();
         if size == 0 {
-            assert_ne!(resolver_error(), 0);
+            assert_ne!(resolver_error().unwrap(), 0);
         } else {
-            assert_eq!(resolver_error(), 0);
+            assert_eq!(resolver_error().unwrap(), 0);
         }
         // Restore a clean resolver state.
-        start_name_lookup(b"127.0.0.1");
+        start_name_lookup(b"127.0.0.1").unwrap();
+    }
+
+    // -----------------------------------------------------------------------
+    // Fail-fast after a panic mid-lookup
+    // -----------------------------------------------------------------------
+
+    /// A panic while [`state`] is held refuses every later lock.
+    ///
+    /// The SDK proves the mechanism in
+    /// `pharo-vm-plugin/tests/plugin_mutex_poison.rs`; this proves the
+    /// *wiring* here, which is the half a `STATE.clear_poison()` slipped in
+    /// front of the `poison::lock` would silently undo while all 38 tests in
+    /// the crate stayed green.
+    ///
+    /// The tear is the one the accessor's own doc names. `get_address_info`
+    /// replaces `results` with the new lookup's answers and only then resets
+    /// `cursor`; a panic between those two leaves the cursor indexing the new
+    /// list at a position that meant something in the old one. Nothing about
+    /// that is detectable downstream -- `current()` finds an entry, `gai_size`
+    /// reports its length, and `gai_result` copies its `sockaddr` bytes
+    /// verbatim into the image's SocketAddress ByteArray, which the image
+    /// round-trips straight back into `bind`/`connect`. So a recovered lock
+    /// does not merely answer stale data: it points the image's next
+    /// connection at a host it never asked to resolve. Refusing is the only
+    /// answer, and refusing is what all eight of this module's `getaddrinfo`
+    /// accessors now propagate -- which is the other half of what this test
+    /// pins, since making them fallible was the change that made refusing
+    /// expressible at all.
+    ///
+    /// It holds [`net_lock`] for its whole body, including the window in which
+    /// `STATE` is poisoned: every test in this crate that can reach `STATE`
+    /// takes that lock, so none of them observes the window. The teardown at
+    /// the end is what hands the binary back.
+    ///
+    /// The panic is raised by this test rather than injected through the proxy
+    /// on purpose: every plugin-to-VM call crosses `extern "C"`, whose
+    /// abort-on-unwind shim would turn an injected panic into `SIGABRT`
+    /// instead of the unwind the hazard is made of.
+    #[test]
+    fn a_panic_while_the_resolver_state_is_held_refuses_every_later_lock() {
+        use std::sync::PoisonError;
+
+        let _guard = net_lock();
+        network_init(0);
+
+        // --- healthy: a lookup, and a caller part-way through its answers --
+        get_address_info(
+            b"127.0.0.1",
+            b"80",
+            SQ_SOCKET_NUMERIC,
+            SQ_SOCKET_FAMILY_INET4,
+            SQ_SOCKET_TYPE_STREAM,
+            SQ_SOCKET_PROTOCOL_TCP,
+        )
+        .expect("a fresh module resolves");
+
+        // A second answer, so that walking the list is meaningful -- one
+        // `getaddrinfo` call routinely answers several, and the image walks
+        // them with `sqResolverGetAddressInfoNext`.
+        let asked_for = {
+            let mut st = state().expect("a fresh module hands out the state");
+            let first = st.results.first().expect("one answer").clone();
+            let second = ResolvedAddr {
+                sockaddr: vec![0xAA; first.sockaddr.len()],
+                ..first
+            };
+            st.results.push(second.clone());
+            second.sockaddr
+        };
+        assert!(gai_next().expect("still healthy"), "walked to the second");
+
+        // --- a panic between the refill and the cursor reset ---------------
+        let never_asked_for = vec![0xBBu8; asked_for.len()];
+        let replacement = never_asked_for.clone();
+        let torn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut st = state().expect("still healthy");
+            let template = st.results.first().expect("one answer").clone();
+            // The next lookup's answers are in place ...
+            st.results = vec![
+                template.clone(),
+                ResolvedAddr {
+                    sockaddr: replacement,
+                    ..template
+                },
+            ];
+            // ... and `st.cursor = 0` is the statement after this one.
+            panic!("getaddrinfo raised mid-refill");
+        }));
+        assert!(torn.is_err());
+
+        // The state really is torn, which is what makes the assertions below
+        // mean something. Reached the way the old code reached it -- and this
+        // is the only place in the crate that may still do so.
+        {
+            let recovered = STATE.lock().unwrap_or_else(PoisonError::into_inner);
+            assert_eq!(recovered.cursor, 1, "still indexing the old list");
+            assert_eq!(
+                recovered.current().map(|e| e.sockaddr.clone()),
+                Some(never_asked_for),
+                "a swallowed poison hands the image this address, which it \
+                 never asked to resolve, in place of the one it did"
+            );
+        }
+
+        // --- the fix -------------------------------------------------------
+        assert_eq!(
+            state().err(),
+            Some(PrimErr::Unsupported),
+            "a cursor indexing the wrong list must never be handed to a caller"
+        );
+
+        // And every accessor above it propagates that refusal rather than
+        // answering out of the torn pair. These eight are the ones the repair
+        // pass made fallible; a `PrimResult` they threw away would put this
+        // whole file back where it started.
+        let mut dest = vec![0u8; address::ADDRESS_HEADER_SIZE + asked_for.len()];
+        assert_eq!(gai_size().err(), Some(PrimErr::Unsupported));
+        assert_eq!(gai_result(&mut dest).err(), Some(PrimErr::Unsupported));
+        assert_eq!(gai_family().err(), Some(PrimErr::Unsupported));
+        assert_eq!(gai_type().err(), Some(PrimErr::Unsupported));
+        assert_eq!(gai_protocol().err(), Some(PrimErr::Unsupported));
+        assert_eq!(gai_next().err(), Some(PrimErr::Unsupported));
+        assert_eq!(resolver_status().err(), Some(PrimErr::Unsupported));
+        assert_eq!(resolver_error().err(), Some(PrimErr::Unsupported));
+        assert!(
+            dest.iter().all(|&b| b == 0),
+            "and nothing was copied into the image's SocketAddress ByteArray"
+        );
+
+        // --- teardown ------------------------------------------------------
+        //
+        // The assertions are made; this hands the binary back to the other 37
+        // tests, which are all still blocked on the `net_lock` held above. It
+        // is the only `clear_poison` in this crate outside `net_lock` itself,
+        // it is `#[cfg(test)]`, and no image can reach it -- `state` is still
+        // the only way in from a primitive, and it still refuses.
+        STATE.clear_poison();
+        *state().expect("cleared") = ResolverState::new();
     }
 }

@@ -33,8 +33,9 @@ beside the executable first. Every entry is optional.
 ## Handles, and SDL's cascade
 
 Windows, renderers and textures live in registries; the image gets
-SmallInteger handles that carry a generation counter, so a stale one fails the
-primitive instead of dereferencing freed memory.
+SmallInteger handles that carry a generation counter, a type tag and a session
+byte, so a stale one -- or one belonging to another of the three registries --
+fails the primitive instead of dereferencing freed memory.
 
 SDL makes this harder than Cairo does, because its objects are **not** reference
 counted: destroying a renderer destroys the textures made from it, and
@@ -48,6 +49,27 @@ lie.
 `primitiveQuit` releases everything before calling `SDL_Quit`, for the same
 reason. Note that module shutdown deliberately does *not* call `SDL_Quit`: the
 image may have brought SDL up by another route.
+
+### Divergences: what the handle encoding does and does not promise
+
+A handle carries a **type tag** as well as a slot index and a generation, so a
+texture handle passed to a window primitive fails with
+`PrimErr::BadArgument` instead of resolving. Before the tag every registry here
+shared one encoding, and the first insert into each answered the *same*
+integer — a live bug, reproducible on the first two objects of every session.
+The tags are declared once in `resources.rs` through
+`pharo_vm_plugin::resource_tags!`, which proves them distinct at compile time.
+
+Two consequences worth knowing:
+
+* **`primitiveWindowIsLive` answers `false` for a live resource of the wrong
+  kind.** An image that used to read `true` there now reads `false`. That is the
+  fix rather than a regression — a texture is not a live window — but it is image-visible.
+* **On a 32-bit image there is no session byte.** A handle the image saved in an
+  inst var and replayed after a restart is caught on 64-bit (the handle carries
+  the low byte of `getThisSessionID`, 255/256 detection) and is **not** caught on
+  32-bit, where the 30 available magnitude bits go entirely to index, generation
+  and a 4-bit tag. See `pharo_vm_plugin::handles` for the arithmetic.
 
 ## Threading
 

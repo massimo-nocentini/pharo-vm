@@ -1,5 +1,6 @@
 //! Patterns: solid colours, gradients, and surfaces used as paint.
 
+use pharo_vm_plugin::handles::Handle;
 use pharo_vm_plugin::{pharo_primitive, sqInt, Interp, Oop, PrimErr, PrimResult};
 
 use crate::ffi::{cairo, cairo_matrix_t, cc};
@@ -11,7 +12,7 @@ macro_rules! pattern_constructor {
         $(#[$meta])*
         #[allow(clippy::too_many_arguments)]
         #[pharo_primitive]
-        fn $prim(_vm: &Interp $(, $arg: f64)*) -> PrimResult<sqInt> {
+        fn $prim(_vm: &Interp $(, $arg: f64)*) -> PrimResult<Handle<Pattern>> {
             let c = cairo()?;
             let ptr = cc!(c, $entry($($arg),*));
             PATTERNS.insert(Pattern::adopt(ptr)?)
@@ -43,7 +44,7 @@ pattern_constructor!(
 /// the image's handle on it -- which is why destroying a surface still
 /// referenced this way keeps its backing store pinned.
 #[pharo_primitive]
-fn primitivePatternCreateForSurface(_vm: &Interp, surface: sqInt) -> PrimResult<sqInt> {
+fn primitivePatternCreateForSurface(_vm: &Interp, surface: sqInt) -> PrimResult<Handle<Pattern>> {
     let c = cairo()?;
     let ptr = with_surface(surface, |s| Ok(cc!(c, cairo_pattern_create_for_surface(s))))?;
     PATTERNS.insert(Pattern::adopt(ptr)?)

@@ -110,10 +110,22 @@ Return any type implementing `IntoReturn`:
 |---|---|
 | `()` | the receiver (Smalltalk's default) |
 | `Oop` | that object |
-| `isize` / `i32` | a SmallInteger |
+| `isize` / `i32` | a SmallInteger, or a LargeInteger when it does not fit |
+| `Handle<R>` | the SmallInteger the image holds the resource by |
 | `bool` | `true` / `false` |
 | `f64` | a Float |
-| `&str` | a String |
+| `&str` / `String` | a String |
+| `Vec<u8>` | a ByteArray of those bytes (empty vector → empty ByteArray, not nil) |
+| `Option<T>` | what `T` answers, or `nil` for `None` |
+
+The rows that allocate — the integers that do not fit a SmallInteger, `&str`,
+`String`, `Vec<u8>`, and `Some` of any of those — can fail with
+`PrimErr::NoMemory`, and that happens *after* your body has returned. The VM's
+answer to `PrimErrNoMemory` from an external primitive is to collect and **run
+the primitive again** from the top, so a body that changed Rust-side state and
+then failed to allocate its answer is re-entered against the state it already
+changed. Allocate first, mutate last; the `IntoReturn` docs spell out the
+alternatives when the order cannot be arranged.
 
 ## Reading and writing what you were handed
 
@@ -179,22 +191,64 @@ failure against a forwarded argument. The default errs high deliberately.
 
 Two optional pieces for a plugin that fronts something other than the image.
 
-**`handles::Registry<T>`** keeps the resource on the Rust side and gives the
-image an integer. The integer carries a slot index *and* a generation counter,
-so a handle on a destroyed resource fails with `PrimErr::NotFound` rather than
-resolving to whatever took the slot:
+**`handles::Registry<R>`** keeps the resource on the Rust side and gives the
+image an integer. That integer is a `Handle<R>`, and it carries four fields:
+
+| field | what it catches | failure |
+|---|---|---|
+| slot index | nothing on its own — it is the address | |
+| generation | a handle on a **destroyed** resource | `NotFound` |
+| type tag | a handle from **another registry in this same library** | `BadArgument` |
+| session byte | a handle the image **saved and replayed in a later run** | `NotFound` |
 
 ```rust
+static SURFACES: Registry<Surface> = Registry::new();
 static CONTEXTS: Registry<Context> = Registry::new();
+
+// One invocation per plugin, next to the statics. The macro proves the tags
+// are pairwise distinct and non-zero at compile time.
+resource_tags! { Surface = 1, Context = 2 }
 
 let handle = CONTEXTS.insert(Context::new()?)?;   // hand this to the image
 CONTEXTS.with(handle, |ctx| ctx.paint())?;        // and take it back later
 drop(CONTEXTS.remove(handle)?);                   // destroyed exactly once
 ```
 
-Handles always fit in a SmallInteger, and 0 is never one. `handles_where` finds
-every live resource matching a predicate, for a library whose objects own each
-other and whose destroy call invalidates handles the image still holds.
+Without the tag every registry in a library shares one encoding, so the first
+insert into each answers the *same* integer and a context handle passed to a
+surface primitive **resolves**. One library is the scope the check covers,
+because `Handle::decode` compares against the `R::TAG` of a type belonging to
+the library running it — not because two `dlopen`ed libraries cannot exchange a
+handle. They can: PangoPlugin forwards a CairoPlugin context handle across the
+bridge without decoding it, and CairoPlugin decodes it against its own tags.
+Two plugins that pick the same literal for different kinds *can* therefore
+confuse one another at such a bridge, and CairoPlugin and PangoPlugin both use
+2; see the `handles` module docs for the scope of that.
+
+`Handle::decode` is the only route from a bare `sqInt` to a typed handle — keep
+it to the handful of accessor functions that front your registries, and let
+primitives take a `Handle<Context>` argument or answer a
+`PrimResult<Handle<Surface>>` from there on; `StackArg` and `IntoReturn` do the
+rest, and the tag is checked while the stack slot is read, before any registry
+is locked. `is_live` keeps its `sqInt` parameter, because that is the primitive
+the image calls to ask *about* an integer — and it now answers `false` for a
+live resource of the wrong kind.
+
+Handles always fit in a SmallInteger, and 0 is never one. `remove_where` takes
+out every live resource matching a predicate and answers them, for a library
+whose objects own each other and whose destroy call invalidates entries the
+image still holds handles on — it sweeps by slot index rather than by handle so
+that a slot with no encodable handle is swept too.
+
+Two limits, stated plainly. **A 32-bit image gets no session byte and a 4-bit
+tag** (14/12/4/0 against 64-bit's 24/20/8/8), so a handle saved across a
+snapshot is not detected there, and a registry can mint 2^14 * (2^12 - 1) =
+67,092,480 handles for the whole life of the process — after which `insert`
+answers `LimitExceeded` for that registry **forever**, because a slot that has
+reached the top generation is retired rather than refilled and destroying
+resources wins none of the budget back. It is a lifetime, not a rate. And the
+session byte is the low byte of a time-derived id, so detection is 255/256, not
+certainty.
 
 **`dylib`** (behind the `dylib` feature, which is off by default so the crate
 otherwise has no dependencies) opens a library the VM bundle ships beside the
@@ -221,6 +275,27 @@ way.
 - *Panics never reach C.* Every primitive body runs in `catch_unwind`; a panic
   becomes a clean primitive failure. Letting a panic unwind into the
   interpreter would be undefined behaviour.
+
+  This holds only if the cdylib is built to unwind, and that is a property of
+  the **workspace root**, not of the crate: cargo ignores a `[profile]` in a
+  member. In-tree plugins get it from `rust/plugins/Cargo.toml`; out of tree,
+  simply do not set `panic = "abort"` — the default is what the promise needs.
+  Under abort there is nothing to catch and the process dies instead, which is
+  what this SDK's own plugins did until the workspace was split.
+- *A panic that tore shared state disables the module instead of continuing.*
+  `Registry` holds its mutex across your closure, so a panic in there leaves a
+  slot half-written. Rather than swallow the mutex poison, the registry refuses
+  every later call with `PrimErr::Unsupported`, and a module-wide flag — set
+  from a panic hook that can see a critical section was open — makes every
+  other primitive in that cdylib fail the same way, for the life of the
+  process. There is no reset: nothing in the image can re-establish an
+  invariant it cannot see. `shutdownModule` still runs, but a poisoned
+  `Registry::drain` answers nothing, so a shutdown hook leaks rather than
+  freeing out of a table nobody can trust.
+
+  The flag only sees state a `Registry` owns. For shared mutable state of your
+  own, open a `pharo_vm_plugin::Section` around the mutation and it is covered
+  too. See the `poison` module.
 - *The accessor-depth byte exists.*
 - *`write_bytes` refuses immutable objects*, so you cannot quietly write
   through Pharo's immutability, and bounds-checks the write. So do

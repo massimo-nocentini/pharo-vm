@@ -43,11 +43,13 @@ use crate::ffi::{
     self, gl, glib, pango, pg, GError, PangoFontFace, PangoFontFamily, PangoLanguage,
     PANGO_DIRECTION_MAX, PANGO_GRAVITY_HINT_MAX, PANGO_GRAVITY_MAX,
 };
+use pharo_vm_plugin::handles::Handle;
+
 use crate::resources::{
     self, as_gboolean, destroy_context, destroy_font_map, enum_in, font_map_is_borrowed,
     from_gboolean, register_context, register_font_desc, register_font_map_borrowed,
-    register_font_map_owned, with_context, with_font_desc, with_font_map,
-    with_optional_font_desc,
+    register_font_map_owned, with_context, with_font_desc, with_font_map, with_optional_font_desc,
+    Context, FontDesc, FontMap,
 };
 
 // ---- shared helpers ------------------------------------------------------
@@ -160,7 +162,7 @@ fn describe_faces(
 /// for the image to treat it like any other: the `owned` flag inside the
 /// registry, not the image's discipline, is what keeps it alive.
 #[pharo_primitive]
-fn primitiveDefaultFontMap(vm: &Interp) -> PrimResult<sqInt> {
+fn primitiveDefaultFontMap(vm: &Interp) -> PrimResult<Handle<FontMap>> {
     vm.expect_argument_count(0)?;
     let p = pango()?;
     register_font_map_borrowed(pg!(p, pango_cairo_font_map_get_default()))
@@ -171,7 +173,7 @@ fn primitiveDefaultFontMap(vm: &Interp) -> PrimResult<sqInt> {
 /// A private font map, for the image that wants a resolution or an added font
 /// file that does not leak into every other layout in the process.
 #[pharo_primitive]
-fn primitiveFontMapNew(vm: &Interp) -> PrimResult<sqInt> {
+fn primitiveFontMapNew(vm: &Interp) -> PrimResult<Handle<FontMap>> {
     vm.expect_argument_count(0)?;
     let p = pango()?;
     register_font_map_owned(pg!(p, pango_cairo_font_map_new()))
@@ -249,7 +251,7 @@ fn primitiveFontMapGetResolution(_vm: &Interp, map: sqInt) -> PrimResult<f64> {
 /// from it answer nothing useful; Pango's own documentation says to use this
 /// instead.
 #[pharo_primitive]
-fn primitiveFontMapCreateContext(_vm: &Interp, map: sqInt) -> PrimResult<sqInt> {
+fn primitiveFontMapCreateContext(_vm: &Interp, map: sqInt) -> PrimResult<Handle<Context>> {
     let p = pango()?;
     with_font_map(map, |m| {
         register_context(pg!(p, pango_font_map_create_context(m)))
@@ -436,7 +438,7 @@ fn primitiveContextSerial(_vm: &Interp, context: sqInt) -> PrimResult<sqInt> {
 /// constructor precisely because a context without a font map measures
 /// nothing.
 #[pharo_primitive]
-fn primitiveContextGetFontMap(_vm: &Interp, context: sqInt) -> PrimResult<sqInt> {
+fn primitiveContextGetFontMap(_vm: &Interp, context: sqInt) -> PrimResult<Handle<FontMap>> {
     let p = pango()?;
     let g = glib()?;
     with_context(context, |c| {
@@ -483,19 +485,18 @@ fn primitiveContextSetFontDescription(_vm: &Interp, context: sqInt, desc: sqInt)
 /// double free, and the second free lands wherever the context is next used.
 /// `pango_font_description_copy` first is the whole fix.
 #[pharo_primitive]
-fn primitiveContextGetFontDescription(vm: &Interp, context: sqInt) -> PrimResult<Oop> {
+fn primitiveContextGetFontDescription(
+    _vm: &Interp,
+    context: sqInt,
+) -> PrimResult<Option<Handle<FontDesc>>> {
     let p = pango()?;
-    let handle = with_context(context, |c| {
+    with_context(context, |c| {
         let borrowed = pg!(p, pango_context_get_font_description(c));
         if borrowed.is_null() {
             return Ok(None);
         }
         register_font_desc(pg!(p, pango_font_description_copy(borrowed))).map(Some)
-    })?;
-    match handle {
-        Some(handle) => vm.integer_checked(handle),
-        None => vm.nil(),
-    }
+    })
 }
 
 /// `pango_context_set_language`, from an RFC-3066 tag; **nil resets the

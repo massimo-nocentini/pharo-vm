@@ -1,6 +1,11 @@
 # The smallest possible Pharo VM plugin: one primitive answering a String.
 [package]
 name = "hello-plugin"
+# A cdylib, so it belongs to the plugin workspace, which sets
+# `panic = "unwind"`. Cargo otherwise binds a package to the nearest
+# ancestor manifest carrying [workspace] -- rust/Cargo.toml, which aborts --
+# and refuses to build it as a member of any other.
+workspace = "../../plugins"
 description = "Minimal example Pharo VM plugin in Rust: one primitive that answers a String."
 version.workspace = true
 edition.workspace = true

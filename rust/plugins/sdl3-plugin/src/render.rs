@@ -15,6 +15,7 @@
 
 use core::ffi::c_void;
 
+use pharo_vm_plugin::handles::Handle;
 use pharo_vm_plugin::{pharo_primitive, sqInt, Interp, Oop, PrimErr, PrimResult};
 
 use crate::ffi::{check, sc, sdl, SDL_FRect, SDL_Rect};
@@ -25,7 +26,7 @@ use crate::resources::{
 
 /// `SDL_CreateRenderer`. `name` may be nil to let SDL choose a driver.
 #[pharo_primitive]
-fn primitiveCreateRenderer(vm: &Interp, window: sqInt, name: Oop) -> PrimResult<sqInt> {
+fn primitiveCreateRenderer(vm: &Interp, window: sqInt, name: Oop) -> PrimResult<Handle<Renderer>> {
     let s = sdl()?;
     let name = if vm.is_nil(name)? {
         None
@@ -233,7 +234,7 @@ fn primitiveCreateTexture(
     access: sqInt,
     width: sqInt,
     height: sqInt,
-) -> PrimResult<sqInt> {
+) -> PrimResult<Handle<Texture>> {
     let s = sdl()?;
     let format = as_u32(format)?;
     let access = as_c_int(access)?;

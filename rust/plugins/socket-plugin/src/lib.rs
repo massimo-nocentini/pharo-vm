@@ -256,9 +256,9 @@ fn primitiveResolverAbortLookup(vm: &Interp) -> PrimResult<Answered> {
 #[pharo_primitive(accessor_depth = -1)]
 fn primitiveResolverAddressLookupResult(vm: &Interp) -> PrimResult<Answered> {
     vm_ref::remember(vm);
-    let size = resolver::addr_lookup_result_size();
+    let size = resolver::addr_lookup_result_size()?;
     let result = vm.instantiate(vm.class_string()?, size as sqInt)?;
-    with_bytes_mut(vm, result, resolver::addr_lookup_result)?;
+    with_bytes_mut(vm, result, resolver::addr_lookup_result)??;
     pop_then_push(vm, 1, result)?;
     Ok(Answered)
 }
@@ -266,7 +266,7 @@ fn primitiveResolverAddressLookupResult(vm: &Interp) -> PrimResult<Answered> {
 #[pharo_primitive(accessor_depth = -1)]
 fn primitiveResolverError(vm: &Interp) -> PrimResult<Answered> {
     vm_ref::remember(vm);
-    let error = resolver::resolver_error();
+    let error = resolver::resolver_error()?;
     pop_then_push(vm, 1, vm.integer(error as sqInt)?)?;
     Ok(Answered)
 }
@@ -297,7 +297,7 @@ fn primitiveResolverStartAddressLookup(vm: &Interp) -> PrimResult<Answered> {
         return Err(PrimErr::BadArgument);
     }
     let addr = net_address_arg(vm, address_oop)?;
-    resolver::start_addr_lookup(addr);
+    resolver::start_addr_lookup(addr)?;
     pop_n(vm, 1)?;
     Ok(Answered)
 }
@@ -309,7 +309,7 @@ fn primitiveResolverStartNameLookup(vm: &Interp) -> PrimResult<Answered> {
     if !vm.is_bytes(name_oop)? {
         return Err(PrimErr::BadArgument);
     }
-    resolver::start_name_lookup(vm.bytes_of(name_oop)?);
+    resolver::start_name_lookup(vm.bytes_of(name_oop)?)?;
     pop_n(vm, 1)?;
     Ok(Answered)
 }
@@ -317,7 +317,7 @@ fn primitiveResolverStartNameLookup(vm: &Interp) -> PrimResult<Answered> {
 #[pharo_primitive(accessor_depth = -1)]
 fn primitiveResolverStatus(vm: &Interp) -> PrimResult<Answered> {
     vm_ref::remember(vm);
-    let status = resolver::resolver_status();
+    let status = resolver::resolver_status()?;
     pop_then_push(vm, 1, vm.integer(status as sqInt)?)?;
     Ok(Answered)
 }
@@ -368,7 +368,7 @@ fn primitiveResolverGetAddressInfo(vm: &Interp) -> PrimResult<Answered> {
 #[pharo_primitive(accessor_depth = -1)]
 fn primitiveResolverGetAddressInfoSize(vm: &Interp) -> PrimResult<Answered> {
     vm_ref::remember(vm);
-    let size = resolver::gai_size();
+    let size = resolver::gai_size()?;
     pop_then_push(vm, 1, vm.integer(size as sqInt)?)?;
     Ok(Answered)
 }
@@ -412,7 +412,7 @@ fn primitiveResolverGetAddressInfoProtocol(vm: &Interp) -> PrimResult<Answered> 
 #[pharo_primitive(accessor_depth = -1)]
 fn primitiveResolverGetAddressInfoNext(vm: &Interp) -> PrimResult<Answered> {
     vm_ref::remember(vm);
-    let more = resolver::gai_next();
+    let more = resolver::gai_next()?;
     let answer = bool_oop(vm, more)?;
     pop_then_push(vm, 1, answer)?;
     Ok(Answered)

@@ -11,6 +11,7 @@
 
 use core::ffi::c_uchar;
 
+use pharo_vm_plugin::handles::Handle;
 use pharo_vm_plugin::{pharo_primitive, sqInt, Interp, Oop, PrimErr, PrimResult};
 
 use crate::ffi::{self, cairo, cc};
@@ -28,7 +29,7 @@ fn primitiveImageSurfaceCreate(
     format: sqInt,
     width: sqInt,
     height: sqInt,
-) -> PrimResult<sqInt> {
+) -> PrimResult<Handle<Surface>> {
     let c = cairo()?;
     let format = as_c_int(format)?;
     if !ffi::is_valid_format(format) {
@@ -59,7 +60,7 @@ fn primitiveImageSurfaceCreateForBitmap(
     width: sqInt,
     height: sqInt,
     stride: sqInt,
-) -> PrimResult<sqInt> {
+) -> PrimResult<Handle<Surface>> {
     let c = cairo()?;
     let format = as_c_int(format)?;
     if !ffi::is_valid_format(format) {
@@ -110,7 +111,7 @@ fn primitiveImageSurfaceCreateForBitmap(
 
 /// `cairo_image_surface_create_from_png`.
 #[pharo_primitive]
-fn primitiveImageSurfaceCreateFromPng(vm: &Interp, filename: Oop) -> PrimResult<sqInt> {
+fn primitiveImageSurfaceCreateFromPng(vm: &Interp, filename: Oop) -> PrimResult<Handle<Surface>> {
     let c = cairo()?;
     let path = vm.c_string_value(filename)?;
     let ptr = cc!(c, cairo_image_surface_create_from_png(path.as_ptr()));

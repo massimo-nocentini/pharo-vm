@@ -36,6 +36,59 @@ The two halves are independent. `pharo-platform` is an in-tree port and needs
 the CMake environment; `pharo-vm-plugin` is for people writing plugins outside
 this repo and deliberately needs nothing but cargo.
 
+### Two workspaces, and why
+
+There are two cargo workspaces here, not one:
+
+| Workspace root | Members | `panic` |
+|---|---|---|
+| `rust/Cargo.toml` | `pharo-vm-sys`, `pharo-platform`, `pharo-vm-plugin`, `pharo-vm-plugin-macros` | `abort` |
+| `rust/plugins/Cargo.toml` | the 18 plugin crates, plus `examples/uuid-plugin` and `examples/hello-plugin` as `..` members | `unwind` |
+
+Cargo reads `[profile]` only from a workspace **root** — a `[profile.release]`
+in a member is ignored, with a warning — so the panic strategy can be stated
+once per workspace and nowhere else. The two halves need opposite answers:
+
+* **`pharo-platform` must abort.** It is linked into `libPharoVMCore`, and its
+  `#[no_mangle]` functions are called from the generated interpreter, from the
+  heartbeat at real-time priority, and from signal handlers. Nothing catches
+  above them; unwinding out of one into C is undefined behaviour, and
+  unwinding out of a signal frame corrupts the interrupted context.
+* **The plugin cdylibs must unwind.** Every primitive body runs inside
+  `catch_unwind` in `pharo_vm_plugin::__private::run_primitive`. Under abort
+  that catch is dead code and an `unwrap()` on image input kills the user's
+  image; under unwind it does what the SDK has always documented — the
+  primitive fails, and the image runs its Smalltalk fallback.
+
+`pharo-vm-plugin` is a member of the first workspace *and* a path dependency of
+every plugin in the second, so it is compiled under whichever profile belongs
+to the workspace being built. That is intended: its catches are only
+load-bearing inside the cdylib.
+
+Entry points that are **not** fenced still abort, and must: the
+`sqSurfaceDispatch` slots in `surface-plugin`, the aio handlers in
+`socket-plugin`, and the signal handlers in `unix-os-process-plugin`. Since
+Rust 1.71 a non-`-unwind` `extern "C"` function inserts an abort-on-unwind
+guard at its boundary, so this needs no code: they aborted before the split and
+they abort after it.
+
+The price is two lockfiles, `rust/Cargo.lock` and `rust/plugins/Cargo.lock`,
+both committed. Twelve package names appear in both, and eleven of them at the
+same version — `bitflags`, `cfg-if`, `libc`, `libloading`, `pharo-vm-plugin`,
+`pharo-vm-plugin-macros`, `proc-macro2`, `quote`, `syn`, `unicode-ident`,
+`windows-link`. The twelfth is `shlex`, at 1.3.0 in `rust/` (pulled by
+`bindgen`) and 2.0.1 in `rust/plugins/` (pulled by `cc`). That is not drift the
+split introduced: HEAD's single lockfile already carried both versions, for the
+same two dependants. What the split does change is that `cargo update` in one
+workspace no longer moves the other, so CI passes `--locked` in both.
+
+Outside CMake each workspace has its own `target/` directory; under CMake
+corrosion hardcodes one shared target dir for every import, which is what it
+already did for the ~20 per-crate cargo invocations it spawns.
+
+A panic that happens while shared state is *mid-mutation* is a third case, and
+it does not become a mere failure: see `pharo_vm_plugin::poison`.
+
 ## Building
 
 The Rust layer is **off by default**. The all-C build is unchanged:
@@ -54,8 +107,12 @@ makes differential testing possible.
 dependency on the VM's headers, so they build and test with plain cargo:
 
 ```bash
-cargo test -p pharo-vm-plugin -p uuid-plugin
+cd rust          && cargo test -p pharo-vm-plugin
+cd rust/plugins  && cargo test -p uuid-plugin
 ```
+
+Note which directory each runs in: `uuid-plugin` is a member of the *plugin*
+workspace, so `cargo test -p uuid-plugin` from `rust/` no longer finds it.
 
 That is the point of the crate: a plugin author should need nothing but Rust.
 The one exception is `cargo test -p pharo-vm-plugin --features verify-abi`,
@@ -123,7 +180,14 @@ Every wave is the same four steps, and step 3 is not optional:
 * **Never bind a symbol you export.** `pharo-vm-sys` is for things Rust *calls
   into C*. Allowlisting something `pharo-platform` defines would declare and
   define the same symbol, which the linker cannot check.
-* **Panics must not unwind into C.** The workspace sets `panic = "abort"`.
+* **Panics must not unwind into C, but *how* that is guaranteed differs by
+  half.** `rust/Cargo.toml` sets `panic = "abort"`, because `pharo-platform` is
+  linked *into* `libPharoVMCore` and its entry points are called straight from
+  the generated interpreter, the heartbeat thread and signal handlers, with no
+  `catch_unwind` above them. `rust/plugins/Cargo.toml` sets `panic = "unwind"`,
+  because a plugin is `dlopen`ed rather than linked and the SDK fences every
+  primitive body in `catch_unwind`, so a panic becomes a primitive failure the
+  image can recover from. See [Two workspaces](#two-workspaces-and-why).
 * **`longjmp` must never cross a Rust frame.** The FFI trampolines in
   `src/ffi/` use `sigsetjmp`; those shims stay in C. The FFI wave therefore
   moves only what never touches them: the worker thread and its task

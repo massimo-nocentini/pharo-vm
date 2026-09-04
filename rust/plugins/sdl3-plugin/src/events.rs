@@ -21,6 +21,7 @@
 use core::ffi::c_void;
 use std::sync::Mutex;
 
+use pharo_vm_plugin::poison;
 use pharo_vm_plugin::{pharo_primitive, sqInt, Interp, Oop, PrimErr, PrimResult};
 
 use crate::ffi::{
@@ -35,6 +36,11 @@ use crate::ffi::{
 ///
 /// SDL's `text` pointer is only good until the next pump, so the text is
 /// copied here as the event is decoded and answered separately.
+///
+/// Reached through [`poison::lock`] on both sides. The store is one
+/// whole-value assignment, so there is nothing here a panic can tear; the
+/// [`Section`](pharo_vm_plugin::Section) it opens is what puts this global
+/// under the same module-wide fail-fast rule as every other one in the tree.
 static LAST_TEXT_INPUT: Mutex<String> = Mutex::new(String::new());
 
 /// A raw event, aligned as SDL's union is.
@@ -176,7 +182,7 @@ fn decode(raw: &RawEvent) -> Record {
             // TEXT_INPUT event; it is copied out before the next pump.
             let text = unsafe { borrowed_str(e.text) };
             r.a = i32::try_from(text.len()).unwrap_or(i32::MAX);
-            if let Ok(mut slot) = LAST_TEXT_INPUT.lock() {
+            if let Ok(mut slot) = poison::lock(&LAST_TEXT_INPUT) {
                 *slot = text;
             }
         }
@@ -283,10 +289,7 @@ fn primitiveWaitEventTimeout(
 #[pharo_primitive]
 fn primitiveLastTextInput(vm: &Interp) -> PrimResult<String> {
     vm.expect_argument_count(0)?;
-    Ok(LAST_TEXT_INPUT
-        .lock()
-        .map(|s| s.clone())
-        .unwrap_or_default())
+    Ok(poison::lock(&LAST_TEXT_INPUT)?.clone())
 }
 
 #[cfg(test)]

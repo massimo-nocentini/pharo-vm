@@ -43,12 +43,14 @@ use crate::ffi::{
     self, gl, glib, pango, pg, PangoRectangle, PANGO_ALIGN_MAX, PANGO_ELLIPSIZE_MAX,
     PANGO_VERSION_1_56, PANGO_WRAP_MAX, PANGO_WRAP_NONE,
 };
+use pharo_vm_plugin::handles::Handle;
+
 use crate::resources::{
     as_c_int, as_c_int_positive, as_gboolean, destroy_layout, enum_in, enum_in_or_since,
     from_gboolean, int_array, oop_array, rect_array, rect_pair_array, register_attr_list,
     register_context, register_font_desc, register_layout, register_tab_array, runtime_version,
-    utf8_cstring, with_context, with_layout, with_optional_attr_list,
-    with_optional_font_desc, with_optional_tab_array,
+    utf8_cstring, with_context, with_layout, with_optional_attr_list, with_optional_font_desc,
+    with_optional_tab_array, AttrList, Context, FontDesc, Layout, TabArray,
 };
 
 // ---- helpers shared by the text entries ----------------------------------
@@ -166,7 +168,7 @@ fn validate_markup(markup: &CString, length: c_int, accel_marker: c_uint) -> Pri
 /// across this call), so the image may destroy its context handle immediately
 /// afterwards and the layout stays valid.
 #[pharo_primitive]
-fn primitiveLayoutNew(_vm: &Interp, context: sqInt) -> PrimResult<sqInt> {
+fn primitiveLayoutNew(_vm: &Interp, context: sqInt) -> PrimResult<Handle<Layout>> {
     let p = pango()?;
     with_context(context, |ctx| {
         let layout = pg!(p, pango_layout_new(ctx));
@@ -178,7 +180,7 @@ fn primitiveLayoutNew(_vm: &Interp, context: sqInt) -> PrimResult<sqInt> {
 /// and tab array are all copied by value, so the two layouts share nothing the
 /// image can change.
 #[pharo_primitive]
-fn primitiveLayoutCopy(_vm: &Interp, layout: sqInt) -> PrimResult<sqInt> {
+fn primitiveLayoutCopy(_vm: &Interp, layout: sqInt) -> PrimResult<Handle<Layout>> {
     let p = pango()?;
     with_layout(layout, |l| {
         let copy = pg!(p, pango_layout_copy(l));
@@ -202,7 +204,7 @@ fn primitiveLayoutDestroy(_vm: &Interp, layout: sqInt) -> PrimResult<()> {
 /// image's context handle would go stale the moment the layout was destroyed,
 /// and destroying the handle would unref a reference this plugin never owned.
 #[pharo_primitive]
-fn primitiveLayoutGetContext(_vm: &Interp, layout: sqInt) -> PrimResult<sqInt> {
+fn primitiveLayoutGetContext(_vm: &Interp, layout: sqInt) -> PrimResult<Handle<Context>> {
     let p = pango()?;
     let g = glib()?;
     with_layout(layout, |l| {
@@ -377,20 +379,19 @@ fn primitiveLayoutSetAttributes(_vm: &Interp, layout: sqInt, attrs: sqInt) -> Pr
 /// never owned -- a double free, arriving whenever the layout happened to be
 /// released first.
 #[pharo_primitive]
-fn primitiveLayoutGetAttributes(vm: &Interp, layout: sqInt) -> PrimResult<Oop> {
+fn primitiveLayoutGetAttributes(
+    _vm: &Interp,
+    layout: sqInt,
+) -> PrimResult<Option<Handle<AttrList>>> {
     let p = pango()?;
-    let handle = with_layout(layout, |l| {
+    with_layout(layout, |l| {
         let list = pg!(p, pango_layout_get_attributes(l));
         if list.is_null() {
             return Ok(None);
         }
         let list = pg!(p, pango_attr_list_ref(list));
         register_attr_list(list).map(Some)
-    })?;
-    match handle {
-        Some(handle) => vm.integer_checked(handle),
-        None => vm.nil(),
-    }
+    })
 }
 
 /// `pango_layout_set_font_description`. Handle 0 unsets it, and the layout
@@ -416,20 +417,19 @@ fn primitiveLayoutSetFontDescription(_vm: &Interp, layout: sqInt, desc: sqInt) -
 /// past the next `setFontDescription:` would dangle. Copying is the only way
 /// to give the image something with a lifetime of its own.
 #[pharo_primitive]
-fn primitiveLayoutGetFontDescription(vm: &Interp, layout: sqInt) -> PrimResult<Oop> {
+fn primitiveLayoutGetFontDescription(
+    _vm: &Interp,
+    layout: sqInt,
+) -> PrimResult<Option<Handle<FontDesc>>> {
     let p = pango()?;
-    let handle = with_layout(layout, |l| {
+    with_layout(layout, |l| {
         let desc = pg!(p, pango_layout_get_font_description(l));
         if desc.is_null() {
             return Ok(None);
         }
         let copy = pg!(p, pango_font_description_copy(desc));
         register_font_desc(copy).map(Some)
-    })?;
-    match handle {
-        Some(handle) => vm.integer_checked(handle),
-        None => vm.nil(),
-    }
+    })
 }
 
 /// `pango_layout_set_tabs`. Handle 0 reinstates the default stop every eight
@@ -457,19 +457,15 @@ fn primitiveLayoutSetTabs(_vm: &Interp, layout: sqInt, tabs: sqInt) -> PrimResul
 /// registered and eventually freed with `pango_tab_array_free`. No `ref` and
 /// no copy here -- that would be the leak the other two's rules prevent.
 #[pharo_primitive]
-fn primitiveLayoutGetTabs(vm: &Interp, layout: sqInt) -> PrimResult<Oop> {
+fn primitiveLayoutGetTabs(_vm: &Interp, layout: sqInt) -> PrimResult<Option<Handle<TabArray>>> {
     let p = pango()?;
-    let handle = with_layout(layout, |l| {
+    with_layout(layout, |l| {
         let tabs = pg!(p, pango_layout_get_tabs(l));
         if tabs.is_null() {
             return Ok(None);
         }
         register_tab_array(tabs).map(Some)
-    })?;
-    match handle {
-        Some(handle) => vm.integer_checked(handle),
-        None => vm.nil(),
-    }
+    })
 }
 
 // ---- geometry, wrapping, alignment ---------------------------------------

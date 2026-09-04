@@ -46,9 +46,11 @@ use pharo_vm_plugin::{pharo_primitive, sqInt, Interp, Oop, PrimErr, PrimResult};
 use crate::ffi::{
     self, pango, pg, PANGO_TAB_ALIGN_MAX, PANGO_TAB_ALIGN_MAX_PRE_1_50, PANGO_VERSION_1_50,
 };
+use pharo_vm_plugin::handles::Handle;
+
 use crate::resources::{
     as_c_int, as_c_int_positive, as_gboolean, destroy_tab_array, enum_in_or_since, from_gboolean,
-    int_array, register_tab_array, runtime_version, utf8_cstring, with_tab_array,
+    int_array, register_tab_array, runtime_version, utf8_cstring, with_tab_array, TabArray,
 };
 
 /// The index bounds check both `get_tab` and `set_tab` need, and neither does.
@@ -77,7 +79,11 @@ fn checked_index(tabs: *mut ffi::PangoTabArray, index: sqInt) -> PrimResult<c_in
 /// allocates `size` tab records up front and a negative `gint` reaching it
 /// through a cast is an allocation the size of the address space.
 #[pharo_primitive]
-fn primitiveTabArrayNew(_vm: &Interp, size: sqInt, in_pixels: bool) -> PrimResult<sqInt> {
+fn primitiveTabArrayNew(
+    _vm: &Interp,
+    size: sqInt,
+    in_pixels: bool,
+) -> PrimResult<Handle<TabArray>> {
     let p = pango()?;
     let size = as_c_int_positive(size)?;
     let tabs = pg!(p, pango_tab_array_new(size, as_gboolean(in_pixels)));
@@ -94,7 +100,7 @@ fn primitiveTabArrayNew(_vm: &Interp, size: sqInt, in_pixels: bool) -> PrimResul
 /// as it owns the original. Nothing is shared between them, so Pango's own
 /// copy-on-write does not enter into it.
 #[pharo_primitive]
-fn primitiveTabArrayCopy(_vm: &Interp, tabs: sqInt) -> PrimResult<sqInt> {
+fn primitiveTabArrayCopy(_vm: &Interp, tabs: sqInt) -> PrimResult<Handle<TabArray>> {
     with_tab_array(tabs, |t| {
         let p = pango()?;
         let copy = pg!(p, pango_tab_array_copy(t));
@@ -364,5 +370,5 @@ fn primitiveTabArrayFromString(vm: &Interp, text: Oop) -> PrimResult<Oop> {
         return vm.nil();
     }
     let handle = register_tab_array(tabs)?;
-    vm.integer_checked(handle)
+    vm.integer_checked(handle.raw())
 }

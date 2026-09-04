@@ -374,5 +374,11 @@ healthchecksdb
 
 # Rust platform layer (see rust/README.md)
 /rust/target
+# The plugin cdylibs are a second cargo workspace -- they need
+# panic = "unwind" while the platform layer needs panic = "abort", and cargo
+# reads profiles only from a workspace root -- so they have a second target
+# directory outside CMake. Under CMake both build into corrosion's.
+/rust/plugins/target
 # Cargo.lock is intentionally NOT ignored: the VM is an application, and
-# packagers need reproducible dependency versions.
+# packagers need reproducible dependency versions. There are two of them now,
+# one per workspace; both are committed.

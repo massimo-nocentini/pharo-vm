@@ -298,28 +298,48 @@ set(RUST_PLATFORM_PACKAGE pharo-platform)
 set(RUST_PLATFORM_TARGET pharo_platform)
 
 function(configure_rust_platform)
-    # Import every crate this build needs in one call: corrosion parses the
-    # workspace manifest once, and a second call against the same manifest
-    # would redefine its targets.
-    set(_crates "")
+    # One import per *manifest*. Corrosion parses a manifest once and names its
+    # CMake targets after the cargo lib targets in it, so a second call against
+    # the same manifest would redefine them -- but a call against a different
+    # manifest is fine, and there are two:
+    #
+    #   rust/Cargo.toml          the platform layer and the SDK, panic = "abort"
+    #   rust/plugins/Cargo.toml  the plugin cdylibs,             panic = "unwind"
+    #
+    # Cargo reads profiles only from a workspace root, which is the whole
+    # reason the plugins have a workspace of their own. See its comment.
+    #
+    # `CRATES` is guarded on a non-empty list in both cases, and that guard is
+    # load-bearing rather than tidy: `CRATES ${_empty}` drops the keyword
+    # altogether, and corrosion filters only `if(DEFINED GGC_CRATES)` -- so an
+    # empty list imports *every* package in the manifest, which here would mean
+    # the examples and every platform-gated-off plugin.
     if(USE_RUST_PLATFORM)
-        list(APPEND _crates ${RUST_PLATFORM_PACKAGE})
+        corrosion_import_crate(
+            MANIFEST_PATH ${CMAKE_SOURCE_DIR}/rust/Cargo.toml
+            CRATES ${RUST_PLATFORM_PACKAGE}
+            # Always optimise: this code sits on paths the interpreter leans
+            # on, and a debug-profile build would skew any measurement taken
+            # against the C build.
+            PROFILE release
+        )
     endif()
-    if(USE_RUST_PLUGINS)
-        list(APPEND _crates ${RUST_PLUGIN_CRATES})
+    # The plugins need no bindgen environment: pharo-vm-sys reaches them only
+    # through pharo-vm-plugin's `verify-abi` feature, which is off by default
+    # and enabled nowhere in the tree. So this import gets no
+    # corrosion_set_env_vars and no dependency on `generate-sources` -- a
+    # plugin never parses a generated header.
+    if(USE_RUST_PLUGINS AND RUST_PLUGIN_CRATES)
+        corrosion_import_crate(
+            MANIFEST_PATH ${CMAKE_SOURCE_DIR}/rust/plugins/Cargo.toml
+            CRATES ${RUST_PLUGIN_CRATES}
+            PROFILE release
+        )
     endif()
-
-    corrosion_import_crate(
-        MANIFEST_PATH ${CMAKE_SOURCE_DIR}/rust/Cargo.toml
-        CRATES ${_crates}
-        # Always optimise: this code sits on paths the interpreter leans on,
-        # and a debug-profile build would skew any measurement taken against
-        # the C build.
-        PROFILE release
-    )
     # Stated in the configure log so a build can be checked at a glance: the
     # profile is fixed here and does not follow CMAKE_BUILD_TYPE.
-    message(STATUS "Rust crates: cargo profile 'release' (independent of CMAKE_BUILD_TYPE)")
+    message(STATUS "Rust crates: cargo profile 'release' (independent of CMAKE_BUILD_TYPE); "
+                   "platform panic=abort, plugins panic=unwind")
 
     if(USE_RUST_PLATFORM)
         _configure_rust_platform_layer()

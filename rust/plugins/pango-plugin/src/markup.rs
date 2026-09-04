@@ -35,14 +35,17 @@
 //! is exactly `0x33 * 257`.
 
 use core::ffi::{c_char, c_int};
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 
+use pharo_vm_plugin::poison::{self, Guarded};
 use pharo_vm_plugin::{pharo_primitive, sqInt, Interp, Oop, PrimErr, PrimResult};
 
 use crate::ffi::{self, gunichar, pango, pg, GStr, PangoAttrList, PangoColor};
+use pharo_vm_plugin::handles::Handle;
+
 use crate::resources::{
     as_c_int_positive, destroy_attr_list, from_gboolean, int_array, register_attr_list,
-    take_gerror, utf8_cstring, utf8_text, with_attr_list,
+    take_gerror, utf8_cstring, utf8_text, with_attr_list, AttrList,
 };
 
 // ---- the last markup error ----------------------------------------------
@@ -69,15 +72,20 @@ struct MarkupError {
 /// `primitiveGetError` already uses, for the same reason.
 static LAST_MARKUP_ERROR: Mutex<Option<MarkupError>> = Mutex::new(None);
 
-/// The stored failure, with a poisoned lock treated as an ordinary one.
+/// The stored failure, refused once a panic has torn it.
 ///
-/// A panic inside a primitive is caught and turned into a failure, so a
-/// poisoned mutex is not a reason to stop answering: the value behind it is a
-/// message and a code, and neither can be left half-written.
-fn last_markup_error() -> std::sync::MutexGuard<'static, Option<MarkupError>> {
-    LAST_MARKUP_ERROR
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+/// Through [`poison::lock`] like every other global in this tree, and the
+/// earlier justification for recovering the lock instead ("a panic inside a
+/// primitive is caught and turned into a failure") was the wrong shape of
+/// argument: catching the panic is what makes continuing *possible*, not what
+/// makes it *safe*. What is true of this particular store is narrower and is
+/// the reason nothing is lost either way -- the guard is held for a single
+/// whole-value assignment, so std will essentially never poison it. The
+/// [`Section`](pharo_vm_plugin::Section) `poison::lock` opens is the part that
+/// earns its place: it is what makes a panic *anywhere* under this lock
+/// disable the module rather than let the next primitive run.
+fn last_markup_error() -> PrimResult<Guarded<'static, Option<MarkupError>>> {
+    poison::lock(&LAST_MARKUP_ERROR)
 }
 
 /// Copies a `GError` into [`LAST_MARKUP_ERROR`] and frees it.
@@ -97,7 +105,13 @@ pub(crate) unsafe fn record_markup_error(error: *mut ffi::GError) {
     // copies the message into a Rust String *before* `g_error_free` runs,
     // which is the only order that works -- the message dies with the GError.
     let taken = unsafe { take_gerror(error) };
-    *last_markup_error() = Some(match taken {
+    // The `GError` is freed by `take_gerror` above either way; a refused store
+    // costs the image the diagnostic, and the module is already failing every
+    // primitive that could have read it.
+    let Ok(mut slot) = last_markup_error() else {
+        return;
+    };
+    *slot = Some(match taken {
         Some((code, message)) => MarkupError { code, message },
         // glib permits a FALSE return with no GError set. Recording that as a
         // state of its own beats leaving the previous failure's message in
@@ -281,13 +295,13 @@ fn primitiveParseMarkup(vm: &Interp, markup: Oop, accel_marker: sqInt) -> PrimRe
     let stripped = text.to_string_lossy_owned();
 
     let handle = register_attr_list(list.take())?;
-    let built = parse_result(vm, handle, &stripped, accel);
+    let built = parse_result(vm, handle.raw(), &stripped, accel);
     if built.is_err() {
         // The image never saw this handle, so nothing else would ever retire
         // it. Registering and then failing is rare -- it needs the image to be
         // out of memory -- but a leak that only happens under memory pressure
         // is the worst kind to diagnose.
-        let _ = destroy_attr_list(handle);
+        let _ = destroy_attr_list(handle.raw());
     }
     built
 }
@@ -306,7 +320,7 @@ fn primitiveParseMarkup(vm: &Interp, markup: Oop, accel_marker: sqInt) -> PrimRe
 #[pharo_primitive]
 fn primitiveLastMarkupError(vm: &Interp) -> PrimResult<String> {
     vm.expect_argument_count(0)?;
-    Ok(last_markup_error()
+    Ok(last_markup_error()?
         .as_ref()
         .map_or_else(String::new, |e| e.message.clone()))
 }
@@ -322,7 +336,7 @@ fn primitiveLastMarkupError(vm: &Interp) -> PrimResult<String> {
 #[pharo_primitive]
 fn primitiveLastMarkupErrorCode(vm: &Interp) -> PrimResult<sqInt> {
     vm.expect_argument_count(0)?;
-    Ok(last_markup_error()
+    Ok(last_markup_error()?
         .as_ref()
         .map_or(NO_ERROR_CODE, |e| e.code) as sqInt)
 }
@@ -336,7 +350,7 @@ fn primitiveLastMarkupErrorCode(vm: &Interp) -> PrimResult<sqInt> {
 /// `pango_layout_set_attributes` -- an empty list is how the image clears a
 /// layout's attributes while keeping a handle to pass around.
 #[pharo_primitive]
-fn primitiveAttrListNew(vm: &Interp) -> PrimResult<sqInt> {
+fn primitiveAttrListNew(vm: &Interp) -> PrimResult<Handle<AttrList>> {
     vm.expect_argument_count(0)?;
     let p = pango()?;
     let list = pg!(p, pango_attr_list_new());
@@ -365,7 +379,7 @@ fn primitiveAttrListCopy(vm: &Interp, list: sqInt) -> PrimResult<Oop> {
         return vm.nil();
     }
     let handle = register_attr_list(copy)?;
-    vm.integer_checked(handle)
+    vm.integer_checked(handle.raw())
 }
 
 /// `pango_attr_list_unref`. Releases one reference and retires the handle.
@@ -428,7 +442,7 @@ fn primitiveAttrListFromString(vm: &Interp, text: Oop) -> PrimResult<Oop> {
         return vm.nil();
     }
     let handle = register_attr_list(list)?;
-    vm.integer_checked(handle)
+    vm.integer_checked(handle.raw())
 }
 
 /// `pango_attr_list_splice`. Copies `other`'s attributes into `list` at `pos`,
@@ -581,13 +595,13 @@ mod tests {
 
     #[test]
     fn a_recorded_failure_is_read_back_and_a_missing_one_reads_as_minus_one() {
-        *last_markup_error() = None;
-        assert!(last_markup_error().is_none());
-        *last_markup_error() = Some(MarkupError {
+        *last_markup_error().expect("not poisoned") = None;
+        assert!(last_markup_error().expect("not poisoned").is_none());
+        *last_markup_error().expect("not poisoned") = Some(MarkupError {
             code: 2,
             message: "Error on line 1 char 24".to_owned(),
         });
-        let stored = last_markup_error();
+        let stored = last_markup_error().expect("not poisoned");
         let stored = stored.as_ref().expect("just stored");
         assert_eq!(stored.code, 2);
         assert_eq!(stored.message, "Error on line 1 char 24");

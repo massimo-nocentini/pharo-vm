@@ -11,6 +11,7 @@
 use std::sync::Mutex;
 
 use libc::c_char;
+use pharo_vm_plugin::poison::{self, Guarded};
 use pharo_vm_plugin::proxy::sqInt;
 
 use crate::charconv::{sq2ux_path, ux2sq_path};
@@ -83,10 +84,16 @@ static CACHE: Mutex<DirCache> = Mutex::new(DirCache {
     open_dir: core::ptr::null_mut(),
 });
 
-fn lock_cache() -> std::sync::MutexGuard<'static, DirCache> {
-    // A poisoned lock means a panic elsewhere; the cache state is still
-    // sound (worst case: a stale DIR* that the next miss closes).
-    CACHE.lock().unwrap_or_else(|e| e.into_inner())
+/// Locks the cache, refusing it once a panic has torn it.
+///
+/// Through [`poison::lock`], not `PoisonError::into_inner`. The four fields
+/// are one invariant: `valid` says `open_dir` is a live `DIR *` that belongs
+/// to `last_path` and stands at `last_index`. A panic between the assignments
+/// leaves `valid` true over a `DIR *` that was already `closedir`d, and the
+/// next lookup calls `readdir` on freed memory. That is not recoverable
+/// state, so the lock is refused and the module poisons.
+fn lock_cache() -> pharo_vm_plugin::PrimResult<Guarded<'static, DirCache>> {
+    poison::lock(&CACHE)
 }
 
 impl DirCache {
@@ -223,7 +230,11 @@ pub fn lookup(path: &[u8], index: sqInt) -> Result<DirEntry, sqInt> {
         return Err(BAD_PATH);
     };
 
-    let mut cache = lock_cache();
+    // A refused cache is reported as a bad path: the image's directory
+    // enumeration stops, which is the one outcome here that touches nothing.
+    let Ok(mut cache) = lock_cache() else {
+        return Err(BAD_PATH);
+    };
     let mut index = index;
     let mut cache_hit = false;
     if cache.valid {
@@ -297,7 +308,11 @@ pub fn entry_lookup(path: &[u8], name: &[u8]) -> Result<DirEntry, sqInt> {
 /// C on non-Apple unix.
 #[no_mangle]
 pub extern "C" fn sqCloseDir() {
-    lock_cache().close();
+    // Nothing to do on a refused cache, and nothing safe that could be done:
+    // `close` would `closedir` a `DIR *` a torn write may already have freed.
+    if let Ok(mut cache) = lock_cache() {
+        cache.close();
+    }
 }
 
 /// Creates a directory, rwxrwxrwx before umask.
@@ -341,8 +356,9 @@ pub unsafe extern "C" fn dir_Delete(path_string: *mut c_char, path_string_length
     let Some(mut unix_path) = to_unix_path_nonempty(path) else {
         return 0;
     };
-    {
-        let mut cache = lock_cache();
+    // The close is a courtesy -- POSIX `rmdir` succeeds with the directory
+    // still open -- so a refused cache skips it rather than failing the call.
+    if let Ok(mut cache) = lock_cache() {
         if cache.valid && cache.last_path == unix_path {
             cache.close();
         }
@@ -570,4 +586,106 @@ pub extern "C" fn convertToSqueakTime(unix_time: libc::time_t) -> libc::time_t {
     unix_time
         .wrapping_add(EPOCH_DELTA as libc::time_t)
         .wrapping_add(vmcalls::vm_gmt_offset() as libc::time_t)
+}
+
+// ---------------------------------------------------------------------------
+// Fail-fast after a panic mid-reopen
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pharo_vm_plugin::PrimErr;
+
+    /// A panic while [`lock_cache`] is held refuses every later lock.
+    ///
+    /// The SDK proves the mechanism in
+    /// `pharo-vm-plugin/tests/plugin_mutex_poison.rs`; this proves the
+    /// *wiring* here, which is the half a `CACHE.clear_poison()` slipped in
+    /// front of the `poison::lock` would silently undo while every test in
+    /// the crate stayed green.
+    ///
+    /// The tear is the real one, in the real window. `maybe_open` closes the
+    /// cached stream *before* it clears `valid`:
+    ///
+    /// ```ignore
+    /// if self.valid { unsafe { libc::closedir(self.open_dir) }; }
+    /// self.valid = false;
+    /// ```
+    ///
+    /// so a panic between those two lines leaves `valid` true over a `DIR *`
+    /// that `closedir` has already freed. That is not a stale value a caller
+    /// could sanity-check: the very next `lookup` sees `cache.valid`, takes
+    /// the cache-hit path, and calls `next_real_entry(cache.open_dir)` --
+    /// `readdir` on freed memory, inside the VM. Recovering the lock is what
+    /// would let it; refusing is why this file locks the way it does.
+    ///
+    /// This test owns the crate's whole unit-test binary (every other
+    /// `file-plugin` test is an integration test, and so runs in its own
+    /// process). It has to: a poisoned `Mutex` never unpoisons, and the state
+    /// it is poisoned over is deliberately left torn, so nothing may follow it
+    /// here. The module-wide flag is not touched at all -- that needs
+    /// `setInterpreter` to have installed the panic hook, which no unit test
+    /// does.
+    ///
+    /// The panic is raised by this test rather than injected through the proxy
+    /// on purpose: every plugin-to-VM call crosses `extern "C"`, whose
+    /// abort-on-unwind shim would turn an injected panic into `SIGABRT`
+    /// instead of the unwind the hazard is made of.
+    #[test]
+    fn a_panic_while_the_directory_cache_is_held_refuses_every_later_lock() {
+        // --- healthy: one real directory open, cached ----------------------
+        //
+        // The empty path is the C's `"."`, so this is the crate directory the
+        // test harness runs in.
+        assert!(
+            lookup(b"", 1).is_ok(),
+            "a fresh module walks the current directory"
+        );
+        {
+            let cache = lock_cache().expect("a fresh module hands out the cache");
+            assert!(cache.valid, "the walk left the DIR* cached");
+            assert_eq!(
+                &cache.last_path[..],
+                b".",
+                "and cached under the path it opened"
+            );
+        }
+
+        // --- a panic in `maybe_open`'s window ------------------------------
+        let torn = std::panic::catch_unwind(|| {
+            let cache = lock_cache().expect("still healthy");
+            // The first of the two statements, without the second.
+            // SAFETY: `open_dir` is the live `DIR *` the lookup above opened,
+            // and this is the only `closedir` of it -- the poisoned mutex
+            // below is what guarantees no second one, `sqCloseDir` included.
+            unsafe { libc::closedir(cache.open_dir) };
+            panic!("a path conversion failed mid-reopen");
+        });
+        assert!(torn.is_err());
+
+        // --- the fix, before anything can touch the freed stream -----------
+        assert_eq!(
+            lock_cache().err(),
+            Some(PrimErr::Unsupported),
+            "a cache that says `valid` over a closed DIR* must never be \
+             handed to a caller"
+        );
+
+        // The image-visible half: the one entry point that walks the cached
+        // stream reports a bad path instead, so directory enumeration stops
+        // rather than calling `readdir` on freed memory.
+        assert_eq!(
+            lookup(b"", 1).err(),
+            Some(BAD_PATH),
+            "the caller propagates the refusal rather than reading on"
+        );
+        // The exported closer is called for its effect rather than its answer:
+        // it returns nothing, so nothing here can assert that it declined to
+        // `closedir` the freed stream. What makes the call worth keeping is
+        // that a second `closedir` on that `DIR *` would fault inside the
+        // allocator and take the test process with it, so reaching the end of
+        // this test at all is the assertion.
+        sqCloseDir();
+    }
 }

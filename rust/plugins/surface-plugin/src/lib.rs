@@ -33,6 +33,7 @@ use core::ffi::{c_int, c_void};
 use core::sync::atomic::Ordering;
 use std::sync::Mutex;
 
+use pharo_vm_plugin::poison;
 use pharo_vm_plugin::proxy::{sqIntptr_t, usqIntptr_t};
 use pharo_vm_plugin::{pharo_plugin, pharo_primitive, Interp, Oop, PrimErr, PrimResult};
 
@@ -51,22 +52,23 @@ pharo_plugin!("SurfacePlugin", init = initialise, shutdown = shutdown);
 /// not deadlock.
 static REGISTRY: Mutex<Registry> = Mutex::new(Registry::new());
 
-/// Runs `f` with the registry locked.
-fn with_registry<R>(f: impl FnOnce(&mut Registry) -> R) -> R {
-    // A poisoned lock would mean a panic mid-registry-update on this same
-    // thread; the state is still the best available, so keep going rather
-    // than poisoning every later primitive too.
-    let mut guard = match REGISTRY.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    f(&mut guard)
+/// Runs `f` with the registry locked, refusing once a panic has torn it.
+///
+/// Through [`poison::lock`] rather than a plain `lock()`, for both of the
+/// reasons that function documents. A surface record is a handle *and* a
+/// dispatch table that must agree; a panic between the two writes leaves an
+/// ID whose dispatch pointer belongs to some other surface, and every caller
+/// below then hands that pointer four out-parameters and calls it. The
+/// registry refusing, and the module poisoning, is the only safe answer --
+/// recovering the lock would call a stale `sqSurfaceDispatch` entry.
+fn with_registry<R>(f: impl FnOnce(&mut Registry) -> R) -> PrimResult<R> {
+    let mut guard = poison::lock(&REGISTRY)?;
+    Ok(f(&mut guard))
 }
 
 /// `initialiseModule`: start from an empty registry.
 fn initialise() -> bool {
-    with_registry(Registry::reset);
-    true
+    with_registry(Registry::reset).is_ok()
 }
 
 /// `shutdownModule`: refuse to unload while any surface is registered, as the
@@ -79,6 +81,9 @@ fn shutdown() -> bool {
         registry.reset();
         true
     })
+    // A poisoned registry cannot answer how many surfaces are live, so it
+    // cannot say the module is safe to unload: refuse, as for a non-empty one.
+    .unwrap_or(false)
 }
 
 /// Sets the interpreter's primitive-failure flag, as the generated C's
@@ -126,19 +131,19 @@ pub unsafe extern "C" fn ioRegisterSurface(
     }
     // SAFETY: forwarding the caller's validity promise (see above).
     match with_registry(|r| unsafe { r.register(surfaceHandle as usqIntptr_t, dispatch) }) {
-        Some(id) => {
+        Ok(Some(id)) => {
             // SAFETY: non-null, caller-writable (checked/promised above).
             unsafe { *surfaceID = id };
             1
         }
-        None => 0,
+        Ok(None) | Err(_) => 0,
     }
 }
 
 /// Unregisters a surface; answers true (1) if it existed.
 #[no_mangle]
 pub extern "C" fn ioUnregisterSurface(surfaceID: c_int) -> c_int {
-    c_int::from(with_registry(|r| r.unregister(surfaceID)))
+    c_int::from(with_registry(|r| r.unregister(surfaceID)).unwrap_or(false))
 }
 
 /// Finds a surface, optionally insisting on a specific dispatch table, and
@@ -154,7 +159,7 @@ pub unsafe extern "C" fn ioFindSurface(
     dispatch: *mut sqSurfaceDispatch,
     surfaceHandle: *mut sqIntptr_t,
 ) -> c_int {
-    let Some(handle) = with_registry(|r| r.find(surfaceID, dispatch)) else {
+    let Ok(Some(handle)) = with_registry(|r| r.find(surfaceID, dispatch)) else {
         return 0;
     };
     // The C dereferenced unconditionally; refuse a null out-pointer instead.
@@ -194,7 +199,7 @@ pub unsafe extern "C" fn ioGetSurfaceFormat(
     depth: *mut c_int,
     isMSB: *mut c_int,
 ) -> c_int {
-    let Some((handle, dispatch)) = with_registry(|r| r.dispatch_entry(surfaceID)) else {
+    let Ok(Some((handle, dispatch))) = with_registry(|r| r.dispatch_entry(surfaceID)) else {
         fail_current_primitive();
         return 0;
     };
@@ -221,7 +226,7 @@ pub unsafe extern "C" fn ioLockSurface(
     w: c_int,
     h: c_int,
 ) -> sqIntptr_t {
-    let Some((handle, dispatch)) = with_registry(|r| r.dispatch_entry(surfaceID)) else {
+    let Ok(Some((handle, dispatch))) = with_registry(|r| r.dispatch_entry(surfaceID)) else {
         fail_current_primitive();
         return 0;
     };
@@ -249,7 +254,7 @@ pub unsafe extern "C" fn ioUnlockSurface(
     w: c_int,
     h: c_int,
 ) -> c_int {
-    let Some((handle, dispatch)) = with_registry(|r| r.dispatch_entry(surfaceID)) else {
+    let Ok(Some((handle, dispatch))) = with_registry(|r| r.dispatch_entry(surfaceID)) else {
         fail_current_primitive();
         return 0;
     };
@@ -276,7 +281,7 @@ pub unsafe extern "C" fn ioShowSurface(
     w: c_int,
     h: c_int,
 ) -> c_int {
-    let Some((handle, dispatch)) = with_registry(|r| r.dispatch_entry(surfaceID)) else {
+    let Ok(Some((handle, dispatch))) = with_registry(|r| r.dispatch_entry(surfaceID)) else {
         fail_current_primitive();
         return 0;
     };
@@ -302,6 +307,9 @@ pub extern "C" fn createManualSurface(
     isMSB: c_int,
 ) -> c_int {
     with_registry(|r| manual::create_manual_surface_in(r, width, height, rowPitch, depth, isMSB))
+        // -1 is the C's "could not create", which is what a refused registry
+        // is from the caller's side.
+        .unwrap_or(-1)
 }
 
 /// Destroys a manual surface. Exactly `ioUnregisterSurface`, as in C -- which
@@ -309,7 +317,7 @@ pub extern "C" fn createManualSurface(
 /// itself is never freed (see [`manual`]).
 #[no_mangle]
 pub extern "C" fn destroyManualSurface(surfaceID: c_int) -> c_int {
-    c_int::from(with_registry(|r| r.unregister(surfaceID)))
+    c_int::from(with_registry(|r| r.unregister(surfaceID)).unwrap_or(false))
 }
 
 /// Points a manual surface at a new buffer (or null); answers true (1) on
@@ -322,7 +330,7 @@ pub extern "C" fn destroyManualSurface(surfaceID: c_int) -> c_int {
 /// through it. Identical to the C contract.
 #[no_mangle]
 pub unsafe extern "C" fn setManualSurfacePointer(surfaceID: c_int, ptr: *mut c_void) -> c_int {
-    with_registry(|r| manual::set_manual_surface_pointer_in(r, surfaceID, ptr))
+    with_registry(|r| manual::set_manual_surface_pointer_in(r, surfaceID, ptr)).unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -404,7 +412,7 @@ fn primitiveFindSurface(vm: &Interp) -> PrimResult<bool> {
         return Err(PrimErr::BadArgument);
     }
 
-    let Some(handle) = with_registry(|r| r.find(external_id as c_int, core::ptr::null_mut()))
+    let Some(handle) = with_registry(|r| r.find(external_id as c_int, core::ptr::null_mut()))?
     else {
         return Ok(false);
     };
@@ -449,7 +457,7 @@ fn primitiveRegisterSurface(vm: &Interp) -> PrimResult<bool> {
 
     // SAFETY: the dispatch pointer and its lifetime are the image's promise,
     // passed through unchanged -- the same trust the C placed in it.
-    let Some(id) = with_registry(|r| unsafe { r.register(handle, dispatch) }) else {
+    let Some(id) = with_registry(|r| unsafe { r.register(handle, dispatch) })? else {
         return Ok(false);
     };
     // The Slang stores the int through the holder's first indexable field; 4
@@ -464,7 +472,7 @@ fn primitiveUnregisterSurface(vm: &Interp) -> PrimResult<bool> {
     vm.expect_argument_count(1)?;
     let id = vm.stack_integer(0)?;
     vm.check_failed()?;
-    Ok(with_registry(|r| r.unregister(id as c_int)))
+    with_registry(|r| r.unregister(id as c_int))
 }
 
 // ---------------------------------------------------------------------------
@@ -501,6 +509,27 @@ fn is_kind_of_class(vm: &Interp, oop: Oop, class: Oop) -> PrimResult<bool> {
     let f = unsafe { (*raw).isKindOfClass }.ok_or(PrimErr::Unsupported)?;
     // SAFETY: signature fixed by virtualMachine.h.
     Ok(unsafe { f(oop.0, class.0) } != 0)
+}
+
+/// Serialisation for the tests that touch the process-wide [`REGISTRY`].
+///
+/// Two of them do -- `tests::the_exported_api_end_to_end` here and
+/// `registry::tests::a_panic_while_the_surface_registry_is_held_refuses_every_later_lock`
+/// -- and the second leaves that registry poisoned for as long as it holds
+/// this guard. The harness runs tests in parallel threads within one binary,
+/// so "nothing else takes this lock while I have it" is the only thing that
+/// keeps the two apart. It recovers its own poison deliberately, as every
+/// `#[cfg(test)]` serialisation lock in this tree does: one failing test must
+/// not cascade into the other, and no image ever reaches this.
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::sync::{Mutex, MutexGuard, PoisonError};
+
+    static REGISTRY_LOCK: Mutex<()> = Mutex::new(());
+
+    pub fn registry_lock() -> MutexGuard<'static, ()> {
+        REGISTRY_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 #[cfg(test)]
@@ -577,6 +606,7 @@ mod tests {
     /// must tolerate.)
     #[test]
     fn the_exported_api_end_to_end() {
+        let _serial = crate::testing::registry_lock();
         let mut probe = Probe::default();
         let dispatch = Box::into_raw(Box::new(sqSurfaceDispatch {
             majorVersion: 1,

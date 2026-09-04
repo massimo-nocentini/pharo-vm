@@ -33,12 +33,16 @@
 //! `primitiveLayoutGetContext` answers a fresh handle on the same live
 //! object. The one thing not protected by a refcount is the borrowed default
 //! font map, which is why [`FontMap`] carries `owned` instead.
+//!
+//! Every handle carries a type tag from the [`resource_tags!`] block below, so
+//! the six registries no longer share an encoding and a layout handle passed
+//! where a font description was wanted fails with `BadArgument`.
 
 use core::ffi::{c_char, c_int};
 use std::ffi::CString;
 
-use pharo_vm_plugin::handles::Registry;
-use pharo_vm_plugin::{sqInt, Interp, Oop, PrimErr, PrimResult};
+use pharo_vm_plugin::handles::{Handle, Registry};
+use pharo_vm_plugin::{resource_tags, sqInt, Interp, Oop, PrimErr, PrimResult};
 
 use crate::ffi::{
     self, gl, glib, pango, pg, PangoAttrList, PangoContext, PangoFontDescription, PangoFontMap,
@@ -101,6 +105,22 @@ unsafe impl Send for Layout {}
 unsafe impl Send for FontDesc {}
 unsafe impl Send for AttrList {}
 unsafe impl Send for TabArray {}
+
+// This library's handle tags, declared once, beside the statics they tell
+// apart. Six registries sharing one encoding meant the first insert into each
+// answered the same integer, so a layout handle passed to a font-description
+// primitive resolved. The macro proves these six are distinct and non-zero at
+// compile time, which is the scope `Handle::decode` can be confused within.
+// `Context = 2` is also CairoPlugin's tag for a `cairo_t *`, and these handles
+// meet CairoPlugin's decode at the bridge -- see `pharo_vm_plugin::handles`.
+resource_tags! {
+    FontMap = 1,
+    Context = 2,
+    Layout = 3,
+    FontDesc = 4,
+    AttrList = 5,
+    TabArray = 6,
+}
 
 /// Font maps the image holds handles on.
 pub static FONT_MAPS: Registry<FontMap> = Registry::new();
@@ -291,43 +311,43 @@ impl TabArray {
 // `cairo-plugin` registers the same way for the same reason.
 
 /// Registers a font map this plugin owns a reference on.
-pub fn register_font_map_owned(ptr: *mut PangoFontMap) -> PrimResult<sqInt> {
+pub fn register_font_map_owned(ptr: *mut PangoFontMap) -> PrimResult<Handle<FontMap>> {
     let map = FontMap::adopt(ptr)?;
     FONT_MAPS.insert(map)
 }
 
 /// Registers a font map Pango owns, which this plugin must never unref.
-pub fn register_font_map_borrowed(ptr: *mut PangoFontMap) -> PrimResult<sqInt> {
+pub fn register_font_map_borrowed(ptr: *mut PangoFontMap) -> PrimResult<Handle<FontMap>> {
     let map = FontMap::borrow(ptr)?;
     FONT_MAPS.insert(map)
 }
 
 /// Registers a context this plugin owns a reference on.
-pub fn register_context(ptr: *mut PangoContext) -> PrimResult<sqInt> {
+pub fn register_context(ptr: *mut PangoContext) -> PrimResult<Handle<Context>> {
     let context = Context::adopt(ptr)?;
     CONTEXTS.insert(context)
 }
 
 /// Registers a layout this plugin owns a reference on.
-pub fn register_layout(ptr: *mut PangoLayout) -> PrimResult<sqInt> {
+pub fn register_layout(ptr: *mut PangoLayout) -> PrimResult<Handle<Layout>> {
     let layout = Layout::adopt(ptr)?;
     LAYOUTS.insert(layout)
 }
 
 /// Registers a font description this plugin owns.
-pub fn register_font_desc(ptr: *mut PangoFontDescription) -> PrimResult<sqInt> {
+pub fn register_font_desc(ptr: *mut PangoFontDescription) -> PrimResult<Handle<FontDesc>> {
     let desc = FontDesc::adopt(ptr)?;
     FONT_DESCS.insert(desc)
 }
 
 /// Registers an attribute list this plugin owns a reference on.
-pub fn register_attr_list(ptr: *mut PangoAttrList) -> PrimResult<sqInt> {
+pub fn register_attr_list(ptr: *mut PangoAttrList) -> PrimResult<Handle<AttrList>> {
     let list = AttrList::adopt(ptr)?;
     ATTR_LISTS.insert(list)
 }
 
 /// Registers a tab array this plugin owns.
-pub fn register_tab_array(ptr: *mut PangoTabArray) -> PrimResult<sqInt> {
+pub fn register_tab_array(ptr: *mut PangoTabArray) -> PrimResult<Handle<TabArray>> {
     let tabs = TabArray::adopt(ptr)?;
     TAB_ARRAYS.insert(tabs)
 }
@@ -337,7 +357,7 @@ pub fn register_tab_array(ptr: *mut PangoTabArray) -> PrimResult<sqInt> {
 /// Destroys the font map `handle` names, unref'ing it only if this plugin
 /// owned a reference. Destroying twice fails the second time.
 pub fn destroy_font_map(handle: sqInt) -> PrimResult<()> {
-    FONT_MAPS.remove(handle)?.release()
+    FONT_MAPS.remove(Handle::decode(handle)?)?.release()
 }
 
 /// Destroys the context `handle` names.
@@ -346,27 +366,27 @@ pub fn destroy_font_map(handle: sqInt) -> PrimResult<()> {
 /// so the `PangoContext` itself stays alive for as long as it is reachable --
 /// the image loses its handle, not the object.
 pub fn destroy_context(handle: sqInt) -> PrimResult<()> {
-    CONTEXTS.remove(handle)?.release()
+    CONTEXTS.remove(Handle::decode(handle)?)?.release()
 }
 
 /// Destroys the layout `handle` names.
 pub fn destroy_layout(handle: sqInt) -> PrimResult<()> {
-    LAYOUTS.remove(handle)?.release()
+    LAYOUTS.remove(Handle::decode(handle)?)?.release()
 }
 
 /// Destroys the font description `handle` names.
 pub fn destroy_font_desc(handle: sqInt) -> PrimResult<()> {
-    FONT_DESCS.remove(handle)?.release()
+    FONT_DESCS.remove(Handle::decode(handle)?)?.release()
 }
 
 /// Destroys the attribute list `handle` names.
 pub fn destroy_attr_list(handle: sqInt) -> PrimResult<()> {
-    ATTR_LISTS.remove(handle)?.release()
+    ATTR_LISTS.remove(Handle::decode(handle)?)?.release()
 }
 
 /// Destroys the tab array `handle` names.
 pub fn destroy_tab_array(handle: sqInt) -> PrimResult<()> {
-    TAB_ARRAYS.remove(handle)?.release()
+    TAB_ARRAYS.remove(Handle::decode(handle)?)?.release()
 }
 
 /// Releases everything still registered, for the module's shutdown hook.
@@ -412,19 +432,26 @@ pub fn live_counts() -> [usize; 6] {
 }
 
 // ---- reaching a resource -------------------------------------------------
+//
+// These accessors are this crate's whole untyped seam: the hundred and fifty
+// odd primitives all reach their resource through one of them, so
+// `Handle::decode` appears here and nowhere else, and a handle of the wrong
+// kind is refused before any registry is locked.
 
 /// Runs `f` on the font map `handle` names.
 pub fn with_font_map<R>(
     handle: sqInt,
     f: impl FnOnce(*mut PangoFontMap) -> PrimResult<R>,
 ) -> PrimResult<R> {
-    FONT_MAPS.with(handle, FontMap::as_ptr).and_then(f)
+    FONT_MAPS
+        .with(Handle::decode(handle)?, FontMap::as_ptr)
+        .and_then(f)
 }
 
 /// Does this handle name a font map Pango owns rather than one this plugin
 /// does?
 pub fn font_map_is_borrowed(handle: sqInt) -> PrimResult<bool> {
-    FONT_MAPS.with(handle, |m| !m.is_owned())
+    FONT_MAPS.with(Handle::decode(handle)?, |m| !m.is_owned())
 }
 
 /// Runs `f` on the context `handle` names.
@@ -432,7 +459,9 @@ pub fn with_context<R>(
     handle: sqInt,
     f: impl FnOnce(*mut PangoContext) -> PrimResult<R>,
 ) -> PrimResult<R> {
-    CONTEXTS.with(handle, Context::as_ptr).and_then(f)
+    CONTEXTS
+        .with(Handle::decode(handle)?, Context::as_ptr)
+        .and_then(f)
 }
 
 /// Runs `f` on the layout `handle` names.
@@ -440,7 +469,9 @@ pub fn with_layout<R>(
     handle: sqInt,
     f: impl FnOnce(*mut PangoLayout) -> PrimResult<R>,
 ) -> PrimResult<R> {
-    LAYOUTS.with(handle, Layout::as_ptr).and_then(f)
+    LAYOUTS
+        .with(Handle::decode(handle)?, Layout::as_ptr)
+        .and_then(f)
 }
 
 /// Runs `f` on the font description `handle` names.
@@ -448,7 +479,9 @@ pub fn with_font_desc<R>(
     handle: sqInt,
     f: impl FnOnce(*mut PangoFontDescription) -> PrimResult<R>,
 ) -> PrimResult<R> {
-    FONT_DESCS.with(handle, FontDesc::as_ptr).and_then(f)
+    FONT_DESCS
+        .with(Handle::decode(handle)?, FontDesc::as_ptr)
+        .and_then(f)
 }
 
 /// Runs `f` on the attribute list `handle` names.
@@ -456,7 +489,9 @@ pub fn with_attr_list<R>(
     handle: sqInt,
     f: impl FnOnce(*mut PangoAttrList) -> PrimResult<R>,
 ) -> PrimResult<R> {
-    ATTR_LISTS.with(handle, AttrList::as_ptr).and_then(f)
+    ATTR_LISTS
+        .with(Handle::decode(handle)?, AttrList::as_ptr)
+        .and_then(f)
 }
 
 /// Runs `f` on the tab array `handle` names.
@@ -464,7 +499,9 @@ pub fn with_tab_array<R>(
     handle: sqInt,
     f: impl FnOnce(*mut PangoTabArray) -> PrimResult<R>,
 ) -> PrimResult<R> {
-    TAB_ARRAYS.with(handle, TabArray::as_ptr).and_then(f)
+    TAB_ARRAYS
+        .with(Handle::decode(handle)?, TabArray::as_ptr)
+        .and_then(f)
 }
 
 // The four setters that accept NULL -- `set_attributes`, `set_font_description`,
@@ -925,6 +962,66 @@ mod tests {
         assert!(!TAB_ARRAYS.is_live(0));
         let seen = with_optional_attr_list(0, |p| Ok(p.is_null())).unwrap();
         assert!(seen, "handle 0 must reach the callee as NULL");
+    }
+
+    #[test]
+    fn a_handle_from_one_registry_is_refused_by_the_others() {
+        // Six registries used to share one encoding, so the first insert into
+        // each answered the same integer and a layout handle passed to
+        // `with_context` resolved onto a `PangoContext`. Nothing here calls
+        // Pango: the tag is checked while the integer is decoded, before any
+        // registry is locked, so a null pointer stands in for the object.
+        //
+        // CONTEXTS/LAYOUTS/ATTR_LISTS deliberately: `live_counts` is compared
+        // against FONT_MAPS and TAB_ARRAYS by a neighbouring test, and these
+        // statics are shared across the whole test binary.
+        let context = CONTEXTS
+            .insert(Context {
+                ptr: core::ptr::null_mut(),
+            })
+            .expect("a slot");
+        let layout = LAYOUTS
+            .insert(Layout {
+                ptr: core::ptr::null_mut(),
+            })
+            .expect("a slot");
+        let attrs = ATTR_LISTS
+            .insert(AttrList {
+                ptr: core::ptr::null_mut(),
+            })
+            .expect("a slot");
+
+        assert_ne!(context.raw(), layout.raw());
+        assert_ne!(context.raw(), attrs.raw());
+        assert_ne!(layout.raw(), attrs.raw());
+
+        assert_eq!(
+            with_context(layout.raw(), |_| Ok(())),
+            Err(PrimErr::BadArgument),
+            "a layout handle must not resolve as a context"
+        );
+        assert_eq!(
+            with_layout(context.raw(), |_| Ok(())),
+            Err(PrimErr::BadArgument)
+        );
+        assert_eq!(
+            with_attr_list(layout.raw(), |_| Ok(())),
+            Err(PrimErr::BadArgument)
+        );
+        assert_eq!(
+            destroy_layout(attrs.raw()),
+            Err(PrimErr::BadArgument),
+            "and destroying across kinds is refused before anything is freed"
+        );
+        assert!(!LAYOUTS.is_live(context.raw()));
+
+        // Each still resolves in its own registry, then goes away again.
+        assert!(with_context(context.raw(), |p| Ok(p.is_null())).unwrap());
+        assert!(with_layout(layout.raw(), |p| Ok(p.is_null())).unwrap());
+        assert!(with_attr_list(attrs.raw(), |p| Ok(p.is_null())).unwrap());
+        CONTEXTS.remove(context).expect("still there");
+        LAYOUTS.remove(layout).expect("still there");
+        ATTR_LISTS.remove(attrs).expect("still there");
     }
 
     #[test]

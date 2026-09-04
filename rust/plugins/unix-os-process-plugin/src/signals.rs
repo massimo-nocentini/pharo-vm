@@ -422,7 +422,12 @@ static KILL_LIST: std::sync::Mutex<Vec<libc::pid_t>> = std::sync::Mutex::new(Vec
 /// Replaces the kill-on-exit pid list (the C freed and re-malloc'ed its
 /// array).
 pub fn set_kill_list(pids: Vec<libc::pid_t>) {
-    if let Ok(mut guard) = KILL_LIST.lock() {
+    // Through `poison::lock` for the `Section` it opens, which is what brings
+    // this global under the module-wide fail-fast rule. The list itself is
+    // replaced whole under the lock, so there is nothing a panic can tear, and
+    // a refused lock simply leaves the previous list in place -- which
+    // `send_signal_to_pids` will read at exit, as it would have anyway.
+    if let Ok(mut guard) = pharo_vm_plugin::poison::lock(&KILL_LIST) {
         *guard = pids;
     }
 }
@@ -439,8 +444,10 @@ pub fn set_signal_to_send(sig: sqInt) {
 /// `sendSignalToPids` -- the atexit hook registered by `initialiseModule`.
 pub extern "C" fn send_signal_to_pids() {
     let sig = SIG_NUM_TO_SEND.load(Ordering::Relaxed);
-    // try_lock: if the process is exiting mid-primitive the list is in flux;
-    // skipping beats deadlocking inside atexit.
+    // try_lock, and deliberately not `poison::lock`: if the process is exiting
+    // mid-primitive the list is in flux, and skipping beats deadlocking inside
+    // atexit. `try_lock` answers `Err` on a poisoned mutex too, so a torn list
+    // is skipped here for free.
     if let Ok(guard) = KILL_LIST.try_lock() {
         for &pid in guard.iter() {
             unsafe { libc::kill(pid, sig) };

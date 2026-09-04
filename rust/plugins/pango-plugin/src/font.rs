@@ -43,9 +43,11 @@ use crate::ffi::{
     PANGO_STYLE_MAX, PANGO_VARIANT_MAX, PANGO_VARIANT_MAX_PRE_1_50, PANGO_VERSION_1_50,
     PANGO_VERSION_1_58, PANGO_WEIGHT_MAX, PANGO_WEIGHT_MIN, PANGO_WIDTH_MAX, PANGO_WIDTH_MIN,
 };
+use pharo_vm_plugin::handles::Handle;
+
 use crate::resources::{
     as_c_int_positive, as_gboolean, destroy_font_desc, enum_in, enum_in_or_since, enum_in_since,
-    from_gboolean, register_font_desc, runtime_version, utf8_cstring, with_font_desc,
+    from_gboolean, register_font_desc, runtime_version, utf8_cstring, with_font_desc, FontDesc,
 };
 
 /// A `const char *` getter's answer as a Pharo String, or nil for NULL.
@@ -76,7 +78,7 @@ fn borrowed_or_nil(vm: &Interp, ptr: *const c_char) -> PrimResult<Oop> {
 /// counted -- `pango_font_description_free` is the only verb -- so nothing
 /// else in this plugin can keep it alive on the image's behalf.
 #[pharo_primitive]
-fn primitiveFontDescriptionNew(vm: &Interp) -> PrimResult<sqInt> {
+fn primitiveFontDescriptionNew(vm: &Interp) -> PrimResult<Handle<FontDesc>> {
     vm.expect_argument_count(0)?;
     let p = pango()?;
     register_font_desc(pg!(p, pango_font_description_new()))
@@ -90,7 +92,7 @@ fn primitiveFontDescriptionNew(vm: &Interp) -> PrimResult<sqInt> {
 /// becomes part of the family name -- so a typo answers a description that
 /// simply will not match, not an error.
 #[pharo_primitive]
-fn primitiveFontDescriptionFromString(vm: &Interp, s: Oop) -> PrimResult<sqInt> {
+fn primitiveFontDescriptionFromString(vm: &Interp, s: Oop) -> PrimResult<Handle<FontDesc>> {
     let p = pango()?;
     let text = utf8_cstring(vm, s)?;
     register_font_desc(pg!(p, pango_font_description_from_string(text.as_ptr())))
@@ -103,7 +105,7 @@ fn primitiveFontDescriptionFromString(vm: &Interp, s: Oop) -> PrimResult<sqInt> 
 /// is safe only while the source outlives the copy -- a lifetime the image
 /// has no way to express, and one this plugin could not enforce for it.
 #[pharo_primitive]
-fn primitiveFontDescriptionCopy(_vm: &Interp, d: sqInt) -> PrimResult<sqInt> {
+fn primitiveFontDescriptionCopy(_vm: &Interp, d: sqInt) -> PrimResult<Handle<FontDesc>> {
     let p = pango()?;
     with_font_desc(d, |desc| {
         register_font_desc(pg!(p, pango_font_description_copy(desc)))

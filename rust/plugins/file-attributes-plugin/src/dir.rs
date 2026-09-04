@@ -29,7 +29,10 @@ use std::fs::ReadDir;
 use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Mutex, OnceLock};
+
+use pharo_vm_plugin::poison::{self, Guarded};
+use pharo_vm_plugin::PrimResult;
 
 use crate::codes::{FA_CANT_OPEN_DIR, FA_CANT_READ_DIR, FA_CORRUPT_VALUE};
 use crate::convert::Converters;
@@ -170,24 +173,30 @@ fn registry() -> &'static Mutex<HashMap<usize, DirSession>> {
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Locks the registry. A poisoned lock (a caught panic mid-primitive) is
-/// recovered rather than propagated: failing every later walk would punish
-/// the image for a bug already reported as a primitive failure.
-pub fn lock() -> MutexGuard<'static, HashMap<usize, DirSession>> {
-    registry().lock().unwrap_or_else(PoisonError::into_inner)
+/// Locks the registry, refusing it once a panic has torn it.
+///
+/// Through [`poison::lock`]. The earlier justification for recovering the
+/// lock -- "the bug was already reported as a primitive failure" -- had the
+/// argument backwards: reporting the *first* call as a failure says nothing
+/// about the *second*, and what the second would find here is a `DirSession`
+/// whose `DIR *` and whose `FaPath` buffer no longer describe the same
+/// directory. `readdir` then walks one directory while `process_directory`
+/// reports paths from another.
+pub fn lock() -> PrimResult<Guarded<'static, HashMap<usize, DirSession>>> {
+    poison::lock(registry())
 }
 
 /// Stores a session, answering the key to embed in the handle.
-pub fn register(session: DirSession) -> usize {
+pub fn register(session: DirSession) -> PrimResult<usize> {
     static NEXT_KEY: AtomicUsize = AtomicUsize::new(1);
     let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
-    lock().insert(key, session);
-    key
+    lock()?.insert(key, session);
+    Ok(key)
 }
 
-/// Removes and answers a session; `None` for a closed or fabricated key.
-pub fn take(key: usize) -> Option<DirSession> {
-    lock().remove(&key)
+/// Removes and answers a session; `Ok(None)` for a closed or fabricated key.
+pub fn take(key: usize) -> PrimResult<Option<DirSession>> {
+    Ok(lock()?.remove(&key))
 }
 
 /// Builds the handle bytes: session id, padding zeroed, key in the pointer
@@ -216,7 +225,23 @@ pub fn decode_handle(bytes: &[u8]) -> Option<(i32, usize)> {
 mod tests {
     use super::*;
     use crate::testutil::TempDir;
+    use pharo_vm_plugin::PrimErr;
     use std::collections::BTreeSet;
+    use std::sync::PoisonError;
+
+    /// Serialises the two tests that touch the process-wide session registry.
+    ///
+    /// The poison test below leaves that registry unusable for as long as it
+    /// holds this guard, and the harness runs tests in parallel threads within
+    /// one binary -- so "nothing else takes this lock while I have it" is the
+    /// only thing that keeps the two from colliding. It recovers its own
+    /// poison deliberately, as every `#[cfg(test)]` serialisation lock in this
+    /// tree does: one failing test must not cascade into the other, and no
+    /// image ever reaches this.
+    fn registry_lock() -> std::sync::MutexGuard<'static, ()> {
+        static SERIAL: Mutex<()> = Mutex::new(());
+        SERIAL.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 
     fn open_dir(path: &std::path::Path) -> Result<Option<DirSession>, i64> {
         let conv = Converters::default();
@@ -306,11 +331,112 @@ mod tests {
 
     #[test]
     fn registry_register_take_take() {
+        let _serial = registry_lock();
         let dir = TempDir::new("dir-registry");
         std::fs::write(dir.path().join("f"), b"x").unwrap();
         let session = open_dir(dir.path()).unwrap().unwrap();
-        let key = register(session);
-        assert!(take(key).is_some());
-        assert!(take(key).is_none(), "a closed handle no longer resolves");
+        let key = register(session).expect("a registry nothing has torn");
+        assert!(take(key).expect("still untorn").is_some());
+        assert!(
+            take(key).expect("still untorn").is_none(),
+            "a closed handle no longer resolves"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Fail-fast after a panic mid-walk
+    // -----------------------------------------------------------------------
+
+    /// A panic while [`lock`] is held refuses every later lock.
+    ///
+    /// The SDK proves the mechanism in
+    /// `pharo-vm-plugin/tests/plugin_mutex_poison.rs`; this proves the
+    /// *wiring* here, which is the half a `registry().clear_poison()` slipped
+    /// in front of the `poison::lock` would silently undo while all 42 tests
+    /// in the crate stayed green.
+    ///
+    /// The tear is the real invariant a [`DirSession`] carries: its `dir`
+    /// stream and its `fa` buffer must describe the *same* directory. `fa` is
+    /// both the prefix `read` appends each entry name to and the buffer
+    /// `primitiveReaddir` hands the image back, so once the two disagree the
+    /// walk enumerates one directory and reports absolute paths inside
+    /// another -- and the image `stat`s, opens and deletes what those paths
+    /// name. Recovering the lock is what would hand that session out; refusing
+    /// is why this registry locks the way it does.
+    ///
+    /// The panic is raised by this test rather than injected through the proxy
+    /// on purpose: every plugin-to-VM call crosses `extern "C"`, whose
+    /// abort-on-unwind shim would turn an injected panic into `SIGABRT`
+    /// instead of the unwind the hazard is made of.
+    #[test]
+    fn a_panic_while_the_session_registry_is_held_refuses_every_later_lock() {
+        let _serial = registry_lock();
+
+        let walked = TempDir::new("dir-poison-walked");
+        std::fs::write(walked.path().join("only-here"), b"x").unwrap();
+        let reported = TempDir::new("dir-poison-reported");
+
+        // --- healthy ------------------------------------------------------
+        let session = open_dir(walked.path()).unwrap().unwrap();
+        let key = register(session).expect("a fresh module hands out the registry");
+        assert!(lock().expect("still healthy").contains_key(&key));
+
+        // --- a panic between the two halves of a session ------------------
+        let torn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let conv = Converters::default();
+            let mut sessions = lock().expect("still healthy");
+            let session = sessions.get_mut(&key).expect("just registered");
+            // The prefix now names the second directory; the `ReadDir` still
+            // walks the first.
+            session
+                .fa
+                .set_st_dir(reported.path().as_os_str().as_encoded_bytes(), &conv)
+                .unwrap();
+            panic!("a path conversion failed mid-rewind");
+        }));
+        assert!(torn.is_err());
+
+        // The session really is torn, which is what makes the assertions
+        // below mean something. Reached the way the old code reached it --
+        // and this is the only place in the crate that may still do so.
+        {
+            let recovered = registry().lock().unwrap_or_else(PoisonError::into_inner);
+            let session = recovered.get(&key).expect("still registered");
+            assert_eq!(
+                session.path,
+                walked.path(),
+                "the stream still walks the directory it was opened on"
+            );
+            assert!(
+                session
+                    .fa
+                    .plat_path()
+                    .starts_with(reported.path().as_os_str().as_encoded_bytes()),
+                "while the buffer the image is handed names the other one"
+            );
+        }
+
+        // --- the fix ------------------------------------------------------
+        assert_eq!(
+            lock().err(),
+            Some(PrimErr::Unsupported),
+            "a session whose stream and buffer name different directories \
+             must never be handed to a caller"
+        );
+        assert_eq!(
+            take(key).err(),
+            Some(PrimErr::Unsupported),
+            "and every caller propagates the refusal rather than walking on"
+        );
+
+        // --- teardown -----------------------------------------------------
+        //
+        // The assertions are made; this restores the binary for the other
+        // test that shares `registry_lock`, which is still blocked on the
+        // guard held above. It is the only `clear_poison` in the crate, it is
+        // `#[cfg(test)]`, and no image can reach it -- the accessor above is
+        // still the only way in from a primitive, and it still refuses.
+        registry().clear_poison();
+        lock().expect("cleared").clear();
     }
 }
