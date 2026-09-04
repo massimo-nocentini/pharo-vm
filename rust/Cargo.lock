@@ -364,6 +364,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pango-plugin"
+version = "0.1.0"
+dependencies = [
+ "pharo-vm-plugin",
+]
+
+[[package]]
 name = "pharo-platform"
 version = "0.1.0"
 dependencies = [

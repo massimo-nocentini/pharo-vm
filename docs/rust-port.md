@@ -133,40 +133,50 @@ Each crate's README says which of its copies remain and why. The aliasing
 cases that now fail cleanly are the ones the C decoded, compressed or
 encrypted out of a buffer it was writing; each is noted as a divergence.
 
-## Beyond the C plugins: bindings for the two downloaded libraries
+## Beyond the C plugins: bindings for libraries no C plugin wrapped
 
-Everything above replaces something. These two do not.
+Everything above replaces something. These three do not.
 
-Cairo and SDL are the only third-party libraries the VM *ships without using*:
+Cairo and SDL are the third-party libraries the VM *ships without using*:
 `cmake/importCairo.cmake` and `cmake/importSDL2.cmake` download ready-made
 binaries into the directory beside the executable, and nothing in `src/`,
 `plugins/` or `include/` mentions either — the image reaches them through UFFI
-(Athens-Cairo, OSWindow-SDL2). Two new crates make the same libraries reachable
-as named primitives instead, with the plugin owning the objects and the image
-holding integer handles.
+(Athens-Cairo, OSWindow-SDL2). Pango is a step further out: the VM neither uses
+it nor ships it, and it is bound here as a system library. Three new crates make
+these libraries reachable as named primitives instead, with the plugin owning
+the objects and the image holding integer handles.
 
 | Plugin | Crate | Surface | Standalone verification |
 |---|---|---|---|
 | CairoPlugin | `cairo-plugin` | 108 primitives over 103 `cairo_*` entry points | 22 tests; run against the bundle's own `cairo-1.17.4` binary, all entry points resolved, drawing asserted per-pixel |
 | SDL3Plugin | `sdl3-plugin` | 63 primitives over 52 `SDL_*` entry points | 26 tests; run against SDL3 `release-3.4.10`, all entry points resolved, display path driven headless, struct offsets checked against a C `offsetof` probe |
+| PangoPlugin | `pango-plugin` | 184 primitives over 264 `pango_*` and 8 `g_*` entry points | 74 tests; run against a system Pango 1.58.2, all entry points resolved, signatures round-tripped through the real library, skipping when no Pango is installed |
 
 Three things distinguish them from the ports above.
 
-**The download rules are untouched.** Both crates `dlopen` whatever the
-existing CMake fetches. That is not a preference: the downloaded zips hold
-runtime objects only — no headers, no `.pc` file — so there is nothing to link
-against, and `cairo-sys-rs`/`sdl3-sys` would add a `-dev` package requirement
-to a VM that already ships the library. The search order is the executable's
-directory first, then the system loader, which is where the image's FFI looks
-too.
+**Nothing is linked, and no download rule changed.** All three crates
+`dlopen`. For Cairo and SDL that means whatever the existing CMake fetches, and
+it is not a preference: the downloaded zips hold runtime objects only — no
+headers, no `.pc` file — so there is nothing to link against, and
+`cairo-sys-rs`/`sdl3-sys` would add a `-dev` package requirement to a VM that
+already ships the library. `pango-plugin` follows the same rule for the
+opposite reason: there is no download to add, so it dlopens whatever the
+machine has and would otherwise force a `libpango1.0-dev` on every builder.
+The search order is the executable's directory first, then the system loader,
+which is where the image's FFI looks too — with Pango adding the usual
+system prefixes after those, because on macOS a bare-name `dlopen` does not
+reach Homebrew and would decline on a machine that plainly has Pango.
 
 **A missing library is a normal outcome.** `initialiseModule` answers 0 and the
 VM rejects the module, so the image can tell "not available here" from "not
 implemented" and stay on its FFI binding. On Linux that is the *expected* path
 for SDL3 today: `importSDL2.cmake` fetches `SDL3-3.4.10` for Windows and macOS
-only, and no Linux artifact exists on `files.pharo.org`.
+only, and no Linux artifact exists on `files.pharo.org`. For Pango it is the
+*default* path everywhere: nothing downloads it, so the plugin finds a library
+only where one is installed system-wide.
 
-**The image gets handles, not pointers.** Every Cairo and SDL object lives in a
+**The image gets handles, not pointers.** Every Cairo, SDL and Pango object
+lives in a
 `pharo_vm_plugin::handles::Registry` and the image holds a SmallInteger carrying
 a slot index and a generation counter. A stale handle fails its primitive with
 `NotFound`; a stale pointer, which is what the FFI binding passes today, is
@@ -174,19 +184,41 @@ dereferenced. Two consequences worth knowing: the Cairo plugin *keeps* a pin on
 image memory a surface is drawing into when Cairo still holds a reference to
 that surface (`primitiveRetainedPinCount` reports how many), and the SDL plugin
 invalidates a window's renderer and that renderer's textures when the window is
-destroyed, because SDL frees them without reference counting.
+destroyed, because SDL frees them without reference counting. Pango's registry
+carries the same idea one step further: a font map records whether the plugin
+*owns* the reference it holds, because `pango_cairo_font_map_get_default` hands
+back a process-wide singleton whose neighbour `pango_cairo_font_map_new` hands
+back an owned object, and unref'ing the first would break text rendering
+everywhere.
 
 `cmake/rust.cmake` carries them in `RUST_ONLY_PLUGINS` rather than
 `RUST_REPLACED_PLUGINS` — there is no C plugin to skip — gated on
-`FEATURE_LIB_CAIRO` and `FEATURE_LIB_SDL2`, and built under the same
-`USE_RUST_PLUGINS=ON`.
+`FEATURE_LIB_CAIRO`, `FEATURE_LIB_SDL2` and `FEATURE_LIB_PANGO`, and built
+under the same `USE_RUST_PLUGINS=ON`. The first two default ON because the flag
+also switches on the download that makes the library present; `FEATURE_LIB_PANGO`
+defaults **OFF**, because nothing downloads Pango and an ON default would put a
+plugin in every bundle that can only decline on a machine without a system
+Pango.
 
-**Neither is usable from Pharo yet.** This is half the change: an Athens
-backend and an OSWindow backend calling these primitives instead of UFFI still
-have to be written, in the image, and until they are nothing in Pharo touches
-either plugin. Each crate's README documents the primitive-by-primitive
-contract those backends have to be written against, including the 64-byte
-decoded event record `SDL3Plugin` answers.
+**None of them is usable from Pharo yet.** This is half the change: an Athens
+backend, an OSWindow backend and a text backend calling these primitives
+instead of UFFI still have to be written, in the image, and until they are
+nothing in Pharo touches any of these plugins. Each crate's README documents
+the primitive-by-primitive contract those backends have to be written against,
+including the 64-byte decoded event record `SDL3Plugin` answers and the wire
+shapes `PangoPlugin` uses for rectangles, matrices and log attributes.
+
+`PangoPlugin` has one further gap the other two do not, and it is a deployment
+question rather than a code one. Drawing text needs a `cairo_t *` that
+`CairoPlugin` owns, so the two plugins hand one across a small versioned C ABI
+— and the handshake refuses unless both plugins resolved the *same* Cairo. On a
+Homebrew macOS today they do not: libpangocairo hard-references
+`/opt/homebrew/opt/cairo/lib/libcairo.2.dylib` while `CairoPlugin` opens the
+bundle's own copy, so every drawing primitive answers `Unsupported` and
+`primitiveCairoBridgeStatus` names both files. Refusing is the correct
+behaviour — passing a `cairo_t *` between two mapped Cairos is silent
+corruption — but it means text does not render until a Pango built against the
+bundled Cairo ships.
 
 ## Wave 12: the interpreter proxy
 

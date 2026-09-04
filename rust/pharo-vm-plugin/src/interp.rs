@@ -1,5 +1,6 @@
 //! A safe handle on the interpreter proxy.
 
+use core::ffi::{c_char, c_void};
 use core::slice;
 use std::ffi::CString;
 
@@ -876,6 +877,107 @@ impl Interp {
         Ok(())
     }
 
+    // ---- other plugins -----------------------------------------------------
+
+    /// Looks a function up in another plugin, loading that plugin if needed.
+    ///
+    /// The VM's own sanctioned way for one plugin to reach another. Two
+    /// separately-loaded shared libraries cannot share a `static`, so a plugin
+    /// that needs a resource another plugin owns -- a `cairo_t *` living in
+    /// CairoPlugin's registry, say -- has to ask for it through an exported C
+    /// entry point, and this is how that entry point is found. Linking the
+    /// other plugin as an rlib instead would compile its code a second time
+    /// and give this library a second, empty copy of its registries.
+    ///
+    /// `ioLoadFunctionFrom` (`src/common/sqNamedPrims.c:319`) **loads the
+    /// module** when it is not loaded yet: a filesystem search over every
+    /// plugin path, followed by `getModuleName`/`setInterpreter`/
+    /// `initialiseModule`, with the library `dlclose`d again if any of those
+    /// declines. So this is not a cheap call, and a plugin should resolve once
+    /// and cache -- including caching the *failure*, or a miss walks the
+    /// filesystem again on every attempt.
+    ///
+    /// The name is looked up literally with `dlsym`, with no module prefix and
+    /// no `AccessorDepth` byte, so the other plugin must export exactly this
+    /// symbol.
+    ///
+    /// Fails with `BadArgument` for an empty name or one containing an interior
+    /// NUL, and `NotFound` when either the module or the symbol is missing --
+    /// which the caller cannot tell apart, by design of the C entry point. Use
+    /// [`Interp::module_is_loadable`] first if the difference matters.
+    ///
+    /// The answer stays valid only until the module is unloaded. The image can
+    /// unload one (`ioUnloadModule`, `src/common/sqNamedPrims.c:487`), which
+    /// `dlclose`s the library and dangles every pointer taken out of it. A
+    /// plugin that caches one of these **must** export `moduleUnloaded` and
+    /// drop its cache when named the module it borrowed from.
+    ///
+    /// # Safety of the result
+    ///
+    /// The answer is a code address the caller will transmute to a function
+    /// pointer. Nothing checks the signature; getting it wrong is exactly as
+    /// dangerous as getting a `dlsym` signature wrong, because it is one.
+    pub fn load_function_from(&self, function: &str, module: &str) -> PrimResult<*mut c_void> {
+        // An empty name is not merely useless: `ioLoadFunctionFrom` tests the
+        // *pointer* for NULL (`sqNamedPrims.c:329`), so an empty CString takes
+        // the string path and `ioFindExternalFunctionInAccessorDepthInto`
+        // answers 0 for it -- while a genuine NULL would answer the constant
+        // 1, which is not an address at all. Refusing here keeps `(void *) 1`
+        // out of the return type.
+        if function.is_empty() || module.is_empty() {
+            return Err(PrimErr::BadArgument);
+        }
+        // The proxy takes `char *`, not `const char *`, so the bytes must live
+        // somewhere writable for the call. Bound to locals: a temporary would
+        // be dropped before `call!` ran, leaving the proxy reading freed
+        // memory.
+        let mut function = CString::new(function)
+            .map_err(|_| PrimErr::BadArgument)?
+            .into_bytes_with_nul();
+        let mut module = CString::new(module)
+            .map_err(|_| PrimErr::BadArgument)?
+            .into_bytes_with_nul();
+        let address = call!(
+            self,
+            ioLoadFunctionFrom(
+                function.as_mut_ptr().cast::<c_char>(),
+                module.as_mut_ptr().cast::<c_char>(),
+            )
+        );
+        if address.is_null() {
+            return Err(PrimErr::NotFound);
+        }
+        Ok(address)
+    }
+
+    /// Is this plugin loadable? Loads it, if it is not loaded already.
+    ///
+    /// `ioLoadFunctionFrom` with a null function name answers the constant 1
+    /// when the module is there and 0 when it is not
+    /// (`src/common/sqNamedPrims.c:329-332`). Note that "there" includes having
+    /// initialised successfully: a plugin whose `initialiseModule` declined has
+    /// been unloaded again by the time this answers.
+    ///
+    /// Distinguishes "no such plugin" from "no such symbol", which
+    /// [`Interp::load_function_from`] cannot -- worth asking when the two want
+    /// different diagnostics, and not worth asking otherwise, because it is the
+    /// same filesystem search.
+    pub fn module_is_loadable(&self, module: &str) -> PrimResult<bool> {
+        if module.is_empty() {
+            return Err(PrimErr::BadArgument);
+        }
+        let mut module = CString::new(module)
+            .map_err(|_| PrimErr::BadArgument)?
+            .into_bytes_with_nul();
+        // A literal null, not an empty string: the C tests the pointer, and
+        // this is the only way to reach the "module is there" answer
+        // deliberately.
+        let answer = call!(
+            self,
+            ioLoadFunctionFrom(core::ptr::null_mut(), module.as_mut_ptr().cast::<c_char>())
+        );
+        Ok(!answer.is_null())
+    }
 }
 
 /// A single primitive argument, read from a stack slot.
@@ -942,3 +1044,66 @@ impl_stack_args!(5: A @ 4, B @ 3, C @ 2, D @ 1, E @ 0);
 impl_stack_args!(6: A @ 5, B @ 4, C @ 3, D @ 2, E @ 1, F @ 0);
 impl_stack_args!(7: A @ 6, B @ 5, C @ 4, D @ 3, E @ 2, F @ 1, G @ 0);
 impl_stack_args!(8: A @ 7, B @ 6, C @ 5, D @ 4, E @ 3, F @ 2, G @ 1, H @ 0);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proxy::VirtualMachine;
+
+    /// A proxy table with every entry unset, which is what an old or
+    /// differently-configured VM hands over and what a test binary has instead
+    /// of a VM at all. Only the checks that run *before* the proxy call are
+    /// exercisable against it -- but those are the ones carrying the trap.
+    fn interp_without_a_vm() -> (Box<VirtualMachine>, Interp) {
+        // SAFETY: every field of `VirtualMachine` is an `Option<fn>`, whose
+        // all-zero bit pattern is the guaranteed niche for `None`. Nothing
+        // here is ever called through.
+        let mut vt: Box<VirtualMachine> = Box::new(unsafe { core::mem::zeroed() });
+        // SAFETY: the box outlives the `Interp`, both are returned together,
+        // and the table is never mutated after this point.
+        let interp = unsafe { Interp::from_raw(core::ptr::from_mut(&mut *vt)) };
+        (vt, interp)
+    }
+
+    #[test]
+    fn an_empty_function_name_is_refused_before_it_can_answer_the_constant_one() {
+        let (_vt, vm) = interp_without_a_vm();
+        assert_eq!(
+            vm.load_function_from("", "CairoPlugin"),
+            Err(PrimErr::BadArgument)
+        );
+    }
+
+    #[test]
+    fn an_empty_module_name_is_refused_by_both_entry_points() {
+        let (_vt, vm) = interp_without_a_vm();
+        assert_eq!(
+            vm.load_function_from("cairoPluginBridgeAbiVersion", ""),
+            Err(PrimErr::BadArgument)
+        );
+        assert_eq!(vm.module_is_loadable(""), Err(PrimErr::BadArgument));
+    }
+
+    #[test]
+    fn an_interior_nul_cannot_be_smuggled_through_as_a_shorter_name() {
+        let (_vt, vm) = interp_without_a_vm();
+        assert_eq!(
+            vm.load_function_from("cairo\0Plugin", "CairoPlugin"),
+            Err(PrimErr::BadArgument)
+        );
+        assert_eq!(
+            vm.module_is_loadable("Cairo\0Plugin"),
+            Err(PrimErr::BadArgument)
+        );
+    }
+
+    #[test]
+    fn a_vm_without_the_entry_point_declines_rather_than_calling_through_null() {
+        let (_vt, vm) = interp_without_a_vm();
+        assert_eq!(
+            vm.load_function_from("cairoPluginBridgeAbiVersion", "CairoPlugin"),
+            Err(PrimErr::Unsupported)
+        );
+        assert_eq!(vm.module_is_loadable("CairoPlugin"), Err(PrimErr::Unsupported));
+    }
+}

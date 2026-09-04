@@ -96,6 +96,79 @@ else still holds one the pin is **kept** rather than released.
 `primitiveRetainedPinCount` reports how many; anything but zero means the image
 destroyed a surface before the contexts drawn on it.
 
+## Bridge: lending a context to another plugin
+
+Rendering a `PangoLayout` needs a `cairo_t *`, and the image's contexts live in
+*this* library's registry. Another plugin cannot see it — linking this crate as
+an rlib would give it a second, empty copy of the statics, answering `NotFound`
+for every handle the image ever got from here — so there is a small exported C
+entry point instead, which PangoPlugin resolves through the VM's own
+`ioLoadFunctionFrom` (`src/common/sqNamedPrims.c:319`).
+
+Five symbols, none of them a primitive, because that lookup is a literal
+`dlsym` with no module prefix and no `AccessorDepth` byte:
+
+```c
+uint32_t    cairoPluginBridgeAbiVersion(void);
+void       *cairoPluginCairoIdentity_v1(void);
+const char *cairoPluginCairoPath_v1(void);
+int         cairoPluginBorrowContext_v1(sqInt handle,
+                                        struct CairoBridgeContextV1 *out,
+                                        uint32_t out_size);
+int         cairoPluginContextStatus_v1(sqInt handle);
+
+struct CairoBridgeContextV1 {
+    uint32_t  size;            /* sizeof, filled by the callee */
+    uint32_t  abi;             /* 1 */
+    void     *cr;              /* borrowed cairo_t *, never NULL on success */
+    void     *cairo_identity;  /* == cairoPluginCairoIdentity_v1() */
+    int32_t   status;          /* cairo_status(cr) as of this call */
+    int32_t   reserved;        /* 0 */
+};                             /* 32 bytes, align 8 — asserted, not assumed */
+```
+
+**These five names and that struct are ABI.** They may not be renamed, and no
+field may be reordered, resized or inserted: the consumer declares the layout a
+second time in its own crate and nothing links the two declarations together, so
+a change here is a breaking change that shows up as garbage on someone else's
+machine rather than as a compile error. An incompatible change becomes a `_v2`
+symbol, which a consumer built for `_v1` simply fails to resolve — one primitive
+answers `Unsupported`, and nothing is called with a struct it reads differently.
+`cairoPluginBridgeAbiVersion` carries no version in its name because its meaning
+is fixed forever; it exists so a consumer can say *why* a versioned symbol was
+missing.
+
+**The borrow never transfers ownership.** `cairoPluginBorrowContext_v1` answers
+a `cairo_t *` valid for the duration of the caller's primitive and no longer.
+The borrower must not destroy it, must not `cairo_reference` it, and must not
+store it anywhere that outlives the call; if it needs the context again it asks
+again, which re-resolves the handle, so a context destroyed in the meantime
+answers 0 instead of a freed pointer. No reference is taken on our side either:
+that would trade a use-after-free for a leak plus a surface pin
+`primitiveRetainedPinCount` would have to account for, and it buys nothing,
+because the VM does not re-enter Smalltalk mid-primitive.
+
+`out_size` is an argument rather than only a field so that the callee never
+reads caller memory it has not written; the struct is filled whole or not at
+all, so the caller need not initialise it.
+
+**`cairoPluginCairoIdentity_v1` is the part not to skip.** It answers the
+address of `cairo_create` *as this plugin resolved it*, purely as a token — it
+is never called through. A consumer that dlopened its own Cairo, or that uses a
+`libpangocairo` linked against one, must compare its own `cairo_create` against
+this and refuse when they differ: two copies of Cairo in one process have
+independent statics and, across versions, different internal struct layouts, so
+passing a `cairo_t *` between them is undefined behaviour that will not crash
+reliably. On a homebrew macOS machine with a bundled Cairo the addresses will
+differ and Pango text will not draw. That is the correct outcome — refusing
+beats corrupting — and `cairoPluginCairoPath_v1` names the library we loaded so
+the diagnostic can say which two Cairos disagreed.
+
+`cairoPluginContextStatus_v1` is for the borrower to call *after* drawing: Cairo
+latches errors and then silently ignores every later call on a broken context,
+so asking afterwards turns "the drawing stopped appearing" into a failed
+primitive at the point of the mistake.
+
 ## What is covered
 
 **108 primitives** over 103 `cairo_*` entry points, chosen to cover what an Athens backend

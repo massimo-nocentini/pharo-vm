@@ -1,0 +1,21 @@
+[package]
+name = "pango-plugin"
+description = "PangoPlugin: Pango text layout as Pharo named primitives, bound to the system library."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# Must match the module name the image asks for, and the file name the VM
+# looks up: libPangoPlugin.so / .dylib / PangoPlugin.dll. cmake/rust.cmake:396
+# turns a mismatch with the corrosion target name into a FATAL_ERROR.
+name = "PangoPlugin"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# `dylib` because Pango is dlopened, not linked. Unlike Cairo and SDL it is not
+# downloaded by the build either: it is whatever the machine has installed, so
+# absence is the common case and must be a clean decline.
+pharo-vm-plugin = { path = "../../pharo-vm-plugin", features = ["dylib"] }

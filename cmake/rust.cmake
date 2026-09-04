@@ -189,19 +189,19 @@ if(UNIX AND NOT APPLE)
     replace_plugin_with_rust(UUIDPlugin            uuid-plugin)
 endif()
 
-# Bindings for the two libraries the build downloads rather than compiles.
+# Bindings for third-party libraries the VM does not otherwise use.
 #
-# Neither replaces anything: today the image reaches Cairo and SDL through its
-# own FFI, and nothing in src/ or plugins/ mentions either library. These make
-# the same libraries reachable as named primitives instead, with the plugin
-# owning the objects and the image holding integer handles.
+# None of them replaces anything: today the image reaches Cairo, SDL and Pango
+# through its own FFI, and nothing in src/ or plugins/ mentions any of the
+# three. These make the same libraries reachable as named primitives instead,
+# with the plugin owning the objects and the image holding integer handles.
 #
 # The download rules are untouched -- cmake/importCairo.cmake and
 # cmake/importSDL2.cmake still fetch the same binaries into
 # ${LIBRARY_OUTPUT_DIRECTORY}. The plugins dlopen whatever lands there, so they
 # are built only when the corresponding FEATURE flag says the bundle will have
-# something for them to find. Both decline to initialise when it does not,
-# which leaves the image on its FFI binding.
+# something for them to find. All of them decline to initialise when it does
+# not, which leaves the image on its FFI binding.
 if(FEATURE_LIB_CAIRO)
     add_rust_only_plugin(CairoPlugin cairo-plugin)
 endif()
@@ -210,6 +210,18 @@ if(FEATURE_LIB_SDL2)
     # downloads SDL3-3.4.10 alongside SDL2, though on Linux it does not yet do
     # so -- there the plugin will decline at load time until it does.
     add_rust_only_plugin(SDL3Plugin sdl3-plugin)
+endif()
+
+if(FEATURE_LIB_PANGO)
+    # Unlike the two above, Pango is a *system* library: nothing in cmake/
+    # downloads it, and FEATURE_LIB_PANGO is deliberately consumed here and
+    # nowhere else -- there is no importPango.cmake to add to
+    # add_third_party_dependencies_per_platform(). That is why it defaults OFF
+    # in CMakeLists.txt: turning it ON does not make Pango appear, it only
+    # builds a plugin that will find one if the machine has it. The plugin
+    # dlopens libpangocairo-1.0.so.0 / libpangocairo-1.0.0.dylib /
+    # pangocairo-1.0-0.dll and declines cleanly when there is none.
+    add_rust_only_plugin(PangoPlugin pango-plugin)
 endif()
 
 if(NOT USE_RUST_PLATFORM)

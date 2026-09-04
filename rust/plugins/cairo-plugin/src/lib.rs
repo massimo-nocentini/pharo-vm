@@ -7,6 +7,7 @@
 #![allow(non_snake_case)] // primitive names follow the image's pragmas
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod bridge;
 pub mod context;
 pub mod ffi;
 pub mod pattern;

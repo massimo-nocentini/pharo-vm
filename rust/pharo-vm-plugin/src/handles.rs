@@ -94,8 +94,19 @@ impl<T> Registry<T> {
 
     /// Stores `value` and answers the handle the image should hold.
     ///
-    /// Fails with [`PrimErr::LimitExceeded`] if no slot can be allocated,
-    /// which needs more than 2^32 live resources.
+    /// Fails with [`PrimErr::LimitExceeded`] when the slot index does not fit
+    /// the handle's index field: more than 2^32 live resources in a 64-bit
+    /// image, more than 2^14 in a 32-bit one, where `INDEX_BITS` is 14.
+    ///
+    /// **On that failure the registry keeps `value` anyway.** The slot is
+    /// filled before the handle is encoded, and encoding is the only fallible
+    /// step, so a failed insert leaves the resource owned by this registry and
+    /// released exactly once by [`Registry::drain`] at module shutdown -- with
+    /// no handle in the image naming it in the meantime. A caller must
+    /// therefore **not** release the resource on the error path: that would be
+    /// a double free, and it would leave a dangling pointer in a live slot for
+    /// `drain` to release a second time. Answering the error and dropping the
+    /// raw pointer on the floor is the correct thing to do.
     pub fn insert(&self, value: T) -> PrimResult<sqInt> {
         let mut slots = self.lock();
 

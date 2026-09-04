@@ -24,6 +24,7 @@ members = [
     "plugins/locale-plugin",
     "plugins/misc-primitive-plugin",
     "plugins/new-file-plugin",
+    "plugins/pango-plugin",
     "plugins/sdl3-plugin",
     "plugins/socket-plugin",
     "plugins/squeak-ssl",

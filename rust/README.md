@@ -30,7 +30,7 @@ heartbeat thread, async I/O, command-line parsing, module loading and FFI.
 | `pharo-vm-plugin-macros` | The `#[pharo_primitive]` attribute. Not used directly. |
 | `examples/hello-plugin` | The smallest plugin: one primitive answering a String, with a `.st` driver script. |
 | `examples/uuid-plugin` | A worked plugin: drop-in replacement for the C `UUIDPlugin`. |
-| `plugins/*` | Drop-in replacements for every C plugin under `plugins/`, one crate each, plus `cairo-plugin` and `sdl3-plugin`, which bind libraries the build downloads and no C plugin ever wrapped. Switched in by `USE_RUST_PLUGINS=ON`; see the plugin-layer section of [docs/rust-port.md](../docs/rust-port.md) and each crate's README for its verification status. |
+| `plugins/*` | Drop-in replacements for every C plugin under `plugins/`, one crate each, plus `cairo-plugin`, `sdl3-plugin` and `pango-plugin`, which bind libraries no C plugin ever wrapped — the first two downloaded by the build, the third a system library. Switched in by `USE_RUST_PLUGINS=ON` (`pango-plugin` additionally needs `FEATURE_LIB_PANGO=ON`, which is off by default); see the plugin-layer section of [docs/rust-port.md](../docs/rust-port.md) and each crate's README for its verification status. |
 
 The two halves are independent. `pharo-platform` is an in-tree port and needs
 the CMake environment; `pharo-vm-plugin` is for people writing plugins outside
