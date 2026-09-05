@@ -6,6 +6,8 @@ CPackSourceConfig.cmake
 Makefile
 cmake_install.cmake
 build
+# The all-C comparison build CLAUDE.md's "Build and test" section describes.
+build-c
 install_manifest.txt
 CMakeSettings.json*
 !CMakeSettings.json.template

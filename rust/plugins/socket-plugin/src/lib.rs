@@ -53,8 +53,27 @@ fn socket_init() -> bool {
     true
 }
 
-/// `shutdownModule` -> `socketShutdown` -> `sqNetworkShutdown`.
+/// `shutdownModule` -> `socketShutdown` -> `sqNetworkShutdown`, unless a DNS
+/// worker is still running.
+///
+/// The refusal is the quiescence rule `CLAUDE.md` §1 and §3 trap 3 state:
+/// `Smalltalk vm unloadModule: 'SocketPlugin'` is reachable from ordinary image
+/// code and ends in `dlclose`, and a `pharo-dns` worker parked in
+/// `getaddrinfo` is executing this library's text and is about to touch its
+/// statics. `ioUnloadModule` honours a 0 by leaving the module loaded
+/// (`rust/pharo-platform/src/named_prims.rs`, the `shutdown_module(entry) == 0`
+/// arm), so answering 0 is how a plugin says "not yet".
+///
+/// It refuses *before* tearing anything down, so a refused unload leaves a
+/// working module rather than a loaded one with its network shut. The one
+/// consequence worth stating: `ioShutdownAllModules` ignores the answer, so a
+/// lookup in flight at that moment means `sqNetworkShutdown` is skipped for
+/// this module. Nothing in this tree calls `ioShutdownAllModules` -- it is
+/// exported for the image -- and the process is on its way out when it does.
 fn socket_shutdown() -> bool {
+    if !resolver::is_quiescent() {
+        return false;
+    }
     resolver::network_shutdown();
     true
 }
@@ -266,7 +285,7 @@ fn primitiveResolverAddressLookupResult(vm: &Interp) -> PrimResult<Answered> {
 #[pharo_primitive(accessor_depth = -1)]
 fn primitiveResolverError(vm: &Interp) -> PrimResult<Answered> {
     vm_ref::remember(vm);
-    let error = resolver::resolver_error()?;
+    let error = resolver::resolver_error();
     pop_then_push(vm, 1, vm.integer(error as sqInt)?)?;
     Ok(Answered)
 }
@@ -317,7 +336,7 @@ fn primitiveResolverStartNameLookup(vm: &Interp) -> PrimResult<Answered> {
 #[pharo_primitive(accessor_depth = -1)]
 fn primitiveResolverStatus(vm: &Interp) -> PrimResult<Answered> {
     vm_ref::remember(vm);
-    let status = resolver::resolver_status()?;
+    let status = resolver::resolver_status();
     pop_then_push(vm, 1, vm.integer(status as sqInt)?)?;
     Ok(Answered)
 }

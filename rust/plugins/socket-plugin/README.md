@@ -47,6 +47,57 @@ for that header-level coupling only; it resolves no symbols from this library.
 
 ## What changed underneath
 
+**The resolver is asynchronous, which on Unix it never was.** The C's
+`sqResolverStartNameLookup` blocked the whole VM inside `getaddrinfo` and then
+signalled the resolver semaphore on its way out -- its own comment reads
+*"we're done before we even started"* -- so every Process in the image stopped
+for the length of a DNS round trip, and `ResolverBusy` (2) was a state the Unix
+plugin could not reach. The image was written for the other contract the whole
+time: `NetNameResolver class >> addressForName:timeout:` takes a mutex, calls
+`waitForResolverReadyUntil:`, starts the lookup, then waits on the resolver
+semaphore while polling `sqResolverStatus` for `ResolverBusy`, and calls
+`primAbortLookup` when it gives up. Pharo 12.0's `NetNameResolver class >>
+initialize` even says so in a comment: *"on other platforms, such as Unix, the
+resolver is synchronous; a call to, say, the name lookup primitive will block
+all image processes until it returns."*
+
+So a start primitive now names a lookup, hands it to a thread and returns.
+**No image-side change is needed** -- this is the contract the image already
+implements. Three things make it safe, and each is a rule the next asynchronous
+plugin will need too:
+
+* **The mutex is never held across the lookup.** `getaddrinfo` runs with
+  nothing locked; the resolver state is taken for the microseconds it takes to
+  store the answer. Spawning a thread that holds the lock for the whole call
+  would only move the freeze from a syscall onto a mutex.
+* **Status and error are read lock-free**, out of two atoms (`LOOKUP_BUSY`,
+  `LAST_ERROR`) that were moved out of the mutex-protected state, because the
+  image polls `sqResolverStatus` in a loop and that poll must never wait for a
+  worker.
+* **A generation counter decides who may commit.** Every start and every abort
+  bumps it under the mutex; a worker that finds the generation moved on drops
+  its answer and stays silent. That is what makes `sqResolverAbort` -- an empty
+  function in the C -- mean something.
+
+A worker's whole vocabulary is "store a result and increment a counter in the
+VM's request table": it reads no oop, allocates nothing in the image and
+answers no value. `signalSemaphoreWithIndex` is the VM's designated any-thread
+entry point; the primitives that copy bytes out still run on the interpreter
+thread, later. Two bounds keep the image from turning a primitive into a
+resource: at most 16 workers may be alive at once (over the ceiling a lookup
+runs inline, which is exactly what the C did on every call), and
+`shutdownModule` answers 0 until every worker thread
+has been *joined*, so `Smalltalk vm unloadModule: 'SocketPlugin'` cannot
+`dlclose` a library a thread is executing. Joined, not counted: a counter
+decremented at the end of a worker's closure reaches zero while the thread is
+still running libstd's own epilogue and its TLS destructors, all of which is
+code in this same cdylib.
+
+The 2007 `getaddrinfo` API (`primitiveResolverGetAddressInfo` and friends) is
+**still synchronous**, and still blocks the VM. Its image-side callers read the
+results back without waiting on a semaphore, so making it asynchronous needs an
+image change and is out of scope here.
+
 **The resolver holds owned Rust values, not a libc linked list.** The C kept
 `getaddrinfo`'s `addrinfo` chain (plus a second, hand-`calloc`ed one for the
 AF_UNIX case) in globals and freed them at the top of the next lookup. Those
@@ -176,6 +227,31 @@ not work.
   verbatim, where both calls are accepted. A `cfg(macos)` test asserts both
   kernel rules against the kernel, so if a future macOS relaxed either the
   branch can go. The same fix is worth filing against the C at that line.
+* **The reverse lookup now signals the resolver semaphore.** The C's
+  `sqResolverStartAddrLookup` never called `signalSemaphoreWithIndex` -- only
+  the forward lookup did -- and could afford not to, because the answer was
+  already in `lastName` by the time the primitive returned and
+  `sqResolverStatus` never said `ResolverBusy`, so `NetNameResolver`'s wait
+  loop fell straight through. Once the lookup is asynchronous that silence
+  costs the image its whole deadline: `waitForResolverNonBusyUntil:` uses
+  `waitTimeoutMilliseconds:`, so it would poll to the timeout instead of
+  hanging, but a 3 ms lookup would take the caller's `timeout:` seconds.
+  Adding a wake-up the image already waits for is the only shape this can
+  take.
+* **The result accessors refuse while a lookup is in flight.**
+  `sqResolverNameLookupResult` and `sqResolverAddrLookupResult(Size)` answer a
+  primitive failure rather than the *previous* lookup's `lastAddr` /
+  `lastName`. The C could not reach this state; here the old answer is still in
+  place until the worker commits, and handing it back would name a host the
+  image is no longer asking about, silently. A well-behaved image never sees
+  it: `NetNameResolver` reads a result only after the resolver leaves
+  `ResolverBusy`.
+* **`sqResolverStatus` and `sqResolverError` no longer refuse on a poisoned
+  module.** Making them lock-free moved `lastError` out of the mutex, and
+  neither word is part of the invariant a panic can tear (that is
+  `results`/`cursor`). Nothing is lost: a panic under `poison::lock` sets the
+  module flag too, so `run_primitive` fails every primitive of a poisoned
+  module before its body runs.
 * The sibling primitive is deliberately left alone: `send_udp_to`
   (`sqSockettoHostportSendDataBufCount`, the C's line 1428) still passes an
   explicit destination on every call, and so is exposed to the same `EISCONN`
@@ -214,11 +290,12 @@ macOS does not have), and the hand-built AF_UNIX `sockaddr_un` leaves
 
 ## Verification
 
-`cargo test -p socket-plugin` runs 38 tests with no VM (36 on Linux: two are
-Darwin-only). Those 38 were executed on aarch64-apple-darwin only. For Linux
-this wave ran `cargo check` and `cargo clippy --all-targets` for
-`aarch64-unknown-linux-gnu` from the same Mac, both clean; nothing was
-executed on Linux, so the 36 remain a compile-time claim there.
+`cargo test -p socket-plugin` runs 45 tests with no VM, of which 43 build on
+Linux (two are Darwin-only). Those **43 were executed on
+x86_64-unknown-linux-gnu**, against a VM built from this tree; the earlier
+wave's were executed on aarch64-apple-darwin. The two Darwin-only tests remain
+a compile-time claim on Linux, and this wave's six new ones remain one on
+Darwin.
 
 * **Pure functions**: net-address round-trips; the address-header
   validate/stamp protocol; port get/set on IPv4 and IPv6 sockaddrs; the
@@ -246,11 +323,65 @@ executed on Linux, so the 36 remain a compile-time claim there.
   behind `udp_send` plus the fact that its `getpeername` probe leaves `errno`
   as it found it.
 
+* **The asynchronous resolver**, five tests that could not have been written
+  before, because they assert what the resolver looks like *during* a lookup.
+  A `#[cfg(test)]` gate that every worker takes for the whole of its body makes
+  that a fact rather than a race -- a loopback `getaddrinfo` finishes in
+  microseconds, so the in-flight window would otherwise be gone before the
+  first assertion ran. They pin: `ResolverBusy` reported while the state mutex
+  is demonstrably free; an abort disowning the worker so its answer is dropped
+  and its doorbell never rings; a second lookup superseding the first by the
+  same generation check; a shutdown not leaving `ResolverBusy` set for the next
+  session; one doorbell per completed lookup in *both* directions; and the
+  quiescence ledger `shutdownModule` reads, including the gap where no lookup
+  is in flight but the thread that ran it is still alive.
+
 The built `.so` was checked against the C plugin's export table: all 60
 primitive names identical, all 60 accessor-depth bytes identical (40 zero, 20
 minus-one), `getModuleName`/`setInterpreter`/`initialiseModule`/
 `shutdownModule`/`moduleUnloaded` present, and `aio*` present as undefined
 imports.
+
+### Against a live image, Rust plugin versus C plugin
+
+Two VMs were built from this tree on Linux x86_64 -- one with
+`USE_RUST_PLATFORM=ON USE_RUST_PLUGINS=ON`, one all-C -- and the same
+Pharo 12.0 image (build 1597, `4689a46372`) run on each:
+
+| | C plugin | Rust plugin |
+|---|---|---|
+| `primStartLookupOfName:` returns after | 2,384 us | **93 us** |
+| `resolverStatus` immediately after | 1 (`ResolverReady`) | **2 (`ResolverBusy`)** |
+| Smalltalk loop iterations during the query | **0** | **4,049,919** (over 155 ms) |
+| `addressForName: 'files.pharo.org'` | `193.49.213.186` | `193.49.213.186` |
+| `nameForAddress: 8.8.8.8` | `'dns.google'` | `'dns.google'` |
+| `primAbortLookup` while busy | n/a (never busy) | 2 -> 1, immediately |
+| `Smalltalk vm unloadModule:` with a lookup in flight | unloads | **refused** (primitive fails); the lookup then completes |
+| `Smalltalk vm unloadModule:` once quiescent | unloads | unloads, and re-`dlopen`s correctly on the next lookup |
+| `Socket newTCP connectToHostNamed: 'files.pharo.org' port: 80` + `GET /` | `HTTP/1.1 301 Moved P...` | `HTTP/1.1 301 Moved P...` |
+
+The last row is the regression check that matters most and reads as the least
+interesting: `connectToHostNamed:` resolves through the asynchronous path and
+then drives the socket half unchanged, so an end-to-end HTTP request over a
+real network answers byte for byte what the C plugin answers.
+
+**And what it costs.** One Process's lookup gets *slower* end to end, and the
+tables above would be dishonest without the number: 200 back-to-back
+`NetNameResolver addressForName:` calls for a name the OS resolver has already
+cached average **1,644 us on the C plugin and 1,997 us on this one**. The extra
+~350 us is a thread spawn, a doorbell round trip and a scheduler wake — the
+p50 of (d) plus the spawn. That is the trade, made deliberately: the Process
+doing the lookup waits about a fifth longer, and every other Process in the
+image stops waiting at all.
+
+
+The third row is the change stated as a user would feel it: on the C plugin the
+image executes *nothing* while a name is resolved; on this one it executed four
+million bytecoded loop iterations, in the same process, and then got the same
+answer. Both VMs were also checked to be identical on the failure the image hit
+first -- a `git_libgit2_init` symbol lookup against the libgit2 this build
+ships, which fails on the all-C VM in exactly the same way, so it is a
+packaging problem in this build tree and not a platform-layer regression.
 
 ## Not verified
 
@@ -259,19 +390,24 @@ linted -- so the Linux arms of the three `cfg` splits (`s_ifsock`,
 `gai_error_is_fatal`, `udp_send`) are unchanged code that nothing here
 re-executed.
 
-No VM runs in this environment, so an image-side differential pass should
-focus on:
+The image-side differential above covers the resolver primitives, the module
+handshake and the resolver semaphore's delivery from a foreign thread. What it
+does not reach, and a fuller pass still should:
 
-* **Load and stack discipline**: the literal `pop`/`popthenPush` counts and
-  the module handshake, against a live interpreter.
-* **Semaphore delivery**: connect/read/write notifications and the resolver
-  semaphore reaching image-side processes through the real aio poll loop.
+* **Load and stack discipline** for the other 40 primitives: the literal
+  `pop`/`popthenPush` counts against a live interpreter.
+* **Semaphore delivery** for the connect/read/write notifications through the
+  real aio poll loop (only the resolver semaphore was exercised).
 * **RAW sockets** (`SOCK_RAW`/ICMP needs root) and the **provided-socket**
   type.
 * **The AF_UNIX local-socket `getaddrinfo` path** beyond the unit test: the
   resulting address actually being connected to.
-* **Reverse DNS** (`gethostbyaddr`) success paths -- environment-dependent
-  here; only the error contract is unit-tested.
+* **Reverse DNS** success paths beyond the one live lookup above --
+  environment-dependent in a unit test, so only the error contract is pinned
+  there.
+* **The resolver under contention**: two Processes racing
+  `NetNameResolver`'s own `resolverMutex` is what serialises lookups image-side,
+  and nothing here drives a second Process past it.
 * **Interop with `UnixOSProcessPlugin`** reading the descriptor through the
   private pointer (the layout invariant is asserted, the interop is not run).
 * **Windows.** Not ported: the crate is Unix-only, like `sqUnixSocket.c`
@@ -285,9 +421,13 @@ from no primitive and referenced nowhere else in the tree.
 
 ## Not done yet
 
-* **CMake wiring.** The crate builds and exports the right surface, but the
-  build still compiles the C plugin. Switching over means adding this crate
-  to `cmake/rust.cmake` and dropping `SocketPlugin` from
-  `cmake/plugins.cmake` (keeping `UnixOSProcessPlugin`'s include path to the
-  `SQSocket` header) -- deliberately left as a separate change, so the swap
-  is reviewed on its own.
+* **The 2007 `getaddrinfo` API is still synchronous** and still stops the
+  image for the length of a lookup, exactly as the classic path used to. The
+  primitives are the same shape, so the machinery above transfers unchanged --
+  what does not transfer is the image side, which reads
+  `primitiveResolverGetAddressInfoSize` straight back without waiting on a
+  semaphore. That needs an image change, and therefore a decision about
+  whether to make one.
+* **macOS.** Everything above was measured on Linux. The resolver change is
+  platform-neutral, but the numbers, and the foreign-thread signalling they
+  rest on, have not been reproduced on Darwin.

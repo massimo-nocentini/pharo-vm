@@ -8,9 +8,45 @@
 //! touched from the interpreter thread (primitives and aio handlers both run
 //! there), the lock simply makes that assumption explicit and safe.
 //!
-//! The resolver is synchronous, as it is in the Unix C plugin: a "start
-//! lookup" primitive blocks in `getaddrinfo` and signals the resolver
-//! semaphore before returning ("we're done before we even started").
+//! The resolver is **asynchronous**, which the Unix C plugin never was. Its
+//! `sqResolverStartNameLookup` blocked the whole VM inside `getaddrinfo` and
+//! then signalled the resolver semaphore on its way out -- "we're done before
+//! we even started" is the C's own comment -- so every Process in the image
+//! stopped for the length of a DNS round trip, and `ResolverBusy` (2) was a
+//! state the Unix plugin could not reach. The image was written for the other
+//! contract all along: `NetNameResolver` starts a lookup, waits on the
+//! resolver semaphore with a deadline, polls `sqResolverStatus` for
+//! `ResolverBusy`, and calls `sqResolverAbort` when it gives up. Nothing here
+//! needs an image-side change; it needs the plugin to keep its half.
+//!
+//! So a start primitive names a lookup, hands it to a thread and returns, and
+//! the worker signals the resolver semaphore when it has an answer --
+//! *handle, doorbell, collect*, the only shape a Rust plugin may take (see
+//! `CLAUDE.md`). Three things make that safe:
+//!
+//! * **The mutex is never held across the lookup.** `getaddrinfo` runs with
+//!   nothing locked; [`STATE`] is taken for the microseconds it takes to store
+//!   the answer. Spawning a thread that holds the lock for the whole call
+//!   would have replaced a freeze inside a syscall with a freeze on a mutex.
+//! * **Status and error are read lock-free**, out of [`LOOKUP_BUSY`] and
+//!   [`LAST_ERROR`], because the image polls `sqResolverStatus` in a loop and
+//!   that poll must never wait for a worker.
+//! * **A generation counter decides who may commit.** Every start and every
+//!   abort bumps it under the mutex; a worker that finds the generation moved
+//!   on drops its answer and stays silent. That is what makes `sqResolverAbort`
+//!   -- a no-op in the C -- mean something.
+//!
+//! The worker thread's whole vocabulary is "store a result and increment a
+//! counter in the VM's request table": it never touches an oop, never
+//! allocates in the image and never answers a value. `signalSemaphoreWithIndex`
+//! is the VM's documented any-thread entry point; the primitives that copy
+//! bytes out ([`name_lookup_result`], [`addr_lookup_result`]) still run on the
+//! interpreter thread, later.
+//!
+//! The 2007 `getaddrinfo` API below ([`get_address_info`], [`get_name_info`])
+//! is still synchronous, and still blocks the VM. Its image-side callers read
+//! the results straight back without waiting on a semaphore, so making it
+//! async needs an image change and is out of scope here.
 //!
 //! Failure convention: `Err(PrimErr::GenericFailure)` stands for the C's
 //! `success(false)`, which is how every function here reported failure.
@@ -18,9 +54,11 @@
 use core::ffi::{c_char, c_int};
 use core::mem;
 use core::ptr;
-use core::sync::atomic::{AtomicI32, AtomicIsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, Ordering};
 use std::os::unix::ffi::OsStrExt;
+use std::panic::AssertUnwindSafe;
 use std::sync::Mutex;
+use std::thread;
 
 use pharo_vm_plugin::poison::{self, Guarded};
 use pharo_vm_plugin::{sqInt, PrimErr, PrimResult};
@@ -36,6 +74,9 @@ pub const MAX_HOST_NAME_LEN: usize = 256;
 // Resolver states, as the image knows them.
 pub const RESOLVER_UNINITIALISED: i32 = 0;
 pub const RESOLVER_SUCCESS: i32 = 1;
+/// A lookup is in flight. `#define ResolverBusy 2` in the C, where nothing
+/// could ever answer it; reachable here.
+pub const RESOLVER_BUSY: i32 = 2;
 pub const RESOLVER_ERROR: i32 = 3;
 
 // The generalised address API's portable enumerations (ikp 2007).
@@ -65,6 +106,70 @@ static THIS_NET_SESSION: AtomicI32 = AtomicI32::new(0);
 /// The image-side semaphore index the resolver signals when a lookup finishes.
 static RESOLVER_SEMA: AtomicIsize = AtomicIsize::new(0);
 
+/// `lastError`: 0 when the last lookup succeeded, otherwise the EAI code (or
+/// `HOST_NOT_FOUND` for a reverse lookup) the C left in its file-static.
+///
+/// Out of [`ResolverState`] and into an atomic on purpose. This and
+/// [`LOOKUP_BUSY`] are the two words the VM thread has to be able to read
+/// *while* a worker owns the lookup: the image polls `sqResolverStatus` in a
+/// loop, and taking the mutex there would trade a freeze inside `getaddrinfo`
+/// for a freeze on a mutex -- the same outage with a worse cause. Neither word
+/// is part of the invariant the mutex protects (that is `results`/`cursor`),
+/// so nothing is lost by moving them out.
+static LAST_ERROR: AtomicI32 = AtomicI32::new(0);
+
+/// True from the moment a lookup is started until its worker commits, or
+/// until [`resolver_abort`] or [`network_shutdown`] disowns it.
+///
+/// Written only under the [`STATE`] mutex, so the VM thread and a worker can
+/// never both decide it; read without the mutex, which is the whole point.
+static LOOKUP_BUSY: AtomicBool = AtomicBool::new(false);
+
+/// The worker threads this module has spawned and not yet joined.
+///
+/// Two jobs, and the second is the one with teeth: it bounds concurrency (see
+/// [`MAX_IN_FLIGHT_LOOKUPS`]), and it is the plugin's **quiescence ledger**.
+/// `Smalltalk vm unloadModule: 'SocketPlugin'` is image-reachable and ends in
+/// `dlclose`, which unmaps the text a worker is executing and the statics it is
+/// about to touch; `shutdownModule` must therefore refuse while this is
+/// non-empty. See [`is_quiescent`] and `CLAUDE.md` §1 / §3 trap 3.
+///
+/// **Join handles rather than a counter**, and the difference is the whole
+/// point. A counter decremented by the last statement of the worker's closure
+/// -- or by a `Drop` at the end of it -- reaches zero while the thread is
+/// still running its own epilogue: libstd's thread cleanup and any TLS
+/// destructors, every byte of which is code in *this* cdylib, since each one
+/// statically links its own libstd. `dlclose` there is the same
+/// use-after-unmap one instruction later. `JoinHandle::join` is the only thing
+/// that means "this thread is gone", so the ledger holds handles and
+/// [`reap`] joins them.
+///
+/// Only the interpreter thread ever locks it -- a worker never touches it --
+/// so the lock is uncontended by construction.
+static WORKERS: Mutex<Vec<thread::JoinHandle<()>>> = Mutex::new(Vec::new());
+
+/// The ceiling on concurrent lookup threads.
+///
+/// The image's contract is one lookup at a time -- `NetNameResolver` waits for
+/// the resolver to leave `ResolverBusy` before starting another -- so a
+/// well-behaved image never approaches this. It exists because
+/// `primitiveResolverStartNameLookup` is reachable from any Process with no
+/// such courtesy, and "one `thread::spawn` per primitive call, unbounded" is a
+/// resource the image must not be able to exhaust. Over the ceiling the lookup
+/// runs inline on the calling thread, which is precisely what the C did on
+/// every call: the fallback is the old behaviour, not a new failure.
+const MAX_IN_FLIGHT_LOOKUPS: usize = 16;
+
+/// The rate limit that pairs with it, stated where the ceiling is: a signaller
+/// must be paced. The soak in `rust/examples/ext-sem-soak` established that an
+/// unpaced one starves the interpreter outright, because
+/// `signalSemaphoreWithIndex` calls `forceInterruptCheck` and
+/// `aioInterruptPoll` on every signal. A lookup rings the doorbell exactly
+/// once, and at most 16 can be in flight, so this path is paced by
+/// construction -- but the next asynchronous plugin has to answer the question
+/// deliberately.
+const _: () = assert!(MAX_IN_FLIGHT_LOOKUPS <= 64);
+
 /// The mutable resolver state behind `lastName` and friends.
 struct ResolverState {
     /// `lastName`: result of the last address→name lookup, or the name last
@@ -72,8 +177,11 @@ struct ResolverState {
     last_name: Vec<u8>,
     /// `lastAddr`: host-order IPv4 result of the last name→address lookup.
     last_addr: u32,
-    /// `lastError`: 0 means the last lookup succeeded.
-    last_error: c_int,
+    /// The lookup this state currently belongs to, counted up by
+    /// [`begin_lookup`](ResolverState::begin_lookup).
+    ///
+    /// `lastError` used to sit here; it is [`LAST_ERROR`] now.
+    generation: u64,
     /// `addrList` + `localInfo`: the current lookup's results.
     ///
     /// The C kept a libc-owned `addrinfo` linked list here (plus a second,
@@ -96,7 +204,7 @@ impl ResolverState {
         Self {
             last_name: Vec::new(),
             last_addr: 0,
-            last_error: 0,
+            generation: 0,
             results: Vec::new(),
             cursor: 0,
             host_name_info: Vec::new(),
@@ -116,6 +224,23 @@ impl ResolverState {
     /// NULL.
     fn current(&self) -> Option<&ResolvedAddr> {
         self.results.get(self.cursor)
+    }
+
+    /// Disowns whatever lookup was in flight and names the next one.
+    ///
+    /// Called under the mutex, from the VM thread only: by both start
+    /// primitives, by [`resolver_abort`] and by [`network_shutdown`]. A worker
+    /// that finishes afterwards compares its own generation against this one,
+    /// finds them different and drops its answer -- which is what
+    /// `sqResolverAbort` has always been documented to do and what the C's
+    /// empty body never did.
+    ///
+    /// `wrapping_add` because the counter is only ever compared for equality,
+    /// and a u64 that wrapped would need 2^64 lookups to reach a generation
+    /// some worker is still holding.
+    fn begin_lookup(&mut self) -> u64 {
+        self.generation = self.generation.wrapping_add(1);
+        self.generation
     }
 }
 
@@ -273,26 +398,88 @@ pub fn network_init(resolver_sema_index: sqInt) -> sqInt {
 pub fn network_shutdown() {
     THIS_NET_SESSION.store(0, Ordering::Relaxed);
     RESOLVER_SEMA.store(0, Ordering::Relaxed);
+    // Disown any lookup in flight, so that its worker cannot write into the
+    // next session's state. Ringing a semaphore index that now belongs to
+    // nobody would be harmless on its own -- `signalSemaphoreWithIndex(0)` is
+    // ignored -- but leaving `ResolverBusy` set across a shutdown would not be.
+    if let Ok(mut st) = state() {
+        st.begin_lookup();
+    }
+    LOOKUP_BUSY.store(false, Ordering::Release);
     aio::fini();
 }
 
-/// `sqResolverAbort`: a no-op, since the Unix resolver is synchronous.
-pub fn resolver_abort() {}
-
-/// `sqResolverStatus`.
-pub fn resolver_status() -> PrimResult<i32> {
-    if current_session() == 0 {
-        return Ok(RESOLVER_UNINITIALISED);
-    }
-    if state()?.last_error != 0 {
-        return Ok(RESOLVER_ERROR);
-    }
-    Ok(RESOLVER_SUCCESS)
+/// `sqResolverAbort`: disowns the lookup in flight.
+///
+/// The C's body is empty, and could afford to be: the lookup had already
+/// finished by the time the start primitive returned, so there was never
+/// anything in flight to abort. Here it bumps the generation -- the worker's
+/// answer is discarded and its doorbell never rings -- and clears
+/// `ResolverBusy`, so the image can start another lookup at once. That is the
+/// contract `NetNameResolver` has always called on a timeout.
+///
+/// The worker thread itself is *not* cancelled. `getaddrinfo` is not
+/// interruptible, and `pthread_cancel` through libc's resolver would leave its
+/// internal state locked or leaked. The thread finishes on its own, finds
+/// itself stale, and exits without touching anything.
+///
+/// On a poisoned [`STATE`] this does nothing, and `ResolverBusy` stays set for
+/// the life of the process. That is the right answer and not a hazard: a
+/// poisoned module fails every primitive before its body runs, so nothing can
+/// observe the flag, and clearing it would be claiming an invariant this
+/// module can no longer establish. [`commit`] declines for the same reason.
+pub fn resolver_abort() {
+    let Ok(mut st) = state() else { return };
+    st.begin_lookup();
+    LOOKUP_BUSY.store(false, Ordering::Release);
 }
 
-/// `sqResolverError`.
-pub fn resolver_error() -> PrimResult<c_int> {
-    Ok(state()?.last_error)
+/// `sqResolverStatus`, including the `ResolverBusy` the C could not answer.
+///
+/// Lock-free, and infallible where it used to answer a `PrimResult`. The image
+/// polls this in a loop while it waits for a lookup, so it must never queue
+/// behind the worker it is waiting for -- and neither word it reads is part of
+/// the invariant [`STATE`] protects. Losing the poisoned-lock refusal with the
+/// `PrimResult` costs nothing: a panic that tears this module's state sets the
+/// module flag too, and `run_primitive` fails every primitive of a poisoned
+/// module before its body runs (see `pharo_vm_plugin::poison`).
+pub fn resolver_status() -> i32 {
+    if current_session() == 0 {
+        return RESOLVER_UNINITIALISED;
+    }
+    // Acquire, paired with the Release in `commit`: a reader that sees the
+    // lookup finished sees the error code that came with it.
+    if LOOKUP_BUSY.load(Ordering::Acquire) {
+        return RESOLVER_BUSY;
+    }
+    if LAST_ERROR.load(Ordering::Relaxed) != 0 {
+        return RESOLVER_ERROR;
+    }
+    RESOLVER_SUCCESS
+}
+
+/// `sqResolverError`. Lock-free, as [`resolver_status`] is and for the same
+/// reasons.
+pub fn resolver_error() -> c_int {
+    LAST_ERROR.load(Ordering::Relaxed)
+}
+
+/// Refuses an accessor while a lookup is in flight.
+///
+/// The C never needed this: its start primitives had finished by the time they
+/// returned, so every accessor ran against a settled answer. Here the previous
+/// lookup's `lastAddr` / `lastName` are still in place while the next one
+/// runs, and answering out of them would hand the image the address of a host
+/// it is no longer asking about, silently. A primitive failure is visible; a
+/// stale address is not.
+///
+/// A well-behaved image never reaches it: `NetNameResolver` waits for the
+/// resolver to leave `ResolverBusy` before reading a result.
+fn not_while_busy() -> PrimResult<()> {
+    if LOOKUP_BUSY.load(Ordering::Acquire) {
+        return Err(PrimErr::GenericFailure);
+    }
+    Ok(())
 }
 
 /// `<netdb.h>`'s `HOST_NOT_FOUND`: the `h_errno` value the C reported for a
@@ -300,100 +487,370 @@ pub fn resolver_error() -> PrimResult<c_int> {
 /// See [`start_addr_lookup`].
 const HOST_NOT_FOUND: c_int = 1;
 
-/// `sqResolverStartAddrLookup`: reverse lookup, synchronously; the result
-/// lands in `lastName` ("" on failure).
+// ---------------------------------------------------------------------------
+// Lookups, off the interpreter thread
+// ---------------------------------------------------------------------------
+
+/// What a worker was asked to find out.
 ///
-/// The C called `gethostbyaddr`, which is deprecated, not thread-safe (it
-/// answers a pointer into static storage) and IPv4-only. `lookup_addr` does
-/// the same job through `getnameinfo`, which is none of those things.
-///
-/// A failure still reports `HOST_NOT_FOUND` through `sqResolverError`:
-/// `getnameinfo` reports EAI codes rather than the `h_errno` the C read, and
-/// `last_h_errno` already flattened those to `HOST_NOT_FOUND` on any platform
-/// without the accessor.
-pub fn start_addr_lookup(net_address: u32) -> PrimResult<()> {
-    let mut st = state()?;
-    st.last_error = 0;
-    let addr = std::net::IpAddr::V4(std::net::Ipv4Addr::from(net_address));
-    match dns_lookup::lookup_addr(&addr) {
-        Ok(name) => {
-            let bytes = name.into_bytes();
-            let len = bytes.len().min(MAX_HOST_NAME_LEN); // strncpy truncation
-            st.last_name = bytes[..len].to_vec();
-        }
-        Err(_) => {
-            st.last_error = HOST_NOT_FOUND;
-            st.last_name.clear(); // strncpy of "" cleared the C buffer too
+/// `Clone` because [`spawn_lookup`] needs a second copy for its inline
+/// fallback: `thread::Builder::spawn` consumes the closure and does not hand
+/// it back when it fails.
+#[derive(Clone, Debug)]
+enum Task {
+    /// `nameToAddr`: a host name to resolve to a host-order IPv4 address.
+    Forward(String),
+    /// `addrToName`: an address to resolve to a name.
+    Reverse(std::net::IpAddr),
+}
+
+/// What a worker found out -- exactly the file-statics the C wrote.
+enum Completion {
+    /// `lastAddr` and `lastError`.
+    Forward { addr: u32, error: c_int },
+    /// `lastName` and `lastError`.
+    Reverse { name: Vec<u8>, error: c_int },
+}
+
+impl Task {
+    /// Runs the lookup, with no lock held. That is the whole design.
+    fn run(&self) -> Completion {
+        match self {
+            // `nameToAddr`: `getaddrinfo` with no hints, first AF_INET result,
+            // host order. `dns_lookup::getaddrinfo` frees the chain itself and
+            // yields owned values, so the C's pointer walk and its
+            // `freeaddrinfo` are gone. `LookupError::error_num` carries the raw
+            // EAI number, which is the value the C stored in `lastError` and
+            // the image reads back through `sqResolverError`.
+            Task::Forward(host) => match dns_lookup::getaddrinfo(Some(host), None, None) {
+                Err(e) => Completion::Forward {
+                    addr: 0,
+                    error: e.error_num(),
+                },
+                Ok(infos) => Completion::Forward {
+                    addr: infos
+                        .flatten()
+                        .find_map(|info| match info.sockaddr {
+                            std::net::SocketAddr::V4(v4) => Some(u32::from(*v4.ip())), // ntohl
+                            std::net::SocketAddr::V6(_) => None,
+                        })
+                        .unwrap_or(0),
+                    error: 0,
+                },
+            },
+            // `addrToName`. The C called `gethostbyaddr`, which is deprecated,
+            // not thread-safe (it answers a pointer into static storage) and
+            // IPv4-only -- the first of those is what made a worker thread
+            // impossible in the C and is why it matters here. `lookup_addr`
+            // does the same job through `getnameinfo`, which is none of those
+            // things.
+            //
+            // A failure still reports `HOST_NOT_FOUND`: `getnameinfo` reports
+            // EAI codes rather than the `h_errno` the C read, and
+            // `last_h_errno` already flattened those to `HOST_NOT_FOUND` on
+            // any platform without the accessor.
+            Task::Reverse(addr) => match dns_lookup::lookup_addr(addr) {
+                Ok(name) => {
+                    let bytes = name.into_bytes();
+                    let len = bytes.len().min(MAX_HOST_NAME_LEN); // strncpy truncation
+                    Completion::Reverse {
+                        name: bytes[..len].to_vec(),
+                        error: 0,
+                    }
+                }
+                Err(_) => Completion::Reverse {
+                    name: Vec::new(), // strncpy of "" cleared the C's buffer too
+                    error: HOST_NOT_FOUND,
+                },
+            },
         }
     }
+
+    /// The answer to record when the lookup itself panicked. See
+    /// [`run_lookup`].
+    fn on_panic(&self) -> Completion {
+        match self {
+            Task::Forward(_) => Completion::Forward {
+                addr: 0,
+                error: libc::EAI_FAIL,
+            },
+            Task::Reverse(_) => Completion::Reverse {
+                name: Vec::new(),
+                error: HOST_NOT_FOUND,
+            },
+        }
+    }
+}
+
+/// Stores a finished lookup's answer, if it is still the one being waited for.
+///
+/// Answers whether the resolver semaphore should be rung. The mutex is held
+/// for the handful of instructions this takes and for nothing else; the lookup
+/// ran with nothing locked at all.
+fn commit(generation: u64, completion: Completion) -> bool {
+    // A poisoned `STATE` means a panic tore `results`/`cursor`. There is
+    // nothing to commit into, and the module is already failing every
+    // primitive; leaving `LOOKUP_BUSY` set is the least of what is wrong.
+    let Ok(mut st) = state() else {
+        return false;
+    };
+    if st.generation != generation {
+        // Aborted, superseded or shut down while we were in `getaddrinfo`.
+        return false;
+    }
+    let error = match completion {
+        Completion::Forward { addr, error } => {
+            st.last_addr = addr;
+            error
+        }
+        Completion::Reverse { name, error } => {
+            st.last_name = name;
+            error
+        }
+    };
+    LAST_ERROR.store(error, Ordering::Relaxed);
+    // Release, paired with the Acquire in `resolver_status` / `not_while_busy`.
+    LOOKUP_BUSY.store(false, Ordering::Release);
+    true
+}
+
+/// A worker's whole body.
+///
+/// The `catch_unwind` is not decoration. No primitive sits above this frame to
+/// fail, so a panic escaping here would take the thread down with
+/// [`LOOKUP_BUSY`] still set, and the resolver would answer `ResolverBusy` for
+/// the life of the process -- an image-visible hang manufactured by an error
+/// path. A panic becomes the failure the lookup would have reported.
+fn run_lookup(generation: u64, task: Task) {
+    #[cfg(test)]
+    let _gate = test_hooks::worker_gate();
+
+    let completion = std::panic::catch_unwind(AssertUnwindSafe(|| task.run()))
+        .unwrap_or_else(|_| task.on_panic());
+
+    if commit(generation, completion) {
+        // Only the lookup the image is actually waiting for rings the
+        // doorbell. A superseded worker staying silent is deliberate: the
+        // current lookup will ring it when it lands, and an aborted lookup is
+        // not being waited for at all.
+        signal_resolver();
+    }
+
+    #[cfg(test)]
+    test_hooks::note_worker_finished();
+}
+
+/// Hands `task` to a thread of its own, or runs it inline if it cannot.
+///
+/// Inline is the C's behaviour, so the fallback is a return to the old freeze
+/// rather than a new failure mode. It is taken in two cases: over
+/// [`MAX_IN_FLIGHT_LOOKUPS`], and when the OS refuses a thread -- `EAGAIN`
+/// under `RLIMIT_NPROC`, which a start primitive has no way to report and no
+/// reason to.
+///
+/// Nothing waits for a worker's answer, but its `JoinHandle` is kept:
+/// [`WORKERS`] is the ledger `shutdownModule` reads before letting
+/// `ioUnloadModule` `dlclose` this library, and a handle is the only thing
+/// that can say a thread has actually gone. At process exit a worker still
+/// inside `getaddrinfo` simply disappears, which is where the C's blocking
+/// call left the image too.
+///
+/// The inline paths are not recorded, and need not be: they run on the
+/// interpreter thread inside a primitive, and no module can be unloaded while
+/// one of its own primitives is on the stack.
+fn spawn_lookup(generation: u64, task: Task) {
+    let Ok(mut live) = WORKERS.lock() else {
+        // A ledger a panic has torn cannot be trusted to say whether an unload
+        // is safe, so never add to it. Inline is the C's behaviour.
+        run_lookup(generation, task);
+        return;
+    };
+    reap(&mut live);
+    if live.len() >= MAX_IN_FLIGHT_LOOKUPS {
+        drop(live);
+        run_lookup(generation, task);
+        return;
+    }
+    let spawned = thread::Builder::new().name("pharo-dns".to_owned()).spawn({
+        let task = task.clone();
+        move || run_lookup(generation, task)
+    });
+    match spawned {
+        Ok(handle) => live.push(handle),
+        Err(_) => {
+            drop(live);
+            run_lookup(generation, task);
+        }
+    }
+}
+
+/// Hooks the unit tests use to make an asynchronous resolver deterministic.
+///
+/// A worker holds [`WORKER_GATE`] for the whole of [`run_lookup`], so a test
+/// that takes the gate first can assert what the resolver looks like *while* a
+/// lookup is in flight -- otherwise a race against a loopback lookup that
+/// finishes in microseconds. [`WORKERS_DONE`] then lets a test wait for the
+/// worker to be completely done instead of sleeping and hoping.
+#[cfg(test)]
+mod test_hooks {
+    use super::*;
+    use std::sync::{MutexGuard, PoisonError};
+
+    /// Held by a worker for the whole of [`run_lookup`].
+    pub(super) static WORKER_GATE: Mutex<()> = Mutex::new(());
+
+    /// Counts workers that have run all the way to the end.
+    pub(super) static WORKERS_DONE: core::sync::atomic::AtomicU64 =
+        core::sync::atomic::AtomicU64::new(0);
+
+    /// Recovers the gate's poison deliberately, as every `#[cfg(test)]`
+    /// serialisation lock in this tree does: one failing test must not cascade
+    /// into every test that shares the lock, and no image can reach it.
+    pub(super) fn worker_gate() -> MutexGuard<'static, ()> {
+        WORKER_GATE.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(super) fn note_worker_finished() {
+        WORKERS_DONE.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// Joins every worker that has run to completion, leaving the rest.
+///
+/// A finished thread's `join` returns at once and is what makes its exit
+/// final; an unfinished one is left in the ledger to be reaped next time.
+/// Called from [`spawn_lookup`], so the vector is bounded by the number of
+/// live workers rather than by the number of lookups the image has ever made,
+/// and from [`is_quiescent`], which is the answer that matters.
+///
+/// A worker that panicked is `is_finished` too, and its `join` answers `Err`;
+/// that is discarded on purpose. The panic was already turned into a lookup
+/// failure inside `run_lookup`, and a thread that panicked is exactly as gone
+/// as one that did not.
+fn reap(live: &mut Vec<thread::JoinHandle<()>>) {
+    let mut still_running = Vec::with_capacity(live.len());
+    for handle in live.drain(..) {
+        if handle.is_finished() {
+            let _ = handle.join();
+        } else {
+            still_running.push(handle);
+        }
+    }
+    *live = still_running;
+}
+
+/// Whether every lookup worker this module started has been joined.
+///
+/// `shutdownModule` answers 0 unless this is true, which is what makes
+/// `ioUnloadModule` refuse (`rust/pharo-platform/src/named_prims.rs`: a
+/// `shutdown_module(entry) == 0` returns 0 before reaching `ioFreeModule`).
+/// Before the resolver went asynchronous this plugin had no code that could
+/// outlive a primitive -- its only outward function pointers were the aio
+/// handlers, and `aioFini` clears those -- so answering 1 unconditionally was
+/// safe. It is not any more.
+///
+/// A poisoned ledger answers `false`: a module that cannot say whether it is
+/// quiescent must not be unloaded.
+#[must_use]
+pub fn is_quiescent() -> bool {
+    let Ok(mut live) = WORKERS.lock() else {
+        return false;
+    };
+    reap(&mut live);
+    live.is_empty()
+}
+
+/// Marks the start of a lookup and answers its generation.
+///
+/// Every field the VM thread has to publish before the worker runs is written
+/// here, under the one mutex acquisition: clearing `lastError`, raising
+/// `ResolverBusy`, and disowning whatever was in flight before.
+fn begin(prepare: impl FnOnce(&mut ResolverState)) -> PrimResult<u64> {
+    let mut st = state()?;
+    prepare(&mut st);
+    LAST_ERROR.store(0, Ordering::Relaxed);
+    LOOKUP_BUSY.store(true, Ordering::Relaxed);
+    Ok(st.begin_lookup())
+}
+
+/// `sqResolverStartAddrLookup`: starts a reverse lookup; the name lands in
+/// `lastName` ("" on failure) when the worker finishes.
+///
+/// # Divergence: this one now signals the resolver semaphore
+///
+/// The C's `sqResolverStartAddrLookup` never called
+/// `signalSemaphoreWithIndex` -- only the *forward* lookup did -- and it could
+/// afford not to, because the answer was already in `lastName` by the time the
+/// primitive returned and `sqResolverStatus` never said `ResolverBusy`.
+/// `NetNameResolver`'s wait loop therefore fell straight through. Once the
+/// lookup is asynchronous that silence would be a hang until the image's own
+/// deadline expired, so the doorbell is rung for both directions. Adding a
+/// wake-up the image already waits for is the only shape this can take.
+pub fn start_addr_lookup(net_address: u32) -> PrimResult<()> {
+    // `lastName` is deliberately *not* cleared here: until the worker commits,
+    // the accessors refuse (see `not_while_busy`), so nothing can observe it,
+    // and leaving it alone keeps an aborted lookup from destroying the answer
+    // the image already had.
+    let generation = begin(|_| {})?;
+    spawn_lookup(
+        generation,
+        Task::Reverse(std::net::IpAddr::V4(std::net::Ipv4Addr::from(net_address))),
+    );
     Ok(())
 }
 
 /// `sqResolverAddrLookupResultSize`.
 pub fn addr_lookup_result_size() -> PrimResult<usize> {
+    not_while_busy()?;
     Ok(state()?.last_name.len())
 }
 
 /// `sqResolverAddrLookupResult`: copies `lastName` into the answer String.
 pub fn addr_lookup_result(dest: &mut [u8]) -> PrimResult<()> {
+    not_while_busy()?;
     let st = state()?;
     let n = st.last_name.len().min(dest.len());
     dest[..n].copy_from_slice(&st.last_name[..n]);
     Ok(())
 }
 
-/// `nameToAddr`: `getaddrinfo` with no hints, first AF_INET result, host
-/// order. Sets `last_error` on failure and answers 0.
+/// `sqResolverStartNameLookup`: starts a forward lookup and returns at once.
 ///
-/// `dns_lookup::getaddrinfo` frees the chain itself and yields owned values,
-/// so the pointer walk and the `freeaddrinfo` are gone. Its `LookupError`
-/// carries the raw EAI number, which is the value the C stored in `lastError`
-/// and the image reads back through `sqResolverError`.
-fn name_to_addr(st: &mut ResolverState, host: &str) -> u32 {
-    let infos = match dns_lookup::getaddrinfo(Some(host), None, None) {
-        Ok(infos) => infos,
-        Err(e) => {
-            st.last_error = e.error_num();
-            return 0;
-        }
-    };
-    infos
-        .flatten()
-        .find_map(|info| match info.sockaddr {
-            std::net::SocketAddr::V4(v4) => Some(u32::from(*v4.ip())), // ntohl
-            std::net::SocketAddr::V6(_) => None,
-        })
-        .unwrap_or(0)
-}
-
-/// `sqResolverStartNameLookup`: synchronous forward lookup; signals the
-/// resolver semaphore before returning.
+/// This is the primitive `NetNameResolver class >> addressForName:timeout:`
+/// reaches -- and `Socket>>connectToHostNamed:port:` through it -- and the one the C used
+/// to spend a whole DNS round trip inside with every Process in the image
+/// stopped behind it. The semaphore is rung by the worker, not from here; the
+/// C's "we're done before we even started" comment is gone with the behaviour
+/// it described.
 pub fn start_name_lookup(host_name: &[u8]) -> PrimResult<()> {
-    {
-        let mut st = state()?;
-        let len = host_name.len().min(MAX_HOST_NAME_LEN);
-        // The C copies into a NUL-terminated buffer, so an interior NUL
-        // truncates what getaddrinfo sees.
-        let effective = match host_name[..len].iter().position(|&b| b == 0) {
-            Some(nul) => &host_name[..nul],
-            None => &host_name[..len],
-        };
-        st.last_name = effective.to_vec();
-        st.last_error = 0;
-        // The C passed a NUL-terminated buffer to getaddrinfo; a host name
-        // that is not valid UTF-8 could never have resolved anyway.
-        let host = String::from_utf8_lossy(&st.last_name).into_owned();
-        st.last_addr = name_to_addr(&mut st, &host);
-    }
-    // "we're done before we even started"
-    signal_resolver();
+    let len = host_name.len().min(MAX_HOST_NAME_LEN);
+    // The C copies into a NUL-terminated buffer, so an interior NUL truncates
+    // what getaddrinfo sees.
+    let effective = match host_name[..len].iter().position(|&b| b == 0) {
+        Some(nul) => &host_name[..nul],
+        None => &host_name[..len],
+    };
+    // The C passed a NUL-terminated buffer to getaddrinfo; a host name that is
+    // not valid UTF-8 could never have resolved anyway.
+    let host = String::from_utf8_lossy(effective).into_owned();
+
+    // `lastName` is the name being *queried* on this path, not a result, and
+    // the C wrote it before looking anything up -- which is why
+    // `sqResolverAddrLookupResultSize` answers the queried name after a
+    // forward lookup. Written here for the same reason, and at the same point
+    // in the sequence.
+    let queried = effective.to_vec();
+    let generation = begin(|st| st.last_name = queried)?;
+    spawn_lookup(generation, Task::Forward(host));
     Ok(())
 }
 
-/// `sqResolverNameLookupResult`: fails if the last lookup failed.
+/// `sqResolverNameLookupResult`: fails if the last lookup failed, and now also
+/// while the next one is still running.
 pub fn name_lookup_result() -> PrimResult<u32> {
+    not_while_busy()?;
     let st = state()?;
-    if st.last_error != 0 {
+    if LAST_ERROR.load(Ordering::Relaxed) != 0 {
         return Err(PrimErr::GenericFailure);
     }
     Ok(st.last_addr)
@@ -663,7 +1120,7 @@ pub fn get_address_info(
                 // The C's `goto fail`: record the EAI code, fail the
                 // primitive, and -- unlike every other exit from here --
                 // leave the resolver semaphore unsignalled.
-                st.last_error = eai;
+                LAST_ERROR.store(eai, Ordering::Relaxed);
                 return Err(PrimErr::GenericFailure);
             }
             // "succeed with zero results for impossible constraints"
@@ -783,7 +1240,7 @@ pub fn get_name_info(addr: &[u8], flags: sqInt) -> PrimResult<()> {
             )
         };
         if gai_error != 0 {
-            st.last_error = gai_error;
+            LAST_ERROR.store(gai_error, Ordering::Relaxed);
             return Err(PrimErr::GenericFailure);
         }
 
@@ -876,15 +1333,63 @@ mod tests {
     use super::*;
     use crate::testing::net_lock;
 
+    /// How long a test waits for a real `getaddrinfo` before calling it a
+    /// hang. Generous: these tests run against the machine's real resolver.
+    const SETTLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    /// Blocks until the resolver leaves `ResolverBusy`.
+    ///
+    /// Every test below that starts a lookup needs one of these, which is the
+    /// change in shape the whole module underwent: a start primitive no longer
+    /// answers the question, it only asks it.
+    fn await_resolver() {
+        let deadline = std::time::Instant::now() + SETTLE_TIMEOUT;
+        while resolver_status() == RESOLVER_BUSY {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the resolver never left ResolverBusy"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    /// How many workers have finished, for [`wait_for_worker`].
+    fn workers_done() -> u64 {
+        test_hooks::WORKERS_DONE.load(Ordering::SeqCst)
+    }
+
+    /// Blocks until one more worker than `before` has run to completion.
+    ///
+    /// Needed where `await_resolver` cannot help: after an abort, the resolver
+    /// is not busy any more but the disowned worker is still running, and what
+    /// the test wants to assert is what it does *not* do when it lands.
+    fn wait_for_worker(before: u64) {
+        let deadline = std::time::Instant::now() + SETTLE_TIMEOUT;
+        while workers_done() <= before {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the worker never finished"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    /// Starts a forward lookup and waits for it, which is what the old
+    /// synchronous `start_name_lookup` amounted to.
+    fn lookup_name(host: &[u8]) {
+        start_name_lookup(host).unwrap();
+        await_resolver();
+    }
+
     #[test]
     fn session_starts_and_stops() {
         let _guard = net_lock();
         network_shutdown();
-        assert_eq!(resolver_status().unwrap(), RESOLVER_UNINITIALISED);
+        assert_eq!(resolver_status(), RESOLVER_UNINITIALISED);
         assert_eq!(network_init(5), 0);
         assert_ne!(current_session(), 0);
         assert_eq!(network_init(6), 0, "re-init is not an error");
-        assert_eq!(resolver_status().unwrap(), RESOLVER_SUCCESS);
+        assert_eq!(resolver_status(), RESOLVER_SUCCESS);
         network_shutdown();
         assert_eq!(current_session(), 0);
         network_init(5);
@@ -894,8 +1399,8 @@ mod tests {
     fn numeric_name_lookup() {
         let _guard = net_lock();
         network_init(0);
-        start_name_lookup(b"127.0.0.1").unwrap();
-        assert_eq!(resolver_error().unwrap(), 0);
+        lookup_name(b"127.0.0.1");
+        assert_eq!(resolver_error(), 0);
         assert_eq!(name_lookup_result().unwrap(), 0x7f00_0001);
         // The looked-up name is what addr-lookup-result answers afterwards.
         assert_eq!(addr_lookup_result_size().unwrap(), 9);
@@ -909,12 +1414,12 @@ mod tests {
         let _guard = net_lock();
         network_init(0);
         // RFC 6761 reserves .invalid: this cannot resolve.
-        start_name_lookup(b"does-not-exist.invalid").unwrap();
-        assert_ne!(resolver_error().unwrap(), 0);
+        lookup_name(b"does-not-exist.invalid");
+        assert_ne!(resolver_error(), 0);
         assert!(name_lookup_result().is_err());
-        assert_eq!(resolver_status().unwrap(), RESOLVER_ERROR);
+        assert_eq!(resolver_status(), RESOLVER_ERROR);
         // Clean up for the next test.
-        start_name_lookup(b"127.0.0.1").unwrap();
+        lookup_name(b"127.0.0.1");
     }
 
     #[test]
@@ -1023,7 +1528,7 @@ mod tests {
 
         drop(listener);
         let _ = std::fs::remove_file(&path);
-        start_name_lookup(b"127.0.0.1").unwrap();
+        lookup_name(b"127.0.0.1");
     }
 
     #[test]
@@ -1070,21 +1575,21 @@ mod tests {
         {
             assert!(lookup().is_err(), "the C's `goto fail`");
             assert_ne!(
-                resolver_error().unwrap(),
+                resolver_error(),
                 0,
                 "lastError carries the EAI code"
             );
             assert_ne!(
-                resolver_error().unwrap(),
+                resolver_error(),
                 EAI_BADHINTS,
                 "only EAI_BADHINTS is the succeed-with-nothing case"
             );
-            assert_eq!(resolver_status().unwrap(), RESOLVER_ERROR);
+            assert_eq!(resolver_status(), RESOLVER_ERROR);
         }
         #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         {
             assert!(lookup().is_ok(), "succeed with zero results");
-            assert_eq!(resolver_error().unwrap(), 0);
+            assert_eq!(resolver_error(), 0);
             assert_eq!(gai_size().unwrap(), -1, "and there really are none");
         }
 
@@ -1111,11 +1616,11 @@ mod tests {
                 "the C's `goto fail`, reached with no node and no service"
             );
             assert_eq!(
-                resolver_error().unwrap(),
+                resolver_error(),
                 libc::EAI_NONAME,
                 "what getaddrinfo(NULL, NULL, ..) answers on Darwin"
             );
-            assert_eq!(resolver_status().unwrap(), RESOLVER_ERROR);
+            assert_eq!(resolver_status(), RESOLVER_ERROR);
         }
         #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         {
@@ -1131,12 +1636,12 @@ mod tests {
                 .is_ok(),
                 "succeed with zero results"
             );
-            assert_eq!(resolver_error().unwrap(), 0);
+            assert_eq!(resolver_error(), 0);
             assert_eq!(gai_size().unwrap(), -1, "and there really are none");
         }
 
         // Leave the shared resolver state clean for the other tests.
-        start_name_lookup(b"127.0.0.1").unwrap();
+        lookup_name(b"127.0.0.1");
     }
 
     #[test]
@@ -1167,17 +1672,227 @@ mod tests {
         let _guard = net_lock();
         network_init(0);
         start_addr_lookup(0x7f00_0001).unwrap();
+        await_resolver();
         // Whether the sandbox can reverse-resolve 127.0.0.1 is environment-
         // dependent; the contract is: either a name arrived and no error, or
         // no name and an error.
         let size = addr_lookup_result_size().unwrap();
         if size == 0 {
-            assert_ne!(resolver_error().unwrap(), 0);
+            assert_ne!(resolver_error(), 0);
         } else {
-            assert_eq!(resolver_error().unwrap(), 0);
+            assert_eq!(resolver_error(), 0);
         }
         // Restore a clean resolver state.
-        start_name_lookup(b"127.0.0.1").unwrap();
+        lookup_name(b"127.0.0.1");
+    }
+
+    // -----------------------------------------------------------------------
+    // The asynchronous half
+    //
+    // These are the tests that could not have been written before: they assert
+    // what the resolver looks like *during* a lookup. `test_hooks::worker_gate`
+    // is what makes that a fact rather than a race -- a loopback `getaddrinfo`
+    // finishes in microseconds, so without a gate the in-flight window would
+    // be gone before the first assertion ran.
+    // -----------------------------------------------------------------------
+
+    /// The whole point of the change: a lookup in flight reports `ResolverBusy`
+    /// and blocks nothing on the interpreter thread.
+    #[test]
+    fn a_lookup_in_flight_is_busy_and_holds_no_lock() {
+        let _guard = net_lock();
+        network_init(0);
+        lookup_name(b"127.0.0.1");
+
+        let gate = test_hooks::worker_gate();
+        let workers_before = workers_done();
+        start_name_lookup(b"127.0.0.2").unwrap();
+
+        // The C reached here only after `getaddrinfo` had returned.
+        assert_eq!(resolver_status(), RESOLVER_BUSY, "ResolverBusy, at last");
+        assert_eq!(resolver_error(), 0, "and readable without the mutex");
+        assert!(
+            state().is_ok(),
+            "STATE is not held across the lookup -- if it were, the freeze \
+             would just have moved from getaddrinfo onto this mutex"
+        );
+        // No answer exists yet, and the previous lookup's must not be passed
+        // off as one.
+        assert_eq!(
+            name_lookup_result().err(),
+            Some(PrimErr::GenericFailure),
+            "127.0.0.1 is still in lastAddr, and is not this lookup's answer"
+        );
+        assert_eq!(
+            addr_lookup_result_size().err(),
+            Some(PrimErr::GenericFailure)
+        );
+
+        drop(gate);
+        wait_for_worker(workers_before);
+        await_resolver();
+        assert_eq!(resolver_status(), RESOLVER_SUCCESS);
+        assert_eq!(name_lookup_result().unwrap(), 0x7f00_0002);
+
+        lookup_name(b"127.0.0.1");
+    }
+
+    /// `sqResolverAbort` means something now: the worker's answer is dropped
+    /// and its doorbell never rings.
+    #[test]
+    fn abort_disowns_the_lookup_in_flight() {
+        let _guard = net_lock();
+        network_init(0);
+        lookup_name(b"127.0.0.1");
+        let kept = name_lookup_result().unwrap();
+        assert_eq!(kept, 0x7f00_0001);
+
+        let gate = test_hooks::worker_gate();
+        let signals_before = vm_ref::signals_sent();
+        let workers_before = workers_done();
+        start_name_lookup(b"127.0.0.2").unwrap();
+        assert_eq!(resolver_status(), RESOLVER_BUSY);
+
+        resolver_abort();
+        assert_ne!(
+            resolver_status(),
+            RESOLVER_BUSY,
+            "the image may start another lookup immediately"
+        );
+
+        drop(gate);
+        wait_for_worker(workers_before);
+
+        assert_eq!(
+            name_lookup_result().unwrap(),
+            kept,
+            "the disowned worker resolved 127.0.0.2 and threw it away"
+        );
+        assert_eq!(
+            vm_ref::signals_sent(),
+            signals_before,
+            "and rang no doorbell: nobody is waiting on that lookup"
+        );
+    }
+
+    /// Starting a second lookup while the first is in flight supersedes it,
+    /// by the same generation check.
+    #[test]
+    fn a_superseded_lookup_does_not_answer_for_the_one_that_replaced_it() {
+        let _guard = net_lock();
+        network_init(0);
+
+        let gate = test_hooks::worker_gate();
+        let workers_before = workers_done();
+        start_name_lookup(b"127.0.0.2").unwrap();
+        start_name_lookup(b"127.0.0.3").unwrap();
+        drop(gate);
+
+        // Two workers, and only the second one may commit.
+        wait_for_worker(workers_before + 1);
+        await_resolver();
+        assert_eq!(name_lookup_result().unwrap(), 0x7f00_0003);
+
+        lookup_name(b"127.0.0.1");
+    }
+
+    /// A shutdown mid-lookup must not leave `ResolverBusy` set for the next
+    /// session, and the disowned worker must not write into it.
+    #[test]
+    fn shutdown_disowns_the_lookup_in_flight() {
+        let _guard = net_lock();
+        network_init(0);
+        lookup_name(b"127.0.0.1");
+        let kept = name_lookup_result().unwrap();
+
+        let gate = test_hooks::worker_gate();
+        let workers_before = workers_done();
+        start_name_lookup(b"127.0.0.2").unwrap();
+        network_shutdown();
+        assert_eq!(resolver_status(), RESOLVER_UNINITIALISED);
+
+        drop(gate);
+        wait_for_worker(workers_before);
+
+        network_init(0);
+        assert_eq!(
+            resolver_status(),
+            RESOLVER_SUCCESS,
+            "not ResolverBusy inherited from the session before"
+        );
+        assert_eq!(name_lookup_result().unwrap(), kept);
+    }
+
+    /// One lookup, one doorbell -- including for the reverse direction, where
+    /// the C rang none at all. See the divergence noted on
+    /// [`start_addr_lookup`].
+    #[test]
+    fn each_completed_lookup_rings_the_doorbell_exactly_once() {
+        let _guard = net_lock();
+        network_init(0);
+
+        let before = vm_ref::signals_sent();
+        lookup_name(b"127.0.0.1");
+        assert_eq!(vm_ref::signals_sent(), before + 1, "forward");
+
+        start_addr_lookup(0x7f00_0001).unwrap();
+        await_resolver();
+        assert_eq!(
+            vm_ref::signals_sent(),
+            before + 2,
+            "reverse: the C never signalled here, and an async lookup that \
+             does not would hang the image until its own deadline"
+        );
+
+        lookup_name(b"127.0.0.1");
+    }
+
+    /// The quiescence ledger `shutdownModule` reads before a `dlclose`.
+    ///
+    /// The property is not "a lookup is in flight" but "a *thread* is alive":
+    /// the two part company after an abort, which disowns the lookup and
+    /// clears `ResolverBusy` while the worker is still inside `getaddrinfo`
+    /// executing this library's text. Unloading there is exactly the
+    /// use-after-`dlclose` `CLAUDE.md` §3 trap 3 names, so this asserts the
+    /// gap explicitly.
+    #[test]
+    fn the_module_is_not_quiescent_while_a_worker_lives() {
+        let _guard = net_lock();
+        network_init(0);
+        await_resolver();
+        assert!(is_quiescent(), "no run, no workers");
+
+        let gate = test_hooks::worker_gate();
+        let workers_before = workers_done();
+        start_name_lookup(b"127.0.0.2").unwrap();
+        assert!(!is_quiescent(), "a worker is executing this library's text");
+
+        resolver_abort();
+        assert_ne!(resolver_status(), RESOLVER_BUSY, "no lookup in flight ...");
+        assert!(!is_quiescent(), "... but the thread that ran it is still here");
+
+        network_shutdown();
+        assert!(
+            !is_quiescent(),
+            "and sqNetworkShutdown does not, and cannot, join it"
+        );
+
+        drop(gate);
+        wait_for_worker(workers_before);
+        // `WORKERS_DONE` says the worker's body is behind it; the handle only
+        // becomes joinable once the thread itself has finished, which is the
+        // whole reason the ledger holds handles rather than a count.
+        let deadline = std::time::Instant::now() + SETTLE_TIMEOUT;
+        while !is_quiescent() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the ledger never emptied, so no unload could ever succeed"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        network_init(0);
+        lookup_name(b"127.0.0.1");
     }
 
     // -----------------------------------------------------------------------
@@ -1290,9 +2005,20 @@ mod tests {
         );
 
         // And every accessor above it propagates that refusal rather than
-        // answering out of the torn pair. These eight are the ones the repair
+        // answering out of the torn pair. These six are the ones the repair
         // pass made fallible; a `PrimResult` they threw away would put this
         // whole file back where it started.
+        //
+        // `resolver_status` and `resolver_error` were in this list and are
+        // not any more: making the resolver asynchronous moved `lastError`
+        // out of `STATE` and into an atomic, so that the image's status poll
+        // never queues behind a worker. Neither is part of the torn invariant
+        // -- that is `results` and `cursor` -- and neither can answer out of
+        // it. Nothing is lost: a panic under `poison::lock` sets the module
+        // flag as well as the mutex's, so in a real VM `run_primitive` fails
+        // every SocketPlugin primitive, these two included, before the body
+        // runs. Only this unit test, which never installs the panic hook,
+        // can still reach them.
         let mut dest = vec![0u8; address::ADDRESS_HEADER_SIZE + asked_for.len()];
         assert_eq!(gai_size().err(), Some(PrimErr::Unsupported));
         assert_eq!(gai_result(&mut dest).err(), Some(PrimErr::Unsupported));
@@ -1300,8 +2026,6 @@ mod tests {
         assert_eq!(gai_type().err(), Some(PrimErr::Unsupported));
         assert_eq!(gai_protocol().err(), Some(PrimErr::Unsupported));
         assert_eq!(gai_next().err(), Some(PrimErr::Unsupported));
-        assert_eq!(resolver_status().err(), Some(PrimErr::Unsupported));
-        assert_eq!(resolver_error().err(), Some(PrimErr::Unsupported));
         assert!(
             dest.iter().all(|&b| b == 0),
             "and nothing was copied into the image's SocketAddress ByteArray"

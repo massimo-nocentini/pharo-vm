@@ -473,3 +473,193 @@ unnoticed.
 The extraction is a genuine improvement to the C tree independent of the port —
 those prototypes belonged in a header — so it is worth keeping even if a wave
 is ever reverted.
+
+## Wave 13: asynchronous DNS, and the foreign-thread edge under it
+
+`CLAUDE.md` lists the remaining work in order, and puts async DNS first — not
+because it is the largest win, but because it is the *smallest complete
+instance* of the only shape a Rust plugin may take: **handle, doorbell,
+collect.** The image names a Rust-owned thing, work happens where the image is
+not, a counted signal wakes a Process, and a later primitive on the VM thread
+copies bytes out. Everything else the port still wants — a job pool, fd
+watches, an `AsyncPlugin` — is that same shape at larger scale.
+
+It also puts a prerequisite in front of it, and this wave did the prerequisite
+first.
+
+### The prerequisite: nothing had ever signalled from a foreign thread
+
+Every asynchronous design rests on N background threads incrementing counters
+in the VM's external-semaphore request table and the interpreter noticing.
+Nothing in this tree had ever done that. SocketPlugin's own `vm_ref` asserted
+the opposite in a `SAFETY` comment — *"handlers run on the interpreter thread,
+so this never races a primitive"* — and `unix-os-process-plugin` signals from a
+signal handler into a path that takes a `sem_wait`, which is unsound rather
+than a model.
+
+`rust/examples/ext-sem-soak` is a throwaway plugin that does exactly that and
+nothing else: N threads signalling a contiguous block of registered indices at
+a paced rate, with `soak.st` driving it against a GC-heavy image. It is
+deliberately absent from `cmake/rust.cmake`, so no bundle can carry it.
+
+Measured on Linux x86_64, Pharo 12.0 build 1597, against a VM built from this
+tree with `USE_RUST_PLATFORM=ON USE_RUST_PLUGINS=ON`:
+
+One run of ten minutes, 8 threads, 50 us apart, ~71,700 signals a second:
+
+| | |
+|---|---|
+| **(a) Lost signals** | **none.** **43,019,960 sent, 43,019,960 received**, and per index exactly — 5,377,496 / 5,377,494 / 5,377,494 / 5,377,494 / 5,377,494 / 5,377,495 / 5,377,496 / 5,377,497, matched one for one |
+| **(b) `signalSemaphoreWithIndex`** | mean 4.8 us, p50 3.4 us, p99 18.9 us, p99.9 25.2 us, max 280 us — what a signaller sees of the VM thread holding the same `requestMutex` |
+| **(c) `sigprocmask`** | **per-thread on glibc**, pinned by a new unit test in `external_semaphores.rs` that runs the real `SignalBlock` on another thread and asserts the calling thread's mask does not move. Darwin unverified |
+| **(d) Wake latency** | mean 55 us, p50 38 us, p99 766 us, p99.9 787 us, max 7.19 ms, over 2,000 paired sends — spawn, `requestMutex`, `forceInterruptCheck`, `aioInterruptPoll`, the next interrupt check, `doSignalExternalSemaphores` and the scheduler, end to end. "Worst case one relinquish quantum" holds for the body of the distribution; the max is three orders of magnitude above the median, so a design that needs a *bound* rather than a typical case does not have one here |
+
+Two honest limits on those numbers. The run is **ten minutes, not the hour**
+`CLAUDE.md` asked for, and it is one machine and one platform. And (b)'s
+reservoir keeps the **first** 16,384 samples per worker and counts the rest as
+dropped (42,888,888 of them here), so the percentiles describe the start of the
+run rather than a uniform sample of it; that is stated in the primitive that
+reports it, and would need a proper reservoir sampler to fix.
+
+The counting request table holds, which is what (a) says: `requests` and
+`responses` per entry rather than a flag is exactly what stops two signals
+arriving close together from collapsing into one, and now something has checked
+it at rate rather than by reading the code.
+
+**The one result that changes a design.** The first run used no pause at all,
+and the image made *no progress whatsoever* — eight threads at 700% CPU, and a
+five-second run had not finished its first `Delay` after two minutes. That is
+not the table failing; it is `signalSemaphoreWithIndex` doing what it is
+written to do on every single signal: take `requestMutex` with signals masked,
+`forceInterruptCheck()`, then `aioInterruptPoll()` to wake the poll loop. At an
+unbounded rate the VM thread never gets back to bytecode. So a signaller must
+be paced by something — which every design in `CLAUDE.md` already is (one
+signal per lookup, per readiness edge, per completed job) — and `AsyncPlugin`'s
+"one external-semaphore index for the whole runtime" is now a measured
+requirement rather than a tidiness preference. `SOAK_MICROS=0` is kept as the
+starvation probe.
+
+### The change itself
+
+`sqResolverStartNameLookup` blocked the whole VM inside `getaddrinfo` and then
+signalled the resolver semaphore on the way out — *"we're done before we even
+started"* is the C's own comment — so `ResolverBusy` (2) was a state the Unix
+plugin could not reach. **The image was written for the other contract all
+along**, and Pharo 12.0's `NetNameResolver class >> initialize` says so in a
+comment: *"on other platforms, such as Unix, the resolver is synchronous; a
+call to, say, the name lookup primitive will block all image processes until it
+returns."* `addressForName:timeout:` and `nameForAddress:timeout:` both take a
+mutex, wait for the resolver to be ready, start the lookup, wait on the
+resolver semaphore while polling the status, and call `primAbortLookup` on a
+timeout. So this needed **no image-side change at all**.
+
+The obstacle was self-inflicted rather than architectural: `start_name_lookup`
+held the resolver's `STATE` guard across the whole of `getaddrinfo`, and
+`resolver_status` took the same guard. Spawning a thread without restructuring
+would have frozen the VM on a mutex instead of on a syscall — the same outage
+with a worse cause. So:
+
+- `lastError` and a new `LOOKUP_BUSY` flag moved **out** of the mutex into
+  atoms, because the image polls `sqResolverStatus` in a loop and that poll
+  must never queue behind a worker. Neither is part of the invariant the mutex
+  protects, which is `results`/`cursor`.
+- A **generation counter**, bumped under the mutex by every start and every
+  abort, decides who may commit. A worker that finds the generation moved on
+  drops its answer and stays silent. That is what makes `sqResolverAbort` — an
+  empty function in the C — mean something.
+- The mutex is held for the microseconds it takes to store an answer, and for
+  nothing else.
+
+Both directions went asynchronous, because they share `lastName`, `lastError`
+and the status word: leaving one synchronous would have let it race the other's
+worker.
+
+### Verification: the same image on two VMs
+
+Two VMs built from this tree on Linux x86_64, one all-Rust and one all-C, same
+Pharo 12.0 image:
+
+| | C plugin | Rust plugin |
+|---|---|---|
+| `primStartLookupOfName:` returns after | 2,384 us | **93 us** |
+| `resolverStatus` immediately after | 1 (`ResolverReady`) | **2 (`ResolverBusy`)** |
+| Smalltalk loop iterations during the query | **0** | **4,049,919** (over 155 ms) |
+| `addressForName: 'files.pharo.org'` | `193.49.213.186` | `193.49.213.186` |
+| `nameForAddress: 8.8.8.8` | `'dns.google'` | `'dns.google'` |
+| `primAbortLookup` while busy | n/a — never busy | 2 -> 1, immediately |
+| `Socket newTCP connectToHostNamed: 'files.pharo.org' port: 80` + `GET /` | `HTTP/1.1 301 Moved P...` | `HTTP/1.1 301 Moved P...` |
+
+The last row is the regression check that reads as the least interesting and
+matters most: `connectToHostNamed:` resolves through the new asynchronous path
+and then drives the socket half unchanged, so an end-to-end HTTP request over a
+real network answers byte for byte what the C plugin answers.
+
+**And what it costs.** One Process's lookup gets *slower* end to end, and the
+tables above would be dishonest without the number: 200 back-to-back
+`NetNameResolver addressForName:` calls for a name the OS resolver has already
+cached average **1,644 us on the C plugin and 1,997 us on this one**. The extra
+~350 us is a thread spawn, a doorbell round trip and a scheduler wake — the
+p50 of (d) plus the spawn. That is the trade, made deliberately: the Process
+doing the lookup waits about a fifth longer, and every other Process in the
+image stops waiting at all.
+
+
+Plus 45 unit tests in the crate, 43 of which build on Linux and were run there;
+six are new, five of them asserting what the resolver looks like *during* a
+lookup, which a `#[cfg(test)]` gate every worker takes makes a fact rather than
+a race, and the sixth pinning the quiescence ledger.
+
+### What an adversarial review caught
+
+Six independent reviewers over the change raised twenty findings; nineteen were
+refuted on the code. The one that survived is worth recording, because it
+generalises to every plugin that hands work to a thread:
+
+**`shutdownModule` answered 1 unconditionally.** `Smalltalk vm unloadModule:
+'SocketPlugin'` is reachable from ordinary image code and ends in `dlclose`,
+and a `pharo-dns` worker parked in `getaddrinfo` is executing that library's
+text and is about to touch its statics. Answering 1 was correct before this
+wave — the plugin's only outward function pointers were the aio handlers, and
+`aioFini` clears those — and the asynchronous resolver invalidated the
+precondition without re-establishing it. The fix is the quiescence ledger
+`CLAUDE.md` already specifies, with one refinement the review's own reasoning
+forced. A *counter* decremented at the end of the worker's closure — or by a
+`Drop` at the end of it — reaches zero while the thread is still running its
+epilogue: libstd's thread cleanup and any TLS destructors, all of which is code
+in this cdylib, since each one statically links its own libstd. So the ledger
+holds `JoinHandle`s, not a count, and `is_quiescent` *joins* the finished ones
+— `join` is the only thing that means "this thread is gone". `shutdownModule`
+answers 0 while any handle remains, which `ioUnloadModule` honours by leaving
+the module loaded. A unit test pins the gap that makes this subtle: after an
+abort there is no lookup in flight, and the thread that ran it is still alive.
+
+Verified against the live image, which also exercises `CLAUDE.md`'s
+hot-reloading item as a side effect:
+
+```smalltalk
+"with a lookup in flight"
+NetNameResolver primStartLookupOfName: 'www.kernel.org'.
+Smalltalk vm unloadModule: 'SocketPlugin'    "=> PrimitiveFailed; status still 2"
+NetNameResolver addressForName: 'www.kernel.org' timeout: 10   "=> 146.75.61.55"
+
+"once quiescent"
+Smalltalk vm unloadModule: 'SocketPlugin'    "=> succeeds"
+NetNameResolver addressForName: 'files.pharo.org' timeout: 10  "=> 193.49.213.186"
+```
+
+The second pair is the interesting one beyond this wave: the module unloads and
+is re-`dlopen`ed on the next primitive, in a running image, and answers
+correctly. That is the reload loop `CLAUDE.md` §1 wants, working — though it
+does not by itself prove `dlclose` *unmapped* anything, which still needs a
+version-stamping primitive to settle.
+
+### A note on the environment
+
+This is the first wave with a Linux machine to run on, which is why the claims
+above say "measured" where earlier waves said "cross-checked". Two things found
+along the way are environment, not port: the all-C build needs system
+`libuuid` and OpenSSL development packages that the Rust build vendors away,
+and both builds ship a `libgit2` whose `git_libgit2_init` the image fails to
+resolve — identically on each, so it is a packaging problem in this tree rather
+than a platform-layer regression. The stock `files.pharo.org` VM does not ship
+that library and does not hit it.

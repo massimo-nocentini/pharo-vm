@@ -27,8 +27,8 @@ primitive body is fenced by `catch_unwind` in `run_primitive`). Two
 requirements, one knob per workspace, hence two workspaces.
 
 ```sh
-cd rust/plugins && cargo test --workspace --locked          # 611 tests, 50 binaries
-cd rust && source ../build/rust-env.sh && cargo test --workspace --locked   # 155 tests
+cd rust/plugins && cargo test --workspace --locked          # 617 tests, 51 binaries
+cd rust && source ../build/rust-env.sh && cargo test --workspace --locked   # 184 tests
 ```
 
 **`pharo-vm-sys` refuses to build standalone by design** — it binds headers
@@ -36,10 +36,40 @@ whose types depend on the `config.h` CMake generates — so the outer workspace
 needs `source build/rust-env.sh` first. Without it you get a build-script panic
 that looks like a regression and is not.
 
-No Linux box is available on the usual dev machine; prove Linux with
+On a machine with no Linux, prove Linux with
 `cargo check --target aarch64-unknown-linux-gnu --all-targets --locked`
 (exclude `squeak-ssl` in the plugins workspace — its vendored OpenSSL will not
 cross-compile). Say "cross-checked", never "passes on Linux", in a README.
+
+**On a Linux box, build both VMs and diff them — it is cheap and it is the only
+thing that settles anything.** A full configure and build takes a few minutes:
+
+```sh
+cmake -S . -B build   -DCMAKE_BUILD_TYPE=Release -DUSE_RUST_PLATFORM=ON  -DUSE_RUST_PLUGINS=ON \
+      -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DICEBERG_DEFAULT_REMOTE=httpsUrl
+cmake --build build -j
+```
+
+For the all-C comparison build, reuse the generated sources
+(`ln -s ../build/generated build-c/generated`, then `-DGENERATE_SOURCES=OFF
+-DGENERATE_VMMAKER=OFF`) and turn off the two plugins whose C versions need
+system development packages the Rust build vendors away:
+`-DFEATURE_PLUGIN_SSL=OFF -DFEATURE_PLUGIN_UUID=OFF`. Then:
+
+```sh
+rust/tools/abi-check.sh capture build-c/build/vm/libPharoVMCore.so /tmp/abi.txt
+rust/tools/abi-check.sh compare build/build/vm/libPharoVMCore.so   /tmp/abi.txt
+```
+
+Two things about running an image on such a build, both of which cost an hour
+to find and neither of which is a port regression:
+
+- The `st` command-line handler **hangs** on a headless Pharo 12.0 image before
+  it runs a line of the script — on the stock `files.pharo.org` VM too. Use
+  `eval 'Smalltalk compiler evaluate: ''<abs path>.st'' asFileReference contents'`.
+- The build ships a `libgit2` whose `git_libgit2_init` the image fails to
+  resolve, which aborts startup before any command runs. Identical on the
+  all-C build. Move `build/build/vm/libgit2.so*` aside for a test run.
 
 ## Invariants
 
@@ -80,66 +110,122 @@ doorbell. Signal through it, never through the `Semaphore` vtable:
 
 ## Remaining work, in order
 
-### 1. Async DNS — the smallest complete instance, do this first
+### Done: the foreign-thread edge, and async DNS on it
 
-`Socket>>lookupName:` freezes every Process in the image inside `getaddrinfo`.
-`rust/plugins/socket-plugin/src/resolver.rs:11-13` says so in its own doc: the
-lookup blocks and signals the semaphore before returning, *"we're done before
-we even started"*. The image-side contract was written for async and the Unix C
-never honoured it, so **this needs no image-side change at all**.
+Both landed together, and what they established is what everything below rests
+on. Read this before designing anything asynchronous.
 
-Not a five-line diff, because of one self-inflicted obstacle: `start_name_lookup`
-holds the `STATE` guard across the whole of `getaddrinfo`, and `resolver_status`
-takes the same guard. Spawn without restructuring and the VM freezes on a mutex
-instead of on a syscall — same symptom, worse cause. Split into an `AtomicI32`
-status plus an `AtomicU32` generation read lock-free, with the mutex only around
-the result write:
+**Foreign-thread signalling works, and is bounded.** `rust/examples/ext-sem-soak`
+is the throwaway plugin this work required first: N threads signalling a contiguous
+block of registered indices at a paced rate, driven by `soak.st` against a
+GC-heavy image. Measured on Linux x86_64 against a Pharo 12.0 image (the numbers
+and the method are in `docs/rust-port.md`, Wave 13):
 
-```
-start_name_lookup:  set RESOLVER_BUSY; bump generation; spawn; return
-worker:             let r = getaddrinfo(..);
-                    if gen == mine { store result }     // lock held for microseconds
-                    signal_semaphore(resolver_index)
-```
+- **No lost signals.** 8 threads, ~71.7k signals/s, ten minutes: **43,019,960
+  sent, 43,019,960 received**, matched per index. The counting request table
+  holds at rate.
+- **`signalSemaphoreWithIndex`** costs mean 4.8 us / p99 18.9 us / max 280 us
+  as a signaller sees it, `requestMutex` contention included — over the first
+  131,072 samples of the run, not a uniform draw, so read the tail as
+  indicative rather than as a bound.
+- **`sigprocmask` is per-thread on glibc**, pinned by a unit test in
+  `external_semaphores.rs`. Darwin is still unverified — run the soak there
+  before trusting it.
+- **Wake latency** is mean 55 us, p50 38 us, p99 766 us, max **7.19 ms**, end
+  to end over 2,000 paired sends. "Worst case one relinquish quantum" holds for
+  the body of it — but the max is three orders of magnitude above the median,
+  so anything that needs a *bound* rather than a typical case does not have one
+  from this.
 
-Also: `RESOLVER_BUSY = 2` does not exist in the Rust file, because nothing was
-ever busy. `sqResolverAbort` is a no-op; make it a generation bump.
+Ten minutes, not the hour that was asked for, and one machine on one
+platform. Run it longer, and run it on Darwin, before leaning harder on it.
 
-**Prerequisite, and it is the highest-value experiment in this list.** Nothing
-in this tree has ever signalled from a genuine foreign thread — socket-plugin's
-own SAFETY comment asserts the opposite ("handlers run on the interpreter
-thread, so this never races a primitive"), and unix-os-process signals from a
-signal handler into a path that takes a `sem_wait`, which is unsound rather
-than a model. Yet async DNS, the job pool, the file watcher and everything in
-§4 all rest on N background threads hammering that table at rate.
+**The one result that constrains every design below: a signaller must be
+paced.** With no pause at all the image makes *no progress whatsoever* — eight
+threads at 700% CPU and a five-second run unfinished after two minutes —
+because `signalSemaphoreWithIndex` calls `forceInterruptCheck()` and
+`aioInterruptPoll()` on **every** signal. So §3's "one external-semaphore index
+for the whole runtime, one pump Process" is a measured requirement, not a
+preference, and any design that signals per-event needs an answer to "how many
+events per second". `SOAK_MICROS=0` is kept as the starvation probe.
 
-Soak it before building on it, on Linux *and* macOS: a throwaway plugin
-spawning 8 threads that signal a contiguous block of registered indices at high
-rate for an hour against a GC-heavy image, asserting (a) no lost signals —
-counted requests against image-side receipts per index, which the counting table
-should make exact; (b) the `requestMutex` contention profile against the VM
-thread's own `doSignalExternalSemaphores`; (c) that `sigprocmask` — not
-`pthread_sigmask` — behaves in a multithreaded process on both platforms, which
-POSIX leaves unspecified and glibc only gets right by accident; (d) the wake
-latency distribution, to confirm rather than assert "worst case one relinquish
-quantum". A week, and cheap. If it does not hold, every ambitious item below
-needs a different wakeup edge.
+**Async DNS shipped on that edge.** `NetNameResolver class >> addressForName:timeout:`
+-- and `Socket>>connectToHostNamed:port:` above it -- no longer freezes the
+image: `primStartLookupOfName:` returns in ~93 us instead of ~2,400 us, answers
+`ResolverBusy`, and the image executed 4,049,919 bytecoded loop iterations
+during a 155 ms query where the C plugin executed none. No image-side change
+was needed — `NetNameResolver` was written for the asynchronous contract all
+along. The shape, in `rust/plugins/socket-plugin/src/resolver.rs`: `lastError`
+and a busy flag are atoms read lock-free (the image polls status in a loop and
+must never queue behind a worker); a generation counter bumped under the mutex
+decides who may commit, which is what finally makes `sqResolverAbort` mean
+something; the mutex is held only for the microseconds it takes to store an
+answer.
 
-### 2. Hot-reloading Rust plugins — best value-to-effort in the list
+**What it costs, since a wave that only reports its wins is not an audit
+trail.** One Process's lookup is *slower* end to end: 200 back-to-back
+`addressForName:` calls for a cached name average 1,644 us on the C plugin and
+1,997 us here — a thread spawn plus a doorbell round trip plus a scheduler
+wake. The Process doing the lookup waits about a fifth longer; every other
+Process in the image stops waiting at all.
 
-Primitive 571 `Smalltalk unloadModule:` already runs `shutdownModule`,
+**And the trap it walked into, which generalises.** `shutdownModule` answered 1
+unconditionally, so `Smalltalk vm unloadModule:` could `dlclose` the library out
+from under a worker parked in `getaddrinfo`. That was correct until the plugin
+had a thread. socket-plugin now carries the quiescence ledger §1 below
+describes, and it is the worked example to copy — including the refinement that
+matters: **the ledger holds `JoinHandle`s, not a count.** A counter decremented
+at the end of the worker's closure reaches zero while the thread is still
+running libstd's own epilogue and its TLS destructors, every byte of which is
+code in that cdylib; `join` is the only thing that means "this thread is gone".
+Note also the gap a test pins: after an abort there is no job in flight and the
+thread that ran it is still alive.
+
+Verified live, and it exercises §1 as a side effect: with a lookup in flight
+`Smalltalk vm unloadModule: 'SocketPlugin'` fails the primitive and the lookup
+then completes normally; once quiescent it succeeds, and the module is
+re-`dlopen`ed on the next primitive and answers correctly. That is the reload
+loop working — it does not prove `dlclose` *unmapped* anything, which still
+needs the version-stamping primitive §1 asks for.
+
+**What async DNS did not do.** The 2007 `getaddrinfo` API
+(`primitiveResolverGetAddressInfo` and friends) is still synchronous and still
+stops the image. The machinery transfers unchanged; the image side does not —
+it reads the results straight back without waiting on a semaphore — so that one
+does need an image change, and therefore a decision.
+
+
+### 1. Hot-reloading Rust plugins — best value-to-effort in the list
+
+Primitive 571 `Smalltalk vm unloadModule:` already runs `shutdownModule`,
 broadcasts `moduleUnloaded` to every other module, `dlclose`s, removes the
 entry, then flushes external primitives and forces an interrupt check. It was
 never worth using because rebuilding a C plugin meant a full VM build. A Rust
 crate rebuilds in seconds.
 
 ```
-cargo build -p large-integers --release && install -m755 <lib> build/vm/Plugins/
+cd rust/plugins && cargo build -p large-integers --release
+install -m755 target/release/libLargeIntegers.so ../../build/build/vm/
 ```
 ```smalltalk
-Smalltalk unloadModule: 'LargeIntegers'.
+Smalltalk vm unloadModule: 'LargeIntegers'.
 1000 factorial printString size   "re-dlopens on next call: new code, same image"
 ```
+
+The selector is `Smalltalk vm unloadModule:` in Pharo 12, not
+`Smalltalk unloadModule:`, which does not exist. And the loop **works today**:
+unloading SocketPlugin from a running image and then resolving a name
+re-`dlopen`s it and answers correctly. What that does *not* prove is that
+`dlclose` unmapped anything — see the version-stamping primitive below.
+
+socket-plugin is the worked example, and the reason this is now numbered
+first: its async resolver made it the first plugin in the tree that can outlive
+a primitive, and `shutdownModule` answering 1 unconditionally would have let
+`dlclose` unmap the text a worker was executing. It now answers 0 while any
+worker `JoinHandle` is unjoined. **Hold handles, not a count**: a counter
+decremented at the end of the worker's closure reaches zero while the thread is
+still running libstd's epilogue and its TLS destructors, all of which is code in
+that same cdylib. Copy that shape.
 
 **The safety condition is not "registries are empty".** Plugins hand function
 pointers into their own text outward through channels the SDK cannot see:
@@ -160,7 +246,7 @@ old code. Test with a version-stamping primitive.
 This is also the only path in the tree that ever runs a shutdown hook, so it is
 the first thing to give shutdown code any coverage — which cuts both ways.
 
-### 3. fd watches and timers, without the reactor rewrite
+### 2. fd watches and timers, without the reactor rewrite
 
 `primitiveAioWaitFd:events:signalling:` and `primitiveAioTimerAfter:signalling:`
 need nothing from a `mio` port. `aioEnable`/`aioHandle`/`aioDisable` are already
@@ -177,7 +263,7 @@ The reactor rewrite (a persistent `mio::Poll` replacing the
 later, Linux-first wave: it touches `libPharoVMCore`, three platform files and
 the heartbeat poll handshake. Do not let it hold this item hostage.
 
-### 4. AsyncPlugin — one runtime, one doorbell, a task registry
+### 3. AsyncPlugin — one runtime, one doorbell, a task registry
 
 A rust-only cdylib (`add_rust_only_plugin`, so it is invisible to
 `abi-check.sh`) holding a runtime, `Registry<Arc<Task>>`, a queue of completed
@@ -196,9 +282,9 @@ Three traps, all learned the hard way and all generalising beyond this item:
    `Registry<Arc<Task>>`, clone out, drop the guard.
 3. **`ioUnloadModule` is image-reachable** and `dlclose`s a library whose code
    a worker is executing. `shutdownModule` must refuse while any job is
-   outstanding — see §2.
+   outstanding — see §1.
 
-### 5. "Run the VM off the main thread" — mostly already true
+### 4. "Run the VM off the main thread" — mostly already true
 
 `run_on_worker_thread` (`rust/pharo-platform/src/client.rs:283`) already spawns
 the interpreter via `std::thread::Builder`, named `"pharo-vm"`, with **4× the
