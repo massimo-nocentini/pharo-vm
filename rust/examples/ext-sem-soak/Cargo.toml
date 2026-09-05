@@ -1,0 +1,25 @@
+# A throwaway harness, not a shipping plugin: it soaks the VM's
+# external-semaphore request table from genuine foreign threads.
+#
+# Deliberately absent from cmake/rust.cmake -- it is built by hand and copied
+# next to the VM for a run, so nothing in a bundle can ever load it. See
+# src/lib.rs for what it measures and soak.st for how to drive it.
+[package]
+name = "ext-sem-soak"
+# A cdylib, so it belongs to the plugin workspace, which sets
+# `panic = "unwind"`. Cargo otherwise binds a package to the nearest ancestor
+# manifest carrying [workspace] -- rust/Cargo.toml, which aborts.
+workspace = "../../plugins"
+description = "Soak harness for the VM's external-semaphore request table, signalled from foreign threads."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "ExtSemSoak"
+crate-type = ["cdylib"]
+
+[dependencies]
+pharo-vm-plugin = { path = "../../pharo-vm-plugin" }

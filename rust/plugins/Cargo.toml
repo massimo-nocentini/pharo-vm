@@ -40,6 +40,11 @@ members = [
     # the nearest ancestor manifest carrying [workspace], and refuses the build.
     "../examples/uuid-plugin",
     "../examples/hello-plugin",
+    # A soak harness rather than an example, and deliberately absent from
+    # cmake/rust.cmake so no bundle can carry it -- but it must be built on the
+    # profile the plugins ship with, because what it measures is what happens
+    # when a foreign thread signals the VM.
+    "../examples/ext-sem-soak",
 ]
 
 [workspace.package]

@@ -181,6 +181,10 @@ mod seam {
     /// production code's vtable calls work unchanged on it.
     struct TestSemaphore {
         /// First, so a `*mut Semaphore` is a `*mut TestSemaphore`.
+        ///
+        /// Read only through that cast, which `dead_code` cannot see, so it
+        /// says the field is never read. It is the whole point of the struct.
+        #[allow(dead_code)]
         vtable: Semaphore,
         count: Mutex<i32>,
         woken: Condvar,

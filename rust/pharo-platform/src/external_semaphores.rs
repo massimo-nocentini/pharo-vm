@@ -460,3 +460,132 @@ pub unsafe extern "C" fn waitOnExternalSemaphoreIndex(semaphore_index: sqInt) {
         pharo_vm_sys::doWaitSemaphore(a_semaphore_oop);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Is `sigprocmask` per-thread on this platform?
+    ///
+    /// The critical section above masks signals with `sigprocmask`, not
+    /// `pthread_sigmask`, because the C did. POSIX says the behaviour of
+    /// `sigprocmask` "is unspecified in a multi-threaded process", and until
+    /// async DNS landed this process had no threads to speak of, so the
+    /// question never had to be answered. It does now: every asynchronous
+    /// capability `CLAUDE.md` still wants -- the DNS workers, a job pool, an
+    /// AsyncPlugin -- signals from a foreign thread and therefore runs this
+    /// code on a thread that is not the VM's.
+    ///
+    /// If `sigprocmask` applied process-wide, then a signaller's critical
+    /// section would mask `SIGINT`, `SIGCHLD` and `SIGTSTP` on the *VM*
+    /// thread for its duration, and `SIG_UNBLOCK` on the way out would unmask
+    /// them there whether or not the VM thread had wanted them blocked -- the
+    /// heartbeat, the JIT and `unix-os-process-plugin`'s `SIGCHLD` handling
+    /// all care.
+    ///
+    /// So assert what this platform actually does rather than what POSIX
+    /// declines to say. Both glibc and Darwin implement `sigprocmask` as
+    /// per-thread (glibc routes it to `rt_sigprocmask` on the calling thread;
+    /// Darwin's is documented as equivalent to `pthread_sigmask`), which is
+    /// what makes the C's choice harmless. A platform where this fails is a
+    /// platform where `block_signals` must be switched to `pthread_sigmask`
+    /// before anything else signals from a worker.
+    #[test]
+    fn sigprocmask_is_per_thread() {
+        let set = blocked_signal_set();
+
+        // Nothing of ours is blocked to begin with on this thread.
+        // SAFETY: a null `set` with any `how` only reads the current mask.
+        let before = unsafe {
+            let mut current = core::mem::zeroed::<libc::sigset_t>();
+            libc::sigprocmask(libc::SIG_BLOCK, core::ptr::null(), &mut current);
+            current
+        };
+        // SAFETY: `before` was filled by sigprocmask; SIGINT is a valid signal.
+        assert_eq!(
+            unsafe { libc::sigismember(&before, libc::SIGINT) },
+            0,
+            "the test thread starts with SIGINT unblocked"
+        );
+
+        // Another thread runs the same critical-section masking this file
+        // does, and holds it while we look.
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let worker = std::thread::spawn(move || {
+            let _signals = SignalBlock::new();
+            done_tx.send(()).expect("the test thread is still listening");
+            rx.recv().expect("the test thread releases us");
+        });
+        done_rx.recv().expect("the worker masked its signals");
+
+        // SAFETY: as above.
+        let during = unsafe {
+            let mut current = core::mem::zeroed::<libc::sigset_t>();
+            libc::sigprocmask(libc::SIG_BLOCK, core::ptr::null(), &mut current);
+            current
+        };
+        // SAFETY: `during` was filled by sigprocmask.
+        assert_eq!(
+            unsafe { libc::sigismember(&during, libc::SIGINT) },
+            0,
+            "a signaller's SIG_BLOCK reached this thread: sigprocmask is \
+             process-wide here, and block_signals must use pthread_sigmask"
+        );
+
+        tx.send(()).expect("the worker is still waiting");
+        worker.join().expect("the worker did not panic");
+
+        // And the worker's SIG_UNBLOCK on the way out did not unmask anything
+        // here either -- the direction that would actually break the VM, since
+        // `unblock_signals` unblocks rather than restoring a saved mask.
+        // SAFETY: as above.
+        let after = unsafe {
+            let mut current = core::mem::zeroed::<libc::sigset_t>();
+            libc::sigprocmask(libc::SIG_BLOCK, core::ptr::null(), &mut current);
+            current
+        };
+        for signal in [libc::SIGCHLD, libc::SIGINT, libc::SIGTSTP] {
+            // SAFETY: `before`/`after` were filled by sigprocmask.
+            assert_eq!(
+                unsafe { libc::sigismember(&before, signal) },
+                unsafe { libc::sigismember(&after, signal) },
+                "signal {signal} changed on this thread because another \
+                 thread ran the critical section"
+            );
+        }
+
+        // `blocked_signal_set` is what the critical section masks; naming it
+        // here keeps this test tied to that set rather than to a copy.
+        // SAFETY: `set` was filled by sigemptyset/sigaddset.
+        assert_eq!(unsafe { libc::sigismember(&set, libc::SIGINT) }, 1);
+    }
+
+    /// `SIGSTOP` is in the C's set and in this one, and `sigprocmask` ignores
+    /// it. Pinned so that "we mask SIGSTOP" is never read as "SIGSTOP is
+    /// blocked".
+    #[test]
+    fn sigstop_is_in_the_set_and_cannot_be_blocked() {
+        let set = blocked_signal_set();
+        // SAFETY: `set` was filled by sigemptyset/sigaddset.
+        assert_eq!(
+            unsafe { libc::sigismember(&set, libc::SIGSTOP) },
+            1,
+            "sigaddset accepts SIGSTOP, as it did in the C"
+        );
+
+        let _signals = SignalBlock::new();
+        // SAFETY: a null `set` only reads the current mask.
+        let current = unsafe {
+            let mut current = core::mem::zeroed::<libc::sigset_t>();
+            libc::sigprocmask(libc::SIG_BLOCK, core::ptr::null(), &mut current);
+            current
+        };
+        // SAFETY: `current` was filled by sigprocmask.
+        assert_eq!(
+            unsafe { libc::sigismember(&current, libc::SIGSTOP) },
+            0,
+            "and sigprocmask ignores it, so it is never actually blocked"
+        );
+    }
+}
