@@ -700,6 +700,72 @@ What survives is the half already built: `ioUnloadModule` honours a
 mean something. macOS is unmeasured; dyld's rules differ, and the same probe
 should be run there before either answer is assumed.
 
+### AioPlugin: fd watches and timers on the loop that already exists
+
+`CLAUDE.md` §2 asked for `primitiveAioWaitFd:events:signalling:` and
+`primitiveAioTimerAfter:signalling:` and said they need nothing from a `mio`
+port. They did not. `rust/plugins/aio-plugin` is a rust-only plugin with **no
+reactor, no runtime and no threads**: it registers a descriptor with the poll
+loop `src/unix/aio.c` and `src/osx/aioOSX.c` already run on every idle turn, and
+rings an image-side semaphore from the handler.
+
+Five primitives — arm an fd watch, arm a timer, collect the result (which
+retires the watch), cancel, and count what is outstanding. Watches are one-shot,
+because `aio.c` clears a descriptor's mask before dispatch and this plugin never
+re-arms; the image asks again, which is the edge-triggered loop it is meant to
+sit in.
+
+Against a live image on Linux x86_64:
+
+```
+timer: waited 250 ms for 250, events=2, a background Process ran 25 times meanwhile
+fd 0 watch armed, immediate result = -1 (still pending), outstanding = 1
+fd 0 became readable after 522 ms, events = 2
+outstanding at the end = 0
+a minute-long timer: cancel answers true, cancel again answers false
+```
+
+The fd watch is on standard input with the script run as
+`( sleep 1; echo hello ) | pharo …`, so the readiness edge happens at a moment
+nothing in the image chose.
+
+Four things came out of building it, and each generalises past this plugin.
+
+**Events arrive on the VM's *idle* turn.** The poll loop runs from
+`ioRelinquishProcessorForMicroseconds`. The first version of the live test put a
+`[ counter := counter + 1. Processor yield ]` Process alongside the timer to
+show the image was not frozen — and the timer never fired at all, because a
+Process that spins without letting the VM idle starves the loop. `SocketPlugin`'s
+notifications have always behaved the same way and nothing said so. A `Delay` is
+idle; a `yield` loop is not.
+
+**A watch is a quiescence hazard with no threads anywhere.** `aio.c` keeps the
+handler — a function pointer into the plugin's own text — in its
+`descriptorList` keyed on fd, and only `aioDisable` takes it out. Unloading with
+a watch armed leaves the poll loop holding a pointer into an unmapped object. So
+`shutdownModule` answers 0 until the registry is empty, for the same reason
+socket-plugin's does while a worker is alive but by an entirely different route:
+this is the "plugins hand function pointers into their own text outward through
+channels the SDK cannot see" case, made concrete.
+
+**Put the handle in `clientData`, never a pointer.** The C plugins put a
+`struct *` there and dereference it in the handler; that is a use-after-free the
+moment a descriptor is disabled while an event for it is already in flight. The
+SmallInteger handle goes in instead — it cannot dangle, a stale one simply fails
+to resolve, and the handler does nothing. A test pins that a handle from a
+retired watch does not resolve to whatever took its slot.
+
+**A timer is just a descriptor that becomes readable**, which is why this needed
+no reactor: `timerfd` on Linux, and on the kqueue platforms a kqueue whose only
+registered event is an `EVFILT_TIMER` with `EV_ONESHOT`, since a kqueue
+descriptor is readable exactly when it has an event pending. One trap worth
+recording: a zero `it_value` *disarms* a timerfd rather than firing it, so "after
+0 ms" has to be spelled 1 ns.
+
+8 unit tests, run on Linux. `aarch64-apple-darwin` is cross-checked and not run —
+and the cross-check was itself checked, by breaking the kqueue branch on purpose
+and confirming `cargo check --target` failed.
+
 ### A note on the environment
 
 This is the first wave with a Linux machine to run on, which is why the claims

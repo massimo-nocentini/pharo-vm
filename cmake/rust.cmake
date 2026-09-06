@@ -250,6 +250,15 @@ endif()
 # are built only when the corresponding FEATURE flag says the bundle will have
 # something for them to find. All of them decline to initialise when it does
 # not, which leaves the image on its FFI binding.
+# Descriptor readiness and OS-resolution timers on the poll loop the VM
+# already runs (src/unix/aio.c, src/osx/aioOSX.c). Unconditional: it binds
+# nothing but the VM's own exported aio* entry points, so unlike the three
+# below there is no library that might not be there. Unix only -- src/win has
+# its own aio and this crate has not been written against it.
+if(UNIX)
+    add_rust_only_plugin(AioPlugin aio-plugin)
+endif()
+
 if(FEATURE_LIB_CAIRO)
     add_rust_only_plugin(CairoPlugin cairo-plugin)
 endif()

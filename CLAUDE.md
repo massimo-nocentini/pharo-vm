@@ -27,7 +27,7 @@ primitive body is fenced by `catch_unwind` in `run_primitive`). Two
 requirements, one knob per workspace, hence two workspaces.
 
 ```sh
-cd rust/plugins && cargo test --workspace --locked          # 617 tests, 51 binaries
+cd rust/plugins && cargo test --workspace --locked          # 625 tests, 52 binaries
 cd rust && source ../build/rust-env.sh && cargo test --workspace --locked   # 184 tests
 ```
 
@@ -110,9 +110,9 @@ doorbell. Signal through it, never through the `Semaphore` vtable:
 
 ## Remaining work, in order
 
-**Start at §2.** §1 was measured to be unbuildable on glibc during the wave that
-was going to build it; its heading says so, and what survives of it is already
-done.
+**Start at §3.** §1 was measured to be unbuildable on glibc and §2 is built;
+both headings say so, and both are kept for what they record rather than for
+work they still name.
 
 ### Done: the foreign-thread edge, and async DNS on it
 
@@ -278,22 +278,43 @@ Unloading is also the only path in the tree that ever runs a shutdown hook, so
 it remains the first thing to give shutdown code any coverage — which cuts both
 ways.
 
-### 2. fd watches and timers, without the reactor rewrite
+### 2. fd watches and timers — **done**, in `rust/plugins/aio-plugin`
 
-`primitiveAioWaitFd:events:signalling:` and `primitiveAioTimerAfter:signalling:`
-need nothing from a `mio` port. `aioEnable`/`aioHandle`/`aioDisable` are already
-resolvable from any plugin (`rust/plugins/socket-plugin/src/aio.rs:55-57`
-declares them as undefined externs), handlers already run on the VM thread, and
-`aioEnable` already takes `AIO_EXT` precisely so it will *not* force
-`O_NONBLOCK|O_ASYNC` on a descriptor the image owns. A timerfd registered the
-same way gives OS-resolution timers today. ~150 lines, three platforms, no ABI
-motion. Handlers are one-shot by contract — the mask is cleared before dispatch
-— so re-arm inside the handler.
+`AioPlugin` is a rust-only plugin over the poll loop the VM already runs. No
+reactor, no runtime, no threads: `primitiveAioWaitFd:events:signalling:` and
+`primitiveAioTimerAfter:signalling:` register a descriptor with `aioEnable` /
+`aioHandle` and ring a semaphore from the handler, plus `primitiveAioResult:`
+to collect, `primitiveAioCancel:` and `primitiveAioOutstanding`. Measured live:
+a 250 ms timer landed on 250 ms while another Process kept running, and an fd
+watch on stdin woke at the moment a pipe was written.
+
+Four things that came out of building it, all of which generalise:
+
+* **Events arrive on the VM's *idle* turn.** The poll loop runs from
+  `ioRelinquishProcessorForMicroseconds`, so a Process that spins without
+  letting the VM idle starves it and no watch ever fires. A `Processor yield`
+  loop is not idle; a `Delay` is. True of `SocketPlugin`'s notifications too,
+  and undocumented until now — it cost a hung test to find.
+* **A watch is a quiescence hazard even with no threads.** `aio.c` holds the
+  handler — a pointer into the plugin's text — in its `descriptorList` keyed on
+  fd, and only `aioDisable` takes it out. So `shutdownModule` answers 0 while
+  any watch is armed, for the same reason socket-plugin's does with a worker
+  alive. This is the "channels the SDK cannot see" case §1 lists, made real.
+* **Put the handle in `clientData`, never a pointer.** The C plugins put a
+  `struct *` there and dereference it in the handler, which is a use-after-free
+  the moment a descriptor is disabled with an event already in flight. A
+  SmallInteger handle cannot dangle: a stale one fails to resolve and the
+  handler does nothing.
+* **A timer is just a descriptor that becomes readable.** `timerfd` on Linux, a
+  kqueue holding one `EVFILT_TIMER` on the BSDs. Note that a zero `it_value`
+  *disarms* a timerfd rather than firing it, so "after 0 ms" has to become 1 ns.
 
 The reactor rewrite (a persistent `mio::Poll` replacing the
-`epoll_create1`/N×`epoll_ctl`/`epoll_wait`/`close` **per poll**) is a separate,
-later, Linux-first wave: it touches `libPharoVMCore`, three platform files and
-the heartbeat poll handshake. Do not let it hold this item hostage.
+`epoll_create1`/N×`epoll_ctl`/`epoll_wait`/`close` **per poll**) is still a
+separate, later, Linux-first wave: it touches `libPharoVMCore`, three platform
+files and the heartbeat poll handshake. It did not hold this item hostage, and
+it is the reason many simultaneous watches have a cost nothing here has
+measured.
 
 ### 3. AsyncPlugin — one runtime, one doorbell, a task registry
 

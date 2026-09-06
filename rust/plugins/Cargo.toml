@@ -13,6 +13,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "aio-plugin",
     "b2d-plugin",
     "bit-blt-plugin",
     "cairo-plugin",

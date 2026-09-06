@@ -1,0 +1,20 @@
+# fd watches and timers on the VM's own poll loop. No C plugin to replace, so
+# cmake/rust.cmake carries it in RUST_ONLY_PLUGINS.
+[package]
+name = "aio-plugin"
+description = "Descriptor readiness and OS-resolution timers as Pharo primitives, on the VM's existing aio poll loop."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# The library name decides the file name, and the VM looks for the module by
+# that name: libAioPlugin.so / .dylib.
+name = "AioPlugin"
+crate-type = ["cdylib"]
+
+[dependencies]
+pharo-vm-plugin = { path = "../../pharo-vm-plugin" }
+libc = "0.2"
