@@ -110,6 +110,10 @@ doorbell. Signal through it, never through the `Semaphore` vtable:
 
 ## Remaining work, in order
 
+**Start at §2.** §1 was measured to be unbuildable on glibc during the wave that
+was going to build it; its heading says so, and what survives of it is already
+done.
+
 ### Done: the foreign-thread edge, and async DNS on it
 
 Both landed together, and what they established is what everything below rests
@@ -195,32 +199,62 @@ it reads the results straight back without waiting on a semaphore — so that on
 does need an image change, and therefore a decision.
 
 
-### 1. Hot-reloading Rust plugins — best value-to-effort in the list
+### 1. Hot-reloading Rust plugins — **does not work on glibc. Measured. Do not start here.**
 
-Primitive 571 `Smalltalk vm unloadModule:` already runs `shutdownModule`,
-broadcasts `moduleUnloaded` to every other module, `dlclose`s, removes the
-entry, then flushes external primitives and forces an interrupt check. It was
-never worth using because rebuilding a C plugin meant a full VM build. A Rust
-crate rebuilds in seconds.
+The idea was: primitive 571 `Smalltalk vm unloadModule:` already runs
+`shutdownModule`, broadcasts `moduleUnloaded`, `dlclose`s, removes the entry and
+flushes external primitives; a C plugin was never worth reloading because
+rebuilding meant a full VM build, but a Rust crate rebuilds in seconds. So
+unload, `install` a new build, and the next primitive call runs new code in the
+same image.
 
-```
-cd rust/plugins && cargo build -p large-integers --release
-install -m755 target/release/libLargeIntegers.so ../../build/build/vm/
-```
-```smalltalk
-Smalltalk vm unloadModule: 'LargeIntegers'.
-1000 factorial printString size   "re-dlopens on next call: new code, same image"
-```
+**It does not.** The version-stamping experiment this item asked for has now
+been run, on Linux x86_64/glibc, with a throwaway plugin whose only primitive
+answers a compile-time version number. Five variants, each: install v1, do one
+thing, `unloadModule:`, install v2 over it with a *new inode*, ask the version.
 
-The selector is `Smalltalk vm unloadModule:` in Pharo 12, not
-`Smalltalk unloadModule:`, which does not exist. And the loop **works today**:
-unloading SocketPlugin from a running image and then resolving a name
-re-`dlopen`s it and answers correctly. What that does *not* prove is that
-`dlclose` unmapped anything — see the version-stamping primitive below.
+| what the plugin did first | mappings after unload | next call answers |
+|---|---|---|
+| nothing at all | **0** | **v2 — reloaded** |
+| touched one `thread_local!`, on the VM thread, once | 4 | v1 — **stale** |
+| spawned and joined a thread touching none of its own TLS | 4 | v1 — **stale** |
+| both | 4 | v1 — **stale** |
+| **one `poison::Section::enter()` and nothing else** | 4 | v1 — **stale** |
 
-socket-plugin is the worked example, and the reason this is now numbered
-first: its async resolver made it the first plugin in the tree that can outlive
-a primitive, and `shutdownModule` answering 1 unconditionally would have let
+The last row is the one that kills it. `Section` is the SDK's, `poison::lock`
+opens one for every guarded mutex and `handles::Registry` opens one for every
+lock it takes — and the SDK is statically linked into *every* plugin cdylib, so
+its `thread_local!` lives in each one. Any plugin that takes a lock or touches a
+registry — which is all of them, on their first substantive primitive — is
+pinned for the life of the process.
+
+Two details worth keeping. The trigger is **TLS instantiation in the DSO**, not
+threads: touching a thread-local once on the interpreter thread is enough, and
+it is permanent, so this is not the `l_tls_dtor_count` race this item used to
+guess at. And the mapping count stays at four rather than going to eight, so
+`dlopen` is handing back the *retained* object rather than mapping the new file:
+glibc's `_dl_map_object` matches an already-loaded object by **name**, so a new
+inode at the same path changes nothing.
+
+What that leaves:
+
+* **The unload half is real and worth having.** `ioUnloadModule` honours a
+  `shutdownModule` of 0, and socket-plugin's quiescence ledger (below) makes
+  that refusal meaningful. Unloading a module that never ran is a genuine
+  `dlclose`.
+* **Reload would need a different name, not a different file.** Loading
+  `libFooPlugin2.so` as module `FooPlugin2` does get new code — but the image's
+  `<primitive: 'x' module: 'FooPlugin'>` pragmas name the module, so this is
+  only useful to something willing to rewrite pragmas. That is a real design,
+  and a different one from this item.
+* **macOS is unmeasured.** dyld's rules differ; run the same probe before
+  assuming either answer.
+
+So: do not build the `reloadable = […]` macro. The rest of this item — the
+quiescence ledger — stands on its own and is already built.
+
+socket-plugin is the worked example: its async resolver made it the first
+plugin in the tree that can outlive a primitive, and `shutdownModule` answering 1 unconditionally would have let
 `dlclose` unmap the text a worker was executing. It now answers 0 while any
 worker `JoinHandle` is unjoined. **Hold handles, not a count**: a counter
 decremented at the end of the worker's closure reaches zero while the thread is
@@ -238,13 +272,11 @@ empty. `ioUnloadModule` already honours that refusal
 (`rust/pharo-platform/src/named_prims.rs:957-959`: `shutdown_module(entry) == 0`
 → return 0).
 
-Use `install`, never `cp` — writing into a mapped inode is SIGBUS. And verify
-empirically that `dlclose` actually unmaps: glibc keeps a DSO mapped on a
-non-zero `l_tls_dtor_count`, in which case the reload silently keeps running
-old code. Test with a version-stamping primitive.
+Use `install`, never `cp` — writing into a mapped inode is SIGBUS.
 
-This is also the only path in the tree that ever runs a shutdown hook, so it is
-the first thing to give shutdown code any coverage — which cuts both ways.
+Unloading is also the only path in the tree that ever runs a shutdown hook, so
+it remains the first thing to give shutdown code any coverage — which cuts both
+ways.
 
 ### 2. fd watches and timers, without the reactor rewrite
 

@@ -653,6 +653,53 @@ correctly. That is the reload loop `CLAUDE.md` §1 wants, working — though it
 does not by itself prove `dlclose` *unmapped* anything, which still needs a
 version-stamping primitive to settle.
 
+### The dlclose experiment, and what it cost the plan
+
+`CLAUDE.md` §1 wanted hot-reloadable Rust plugins: unload, `install` a new
+build, next call runs new code in the same image. It also asked, in one line,
+for a version-stamping primitive to check that `dlclose` really unmaps first.
+That check has now been run, and it takes the item off the list.
+
+A throwaway plugin outside the tree, whose only primitive answers a
+compile-time version number. Five variants, each one: install v1, do a single
+thing, `Smalltalk vm unloadModule:`, install v2 over it with a **new inode**,
+ask the version again — all inside one image.
+
+| what the plugin did first | mappings after unload | next call answers |
+|---|---|---|
+| nothing at all | **0** | **v2 — reloaded** |
+| touched one `thread_local!`, on the VM thread, once | 4 | v1 — **stale** |
+| spawned and joined a thread touching none of its own TLS | 4 | v1 — **stale** |
+| both | 4 | v1 — **stale** |
+| one `poison::Section::enter()` and nothing else | 4 | v1 — **stale** |
+
+The last row decides it. `Section` is the SDK's own, `poison::lock` opens one
+for every guarded mutex, `handles::Registry` opens one for every lock it takes,
+and the SDK is statically linked into every plugin cdylib — so that
+`thread_local!` is resident in each of them. Any plugin that takes a lock or
+touches a registry is pinned, permanently, from its first substantive
+primitive. That is all sixteen.
+
+Two things the experiment corrected in the guess this item was written on.
+
+The trigger is **TLS instantiation in the DSO, not threads.** One touch of one
+thread-local, on the interpreter thread, with no thread anywhere, is enough,
+and it does not wear off — so this is not the `l_tls_dtor_count` race
+`CLAUDE.md` named, where the count returns to zero once the thread exits.
+
+And the mapping count stays at **four, not eight**: `dlopen` of the replacement
+file hands back the *retained* object rather than mapping the new one. glibc's
+`_dl_map_object` looks for an already-loaded object by **name**, so installing a
+new inode at the same path changes nothing at all. Which in turn says what a
+working reload would have to look like: a new *module name*, not a new file —
+and the image's `<primitive: 'x' module: 'FooPlugin'>` pragmas name the module,
+so that is a different design than this one, not a fix to it.
+
+What survives is the half already built: `ioUnloadModule` honours a
+`shutdownModule` of 0, and socket-plugin's quiescence ledger makes that refusal
+mean something. macOS is unmeasured; dyld's rules differ, and the same probe
+should be run there before either answer is assumed.
+
 ### A note on the environment
 
 This is the first wave with a Linux machine to run on, which is why the claims
