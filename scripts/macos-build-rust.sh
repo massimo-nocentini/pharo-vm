@@ -14,9 +14,11 @@ APP=Pharo.app
 DIST=build/build/dist/${APP}
 
 rm -rf build
-${CMAKE} -S . -B build -DCMAKE_BUILD_TYPE=Release -DUSE_RUST_PLATFORM=ON -DUSE_RUST_PLUGINS=ON -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DCMAKE_C_COMPILER=${CC} -DCMAKE_CXX_COMPILER=${CXX} -DICEBERG_DEFAULT_REMOTE=httpsUrl
+${CMAKE} -S . -B build -DCMAKE_BUILD_TYPE=Release -DUSE_RUST_PLATFORM=ON -DUSE_RUST_PLUGINS=ON -DFEATURE_LIB_PANGO=ON -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE -DCMAKE_C_COMPILER=${CC} -DCMAKE_CXX_COMPILER=${CXX} -DICEBERG_DEFAULT_REMOTE=httpsUrl
 ${CMAKE} --build build
 ${CMAKE} --install build
+
+rm ${DIST}/Contents/MacOS/Plugins/{libcairo.2.dylib,libcairo.dylib}
 
 # Nothing under ${DEST} is touched until the freshly installed bundle has been
 # shown to run.
