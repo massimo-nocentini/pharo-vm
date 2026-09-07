@@ -257,6 +257,13 @@ endif()
 # its own aio and this crate has not been written against it.
 if(UNIX)
     add_rust_only_plugin(AioPlugin aio-plugin)
+
+    # Somewhere to put a blocking call. Binds nothing at all -- no library, not
+    # even the VM's aio entry points -- so like AioPlugin it is unconditional
+    # rather than gated on a FEATURE flag. Unix only for the same reason:
+    # nothing here is Windows-aware, and `path_argument` reads a path as bytes
+    # the way every Unix caller of sq2uxPath does.
+    add_rust_only_plugin(AsyncPlugin async-plugin)
 endif()
 
 if(FEATURE_LIB_CAIRO)

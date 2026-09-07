@@ -27,7 +27,7 @@ primitive body is fenced by `catch_unwind` in `run_primitive`). Two
 requirements, one knob per workspace, hence two workspaces.
 
 ```sh
-cd rust/plugins && cargo test --workspace --locked          # 625 tests, 52 binaries
+cd rust/plugins && cargo test --workspace --locked          # 634 tests, 53 binaries
 cd rust && source ../build/rust-env.sh && cargo test --workspace --locked   # 184 tests
 ```
 
@@ -110,9 +110,9 @@ doorbell. Signal through it, never through the `Semaphore` vtable:
 
 ## Remaining work, in order
 
-**Start at §3.** §1 was measured to be unbuildable on glibc and §2 is built;
-both headings say so, and both are kept for what they record rather than for
-work they still name.
+**Start at §4** — and note that what is left of it is one bug fix, not a
+feature. §1 was measured to be unbuildable on glibc; §2 and §3 are built. All
+three are kept for what they record rather than for work they still name.
 
 ### Done: the foreign-thread edge, and async DNS on it
 
@@ -316,26 +316,51 @@ files and the heartbeat poll handshake. It did not hold this item hostage, and
 it is the reason many simultaneous watches have a cost nothing here has
 measured.
 
-### 3. AsyncPlugin — one runtime, one doorbell, a task registry
+### 3. AsyncPlugin — **done**, in `rust/plugins/async-plugin`
 
-A rust-only cdylib (`add_rust_only_plugin`, so it is invisible to
-`abi-check.sh`) holding a runtime, `Registry<Arc<Task>>`, a queue of completed
-handles, and **one** external-semaphore index for the whole runtime. The image
-runs one pump Process and never sees a semaphore.
+A rust-only cdylib holding a pool, a task registry, a queue of completed handles
+and **one** external-semaphore index for the whole runtime. The image runs one
+pump Process and never sees a semaphore. Jobs: read a file, write a file, sleep.
+Measured live, the same 40 MB read both ways:
 
-Three traps, all learned the hard way and all generalising beyond this item:
+```
+40 MB blocking read froze the image for 96 ms
+40 MB async read finished in 126 ms while a background Process ran 3,987,078 times
+```
 
-1. **The drain must be peek-and-ack, not pop.** `IntoReturn` runs *after* the
-   body, and an allocation failure makes the interpreter scavenge and **re-run**
-   the primitive. Pop-then-allocate loses completions permanently on the retry,
-   with no error anywhere. Rule: allocate first, mutate Rust state last, never
-   answer `NoMemory` after a side effect.
-2. **`Registry::with` holds the mutex across the closure.** A worker reaching
-   its task through the registry stops the interpreter dead. Use
-   `Registry<Arc<Task>>`, clone out, drop the guard.
-3. **`ioUnloadModule` is image-reachable** and `dlclose`s a library whose code
-   a worker is executing. `shutdownModule` must refuse while any job is
-   outstanding — see §1.
+Not tokio, and the reason generalises: every job here *blocks*, an async
+runtime's value is multiplexing many waits onto few threads, and under tokio all
+of this would go to `spawn_blocking` — a thread pool. Genuinely async work has
+somewhere to go already: sockets to `SocketPlugin` and the VM's poll loop,
+timers to §2's `AioPlugin` on that same loop with no threads at all.
+
+The three traps held up. Two need amending:
+
+1. **The drain must be peek-and-ack, not pop** — and **the ack is mandatory**,
+   which the original note left out. `IntoReturn` runs *after* the body and an
+   allocation failure makes the interpreter scavenge and re-run the primitive,
+   so a pop would lose the completion; peeking is right. But a completion the
+   image cannot collect then sits at the head of the queue forever and a pump
+   without an error arm spins on it. It did, on the first live run. A pump
+   either collects a handle or cancels it. A test pins the property rather than
+   removing it, because it is what makes the re-run safe.
+2. **`Registry::with` holds the mutex across the closure** — confirmed, and the
+   `Arc` needs one wrapper: coherence refuses `impl Resource for Arc<Task>`
+   because both the trait and `Arc` are foreign. A newtype costs one line.
+   A test asserts 1,000 registry reads finish well inside the length of a job
+   running at the time, which is what "no worker holds the lock" actually means.
+3. **`shutdownModule` must refuse while any job is outstanding** — done, and it
+   *joins* its workers rather than counting them down, for the reason §1
+   measured.
+
+And one the list did not have: **a plugin cannot allocate a large object.**
+`instantiateClass:indexableSize:` allocates out of what the image already has
+and does not grow the heap; the interpreter retries after a scavenge and after a
+full GC, then gives up. On a stock Pharo 12.0 image 1, 4 and 16 MB collect while
+32 and 40 MB fail — headroom, not a constant, since 16 MB fails once the image
+is already holding another 16. Anything larger has to be chunked. The failure is
+clean *because* the drain peeks: the task stays done, the result intact and the
+handle still queued, which was verified live and is trap 1 paying for itself.
 
 ### 4. "Run the VM off the main thread" — mostly already true
 

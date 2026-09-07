@@ -766,6 +766,89 @@ recording: a zero `it_value` *disarms* a timerfd rather than firing it, so "afte
 and the cross-check was itself checked, by breaking the kqueue branch on purpose
 and confirming `cargo check --target` failed.
 
+### AsyncPlugin: somewhere to put a blocking call
+
+`CLAUDE.md` §3 asked for a rust-only cdylib holding a runtime, a task registry,
+a queue of completed handles and **one** external-semaphore index for the whole
+runtime, with the image running a single pump Process.
+`rust/plugins/async-plugin` is that. Jobs: read a file, write a file, sleep.
+
+The same 40 MB read both ways, on a live image:
+
+```
+40 MB blocking read froze the image for 96 ms
+40 MB async read finished in 126 ms while a background Process ran 3,987,078 times
+```
+
+**Not tokio**, and the reason generalises past this plugin. Every job here
+*blocks*; an async runtime's value is multiplexing many waits onto few threads;
+under tokio all of this would be handed to `spawn_blocking`, which is a thread
+pool. What it would add is a large dependency tree, a second scheduler inside a
+VM that already has one, and shutdown and cancellation semantics to explain.
+Genuinely async work already has somewhere to go: sockets to `SocketPlugin` and
+the VM's poll loop, timers to `AioPlugin` on that same loop with no threads at
+all. The runtime that was missing is this one.
+
+#### The three traps, and the two that needed amending
+
+**Trap 1 — peek-and-ack, not pop — was right, and incomplete.** The reasoning
+holds: `IntoReturn` runs after a primitive body, an allocation failure makes the
+interpreter scavenge and re-run the primitive, so popping a completion would
+lose it on a run that never reached the image. What the note did not say is that
+**the ack has to be mandatory.** A completion the image cannot collect stays at
+the head of the queue, and everything behind it is unreachable — so a pump
+without an error arm spins on it forever. It did, on the first live run of this
+plugin, and the symptom was 39 collected "completions" for four submitted jobs.
+The fix is two lines in the *image's* pump, not in the plugin, because the
+property is what makes the re-run safe:
+
+```smalltalk
+[ self deliver: (nil asyncResult: h) for: h ]
+    on: Error do: [ :e | nil asyncCancel: h ]
+```
+
+A unit test pins the blocking behaviour rather than removing it.
+
+**Trap 2 — `Registry::with` holds its mutex across the closure — was right**,
+and the `Arc` the note prescribes needs one wrapper: coherence refuses
+`impl Resource for Arc<Task>` because both the trait and `Arc` are foreign, and
+`Task` behind a foreign generic is not a local type for the orphan rule. A
+newtype costs one line. The property is asserted rather than asserted about:
+1,000 registry reads have to finish well inside the length of a job that is
+running at the time, which is what "no worker holds the lock across its work"
+actually means.
+
+**Trap 3 — `shutdownModule` must refuse while a job is outstanding — was
+right**, and it joins its workers rather than counting them down, for the reason
+the §1 measurement established.
+
+#### And a fourth the list did not have
+
+**A plugin cannot allocate a large object.** `primitiveAsyncResult:` builds its
+ByteArray through the proxy's `instantiateClass:indexableSize:`, which allocates
+out of what the image has already got and does not grow the heap. The
+interpreter answers `NoMemory` by scavenging and re-running, then by doing a
+full GC and re-running again, and then gives up.
+
+On a stock Pharo 12.0 image: **1, 4 and 16 MB reads collect; 32 and 40 MB
+fail** — headroom rather than a constant, since 16 MB fails too once the image
+is already holding another 16 MB. Anything bigger has to be chunked, and this
+plugin does not.
+
+The failure is clean, and it is clean *because* the drain peeks. Verified live
+on the 40 MB case: after `primitiveAsyncResult:` failed, the task was still
+done, `primitiveAsyncNextCompleted` still answered the same handle, outstanding
+was still 1, and a second attempt failed the same way rather than finding the
+result gone. That is trap 1 paying for itself in the exact failure it was
+written for.
+
+One more thing the live run taught, and it is about the image rather than the
+plugin: **once a pump is running, nothing else may touch a handle.** Collecting
+retires the task, so a second Process asking `primitiveAsyncState:` about the
+same handle races the pump and fails when it loses.
+
+9 unit tests, run on Linux; `aarch64-apple-darwin` cross-checked, not run.
+
 ### A note on the environment
 
 This is the first wave with a Linux machine to run on, which is why the claims

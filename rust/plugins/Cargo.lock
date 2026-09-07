@@ -11,6 +11,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-plugin"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "pharo-vm-plugin",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -14,6 +14,7 @@
 resolver = "2"
 members = [
     "aio-plugin",
+    "async-plugin",
     "b2d-plugin",
     "bit-blt-plugin",
     "cairo-plugin",

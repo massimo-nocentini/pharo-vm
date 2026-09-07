@@ -1,0 +1,20 @@
+# A worker pool with one doorbell, so blocking work stops freezing the image.
+# No C plugin to replace, so cmake/rust.cmake carries it in RUST_ONLY_PLUGINS.
+[package]
+name = "async-plugin"
+description = "Off-thread file I/O and jobs for Pharo: one pool, one doorbell, a task registry."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# The library name decides the file name, and the VM looks for the module by
+# that name: libAsyncPlugin.so / .dylib.
+name = "AsyncPlugin"
+crate-type = ["cdylib"]
+
+[dependencies]
+pharo-vm-plugin = { path = "../../pharo-vm-plugin" }
+libc = "0.2"
