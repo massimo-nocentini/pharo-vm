@@ -849,6 +849,65 @@ same handle races the pump and fails when it loses.
 
 9 unit tests, run on Linux; `aarch64-apple-darwin` cross-checked, not run.
 
+### The main-thread worker: a process-exit hazard, closed
+
+`CLAUDE.md` §4 said to fix one thing before building anything on the
+main-thread worker, and this is that fix, in
+`rust/pharo-platform/src/worker.rs`.
+
+On a worker-thread build, `runMainThreadWorker` (`src/ffi/pThreadedFFI.c`,
+still C) builds a worker with `spawn == 0`, publishes it as the exported
+`mainThreadWorker`, and runs it on OS thread 0. A `WORKER_RELEASE` task for
+*that* worker used to set `hasToQuit`, end the loop, free the queue, free the
+worker — and then return. Up through `runMainThreadWorker`,
+`run_on_worker_thread`, `vm_main_with_parameters`, to `main`. **The process
+exits by returning from `main` while the detached interpreter thread is still
+running image code**, and the exported global is left naming freed memory on
+the way past.
+
+The fix is one assignment: `worker_run` does not set `has_to_quit` for the
+main-thread worker. That is both arms at once, because `has_to_quit` is the
+only thing that ends the loop and the loop ending was the only route to either
+the free or the return. The `is_main_thread` field it consults is set from
+`spawn == 0`, which in the whole tree only `runMainThreadWorker` passes;
+`worker.h` declares `struct __Worker` and never defines it, so no C knows the
+type's size and the field costs no ABI. It is a **divergence** — a C bug fixed
+rather than reproduced — and is written up as one in the module docs.
+
+Two tests, and the second is what keeps the fix narrow: releasing the
+main-thread worker does not end its run (asserted from another thread, since
+"never returns" has no return to observe), and releasing an ordinary worker
+still does, still freeing it.
+
+#### Two corrections to the item as written
+
+It said the hazard was "reachable from ordinary image code". Measured against
+Pharo 12.0, it is **latent rather than live**, on two counts.
+
+The image does hold the pointer — `TFMainThreadRunner>>workerAddress` is
+`(ExternalAddress loadSymbol: 'mainThreadWorker') pointerAt: 1`, and
+`initialize` stashes it as the runner's handle. But `TFMainThreadRunner`
+inherits `release` from `TFRunner`, which only nulls the handle and drops the
+semaphore pool. The `release` that calls `primitiveReleaseWorker` is
+`TFWorker>>release`, a *sibling* override on a class `TFMainThreadRunner` does
+not descend from. So anything that wraps that pointer in a `TFWorker` reaches
+the hazard with no C involved, and the shipped image does not.
+
+And it needs `--worker`:
+
+```
+--headless              '@ 16r00000000'
+--worker --headless     '@ 16r5B16AD305830'
+```
+
+`runMainThreadWorker` is only reached down the worker-thread path, so without
+the switch there is no main-thread worker to release at all.
+
+Neither correction changes whether the fix is right — a latent
+use-after-free that ends in `main` returning under a live interpreter is worth
+closing before anything is built on top of it, which is exactly why the item
+said to do it first.
+
 ### A note on the environment
 
 This is the first wave with a Linux machine to run on, which is why the claims

@@ -44,6 +44,33 @@
 //!   `perror("No callbacks in the queue")` and another blocking take.
 //! * The C included `dispatch/dispatch.h` on Apple and used nothing from it.
 //!
+//! # Divergences
+//!
+//! * **The main-thread worker is never released, and this one is visible.**
+//!   `runMainThreadWorker` (`src/ffi/pThreadedFFI.c`, still C) builds a worker
+//!   with `spawn == 0`, publishes it as the exported `mainThreadWorker`, and
+//!   runs it on OS thread 0. In the C, a `WORKER_RELEASE` task for *that*
+//!   worker sets `hasToQuit`, ends the loop, frees the queue and frees the
+//!   worker -- and then `worker_run` returns, to `runMainThreadWorker`, to
+//!   [`crate::client::run_on_worker_thread`], to `vm_main_with_parameters`, to
+//!   `main`. **The process exits by returning from `main` while the detached
+//!   interpreter thread is still running image code**, and the exported global
+//!   is left pointing at freed memory on the way out.
+//!
+//!   So [`worker_run`] does not set `has_to_quit` for it. That single
+//!   assignment is the whole fix: `has_to_quit` is the only thing that ends
+//!   the loop, and the loop ending is the only route to either the free or the
+//!   return.
+//!
+//!   How close the image is to this: Pharo 12.0's `TFMainThreadRunner`
+//!   already holds the pointer -- `workerAddress` is
+//!   `(ExternalAddress loadSymbol: 'mainThreadWorker') pointerAt: 1` -- but
+//!   inherits `release` from `TFRunner`, which only nulls the handle. It is
+//!   `TFWorker>>release`, a sibling override, that calls
+//!   `primitiveReleaseWorker`. So the shipped image does not take this path
+//!   today; anything that wraps that pointer in a `TFWorker` does, with no C
+//!   involved. Latent, not live -- and a one-line image change away from live.
+//!
 //! # Divergences, all invisible
 //!
 //! * The Worker is allocated zero-initialized where the C's `malloc` left
@@ -87,6 +114,13 @@ pub struct Worker {
     self_thread: libc::pthread_t,
     /// Never used beyond initialization, in the C as here.
     next: *mut Worker,
+    /// Set for the worker that runs on OS thread 0. Not in the C; see the
+    /// process-exit divergence in the module docs.
+    ///
+    /// Safe to add: `worker.h` declares `struct __Worker` and never defines
+    /// it, so no C translation unit knows this type's size or layout. The one
+    /// piece of ABI is that [`Runner`] stays first, which it does.
+    is_main_thread: c_int,
 }
 
 /// What the worker links against; see "The C seam" in the module docs.
@@ -433,6 +467,12 @@ pub extern "C" fn worker_newSpawning(spawn: c_int) -> *mut Worker {
     worker.has_to_quit = 0;
     worker.nested_runs = 0;
     worker.next = ptr::null_mut();
+    // `spawn == 0` means "run me on the caller's thread", and in the whole
+    // tree there is exactly one such caller: `runMainThreadWorker` in
+    // `src/ffi/pThreadedFFI.c`, which runs it on OS thread 0 and publishes it
+    // as the exported `mainThreadWorker`. `worker_new()` -- every other
+    // worker -- passes 1.
+    worker.is_main_thread = c_int::from(spawn == 0);
     // SAFETY: a fresh platform semaphore, owned (and leaked, faithfully) by
     // the queue's user.
     worker.task_queue = unsafe { seam::queue_new(seam::semaphore_new(0)) };
@@ -595,7 +635,14 @@ pub unsafe extern "C" fn worker_run(a_worker: *mut c_void) -> *mut c_void {
 
         if task_type == WorkerTaskType::WORKER_RELEASE {
             unsafe {
-                (*worker).has_to_quit = 1;
+                // The main-thread worker is never released. See the
+                // process-exit divergence in the module docs: this one
+                // assignment is the whole of the fix, because `has_to_quit` is
+                // the only thing that can end the loop, and the loop ending is
+                // the only way to reach either the free or the return.
+                if (*worker).is_main_thread == 0 {
+                    (*worker).has_to_quit = 1;
+                }
                 // We wait in case we need to receive a callback_return
                 // message.
                 libc::sleep(1);
@@ -649,6 +696,14 @@ pub unsafe extern "C" fn worker_run(a_worker: *mut c_void) -> *mut c_void {
         (*worker).nested_runs -= 1;
 
         if (*worker).nested_runs == 0 {
+            // Unreachable for the main-thread worker, and stated rather than
+            // re-guarded: the loop above can only end through `has_to_quit`,
+            // which is never set for it. A second guard here would be a second
+            // place to keep true.
+            debug_assert!(
+                (*worker).is_main_thread == 0,
+                "the main-thread worker must never be freed: `mainThreadWorker` still names it"
+            );
             seam::queue_free((*worker).task_queue);
             drop(Box::from_raw(worker));
         }
@@ -672,10 +727,109 @@ mod tests {
     }
 
     /// A worker without a thread, run by the test itself.
+    ///
+    /// `worker_newSpawning(0)` marks a worker as the main-thread one, because
+    /// in production that is the only thing it can be. A test that wants the
+    /// ordinary release-and-free behaviour has to say so -- and if it does
+    /// not, `worker_run` never returns and the test hangs, which is how the
+    /// fix was first confirmed to work.
     fn unspawned_worker() -> *mut Worker {
         let worker = worker_newSpawning(0);
         assert!(!worker.is_null());
+        // SAFETY: freshly built and owned by this test.
+        unsafe { (*worker).is_main_thread = 0 };
         worker
+    }
+
+    /// A worker standing in for the one `runMainThreadWorker` publishes.
+    fn main_thread_worker() -> *mut Worker {
+        let worker = worker_newSpawning(0);
+        assert!(!worker.is_null());
+        // SAFETY: freshly built and owned by this test.
+        assert_eq!(
+            unsafe { (*worker).is_main_thread },
+            1,
+            "spawn == 0 is what marks it"
+        );
+        worker
+    }
+
+    /// The process-exit hazard, and the fix, end to end.
+    ///
+    /// Releasing the *main-thread* worker must not end its run: the C's
+    /// `worker_run` would break out of the loop, free the worker that the
+    /// exported `mainThreadWorker` still names, and return -- through
+    /// `runMainThreadWorker` and `vm_main_with_parameters` to `main`, exiting
+    /// the process while the detached interpreter thread is still running
+    /// image code.
+    ///
+    /// Asserted from another thread because the fixed behaviour is "never
+    /// returns": the run loop is left parked on its queue for the rest of the
+    /// test binary, which is one blocked thread and no CPU.
+    #[test]
+    fn releasing_the_main_thread_worker_does_not_end_its_run() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let _guard = test_support::lock_globals();
+        reset_recorders();
+
+        let worker = main_thread_worker();
+        let returned = Arc::new(AtomicBool::new(false));
+
+        // A usize, because a raw pointer is not Send and this one is genuinely
+        // owned by the spawned thread for the rest of the process.
+        let address = worker as usize;
+        let flag = Arc::clone(&returned);
+        std::thread::spawn(move || {
+            // SAFETY: the worker is live and nothing else runs it.
+            unsafe { worker_run(address as *mut c_void) };
+            flag.store(true, Ordering::SeqCst);
+        });
+
+        // SAFETY: the worker is live; this is what the image's
+        // `primitiveReleaseWorker` does.
+        unsafe { worker_release(worker) };
+
+        // The release arm sleeps a literal second before looping (a faithful
+        // oddity), so wait past that before concluding anything.
+        std::thread::sleep(Duration::from_millis(1_800));
+        assert!(
+            !returned.load(Ordering::SeqCst),
+            "worker_run returned for the main-thread worker: the process would \
+             now exit from main with the interpreter thread still running"
+        );
+        // SAFETY: still live precisely because the run did not end. Reading it
+        // is the other half of the claim -- a freed worker would be a
+        // use-after-free here, and `mainThreadWorker` still names it.
+        assert_eq!(unsafe { (*worker).has_to_quit }, 0, "and it was never told to quit");
+    }
+
+    /// The converse, so the fix is known to be narrow: an ordinary worker is
+    /// still released, still ends its run, and is still freed.
+    #[test]
+    fn releasing_an_ordinary_worker_still_ends_its_run() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let _guard = test_support::lock_globals();
+        reset_recorders();
+
+        let worker = unspawned_worker();
+        let returned = Arc::new(AtomicBool::new(false));
+        let address = worker as usize;
+        let flag = Arc::clone(&returned);
+        let run = std::thread::spawn(move || {
+            // SAFETY: the worker is live and nothing else runs it; it frees
+            // itself on the way out.
+            unsafe { worker_run(address as *mut c_void) };
+            flag.store(true, Ordering::SeqCst);
+        });
+
+        // SAFETY: live until the run above frees it, which is after the join.
+        unsafe { worker_release(worker) };
+        run.join().expect("the run ended");
+        assert!(returned.load(Ordering::SeqCst));
     }
 
     #[test]

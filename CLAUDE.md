@@ -28,7 +28,7 @@ requirements, one knob per workspace, hence two workspaces.
 
 ```sh
 cd rust/plugins && cargo test --workspace --locked          # 634 tests, 53 binaries
-cd rust && source ../build/rust-env.sh && cargo test --workspace --locked   # 184 tests
+cd rust && source ../build/rust-env.sh && cargo test --workspace --locked   # 186 tests
 ```
 
 **`pharo-vm-sys` refuses to build standalone by design** — it binds headers
@@ -110,9 +110,10 @@ doorbell. Signal through it, never through the `Semaphore` vtable:
 
 ## Remaining work, in order
 
-**Start at §4** — and note that what is left of it is one bug fix, not a
-feature. §1 was measured to be unbuildable on glibc; §2 and §3 are built. All
-three are kept for what they record rather than for work they still name.
+**Nothing here is queued work any more.** §1 was measured to be unbuildable on
+glibc; §2 and §3 are built; §4's bug is fixed and what remains of it is an
+optional feature. All four are kept for what they record — the traps, the
+measurements and the reasons — rather than for work they still name.
 
 ### Done: the foreign-thread edge, and async DNS on it
 
@@ -362,7 +363,7 @@ is already holding another 16. Anything larger has to be chunked. The failure is
 clean *because* the drain peeks: the task stays done, the result intact and the
 handle still queued, which was verified live and is trap 1 paying for itself.
 
-### 4. "Run the VM off the main thread" — mostly already true
+### 4. "Run the VM off the main thread" — the bug is fixed; the feature is optional
 
 `run_on_worker_thread` (`rust/pharo-platform/src/client.rs:283`) already spawns
 the interpreter via `std::thread::Builder`, named `"pharo-vm"`, with **4× the
@@ -378,14 +379,33 @@ a `primitiveAttachMainThreadWorker` that `setHandler`s it onto a
 `TFMainThreadWorker`, failing `Unsupported` when null. Every `TFExternalFunction`
 invoked with that worker then runs on OS thread 0 — SDL, AppKit, GTK.
 
-Fix first, because it is a process-exit hazard reachable from ordinary image
-code: `TFWorker>>release` on the main-thread worker queues `WORKER_RELEASE`;
-teardown frees the `Box`; `worker_run` returns to `runMainThreadWorker` →
-`run_on_worker_thread` → `vm_main_with_parameters` → **the process exits by
-returning from `main` while the detached interpreter thread is still running
-image code**, leaving the exported global dangling. Add an `is_main_thread`
-field to `Worker` (safe: only the leading `Runner` is ABI, and `worker.h` never
-defines the struct) and skip both arms.
+**The process-exit hazard is fixed** (`rust/pharo-platform/src/worker.rs`).
+`worker_run` no longer sets `has_to_quit` for the main-thread worker, which is
+the whole of it: `has_to_quit` is the only thing that can end the loop, and the
+loop ending was the only route to *both* arms — freeing the worker that the
+exported `mainThreadWorker` still names, and returning through
+`runMainThreadWorker` → `run_on_worker_thread` → `vm_main_with_parameters` →
+`main`, exiting the process while the detached interpreter thread is still
+running image code. The `is_main_thread` field is set from `spawn == 0`, which
+in the whole tree only `runMainThreadWorker` passes. Two tests: the main-thread
+worker's run does not return after a release, an ordinary one's still does.
+
+Two corrections to what this item used to say, both measured on Pharo 12.0:
+
+* **It is latent, not "reachable from ordinary image code".** The image does
+  hold the pointer — `TFMainThreadRunner>>workerAddress` is
+  `(ExternalAddress loadSymbol: 'mainThreadWorker') pointerAt: 1` — but
+  `TFMainThreadRunner` inherits `release` from `TFRunner`, which only nulls the
+  handle. It is `TFWorker>>release`, a *sibling* override, that calls
+  `primitiveReleaseWorker`. Anything wrapping that pointer in a `TFWorker`
+  reaches it with no C involved; the shipped image does not.
+* **And it needs `--worker`.** `mainThreadWorker` is `@ 16r00000000` without the
+  switch and a live pointer with it, because `runMainThreadWorker` is only
+  reached down the worker-thread path.
+
+What is left of this item is the feature above, not a bug. Weigh it on its own:
+nothing in the tree exercises a main-thread worker, and the payoff (SDL, AppKit,
+GTK on OS thread 0) is speculative until something wants it.
 
 **Do not fill `scheduleInMainThread`.** Its declared signature is synchronous,
 which invites the deadlock where the VM thread waits on the main thread while
