@@ -417,7 +417,7 @@ static sqInt printingStack = false;
 
 void reportStackState(const char *msg, char *date, int printAll, ucontext_t *uap, FILE* output)
 {
-#if !defined(NOEXECINFO)
+#ifdef HAVE_EXECINFO_H	/* the C backtrace below */
 	void *addrs[BACKTRACE_DEPTH];
 	int depth;
 #endif

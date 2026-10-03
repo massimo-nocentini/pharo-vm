@@ -124,7 +124,12 @@ findInternalFunctionIn(char *functionName, char *pluginName,  sqInt fnameLength,
   if(functionName && !functionName[0]) functionName = NULL;
   if(pluginName && !pluginName[0]) pluginName = NULL;
   for(listIndex=0;; listIndex++) {
+#ifdef PHARO_BUILTIN_PLUGINS_HEADER
+    /* named primitives are called through void (*)(void): look them up among functions of that type */
+    exports = (accessorDepthPtr ? pluginPrimitives : pluginExports)[listIndex];
+#else
     exports = pluginExports[listIndex];
+#endif
     if(!exports) break;
     for(index=0;; index++) {
       plugin = exports[index].pluginName;

@@ -35,6 +35,11 @@
 
 #include "pharovm/debug.h"
 
+#if defined(__EMSCRIPTEN__)
+# include <emscripten.h>
+static void heartbeat();
+#endif
+
 #define SecondsFrom1901To1970      2177452800LL
 #define MicrosecondsFrom1901To1970 2177452800000000LL
 #define MicrosecondsFrom1601To1970 11644473600000000LL
@@ -241,6 +246,12 @@ ioHighResClock(void)
 	/* On RISC-V, the time control status register is read through the rdtime instruction */
 	/* If the performance counter needs to be used, use rdcycle instead */
 	__asm__ __volatile__("rdtime %0" : "=r"(value));
+#elif defined(__EMSCRIPTEN__)
+	/* no cycle counter in WebAssembly: answer monotonic nanoseconds */
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	value = (sqLong)now.tv_sec * 1000000000LL + now.tv_nsec;
 #elif defined(_WIN32)
 	value = __rdtsc();
 #else
@@ -249,8 +260,17 @@ ioHighResClock(void)
   return value;
 }
 
+#if defined(__EMSCRIPTEN__)
+/* Without a heartbeat thread the clocks only move when the interpreter polls
+ * the heartbeat, so bring them up to date whenever they are read.
+ */
+# define updateClockOnRead() updateMicrosecondClock()
+#else
+# define updateClockOnRead() ((void)0)
+#endif
+
 unsigned volatile long long
-ioUTCMicroseconds() { return get64(utcMicrosecondClock); }
+ioUTCMicroseconds() { updateClockOnRead(); return get64(utcMicrosecondClock); }
 
 unsigned volatile long long
 ioLocalMicroseconds() { return get64(localMicrosecondClock); }
@@ -272,7 +292,7 @@ ioLocalMicrosecondsNow() { return currentUTCMicroseconds() + vmGMTOffset; };
 
 /* ioMSecs answers the millisecondClock as of the last tick. */
 long
-ioMSecs() { return millisecondClock; }
+ioMSecs() { updateClockOnRead(); return millisecondClock; }
 
 /* ioMicroMSecs answers the millisecondClock right now */
 sqInt ioMicroMSecs(void) { return microToMilliseconds(currentUTCMicroseconds());}
@@ -312,7 +332,17 @@ ioRelinquishProcessorForMicroseconds(sqInt microSeconds)
 			realTimeToWait = microSeconds;
 	}
 
+#if defined(__EMSCRIPTEN__)
+	/* Never block the host: deliver the i/o that is ready now and, unless that
+	 * woke something up, have the next event check return to the host until
+	 * the wakeup time.
+	 */
+	if (!aioPoll(0))
+		emscriptenRequestSleep(realTimeToWait);
+	heartbeat();
+#else
     aioPoll(realTimeToWait);
+#endif
 
 	return 0;
 }
@@ -345,7 +375,7 @@ heartbeat()
 
 typedef enum { dead, condemned, nascent, quiescent, active } machine_state;
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
 #define UNDEFINED 0xBADF00D
 
 static int					stateMachinePolicy = UNDEFINED;
@@ -359,6 +389,43 @@ static volatile machine_state beatState = nascent;
 #endif
 static int beatMilliseconds = DEFAULT_BEAT_MS;
 static struct timespec beatperiod = { 0, DEFAULT_BEAT_MS * 1000 * 1000 };
+
+#if defined(__EMSCRIPTEN__)
+/* The synchronous heartbeat of WebAssembly, which has no threads.  No thread
+ * ticks it: the interpreter counts down at every pollHeartbeat() site
+ * (PHARO_POLL_HEARTBEAT, see include/pharovm/emscripten/sqPlatformSpecific.h)
+ * and every SYNCHRONOUS_POLL_INTERVAL polls ioHeartbeatPoll() looks at the
+ * time.  It beats every beatMilliseconds, as the thread would, and lets the
+ * host driver (src/emscripten/emscriptenMain.c) end the slice once it is over.
+ */
+# define SYNCHRONOUS_POLL_INTERVAL 2000
+
+int ioHeartbeatPollCountdown = SYNCHRONOUS_POLL_INTERVAL;
+static double lastBeatMilliseconds = 0;
+
+void
+ioHeartbeatPoll(void)
+{
+	double now = emscripten_get_now();
+
+	ioHeartbeatPollCountdown = SYNCHRONOUS_POLL_INTERVAL;
+	if (now - lastBeatMilliseconds >= beatMilliseconds) {
+		lastBeatMilliseconds = now;
+		heartbeat();
+	}
+	emscriptenSliceCheck(now);
+}
+
+void
+ioInitHeartbeat()
+{
+	/* There is no thread to start, but aio uses the polling semaphores. */
+	heartbeatStopMutex = platform_semaphore_new(1);
+	heartbeatSemaphore = platform_semaphore_new(0);
+	polling = 0;
+	beatState = active;
+}
+#else /* __EMSCRIPTEN__ */
 
 #if defined(_WIN32)
 DWORD WINAPI
@@ -481,6 +548,7 @@ ioInitHeartbeat()
 #endif
 	}
 }
+#endif /* __EMSCRIPTEN__ */
 
 void
 ioSetHeartbeatMilliseconds(int ms)

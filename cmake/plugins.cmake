@@ -45,7 +45,11 @@ if (${FEATURE_NETWORK})
   endif()
 endif()
 
-add_vm_plugin(SurfacePlugin TRUE FALSE)
+# The manual surfaces of SurfacePlugin (sqManualSurface.c) cannot be built
+# in, and Emscripten has only builtin plugins
+if(NOT EMSCRIPTEN)
+    add_vm_plugin(SurfacePlugin TRUE FALSE)
+endif()
 add_vm_plugin(FloatArrayPlugin TRUE FALSE)
 add_vm_plugin(LargeIntegers FALSE FALSE)
 add_vm_plugin(JPEGReaderPlugin FALSE FALSE)
@@ -78,8 +82,8 @@ if(FEATURE_PLUGIN_SSL)
     endif()
 endif()
 
-# UnixOSProcessPlugin
-if(NOT WIN)
+# UnixOSProcessPlugin (it needs fork(), which Emscripten has not)
+if(NOT WIN AND NOT EMSCRIPTEN)
     add_vm_plugin(UnixOSProcessPlugin FALSE FALSE)
     target_link_libraries(UnixOSProcessPlugin PRIVATE FilePlugin)
     target_link_libraries(UnixOSProcessPlugin PRIVATE SocketPlugin)

@@ -42,6 +42,7 @@ For more details about the whole Pharo VM project, refer to our [wiki](../../wik
       - [Compiling i686 third party dependencies](https://github.com/pharo-project/pharo-vm/wiki/Building-Linux-i686-(32bits)-Third-Party-Dependencies)
       - [Compiling ARM64 third party dependencies](https://github.com/pharo-project/pharo-vm/wiki/Building-Linux-ARM64-Third-Party-Dependencies)
       - [Compiling ARM32 third party dependencies](https://github.com/pharo-project/pharo-vm/wiki/Building-Linux-ARM32-Third-Party-Dependencies)
+    - [WebAssembly (Emscripten)](docs/WebAssembly.md)
   - [Troubleshooting](https://github.com/pharo-project/pharo-vm/wiki/Troubleshooting)
 - [Continuous Integration](https://github.com/pharo-project/pharo-vm/wiki/Continuous-Integration)
 - Developer documentation

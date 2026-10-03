@@ -5,6 +5,14 @@
 #include <assert.h>
 #include <unistd.h>
 
+/* The Smalltalk frames printed per process when the VM reports an error,
+ * unless --maxFramesToLog says otherwise; 0 prints them all.  A platform may
+ * define another default in its sqPlatformSpecific.h.
+ */
+#ifndef PHARO_DEFAULT_MAX_FRAMES_TO_LOG
+# define PHARO_DEFAULT_MAX_FRAMES_TO_LOG 0
+#endif
+
 typedef VMErrorCode (*vm_parameter_process_function)(const char *argument, VMParameters* params);
 
 typedef struct VMParameterSpec_
@@ -805,7 +813,7 @@ vm_parameters_init(VMParameters *parameters){
 	parameters->imageParameters.count = 0;
 	parameters->imageParameters.parameters = NULL;
 
-	parameters->maxStackFramesToPrint = 0;
+	parameters->maxStackFramesToPrint = PHARO_DEFAULT_MAX_FRAMES_TO_LOG;
 	parameters->maxCodeSize = 0;
 	parameters->maxOldSpaceSize = 0;
 	parameters->maxSlotsForNewSpaceAlloc = 0;

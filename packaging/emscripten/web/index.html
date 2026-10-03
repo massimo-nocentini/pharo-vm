@@ -1,0 +1,423 @@
+<!doctype html>
+<!-- index.html - the Console page of the Pharo VM for WebAssembly
+
+  The page runs the Pharo VM in a Web Worker (vm-worker.js), booting the
+  image with the REPL of st/web-repl.st; page.js drives it.  The build
+  (stage.mjs) replaces the BUILD placeholder, in the pharo-build meta tag
+  and the URLs below, with a build id, which the page passes as ?v= on
+  every script, worker and .wasm URL.  No external resources: it must be
+  served over plain HTTP (make wasm-serve), not from file://. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Pharo, the Smalltalk environment, running in your browser on WebAssembly.">
+<meta name="pharo-build" content="@BUILD@">
+<title>Pharo Console</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M10 7l8-4v4z' fill='%23f5a524'/%3E%3Cpath d='M12 30l1.6-17h4.8L20 30z' fill='%231d6fb8'/%3E%3Cpath d='M12.6 9h6.8v4h-6.8z' fill='%23155a96'/%3E%3Cpath d='M13 20h6l.3 3h-6.6z' fill='%23fff'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --surface-2: #eaeef2;
+  --border: #d7dde4;
+  --text: #1b1f24;
+  --muted: #5b6471;
+  --accent: #1d6fb8;
+  --accent-strong: #155a96;
+  --accent-soft: #e2eefa;
+  --on-accent: #ffffff;
+  --beacon: #e8930c;
+  --focus: #2563eb;
+  --term-bg: #fbfcfd;
+  --term-fg: #1f242a;
+  --term-err: #b42318;
+  --term-in: #1b5c99;
+  --term-prompt: #8a929c;
+  --term-sys: #5b6471;
+  --ok: #15803d;
+  --busy: #b45309;
+  --wait: #1d6fb8;
+  --sleep: #7c3aed;
+  --bad: #b42318;
+  --shadow: 0 1px 2px rgb(15 30 50 / .06), 0 4px 16px rgb(15 30 50 / .06);
+  --radius: 10px;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Cascadia Code", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1216;
+    --surface: #171b21;
+    --surface-2: #212730;
+    --border: #2f3641;
+    --text: #e6eaef;
+    --muted: #9aa4b1;
+    --accent: #5aa9f0;
+    --accent-strong: #80bdf5;
+    --accent-soft: #15283b;
+    --on-accent: #07111b;
+    --beacon: #f5a524;
+    --focus: #7aa7ff;
+    --term-bg: #0b0e12;
+    --term-fg: #e2e6eb;
+    --term-err: #ff8a80;
+    --term-in: #8cc4ff;
+    --term-prompt: #7d8794;
+    --term-sys: #949eab;
+    --ok: #4ade80;
+    --busy: #fbbf24;
+    --wait: #7aa7ff;
+    --sleep: #c4a5ff;
+    --bad: #ff8a80;
+    --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 6px 20px rgb(0 0 0 / .3);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1216;
+  --surface: #171b21;
+  --surface-2: #212730;
+  --border: #2f3641;
+  --text: #e6eaef;
+  --muted: #9aa4b1;
+  --accent: #5aa9f0;
+  --accent-strong: #80bdf5;
+  --accent-soft: #15283b;
+  --on-accent: #07111b;
+  --beacon: #f5a524;
+  --focus: #7aa7ff;
+  --term-bg: #0b0e12;
+  --term-fg: #e2e6eb;
+  --term-err: #ff8a80;
+  --term-in: #8cc4ff;
+  --term-prompt: #7d8794;
+  --term-sys: #949eab;
+  --ok: #4ade80;
+  --busy: #fbbf24;
+  --wait: #7aa7ff;
+  --sleep: #c4a5ff;
+  --bad: #ff8a80;
+  --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 6px 20px rgb(0 0 0 / .3);
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 var(--sans);
+  -webkit-text-size-adjust: 100%;
+}
+[hidden] { display: none !important; }
+button, input, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.app {
+  height: 100vh;
+  height: 100dvh;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 max(16px, env(safe-area-inset-right)) 12px max(16px, env(safe-area-inset-left));
+  display: flex;
+  flex-direction: column;
+}
+
+/* header */
+.top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 0 10px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+.brand svg { width: 34px; height: 34px; flex: none; }
+.brand .tower { fill: var(--accent); }
+.brand .lamp { fill: var(--accent-strong); }
+.brand .band { fill: var(--surface); }
+.brand .beam { fill: var(--beacon); }
+.brand div { min-width: 0; }
+.brand h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -.01em; line-height: 1.2; }
+.brand p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.top .grow { flex: 1; }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  padding: 4px 11px 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.pill .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--muted);
+}
+.pill[data-state="waiting"] .dot { background: var(--ok); }
+.pill[data-state="running"] .dot, .pill[data-state="busy"] .dot { background: var(--busy); animation: pulse 1s ease-in-out infinite; }
+.pill[data-state="sleeping"] .dot { background: var(--sleep); animation: pulse 2s ease-in-out infinite; }
+.pill[data-state="loading"] .dot, .pill[data-state="starting"] .dot { background: var(--wait); animation: pulse 1s ease-in-out infinite; }
+.pill[data-state="exited"] .dot, .pill[data-state="crashed"] .dot, .pill[data-state="error"] .dot { background: var(--bad); }
+.pill[data-state="waiting"] { color: var(--text); }
+@keyframes pulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .pill .dot { animation: none !important; } }
+
+/* toolbar */
+.bar {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+}
+.toolbar { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.toolbar .sep { width: 1px; margin: 6px 4px; background: var(--border); }
+.btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 520;
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+  transition: background-color .12s, border-color .12s;
+}
+.btn:hover { background: var(--surface-2); }
+.btn:disabled, .btn[aria-disabled="true"] { opacity: .45; cursor: default; }
+.btn svg { width: 16px; height: 16px; flex: none; }
+.btn.ghost { border-color: transparent; background: none; }
+.btn.ghost:hover { background: var(--surface-2); }
+.btn.ghost:disabled:hover { background: none; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.btn.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+.btn.danger svg { color: var(--bad); }
+
+main { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-top: 12px; }
+
+/* terminal */
+.console {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--term-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+#term {
+  flex: 1;
+  min-height: 8rem;
+  margin: 0;
+  padding: 14px 16px 6px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  color: var(--term-fg);
+  font: 13.5px/1.55 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+  overscroll-behavior: contain;
+}
+#term:focus-visible { outline-offset: -3px; }
+#term .err { color: var(--term-err); }
+#term .in { color: var(--term-in); }
+#term .p { color: var(--term-prompt); }
+#term .sys { color: var(--term-sys); font-style: italic; }
+#term .loading { color: var(--term-sys); }
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 12px 10px;
+  padding: 8px 10px 8px 12px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 13.5px;
+}
+.notice span { flex: 1; min-width: 12ch; }
+.notice .close { min-height: 30px; padding: 0 8px; }
+
+.entry {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 8px 8px 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.entry .caret {
+  align-self: flex-start;
+  padding-top: 7px;
+  color: var(--accent);
+  font: 600 14px/1.5 var(--mono);
+  user-select: none;
+}
+#line {
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  max-height: 40vh;
+  padding: 7px 4px;
+  border: 0;
+  background: none;
+  color: var(--term-fg);
+  font: 14px/1.5 var(--mono);
+  tab-size: 4;
+  resize: none;
+  outline: none;
+}
+#line::placeholder { color: var(--muted); opacity: .8; }
+.entry:focus-within { box-shadow: inset 0 2px 0 -1px var(--accent); }
+.entry .btn { min-height: 36px; }
+.entry .hist { padding: 0 8px; }
+.hints {
+  margin: 8px 2px 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+kbd {
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--surface);
+  font: 11.5px/1.5 var(--mono);
+}
+code { font-family: var(--mono); font-size: .92em; }
+
+@media (max-width: 760px) {
+  .brand p { display: none; }
+  .toolbar .label { display: none; }
+  .toolbar .btn { padding: 0 9px; }
+  .hints { display: none; }
+  #term { padding: 10px 12px 4px; font-size: 13px; }
+}
+@media (max-width: 380px) {
+  .toolbar { gap: 2px; }
+  .toolbar .sep { margin: 6px 1px; }
+  .toolbar .btn { padding: 0 7px; min-height: 32px; }
+  .entry .hist { padding: 0 6px; }
+}
+@media (hover: none) and (pointer: coarse) {
+  .hints { display: none; }
+}
+@media (hover: hover) and (pointer: fine) {
+  .entry .hist { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <a class="brand" href="https://pharo.org/" title="pharo.org">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <path class="beam" d="M10 7l8-4v4z"/>
+        <path class="tower" d="M12 30l1.6-17h4.8L20 30z"/>
+        <path class="lamp" d="M12.6 9h6.8v4h-6.8z"/>
+        <path class="band" d="M13 20h6l.3 3h-6.6z"/>
+      </svg>
+      <div>
+        <h1>Pharo</h1>
+        <p>The Pharo 12 VM, compiled to WebAssembly, running in your browser</p>
+      </div>
+    </a>
+    <span class="grow"></span>
+    <span id="status" class="pill" data-state="loading">
+      <span class="dot" aria-hidden="true"></span><span id="status-text">Loading</span>
+    </span>
+    <span id="status-live" class="sr-only" role="status" aria-live="polite"></span>
+  </header>
+
+  <div class="bar">
+    <div class="toolbar" role="toolbar" aria-label="Console controls">
+      <button class="btn ghost danger" id="stop" type="button" aria-label="Stop" title="Stop the running evaluation (Esc)" disabled>
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg><span class="label">Stop</span>
+      </button>
+      <button class="btn ghost" id="restart" type="button" aria-label="Restart" title="Start the VM again, from the image saved in this browser">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg><span class="label">Restart</span>
+      </button>
+      <span class="sep" aria-hidden="true"></span>
+      <button class="btn ghost" id="save" type="button" aria-label="Save" title="Save the image, and keep it in this browser" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2z"/><path d="M8 3v5h7V3"/><path d="M8 21v-7h8v7"/></svg><span class="label">Save</span>
+      </button>
+      <button class="btn ghost" id="download" type="button" aria-label="Download" title="Download the image and its .changes, as last saved" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg><span class="label">Download</span>
+      </button>
+      <button class="btn ghost" id="upload-btn" type="button" aria-label="Upload" title="Start an image of your own: choose its .image and .changes">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3"/><path d="M7 8l5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg><span class="label">Upload</span>
+      </button>
+      <input type="file" id="upload" accept=".image,.changes" multiple hidden>
+      <button class="btn ghost" id="reset" type="button" aria-label="Reset saved image" title="Delete the image saved in this browser" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></svg><span class="label">Reset</span>
+      </button>
+      <span class="sep" aria-hidden="true"></span>
+      <button class="btn ghost" id="clear" type="button" aria-label="Clear" title="Clear the terminal (Ctrl+L)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 5l14 14"/><path d="M3 12a9 9 0 0 1 15-6.7"/><path d="M21 12a9 9 0 0 1-15 6.7"/></svg><span class="label">Clear</span>
+      </button>
+      <button class="btn ghost" id="theme" type="button" aria-label="Theme: System" title="Theme: follow the system">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg><span class="label" id="theme-label">System</span>
+      </button>
+    </div>
+  </div>
+
+  <main>
+    <div class="console" id="console">
+      <pre id="term" role="log" aria-label="Pharo output" tabindex="0"><span class="loading" id="loading" aria-hidden="true">Loading Pharo…</span></pre>
+      <div class="notice" id="notice" role="status" hidden>
+        <span id="notice-text"></span>
+        <button class="btn primary" id="notice-action" type="button">Restart</button>
+        <button class="btn" id="notice-alt" type="button" hidden></button>
+        <button class="btn ghost close" id="notice-close" type="button" aria-label="Dismiss">✕</button>
+      </div>
+      <form class="entry" id="entry" autocomplete="off">
+        <span class="caret" aria-hidden="true">›</span>
+        <label for="line" class="sr-only">Smalltalk input</label>
+        <textarea id="line" rows="1" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="send" placeholder="Type a Smalltalk expression, e.g. 3 + 4" disabled></textarea>
+        <button class="btn ghost hist" id="hist-up" type="button" aria-label="Previous input">↑</button>
+        <button class="btn ghost hist" id="hist-down" type="button" aria-label="Next input">↓</button>
+        <button class="btn primary" id="send" type="submit" disabled>Run</button>
+      </form>
+    </div>
+    <p class="hints"><kbd>Enter</kbd> evaluates, <kbd>Shift</kbd>+<kbd>Enter</kbd> adds a line, <kbd>Esc</kbd> or <kbd>Ctrl</kbd>+<kbd>C</kbd> stops, <kbd>↑</kbd>/<kbd>↓</kbd> recall history, <kbd>Ctrl</kbd>+<kbd>L</kbd> clears, <kbd>Ctrl</kbd>+<kbd>D</kbd> ends the session. Save keeps the image in this browser.</p>
+  </main>
+</div>
+
+<noscript><p style="padding:16px">This page needs JavaScript and WebAssembly.</p></noscript>
+<script src="page.js?v=@BUILD@"></script>
+</body>
+</html>

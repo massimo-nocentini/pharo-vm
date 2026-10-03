@@ -369,5 +369,6 @@ healthchecksdb
 /out/build
 /stack32/generated
 /stack64/generated
+/build-wasm*/
 
 **/.DS_Store

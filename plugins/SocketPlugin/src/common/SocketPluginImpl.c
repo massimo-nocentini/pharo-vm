@@ -374,7 +374,14 @@ static int nameToAddr(char *hostName)
 	struct sockaddr_in* addr;
 
 	/* resolve the domain name into a list of addresses */
+#if defined(__EMSCRIPTEN__)
+   /* Emscripten's getaddrinfo() aborts the wasm64 runtime (BigInt(null))
+      instead of failing, and it would only make up addresses anyway. */
+   result = NULL;
+   error = EAI_FAIL;
+#else
    error = getaddrinfo(hostName, NULL, NULL, &result);
+#endif
    if (error != 0) {
 	   lastError = error;
 	   return 0;
@@ -1951,7 +1958,11 @@ void sqResolverGetAddressInfoHostSizeServiceSizeFlagsFamilyTypeProtocol(char *ho
     case SQ_SOCKET_PROTOCOL_UDP:	request.ai_protocol= IPPROTO_UDP;	break;
     }
 
+#if defined(__EMSCRIPTEN__)
+  gaiError= EAI_FAIL;	/* see nameToAddr() */
+#else
   gaiError= getaddrinfo(hostSize ? host : 0, servSize ? serv : 0, &request, &addrList);
+#endif
 
   if (gaiError)
     {

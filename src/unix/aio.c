@@ -127,7 +127,9 @@ aioInit(void)
 	if (fcntl(signal_pipe_fd[1], F_SETFL, arg | O_NONBLOCK | O_ASYNC | O_APPEND) < 0)
 		logErrorFromErrno("fcntl(F_SETFL, O_ASYNC)");
 
+#if !defined(__EMSCRIPTEN__)	/* no signals there, see aioEnable() */
 	signal(SIGIO, sigIOHandler);
+#endif
 }
 
 /* disable handlers and close all handled non-exteral descriptors */
@@ -136,7 +138,9 @@ void
 aioFini(void)
 {	
 	AioUnixDescriptor_removeAll();
+#if !defined(__EMSCRIPTEN__)
 	signal(SIGIO, SIG_DFL);
+#endif
 }
 
 
@@ -374,7 +378,9 @@ aioInterruptPoll(){
 		if(n != 1){
 			logErrorFromErrno("write to pipe");
 		}
+#if !defined(__EMSCRIPTEN__)	/* its pipes are in memory, with nothing to flush */
 		fsync(signal_pipe_fd[1]);
+#endif
 	}
 
 	interruptFIFOMutex->wait(interruptFIFOMutex);
@@ -416,7 +422,15 @@ aioEnable(sqInt fd, void *clientData, int flags)
 		 */
 		int	arg;
 
-#if defined(O_ASYNC)
+#if defined(__EMSCRIPTEN__)
+		/* there is no SIGIO (and fcntl() refuses F_SETOWN): aioPoll() alone
+		 * finds out that the descriptor is ready */
+		if ((arg = fcntl(fd, F_GETFL, 0)) < 0)
+			logErrorFromErrno("fcntl(F_GETFL)");
+		if (fcntl(fd, F_SETFL, arg | O_NONBLOCK) < 0)
+			logErrorFromErrno("fcntl(F_SETFL, O_NONBLOCK)");
+
+#elif defined(O_ASYNC)
 		if (fcntl(fd, F_SETOWN, getpid()) < 0)
 			logErrorFromErrno("fcntl(F_SETOWN, getpid())");
 		if ((arg = fcntl(fd, F_GETFL, 0)) < 0)

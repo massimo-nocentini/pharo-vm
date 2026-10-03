@@ -135,6 +135,16 @@ ioSynchronousCheckForEvents()
 			synch[i].tickeeDeadlineUsecs += synch[i].tickeePeriodUsecs;
 			synch[i].tickee();
 		}
+#if defined(__EMSCRIPTEN__)
+	/* This must stay the last statement.  The interpreter calls this from its
+	 * event check with its state saved in its globals; what the event check
+	 * would do after it happens at the next check instead, which the driver
+	 * forces, and the callers of the event check only return to the
+	 * interpreter's loop.  So the host driver may end the slice here with a
+	 * longjmp back to where the slice began (src/emscripten/emscriptenMain.c).
+	 */
+	ioReturnToHostIfRequested();
+#endif
 }
 
 static int numAsyncTickees = 0;

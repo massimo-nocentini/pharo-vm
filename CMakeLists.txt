@@ -536,12 +536,17 @@ add_required_libs_per_platform()
 
 include(cmake/plugins.cmake)
 
-add_subdirectory(ffiTestLibrary ${CMAKE_CURRENT_BINARY_DIR}/build/ffiTestLibrary)
+# The library of the FFI tests.  Emscripten builds have no FFI, and
+# ffiTestLibrary/CMakeLists.txt includes cmake/macros.cmake again, which would
+# undo the library macros of cmake/Emscripten.cmake.
+if(NOT EMSCRIPTEN)
+    add_subdirectory(ffiTestLibrary ${CMAKE_CURRENT_BINARY_DIR}/build/ffiTestLibrary)
+endif()
 
 # Handling Third party dependencies
 add_third_party_dependencies_per_platform()
 
-if (UNIX)
+if (UNIX AND NOT EMSCRIPTEN)
     addIndependentLibraryWithRPATH(tty ${CMAKE_CURRENT_SOURCE_DIR}/src/tty/tty.c)
 endif()
 
