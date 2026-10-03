@@ -348,7 +348,7 @@ extern
 #endif
 struct VirtualMachine* interpreterProxy;
 static sqInt isWarping;
-static sqIntptr_t (*lockSurfaceFn)(sqIntptr_t, int*, int, int, int, int);
+static sqInt (*lockSurfaceFn)(int, int*, int, int, int, int);
 static sqInt mask1;
 static sqInt mask2;
 static int maskTable[33] = {
@@ -368,7 +368,7 @@ static sqInt numGCsOnInvocation;
 static sqInt nWords;
 static void *opTable[43];
 static sqInt preload;
-static int (*querySurfaceFn)(sqIntptr_t, int*, int*, int*, int*);
+static sqInt (*querySurfaceFn)(int, int*, int*, int*, int*);
 static sqInt skew;
 static sqInt sourceAlpha;
 static sqInt sourceBits;
@@ -387,7 +387,7 @@ static sqInt srcBitShift;
 static int sx;
 static int sy;
 static unsigned char * ungammaLookupTable;
-static int (*unlockSurfaceFn)(sqIntptr_t, int, int, int, int);
+static sqInt (*unlockSurfaceFn)(int, int, int, int, int);
 static sqInt vDir;
 static sqInt warpAlignMask;
 static sqInt warpAlignShift;

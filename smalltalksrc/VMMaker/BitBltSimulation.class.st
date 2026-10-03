@@ -249,9 +249,9 @@ BitBltSimulation class >> declareCVarsIn: aCCodeGenerator [
 		type: 'unsigned char *'.
 
 	aCCodeGenerator
-		var: 'querySurfaceFn' declareC: 'int (*querySurfaceFn)(sqIntptr_t, int*, int*, int*, int*)';
-		var: 'lockSurfaceFn' declareC: 'sqIntptr_t (*lockSurfaceFn)(sqIntptr_t, int*, int, int, int, int)';
-		var: 'unlockSurfaceFn' declareC: 'int (*unlockSurfaceFn)(sqIntptr_t, int, int, int, int)'.
+		var: 'querySurfaceFn' declareC: 'sqInt (*querySurfaceFn)(int, int*, int*, int*, int*)';
+		var: 'lockSurfaceFn' declareC: 'sqInt (*lockSurfaceFn)(int, int*, int, int, int, int)';
+		var: 'unlockSurfaceFn' declareC: 'sqInt (*unlockSurfaceFn)(int, int, int, int, int)'.
 	
 	#(sourcePitch sourceWidth sourceHeight sourceDepth sourceMSB sx sy
 		destPitch destWidth destHeight destDepth destMSB dx dy bbW bbH)
