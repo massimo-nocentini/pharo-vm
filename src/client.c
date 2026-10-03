@@ -7,11 +7,11 @@
 extern void setMaxStacksToPrint(sqInt anInteger);
 extern sqInt setMaxOldSpaceSize(usqInt limit);
 extern void setDesiredCogCodeSize(sqInt anInteger);
-extern void setDesiredEdenBytes(sqLong anInteger);
+extern sqInt setDesiredEdenBytes(usqLong anInteger);
 extern void setMinimalPermSpaceSize(sqInt min);
-extern void setDesiredStackPageBytes(sqLong anInteger);
+extern void setDesiredStackPageBytes(sqInt anInteger);
 extern void setAvoidSearchingSegmentsWithPinnedObjects(sqInt aValue);
-extern void setMaxSlotsForNewSpaceAlloc(usqInt aValue);
+extern void setMaxSlotsForNewSpaceAlloc(sqInt aValue);
 
 #if defined(__GNUC__) && ( defined(i386) || defined(__i386) || defined(__i386__)  \
 			|| defined(i486) || defined(__i486) || defined (__i486__) \

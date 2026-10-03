@@ -47,7 +47,7 @@ sqInt  literalofMethod(sqInt offset, sqInt methodPointer);
 sqInt  literalCountOf(sqInt methodPointer);
 sqInt  methodArgumentCount(void);
 sqInt  methodPrimitiveIndex(void);
-sqInt  primitiveMethod(void);
+usqInt primitiveMethod(void);
 sqInt  primitiveIndexOf(sqInt methodPointer);
 sqInt  sizeOfSTArrayFromCPrimitive(void *cPtr);
 sqInt  slotSizeOf(sqInt oop);
@@ -125,7 +125,7 @@ sqInt classString(void);
 /* InterpreterProxy methodsFor: 'instance creation' */
 sqInt clone(sqInt oop);
 sqInt instantiateClassindexableSize(sqInt classPointer, sqInt size);
-sqInt makePointwithxValueyValue(sqInt xValue, sqInt yValue);
+usqInt makePointwithxValueyValue(sqInt xValue, sqInt yValue);
 sqInt popRemappableOop(void);
 void pushRemappableOop(sqInt oop);
 
@@ -134,7 +134,7 @@ void pushRemappableOop(sqInt oop);
 sqInt becomewith(sqInt array1, sqInt array2);
 sqInt byteSwapped(sqInt w);
 sqInt failed(void);
-void fullGC(void);
+usqLong fullGC(void);
 sqInt primitiveFail(void);
 sqInt primitiveFailFor(sqInt reasonCode);
 sqInt signalSemaphoreWithIndex(sqInt semaIndex);
@@ -145,7 +145,7 @@ unsigned volatile long long  ioUTCMicroseconds(void);
 unsigned volatile long long  ioUTCMicrosecondsNow(void);
 sqInt forceInterruptCheck(void);
 sqInt getThisSessionID(void);
-sqInt ioFilenamefromStringofLengthresolveAliases(char* aCharBuffer, char* filenameIndex, sqInt filenameLength, sqInt resolveFlag);
+void ioFilenamefromStringofLengthresolveAliases(char* aCharBuffer, char* filenameIndex, sqInt filenameLength, sqInt resolveFlag);
 sqInt vmEndianness(void);	
 sqInt getInterruptPending(void);
 
@@ -166,9 +166,9 @@ sqInt signalNoResume(sqInt);
 #if VM_PROXY_MINOR > 12 /* Spur */
 sqInt isImmediate(sqInt oop);
 sqInt isCharacterObject(sqInt oop);
-sqInt isCharacterValue(int charCode);
+sqInt isCharacterValue(sqInt charCode);
 sqInt characterObjectOf(sqInt charCode);
-sqInt characterValueOf(sqInt oop);
+usqInt characterValueOf(sqInt oop);
 sqInt isPinned(sqInt objOop);
 sqInt pinObject(sqInt objOop);
 sqInt unpinObject(sqInt objOop);
@@ -251,6 +251,57 @@ interceptFetchIntegerofObject(sqInt fieldIndex, sqInt objectPointer)
 	return fetchIntegerofObject(fieldIndex, objectPointer);
 }
 
+/* The interpreter defines these functions with types that differ from those
+ * of their VirtualMachine slots, which are the ABI of external plugins.  A call
+ * through a function pointer of another type is undefined behaviour, and traps
+ * in WebAssembly, so the slots hold adapters of exactly the slot types.
+ */
+static sqInt
+proxyPrimitiveMethod(void)
+{
+	return primitiveMethod();
+}
+
+static sqInt
+proxyMakePointwithxValueyValue(sqInt xValue, sqInt yValue)
+{
+	return makePointwithxValueyValue(xValue, yValue);
+}
+
+static void
+proxyFullGC(void)
+{
+	fullGC();
+}
+
+#if VM_PROXY_MINOR > 6
+/* The interpreter's version (StackInterpreter>>ioFilename:fromString:
+ * ofLength:resolveAliases:) only calls sqGetFilenameFromString and answers
+ * nothing, but the FilePlugin tests the answer for failure, so answer the
+ * status of that conversion.  This calls sqGetFilenameFromString itself, so
+ * should that Slang method ever do more, this adapter must follow it.
+ */
+static sqInt
+proxyIoFilenamefromStringofLengthresolveAliases(char* aCharBuffer, char* filenameIndex, sqInt filenameLength, sqInt resolveFlag)
+{
+	return sqGetFilenameFromString(aCharBuffer, filenameIndex, filenameLength, resolveFlag);
+}
+#endif
+
+#if VM_PROXY_MINOR > 12 /* Spur */
+static sqInt
+proxyIsCharacterValue(int charCode)
+{
+	return isCharacterValue(charCode);
+}
+
+static sqInt
+proxyCharacterValueOf(sqInt oop)
+{
+	return characterValueOf(oop);
+}
+#endif
+
 sqInt  fetchIntegerofObject(sqInt fieldIndex, sqInt objectPointer);
 struct VirtualMachine* sqGetInterpreterProxy(void)
 {
@@ -289,7 +340,7 @@ struct VirtualMachine* sqGetInterpreterProxy(void)
 	VM->methodArgumentCount = methodArgumentCount;
 	VM->methodPrimitiveIndex = methodPrimitiveIndex;
 	VM->primitiveIndexOf = primitiveIndexOf;
-	VM->primitiveMethod = primitiveMethod;
+	VM->primitiveMethod = proxyPrimitiveMethod;
 	VM->sizeOfSTArrayFromCPrimitive = sizeOfSTArrayFromCPrimitive;
 	VM->slotSizeOf = slotSizeOf;
 	VM->stObjectat = stObjectat;
@@ -341,7 +392,7 @@ struct VirtualMachine* sqGetInterpreterProxy(void)
 	/* InterpreterProxy methodsFor: 'instance creation' */
 	VM->clone = clone;
 	VM->instantiateClassindexableSize = instantiateClassindexableSize;
-	VM->makePointwithxValueyValue = makePointwithxValueyValue;
+	VM->makePointwithxValueyValue = proxyMakePointwithxValueyValue;
 	VM->popRemappableOop = popRemappableOop;
 	VM->pushRemappableOop = pushRemappableOop;
 
@@ -349,7 +400,7 @@ struct VirtualMachine* sqGetInterpreterProxy(void)
 	VM->becomewith = becomewith;
 	VM->byteSwapped = byteSwapped;
 	VM->failed = failed;
-	VM->fullGC = fullGC;
+	VM->fullGC = proxyFullGC;
 	VM->primitiveFail = primitiveFail;
 	VM->signalSemaphoreWithIndex = signalSemaphoreWithIndex;
 	VM->success = success;
@@ -409,7 +460,7 @@ struct VirtualMachine* sqGetInterpreterProxy(void)
 #if VM_PROXY_MINOR > 6
 	VM->fetchLong32ofObject = fetchLong32ofObject;
 	VM->getThisSessionID = getThisSessionID;
-	VM->ioFilenamefromStringofLengthresolveAliases = ioFilenamefromStringofLengthresolveAliases;
+	VM->ioFilenamefromStringofLengthresolveAliases = proxyIoFilenamefromStringofLengthresolveAliases;
 	VM->vmEndianness = vmEndianness;
 #endif
 
@@ -465,9 +516,9 @@ struct VirtualMachine* sqGetInterpreterProxy(void)
 #if VM_PROXY_MINOR > 12 /* Spur */
 	VM->isImmediate = isImmediate;
 	VM->characterObjectOf = characterObjectOf;
-	VM->characterValueOf = characterValueOf;
+	VM->characterValueOf = proxyCharacterValueOf;
 	VM->isCharacterObject = isCharacterObject;
-	VM->isCharacterValue = isCharacterValue;
+	VM->isCharacterValue = proxyIsCharacterValue;
 	VM->isPinned = isPinned;
 	VM->pinObject = pinObject;
 	VM->unpinObject = unpinObject;
