@@ -7556,12 +7556,18 @@ StackInterpreter >> initializeExtraClassInstVarIndices [
 { #category : 'initialization' }
 StackInterpreter >> initializeGlobalSessionID [
 	"Initialize the globalSessionID.
+	Plugins trust a handle (e.g. a FilePlugin SQFile) only while it holds the current
+	ID, so a snapshot must not bring back the handles of a session with the same ID.
+	Seconds plus the UTC clock in milliseconds grow by 1001 a second, so sessions
+	started a millisecond apart differ until the 31 bits wrap after almost 25 days;
+	seconds plus ioMSecs, which counts from the start of the VM, repeat for sessions
+	a few seconds apart.
 	To ensure compatibility with old plugins, keep the value to a postive signed 32 bit integer"
 
 	[globalSessionID = 0] whileTrue:
 		[globalSessionID := self
-			cCode: [((self time: #NULL) + self ioMSecs) bitAnd: 16r7FFFFFFF]
-			inSmalltalk: [((self time: #NULL) + self ioMSecs) bitAnd: 16r7FFFFFFF]].
+			cCode: [((self time: #NULL) + (self ioUTCMicroseconds // 1000)) bitAnd: 16r7FFFFFFF]
+			inSmalltalk: [((self time: #NULL) + (self ioUTCMicroseconds // 1000)) bitAnd: 16r7FFFFFFF]].
 
 ]
 
