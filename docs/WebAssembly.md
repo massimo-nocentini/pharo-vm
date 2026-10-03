@@ -8,6 +8,8 @@ Two VMs are linked from the same objects:
 - a command-line VM for node, with access to the host file system, environment and exit status;
 - a VM for a Web Worker, which a static web site runs: the Console, a Smalltalk REPL with Stop, Save, Download and Upload.
 
+The site also has the world page: the Morphic world of the image in a canvas, drawn through the WebDisplayPlugin.
+
 Requirements:
 
 - Emscripten 6.0.10 (emsdk).
@@ -28,6 +30,7 @@ Engines, as Emscripten's feature matrix gives them for the default settings:
 - The pages inflate what they download with DecompressionStream (Chrome 80, Firefox 113, Safari 16.4), and say so in a browser without it, so a `wasm-legacy` build needs Chrome 95, Firefox 113 or Safari 16.4, or later.
 - The pages were tested in Chromium 153 and Firefox 155.
   Safari is untested.
+- The world page also needs OffscreenCanvas: Chrome 69, Firefox 105, Safari 17.
 
 ## Building
 
@@ -66,8 +69,12 @@ It needs no special headers (no COOP or COEP, since nothing uses SharedArrayBuff
 - `build-wasm/web/`: the static site.
   It holds the Console page (`index.html`), the web VM (`pharo-web.js`, the factory `createPharoVM`, and `pharo-web.wasm`), the scripts of the worker, the image, its `.changes` and the `.sources`, gzipped, in `image/`, the Smalltalk scripts of the pages in `st/`, and `manifest.json`, which lists the files the worker loads.
   The pages load every file with the build id in its URL (`?v=<id>`), so a new build is never mixed with a cached one.
-  The browser downloads about 23 MB: an image of about 54 MB and the 43 MB `.sources`, gzipped.
+  The browser downloads about 23 MB: an image of about 55 MB and the 43 MB `.sources`, gzipped.
+- `build-wasm/web/world.html`: the world page.
+  With the world (`WASM_WORLD=ON`, the default, and a native Pharo VM, `WASM_HOST_PHARO`), `web/` holds the world image, which is the stock image with the OSWindow-Web package and bitmap fonts, prepared at build time; both pages boot it.
+  Without it, `web/` holds the stock image, and the world page says that the build has no world image.
 - `build-wasm/image/stock/`: the unpacked Pharo 12 image (as `Pharo.image` and `Pharo.changes`, with its `.sources`); `build-wasm/image/stock.stamp` records the SHA256 of the zip it came from.
+- `build-wasm/image/web/`: `Pharo12-web.image` and `.changes`, the world image, and `OSWindow-Web.st`, the package filed out for `web-bootstrap.st`.
 - `build-wasm/host/`: the native tree that generates the sources, in `host/generated/64/{vm,plugins}`, and its VMMaker image (in `host/build/vmmaker/image`, or in `host/vmmaker-image` for a copy of `WASM_VMMAKER_IMAGE`).
 - `build-wasm/cmake/`: the CMake tree of the WebAssembly build.
 - `build-wasm/downloads/` and `build-wasm/tests-run/`: the downloaded image zip, and the scratch directory of `make wasm-check`.
@@ -108,10 +115,39 @@ Output streams as the VM writes it, and the terminal keeps the last 20000 lines.
   The other tab says that its image was replaced ("Another tab has replaced the image saved in this browser"), and stops storing its `.changes` until it saves again.
 - For screen readers, a live region next to the status pill says how the VM goes: loading, starting, ready, and how it ended.
 
+On a site built with the world, the Console links to the world page when the image can open it, and offers to save first when something was evaluated since the last save.
+An image that cannot yet (an upload of a stock image) gets the offer "Prepare for the world", which files in the OSWindow-Web package (`CodeImporter evaluateFileNamed: '/pharo/st/web-bootstrap.st'`) and saves.
+
+## The world page
+
+`world.html` boots the saved image, or the world image of the build, with `--interactive`, and the world draws itself in the canvas.
+The canvas has one pixel per CSS pixel and follows the size of the page.
+
+- The mouse buttons, the wheel and the keyboard reach the world as the events of an SDL2 window would.
+  Text typed with Shift, Option (macOS) or AltGr is text.
+  On macOS Cmd is sent as Ctrl, Pharo's shortcut key.
+  On Windows, Ctrl+Alt types the AltGr character of the key, when the key has one; elsewhere, Ctrl+Alt is a shortcut.
+- What the world copies (Ctrl/Cmd+C or X) goes to the system clipboard, and Ctrl/Cmd+V pastes the system clipboard, through the browser's paste event.
+  When the browser refuses a copy to the system clipboard, Ctrl/Cmd+V pastes the world's own copy instead, until the page loses the focus to another window or something else on the page is copied.
+- The browser keeps some keys for itself, such as Ctrl/Cmd+W, T and N.
+  Pharo's Ctrl+O, Ctrl+W would close the tab, so the page asks before it goes while the world has taken input since the last save.
+- F6 (or Shift+F6) moves the keyboard from the world to the toolbar, and Tab goes back into the world.
+- Stop (or Alt+. in the world) interrupts the busy process and opens a debugger on it.
+  When the worker then says nothing for 3 s, it is replaced, as in the Console.
+- Save asks the image to save itself, and the worker keeps it as the Console does: the next visit, here or in the Console, boots it.
+  Download gives the image and its `.changes`.
+- The canvas shows one OSWindow at a time: the newest one that has an event handler, such as the window of the Emergency Debugger, takes the canvas and the input, and the world comes back when it closes.
+- The status pill says Busy while the VM has not slept for a second, or while it does not answer at all (a long primitive).
+- The Console button opens the Console page.
+  When the world has not drawn 30 s after the VM started, or the VM ended before it drew, the notice points to the Console, which can prepare the image or reset it.
+
+The first frame came about 1 s (Chromium) to 1.6 s (Firefox) after the page was opened on localhost, and a key took 35 to 50 ms (median) to reach the canvas.
+
 ## Other targets
 
-`make wasm-check-browser` runs the Playwright spec of the Console (see Tests).
+`make wasm-check-browser` runs the Playwright specs of the pages (see Tests).
 Without Playwright (`PLAYWRIGHT_MODULE`, or a `playwright` package that node finds from `tests/wasm/lib`) it fails, and says so.
+On a build without the world image, it skips `tests/wasm/world.spec.mjs`, and says why.
 `make wasm-clean` removes the WebAssembly build (`build-wasm/cmake`, `node`, `web` and `tests-run`), and keeps the generated sources, the images and the downloads.
 `make wasm-distclean` also removes `build-wasm/host`, `build-wasm/image` and the recorded settings, and, with `WASM_CLEAN_DOWNLOADS=1`, `build-wasm/downloads`.
 
@@ -124,7 +160,8 @@ The WebAssembly tree can also be configured with CMake alone, from sources gener
     cmake --build build-wasm-cmake
 
 It stages `node/` and `web/` in its build directory, or in `WASM_STAGE_DIR`.
-Its cache variables are the settings `WASM_SJLJ`, `WASM_WEB_MEMORY64`, `WASM_STACK_SIZE`, `WASM_INITIAL_MEMORY`, `WASM_MAXIMUM_MEMORY`, `WASM_OLD_SPACE_BASE`, `WASM_SLICE_MS` and `WASM_IMAGE_ZIP` below, `CMAKE_BUILD_TYPE` (`Debug` for `WASM_DEBUG=1`), `WASM_STAGE_DIR`, and `NODE_JS_EXECUTABLE`, the node that stages `web/`.
+Its cache variables are the settings `WASM_SJLJ`, `WASM_WEB_MEMORY64`, `WASM_STACK_SIZE`, `WASM_INITIAL_MEMORY`, `WASM_MAXIMUM_MEMORY`, `WASM_OLD_SPACE_BASE`, `WASM_SLICE_MS`, `WASM_WORLD`, `WASM_IMAGE_ZIP` and `WASM_HOST_PHARO` below, `CMAKE_BUILD_TYPE` (`Debug` for `WASM_DEBUG=1`), `WASM_STAGE_DIR`, and `NODE_JS_EXECUTABLE`, the node that stages `web/`.
+`WASM_HOST_PHARO` has no default there, so the world image is prepared only when it is given.
 
 ## Settings
 
@@ -154,10 +191,12 @@ To keep two builds, give each its own `WASM_BUILDDIR`:
   The environment variable `PHARO_WASM_OLD_SPACE_BASE` overrides it when the VM starts, for example `0x40000000` for 1 GiB.
   Changing the setting recompiles the VM core.
 - `WASM_SLICE_MS`: the length of a slice of the VM in milliseconds (default `20`); `PHARO_WASM_SLICE_MS` overrides it when the VM starts.
-- `WASM_HOST_PHARO`: a native Pharo VM (not recorded).
+- `WASM_WORLD`: `ON` (the default) prepares the world image with `WASM_HOST_PHARO`, on a build that has the world, and stages it in `web/`; `OFF` stages the stock image.
+- `WASM_HOST_PHARO`: a native Pharo VM.
   By default, it is the VM that runs VMMaker: `WASM_VMMAKER_VM`, or the one that the host tree downloads, `build-wasm/host/build/vmmaker/vm/pharo`.
   With `WASM_GENERATED`, which skips the host tree, that is only `WASM_VMMAKER_VM`, or a VM left there by an earlier build of the same directory: give it otherwise.
   The lanes use it to load an image that the WebAssembly VM saved (S14b, which is skipped without it).
+  It also prepares the world image (`packaging/emscripten/st/prepare-web-image.st`, in about a second), and lanes 80 and 82 run `tests/wasm/st/osweb-native.st` and `tests/wasm/st/osweb-windows.st` with it; without it, `web/` gets the stock image.
 - `WASM_IMAGE_ZIP`: a local copy of the Pharo 12 image zip, instead of downloading it into `build-wasm/downloads`.
   Any zip holding one image, its `.changes` and a `.sources` is accepted; one that is not the pinned image gets a note with its SHA256.
 - `WASM_GENERATED`: a directory holding `generated/64`, the generated StackVM sources, which skips the host tree.
@@ -165,7 +204,7 @@ To keep two builds, give each its own `WASM_BUILDDIR`:
   The sources must come from this tree's `smalltalksrc`: the configuration refuses sources without the Emscripten hooks.
 - `WASM_VMMAKER_IMAGE`, `WASM_VMMAKER_VM`: a VMMaker image, copied with its directory into `build-wasm/host/vmmaker-image` instead of bootstrapping one, and the Pharo VM that runs it (by default the one the host tree downloads, PharoVM 10.3.1 on Linux x86_64).
   The copy is refreshed from `smalltalksrc` the first time it is used, which takes about 12 s.
-  These two are recorded in `config-host.make`: changing them configures the host tree again.
+  These two are recorded in `config-host.make`: changing them configures the host tree again, and a new `WASM_VMMAKER_VM`, through the default `WASM_HOST_PHARO`, the WebAssembly tree too, unless `WASM_HOST_PHARO` is given.
 - `WASM_PORT`: the port of `make wasm-serve` (default `8080`; not recorded).
 - `WASM_JOBS`: the jobs of the CMake builds when `make` itself runs without `-j` (default: the number of processors; not recorded); with `-jN`, they share make's job slots.
 - `WASM_CLEAN_DOWNLOADS`: `1` makes `make wasm-distclean` remove `build-wasm/downloads` too (default `0`; not recorded).
@@ -262,6 +301,26 @@ Stop calls `vm_interrupt()`, which signals the semaphore that the REPL registere
 When the image saves, the image file access handler tells the host (`Module.onPharoHost`), and after the slice the worker stores the image and its `.changes` in IndexedDB.
 The database belongs to the directory of the site: `pharo-wasm` for a site at the root of its origin, and `pharo-wasm:/dir/` for one in `/dir/`.
 The store is guarded by a per-save id, so that a tab never pairs its `.changes` with the image of another tab.
+In the Console, the worker names the file `/pharo/.pharo-web-world` in `PHARO_WEB_WORLD_FILE`, and the REPL writes there whether the image has OSWebDriver, when it starts and before it saves: so the page knows whether the image can open the world.
+
+### The world
+
+The Pharo 12 world draws itself into a Form, and the VM only blits it.
+SDL2 under Emscripten would need the DOM of the main thread, or pthreads, and the image's SDL2 driver needs the FFI.
+So the world image has the OSWindow-Web package (`packaging/emscripten/st/OSWindow-Web`): OSWebDriver, a backend window and a Form renderer, which a startUp: hook picks whenever the page gives a display.
+It has bitmap fonts, since there is no FreeType without the FFI.
+The native Pharo VM prepares it at build time, which is fast and keeps the world image independent of the VM being built; it is prepared again when a class of the package changes, comes or goes.
+
+`src/emscripten/plugins/WebDisplayPlugin.c` is a builtin plugin of 12 primitives.
+The image blits each damaged rectangle of its 32-bit Form into the frame, an RGBA copy, and presents the frame once per Morphic cycle.
+The dirty rectangles (up to 64, then their bounding box) go to the page, and the slice ends, so that the canvas shows them at once.
+The page's events come back as records of 8 integers, in a ring of 256 records, and each one signals the image's input semaphore.
+The title, the cursor (1-bit Forms, as RGBA), the clipboard and the focus go to the page as well.
+In the worker, `display-worker.js` paints the dirty rectangles, straight from the VM's memory, into the OffscreenCanvas that the page transferred to it.
+`world.js` sends it the size of the canvas and the input, which `keymap.js` maps to SDL keycodes, scancodes and modifiers.
+
+A stock image cannot open the world page: its world starts through OSSDL2Driver, which needs the FFI.
+The Console's "Prepare for the world" runs `packaging/emscripten/st/web-bootstrap.st`, which files in the package and switches the fonts, and then saves.
 
 ## Tests
 
@@ -274,17 +333,21 @@ On the machine the port was made on, they passed in under 3 minutes:
 
 | Lane | What it checks | Checks | Time |
 |---|---|---|---|
+| 05-build-rules | the rules of `GNUmakefile` and `cmake/emscripten/webimage.cmake`, in small trees where stand-ins of cmake, emcmake and the Pharo VMs log what they are asked to do: what is configured, generated or prepared again when a setting, the initial cache, a `.st` file or a class of OSWindow-Web changes, comes or goes, the guard of `WASM_BUILDDIR`, and `make wasm-check-browser`; it needs GNU make and cmake, and builds no VM | 22 steps | 4 s |
 | 10-types | `tests/wasm/check-types.sh` compiles the generated interpreter with `sqVirtualMachine.c`, `client.c` and `sqExternalSemaphores.c` as one translation unit: every interpreterProxy slot and prototype must have the interpreter's type; and both link commands of the CMake tree (Unix Makefiles or Ninja) carry `-Wl,--fatal-warnings` | 0 errors | < 1 s |
-| 20-smoke | `tests/wasm/wasm-smoke.sh`, S1 to S21 with the node VM: the exact output of `eval` and `st`, the platform, files, environment, Delays, preemption, deep recursion, a growing heap, a snapshot reloaded in WebAssembly and natively, exit statuses, time zones, the builtin plugins, the slices and where old space is placed | 27 | 23 s |
+| 20-smoke | `tests/wasm/wasm-smoke.sh`, S1 to S22 with the node VM: the exact output of `eval` and `st`, the platform, files, environment, Delays, preemption, deep recursion, a growing heap, a snapshot reloaded in WebAssembly and natively, exit statuses, time zones, the builtin plugins, the slices and where old space is placed | 28 | 23 s |
 | 22-old-space | `tests/wasm/st/oldspace-window.st`, `oldspace-regrow.st` and `permspace.st` with the node VM: old space ends in an `OutOfMemory` at the end of its window, and the young objects stored at its top survive a scavenge; a freed segment at the top is used and grown again; the perm-space primitives fail | 3 | 11 s |
 | 25-session-id | `tests/wasm/session-id.mjs`: a snapshot booted again within the same second gets a session ID of its own and refuses the old session's file handles; the C streams are flushed on exit | 8 | 2 s |
 | 30-engines | S2, S8 and S9 again, in Liftoff code only (`--liftoff-only`) with a 900 KB stack, and in a worker thread with a 1 MB stack, the stack of a browser worker; S2t checks that V8 compiled nothing with TurboFan, and fails when the V8 flags of the lane do not reach node | 8 | 16 s |
 | 40-bench | `tests/wasm/bench.sh`: the measures below, next to reference numbers; it fails when 300k-deep recursion takes 1 s, when `eval '3+4'` takes 1.5 s, or when 2 s of computing run in fewer than 10 slices | 8 | 13 s |
 | 50-prim-audit | `tests/wasm/prim-audit.mjs` reads `pharo.wasm`: the named-primitive lookup answers the trampoline tables, every primitive is called through a `() -> ()` function, every function pointer is at least 1024, nothing goes through `-sEMULATE_FUNCTION_POINTER_CASTS`, and the builtin modules are the expected ones | every row | < 1 s |
+| 55-webdisplay-unit | `tests/wasm/webdisplay-unit.c` on the frame code of the WebDisplayPlugin, then its primitives on bad arguments in the node VM | 235 + 34 | 2 s |
 | 56-memory-unit | `tests/wasm/memory-unit.c` drives `src/emscripten/memoryEmscripten.c` as Spur does, against a stub of `pharovm/pharo.h`: fixed spaces, segments that grow again where freed ones were and come back zeroed, old space that never leaves its window, and a first segment larger than the window | 55 + 2 | 1 s |
 | 60-vm-harness | `tests/wasm/vm-harness.js`: the web VM and the REPL through `vm-driver.js`, in node, with the default engine and then in Liftoff code only | 32 + 32 | 30 s |
-| 62-web-repl-regress | `tests/wasm/web-repl-regress.js`, through `vm-driver.js` as lane 60: a Stop of an evaluation that has not started yet, a Warning that nothing handles, and where a syntax error is | 3 | 3 s |
-| 70-worker-harness | `tests/wasm/worker-harness.js`: `vm-worker.js` as staged, in worker threads behind a shim of the worker globals: the protocol, Stop, output credit, the downloads, persistence, two workers on one saved image | 16 | 25 s |
+| 62-web-repl-regress | `tests/wasm/web-repl-regress.js`, through `vm-driver.js` as lane 60: a Stop of an evaluation that has not started yet, a Warning that nothing handles, where a syntax error is, and the file in which the REPL tells the page about its image | 4 | 3 s |
+| 70-worker-harness | `tests/wasm/worker-harness.js`: `vm-worker.js` as staged, in worker threads behind a shim of the worker globals: the protocol, Stop, output credit, the downloads, persistence, two workers on one saved image | 17 | 25 s |
+| 80-world-harness | `tests/wasm/keymap.test.mjs`, then `tests/wasm/world-harness.mjs`, which plays the world page in node with a memory framebuffer, and `tests/wasm/st/osweb-native.st` on the native VM | 16 + 14 + 27 | 16 s |
+| 82-osweb-windows | `tests/wasm/st/osweb-windows.st` on the native VM: a second OSWindow without an event handler leaves the world shown, and the window of the Emergency Debugger takes the canvas and the input, then gives them back | 11 | 10 s |
 
 The bench measured, on that machine with node 25.2.1:
 
@@ -307,6 +370,7 @@ The lanes take these settings:
 - `WASM_BENCH_RECURSION_MS` (1000), `WASM_BENCH_EVAL_MS` (1500) and `WASM_BENCH_SLICES` (10): the limits of the bench.
   `WASM_BENCH_BYTECODES` (100000000) and `WASM_BENCH_SENDS` (6000000) are those of the tinyBenchmarks warnings, which fail the bench only with `WASM_BENCH_STRICT=1`.
 - `WASM_CC`: the compiler of lanes 10 and 56, instead of `emcc -m64` from the PATH or `$EMSDK`; an exported `CC` or `CFLAGS` is ignored.
+  Lane 55 compiles with it too.
   Run by hand, `GEN=build-wasm/host/generated/64 sh tests/wasm/check-types.sh` takes the clang or emcc of `CC` (default `emcc -m64`), and exits 0 without errors, 1 for type errors or a failing compiler, and 2 when it cannot check (a `CC` that is not clang, or no generated interpreter in `GEN`).
 
 `run-lanes.sh` empties its `TEST_DIR` only when it is a scratch directory: the default `build-wasm/tests-run`, an empty directory, or one that it used before.
@@ -314,6 +378,8 @@ One run at a time uses a `TEST_DIR`: a second `make wasm-check` of the same buil
 The runner exits 2 when it may not use its `TEST_DIR`, or cannot make its lock there.
 
 `tests/wasm/page.spec.mjs` drives the Console in real browsers through Playwright, which is not a build dependency.
+`tests/wasm/world.spec.mjs` does the same with the world page, after it.
+It boots the world with `tests/wasm/st/world-probe.st` too, which writes `/pharo/probe.json` (the menus, windows, Playground text and debuggers of the world), and reads it through `window.PharoWorld`, which the world page gives tests: `stats` (the workers started, the frames and when they came, the times from a key to the next frame), `state` (the status pill), `unsaved` and `readFile(path)`.
 `PLAYWRIGHT_MODULE` names the Playwright package, and `BROWSERS` the browsers (default `chromium`); Playwright's own variables, such as `PLAYWRIGHT_BROWSERS_PATH`, apply:
 
     PLAYWRIGHT_MODULE=/path/to/node_modules/playwright BROWSERS=chromium,firefox make wasm-check-browser
@@ -322,7 +388,8 @@ or for one spec, on any staged site:
 
     PLAYWRIGHT_MODULE=/path/to/node_modules/playwright BROWSERS=chromium,firefox node tests/wasm/page.spec.mjs build-wasm/web
 
-The Console spec has 32 checks per browser, and passed in Chromium 153 and Firefox 155 in about 80 s.
+The Console spec has 33 checks per browser, and passed in Chromium 153 and Firefox 155 in about 80 s.
+The world spec has 25, and passed in both in about 80 s.
 `tests/wasm/pages-regress.spec.mjs` holds regression checks of the pages, and runs the same way; `make wasm-check-browser` does not run it.
 `SHOTS=1` saves screenshots of the pages, light and dark, at 1280 and 360 px, in `build-wasm/tests-run/shots`.
 
@@ -341,6 +408,9 @@ The Console spec has 32 checks per browser, and passed in Chromium 153 and Firef
 - Stop ends the evaluation, not the processes that it forked: one that never waits keeps the VM busy until Restart.
 - One image is saved per browser and site directory, shared by all its tabs and pages; the last save wins.
 - Safari is untested.
+- The world has bitmap fonts only.
+  The canvas has one pixel per CSS pixel, so it is blurred on HiDPI screens.
+  Input methods commit their text when the composition ends, touch gestures are not supported, and touch screens are untested.
 
 ## Troubleshooting
 
@@ -361,7 +431,9 @@ The Console spec has 32 checks per browser, and passed in Chromium 153 and Firef
   Build with the default, `2`.
 - The page says that the browser cannot inflate the files of Pharo: the browser has no DecompressionStream (see the engines above).
 - Firefox warns that the WebAssembly `try` instruction is deprecated: the build has `WASM_SJLJ=wasm-legacy`.
+- The world page says that the build has no world image: the build had `WASM_WORLD=OFF`, or no `WASM_HOST_PHARO`, as with `WASM_GENERATED` alone (CMake said `WASM_HOST_PHARO is not set: the world image is not prepared, and web/ gets the stock image`).
 - With `WASM_DEBUG=1`, the time checks of the lanes (S6b, S8 and the bench) and the checks of an empty stderr (S2, S13) fail: the VM is many times slower with its asserts (the lanes take over 20 minutes), and Emscripten's assertions print "Heap resize call ..." and "program exited (with status: 0), but keepRuntimeAlive() is set ..." when the image quits.
+  In lane 80, the world harness fails its keystroke median, and its cases that wait for the world (Stop, the save) can time out.
 - `run-lanes: waiting for the run N ...`: another run uses that `TEST_DIR`; if it is gone, remove the lock that the message names.
 - An `OutOfMemory` for a large object, and the VM logs `Cannot allocate N bytes of old space at P ...: old space must fit in [base, 2*base)`: raise the old-space base, for example with `PHARO_WASM_OLD_SPACE_BASE=0x40000000` (1 GiB of old space).
 - `Cannot allocate N bytes of perm space at 0x20000000000: WebAssembly memory cannot reach it (perm space is not supported)`: the image has perm space, or the VM was given `--minPermSpaceSize`; neither works in WebAssembly.

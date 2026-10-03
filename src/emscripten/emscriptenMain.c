@@ -18,7 +18,7 @@
  *
  * vm_resume() answers how the slice ended:
  *  - VM_BUSY: its time was up (PHARO_WASM_SLICE_MS, see ioHeartbeatPoll() in
- *    heartbeat.c); resume at once;
+ *    heartbeat.c), or emscriptenRequestYield() asked for it; resume at once;
  *  - VM_SLEEPING: the image is idle; resume after vm_wakeup_ms() at the
  *    latest, or as soon as there is input for it;
  *  - VM_EXITED: interpret() returned.
@@ -138,6 +138,15 @@ emscriptenRequestSleep(long long usecs)
 	wakeupUsecs = usecs;
 	yieldRequest = VM_SLEEPING;
 	forceInterruptCheck();
+}
+
+void
+emscriptenRequestYield(void)
+{
+	if (inSlice && !yieldRequest) {
+		yieldRequest = VM_BUSY;
+		forceInterruptCheck();
+	}
 }
 
 /* Every exit() of the VM, through the macro of sqPlatformSpecific.h: the

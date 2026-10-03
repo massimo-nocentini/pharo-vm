@@ -25,6 +25,7 @@ const { Worker, MessageChannel } = require('worker_threads');
 const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
+const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const zlib = require('zlib');
@@ -45,13 +46,31 @@ const sha256 = data => crypto.createHash('sha256').update(data).digest('hex');
 const memory = PharoStorage.memory();
 let storeFails = null, storeUnavailable = null;
 
+// A stand-in for display-worker.js (M2), which records what the worker does
+// with it in "display" messages
+const displayStub = path.join(fs.mkdtempSync(path.join(process.env.TEST_DIR || os.tmpdir(), 'worker-harness-')),
+                              'display-worker.js');
+fs.writeFileSync(displayStub, `
+var PharoDisplay = {
+  create(init, post) {
+    post({ type: 'display', kind: 'created', init });
+    return { open() {}, present() {}, setTitle() {}, setCursor() {}, setClipboard() {}, focus() {},
+             handle(m, vm) { post({ type: 'display', kind: 'handle', what: m.kind, state: vm.state(), dead: vm.dead }); } };
+  },
+  onMessage(m, vm) {
+    vm.kick();
+    self.postMessage({ type: 'display', kind: 'handled', what: m.what, state: vm.state() });
+  },
+};
+`);
+
 // (In a block: vm-worker.js shares the global scope of this script.)
 const prelude = `
   'use strict';
   {
   const { parentPort, workerData } = require('worker_threads');
   const fs = require('fs'), path = require('path'), vm = require('vm');
-  const { dir, url, storePort } = workerData;
+  const { dir, url, overrides, storePort } = workerData;
   globalThis.self = globalThis;
   self.location = new URL(url);
   globalThis.require = require;               // emscripten's node support
@@ -76,7 +95,7 @@ const prelude = `
   const store = { get: key => call('get', [key]), write: (e, guard) => call('write', [e, guard]),
                   clear: () => call('clear', []) };
   globalThis.importScripts = (...files) => files.forEach(p => {
-    const name = p.split('?')[0], file = path.join(dir, name);
+    const name = p.split('?')[0], file = overrides[name] || path.join(dir, name);
     vm.runInThisContext(fs.readFileSync(file, 'utf8'), { filename: file });
     if (name === 'vm-storage.js') PharoStorage.backend = store;
   });
@@ -151,7 +170,7 @@ const sessions = [];
 
 // One worker.  `autoAck' acks every output message, as the page does after
 // rendering it.
-function session(init = {}, { autoAck = true, encodeGzip = false } = {}) {
+function session(init = {}, { autoAck = true, encodeGzip = false, display = false } = {}) {
   const n = ++sessionCount;
   const s = { n, msgs: [], out: '', err: '', states: [], progress: [], ready: null, exit: null, crash: null,
               saved: [], superseded: 0, files: [], ticks: 0, error: null, diag: '', log: [],
@@ -170,7 +189,7 @@ function session(init = {}, { autoAck = true, encodeGzip = false } = {}) {
   s.w = new Worker(prelude, {
     eval: true, stdout: true, stderr: true,
     workerData: { dir: webDir, url: base + 's' + n + '/vm-worker.js?v=' + encodeURIComponent(manifest.build),
-                  storePort: store.port2 },
+                  overrides: display ? { 'display-worker.js': displayStub } : {}, storePort: store.port2 },
     transferList: [store.port2],
     resourceLimits: { stackSizeMb: 1 },
   });
@@ -228,7 +247,7 @@ function session(init = {}, { autoAck = true, encodeGzip = false } = {}) {
     () => s.msgs.find(m => m.id === id && (m.type === type || m.type === 'error')), ms);
   s.close = () => s.w.terminate();
   s.post(Object.assign({ type: 'init', wasmModule, manifestUrl: 'manifest.json?v=' + encodeURIComponent(manifest.build),
-                         build: manifest.build, persist: true }, init));
+                         build: manifest.build, mode: 'console', persist: true }, init));
   current = s;
   sessions.push(s);
   return s;
@@ -270,14 +289,15 @@ const sourcesName = manifest.files.find(f => f.path.endsWith('.sources')).path;
     assert(p[p.length - 1].phase === 'boot', 'boot comes last');
     const r = S.ready;
     assert(r.image === '/pharo/' + imageName && r.source === 'download' && r.persisted === false &&
-           !r.storageError, 'ready ' + JSON.stringify(r));
+           r.world === !!manifest.world && r.prepared === !!manifest.world && !r.storageError,
+           'ready ' + JSON.stringify(r));
     assert(S.out === 'st> ', 'output ' + JSON.stringify(S.out));
     for (const f of manifest.files) assert(fetched(S, f.path), f.path + ' fetched');
     for (const st of manifest.st) assert(S.log.includes('/' + st), st + ' fetched');
   });
   if (!S || !S.ready) { console.log('cannot continue'); process.exit(1); }
 
-  await check('2 3+4 gives 7; an error goes to fd 2', async () => {
+  await check('2 3+4 gives 7; an error goes to fd 2; WebDisplay is not available', async () => {
     S.send('3+4\n');
     await S.prompt();
     assert(S.since() === '7\nst> ', 'output ' + JSON.stringify(S.since()));
@@ -285,6 +305,9 @@ const sourcesName = manifest.files.find(f => f.path.endsWith('.sources')).path;
     await S.prompt();
     assert(/^Error: MessageNotUnderstood/.test(S.errSince()), 'stderr ' + JSON.stringify(S.errSince()));
     assert(S.msgsSince().some(m => m.type === 'output' && m.fd === 2), 'output {fd: 2}');
+    S.send('(Smalltalk at: #OSWebDriver ifAbsent: [ nil ]) ifNil: [ #none ] ifNotNil: [ :c | c isSuitable ]\n');
+    await S.prompt();
+    assert(S.since() === (manifest.world ? 'false' : '#none') + '\nst> ', 'output ' + JSON.stringify(S.since()));
   });
 
   await check('3 input sent before ready is evaluated after it', async () => {
@@ -447,7 +470,7 @@ const sourcesName = manifest.files.find(f => f.path.endsWith('.sources')).path;
     assert(S.since() === 'a SnapshotOperation\nst> ', 'output ' + JSON.stringify(S.since()));
     await waitFor('saved', () => S.saved.length, 30000);
     const m = S.saved[0];
-    assert(!m.error && m.bytes > 1e7, 'saved ' + JSON.stringify(m));
+    assert(!m.error && m.bytes > 1e7 && m.prepared === !!manifest.world, 'saved ' + JSON.stringify(m));
     const meta = memory.map.get('meta');
     assert(meta && meta.image === 'Pharo.image' && meta.imageSize === m.bytes && meta.build === manifest.build,
            'meta ' + JSON.stringify(meta));
@@ -515,12 +538,14 @@ const sourcesName = manifest.files.find(f => f.path.endsWith('.sources')).path;
     try {
       await waitFor('ready', () => U.ready || U.crash || U.error, 60000);
       U.alive();
-      assert(U.ready.source === 'upload' && U.ready.persisted === false, 'ready ' + JSON.stringify(U.ready));
+      assert(U.ready.source === 'upload' && U.ready.persisted === false && U.ready.prepared === !!manifest.world,
+             'ready ' + JSON.stringify(U.ready));
       assert(!memory.map.size, 'nothing stored before the first prompt');
       await U.prompt(60000);
       await waitFor('saved {upload}', () => U.saved.length, 30000);
       const m = U.saved[0];
-      assert(m.upload === true && !m.error && m.bytes === saved.length, 'saved ' + JSON.stringify(m));
+      assert(m.upload === true && !m.error && m.bytes === saved.length && m.prepared === !!manifest.world,
+             'saved ' + JSON.stringify(m));
       assert(U.msgs.indexOf(m) > U.msgs.findIndex(x => x.type === 'state' && x.state === WAITING), 'after the first WAITING');
       assert(!fetched(U, imageName) && !fetched(U, changesName), 'nothing fetched for the image');
       U.send('Smalltalk at: #HarnessMarker\n');
@@ -568,8 +593,29 @@ const sourcesName = manifest.files.find(f => f.path.endsWith('.sources')).path;
     } finally { await E.close(); }
   });
 
-  await check('14 two workers on one slot: once one saves, the other stops storing its .changes', async () => {
-    // Two tabs of the Console: the image of a slot reads its
+  await check('14 init.display: PharoDisplay gives the webDisplay and handles the display messages', async () => {
+    const W = session({ persist: false, display: { canvas: 'stub' } }, { display: true });
+    try {
+      await W.started();
+      const created = W.msgs.find(m => m.type === 'display' && m.kind === 'created');
+      assert(created && created.init.canvas === 'stub', 'created ' + JSON.stringify(created));
+      assert(W.msgs.indexOf(created) < W.msgs.indexOf(W.ready), 'created before ready');
+      // the display gets the driver before the first slice, whatever the page sends
+      const attach = W.msgs.find(m => m.type === 'display' && m.kind === 'handle');
+      assert(attach && attach.what === 'attach' && attach.state === 0 && attach.dead === false &&
+             W.msgs.indexOf(attach) < W.msgs.indexOf(W.ready), 'attach ' + JSON.stringify(attach));
+      W.mark();
+      W.post({ type: 'display', what: 'ping' });
+      const handled = await waitFor('handled', () => W.msgsSince().find(m => m.type === 'display' && m.kind === 'handled'));
+      assert(handled.what === 'ping', 'handled ' + JSON.stringify(handled));
+      W.send('(Smalltalk at: #OSWebDriver ifAbsent: [ nil ]) ifNil: [ #none ] ifNotNil: [ :c | c isSuitable ]\n');
+      await W.prompt();
+      assert(W.since() === (manifest.world ? 'true' : '#none') + '\nst> ', 'output ' + JSON.stringify(W.since()));
+    } finally { await W.close(); }
+  });
+
+  await check('15 two workers on one slot: once one saves, the other stops storing its .changes', async () => {
+    // Two tabs, or the Console and the world: the image of a slot reads its
     // sources at offsets of its own .changes, so the .changes of a VM that
     // runs an older image must not replace it
     memory.map.clear();
@@ -651,7 +697,7 @@ const sourcesName = manifest.files.find(f => f.path.endsWith('.sources')).path;
     }
   });
 
-  await check('15 a database that cannot be opened: ready {storageError}; Save says Download; the REPL goes on', async () => {
+  await check('16 a database that cannot be opened: ready {storageError}; Save says Download; the REPL goes on', async () => {
     storeUnavailable = Object.assign(new Error('The operation is insecure.'), { name: 'InvalidStateError', unavailable: true });
     const N = session();
     try {
@@ -670,7 +716,7 @@ const sourcesName = manifest.files.find(f => f.path.endsWith('.sources')).path;
     } finally { storeUnavailable = null; await N.close(); }
   });
 
-  await check('16 vm-storage.js: guarded writes, a fresh id per save, meta, a load during a save, an IndexedDB that fails to open', async () => {
+  await check('17 vm-storage.js: guarded writes, a fresh id per save, meta, a load during a save, an IndexedDB that fails to open', async () => {
     const m = PharoStorage.memory(), st = PharoStorage.open(m), bytes = n => new Uint8Array(n);
     assert(await st.meta() === null, 'no meta in an empty store');
     const a = await st.save(bytes(3), bytes(2), { build: 'x' });
@@ -714,6 +760,7 @@ const sourcesName = manifest.files.find(f => f.path.endsWith('.sources')).path;
       console.log(`not ok - engine error in session ${s.n}: ` + text.match(ENGINE_ERRORS)[0]);
     }
   }
+  fs.rmSync(path.dirname(displayStub), { recursive: true, force: true });
   console.log(`# ${passes} passed, ${failures} failed, ${passes + failures} cases in ` +
               ((now() - t0) / 1000).toFixed(1) + ' s');
   process.exit(failures ? 1 : 0);

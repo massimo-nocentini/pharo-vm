@@ -8,8 +8,9 @@
 # and crash, the download of the manifest with and without gzip, the
 # persistence of the image (save, restore without a fetch, the .changes,
 # a failing store, upload, reset, two workers sharing the slot, a database
-# that cannot be opened).  An engine-level failure on its stderr fails the
-# lane too.  The harness is stopped after 600 s.
+# that cannot be opened) and the M2 display extension point.  An
+# engine-level failure on its stderr fails the lane too.  The harness is
+# stopped after 600 s.
 #
 # Environment (from make wasm-check): NODE, WASM_DIR, SRCDIR, TEST_DIR.
 

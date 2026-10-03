@@ -11,7 +11,7 @@
 // it ready, and every slice is a call of _vm_resume(), which answers how the
 // slice ended.  The driver runs them: soon (schedule) when the slice was
 // merely over (BUSY), after _vm_wakeup_ms() (later) when the image is idle
-// (SLEEPING).  Input and Stop cut such a sleep short.  Exports are
+// (SLEEPING).  Input, Stop and kick() cut such a sleep short.  Exports are
 // called only between slices, and the driver keeps no view of the memory,
 // which a memory growth detaches: exports take and answer numbers only.
 //
@@ -21,13 +21,14 @@
 // rejects only when the module fails to load or instantiate, calling no
 // callback.  begin() runs the first slice, which loads the image.  Options:
 //
-//   args         the VM's arguments (default vmArgs())
+//   args         the VM's arguments (default vmArgs('console'))
 //   files        [{path, data}] written into MEMFS before main() runs, with
 //                the directories they need; data is a Uint8Array or a string
 //   cwd          the working directory (default '/pharo', created)
 //   thisProgram  argv[0] (default '/pharo/pharo': the VM's directory is /pharo)
 //   env          {name: value} added to the environment of the VM
 //   sliceMs      the time slice in ms (default PHARO_WASM_SLICE_MS of the build)
+//   config       more properties of the emscripten Module (M2: webDisplay)
 //   wasmModule   a precompiled WebAssembly.Module (optional)
 //   locateFile   emscripten's locateFile hook (optional)
 //   schedule(f)  run f soon, as a macrotask, so that JS events get a turn
@@ -81,11 +82,12 @@
 
   const encoder = new TextEncoder();
 
-  // The arguments of the VM for the page: the REPL of web-repl.st (filed in
-  // at every boot, so without logging its source to the .changes again each
-  // time), on image (default /pharo/Pharo.image).
-  function vmArgs(image) {
+  // The arguments of the VM for the modes of the pages: 'console', the REPL
+  // of web-repl.st (filed in at every boot, so without logging its source
+  // to the .changes again each time), and 'world', the Morphic world.
+  function vmArgs(mode, image) {
     image = image || '/pharo/Pharo.image';
+    if (mode === 'world') return ['--headless', image, '--no-default-preferences', '--interactive'];
     return ['--headless', image, '--no-default-preferences', 'st', '--no-source', '/pharo/st/web-repl.st'];
   }
 
@@ -204,8 +206,8 @@
       finish('onCrash', [message, stack, stacks]);
     }
 
-    const opts = {
-      arguments: o.args || vmArgs(),
+    const opts = Object.assign({}, o.config, {
+      arguments: o.args || vmArgs('console'),
       thisProgram: o.thisProgram || '/pharo/pharo',
       print: t => diag(t + '\n'),
       printErr: t => diag(t + '\n'),
@@ -235,7 +237,7 @@
         Object.assign(FS.getStream(1).stream_ops, { write: writer(1) });
         Object.assign(FS.getStream(2).stream_ops, { write: writer(2) });
       }],
-    };
+    });
     if (o.locateFile) opts.locateFile = o.locateFile;
     let loadFailed;
     const loadFailure = new Promise((_, reject) => { loadFailed = reject; });
@@ -270,7 +272,7 @@
         inputArrived();
       },
       // Stop: signal the semaphore the image registered with the WebHostPlugin
-      // (WebRepl).  Answers whether there was one.  Not from
+      // (WebRepl, OSWebDriver).  Answers whether there was one.  Not from
       // onOutput, which runs inside a slice.
       interrupt() {
         if (dead) return false;
@@ -280,6 +282,8 @@
         runSoon();
         return registered;
       },
+      // run a slice soon, e.g. after an event given to the VM through an export
+      kick() { runSoon(); },
       // canRun() may answer true again
       resumeOutput() { if (!dead && last === BUSY) runSoon(); },
       // what the last slice reported: RUNNING before the first, EXITED once dead

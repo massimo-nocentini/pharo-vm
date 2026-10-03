@@ -1,7 +1,8 @@
 # Staging of the Emscripten build
 #
-# Emscripten.cmake includes this file last, once the executables and the
-# stock image (download.cmake) are defined.  It defines the targets
+# Emscripten.cmake includes this file last, once the executables, the stock
+# image (download.cmake) and the optional image of the world (webimage.cmake)
+# are defined.  It defines the targets
 #
 #     wasm-node-stage  - ${WASM_STAGE_DIR}/node: pharo.js, pharo.wasm and
 #                        the launcher pharo (packaging/emscripten/node/launch.sh.in)
@@ -12,6 +13,9 @@
 #                        (gzipped) in image/, the st files in st/ and
 #                        manifest.json.  It always runs, and rewrites only what
 #                        changed.
+#
+# web/ gets the image of the world when webimage.cmake defines its target
+# wasm-web-image, and the stock image otherwise.
 
 set(PHARO_WASM_NODE_DIR "${WASM_STAGE_DIR}/node")
 set(PHARO_WASM_WEB_DIR "${WASM_STAGE_DIR}/web")
@@ -56,6 +60,11 @@ set(PHARO_WASM_STAGE_ARGUMENTS
     --git "${PharoVM_VERSION_GIT_SHA}"
     --stock-image "${WASM_STOCK_IMAGE_DIR}"
     --st "${PHARO_WASM_ST_SOURCE_DIR}/web-repl.st")
+if(TARGET wasm-web-image)
+    list(APPEND PHARO_WASM_STAGE_ARGUMENTS
+        --world-image "${WASM_WEB_IMAGE_DIR}"
+        --world-st "${PHARO_WASM_ST_SOURCE_DIR}/web-bootstrap.st")
+endif()
 
 add_custom_target(wasm-web-stage ALL
     COMMAND "${NODE_JS_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/tools/stage.mjs"
@@ -63,3 +72,6 @@ add_custom_target(wasm-web-stage ALL
     COMMENT "Staging ${PHARO_WASM_WEB_DIR}"
     VERBATIM)
 add_dependencies(wasm-web-stage pharo-web wasm-stock-image)
+if(TARGET wasm-web-image)
+    add_dependencies(wasm-web-stage wasm-web-image)
+endif()

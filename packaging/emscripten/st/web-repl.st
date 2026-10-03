@@ -2,7 +2,7 @@
 
 	--headless /pharo/Pharo.image --no-default-preferences st --no-source /pharo/st/web-repl.st
 
- (PharoVMDriver.vmArgs() of packaging/emscripten/web/vm-driver.js), so this
+ (PharoVMDriver.vmArgs('console') of packaging/emscripten/web/vm-driver.js), so this
  script is filed in at every boot, also of an image that was saved from the page, and
  its source is not logged to the .changes each time.  It defines the class WebRepl and
  starts it.
@@ -21,6 +21,10 @@
 
  The page's Stop calls vm_interrupt(), which signals the semaphore that WebRepl
  registered with the WebHostPlugin: the evaluation that runs is terminated.
+
+ The page offers to open the world when the image has OSWindow-Web: its worker names
+ a file in PHARO_WEB_WORLD_FILE, where WebRepl writes whether the image has OSWebDriver
+ when it starts and before the image is saved.
 
  The page's stdin is a terminal that never blocks a read.  The script runs natively too,
  e.g. pharo --headless <image> st web-repl.st < input, but there is no Stop there."
@@ -43,6 +47,11 @@ start
 	EvalProcess := EvalDone := nil.
 	AtPrompt := false.
 	self handleErrors.
+	"Before every save: see noteWorld"
+	SessionManager default
+		unregisterClassNamed: self name;
+		registerUserClassNamed: self name.
+	self noteWorld.
 	InterruptSemaphore ifNotNil: [ :old | Smalltalk unregisterExternalObject: old ].
 	semaphore := InterruptSemaphore := Semaphore new.
 	self primSetInterruptSemaphore: (Smalltalk registerExternalObject: semaphore).
@@ -90,6 +99,12 @@ report: anException
 
 	self write: (self describe: anException) , String lf on: Stdio stderr.
 	AtPrompt == true ifTrue: [ self prompt ]! !
+
+!WebRepl class methodsFor: 'system startup'!
+shutDown: quitting
+	"The image is about to be saved, or to quit"
+
+	self noteWorld! !
 
 !WebRepl class methodsFor: 'private'!
 decode: aByteArray
@@ -184,6 +199,20 @@ loop: generation
 	(self isCurrent: generation) ifFalse: [ ^ self ].
 	self write: String lf on: Stdio stdout.
 	Smalltalk snapshot: false andQuit: true!
+
+noteWorld
+	"Write whether the image has OSWindow-Web, true or false, to the file that the page's worker
+	 names in PHARO_WEB_WORLD_FILE, if it names one.  The worker reads it once the REPL prompted, or
+	 the image saved itself, and else looks for the name of the class in the bytes of the image"
+
+	| file |
+	file := (Smalltalk os environment at: 'PHARO_WEB_WORLD_FILE' ifAbsent: [ ^ self ])
+		asFileReference.
+	[	file ensureDelete.
+		file writeStreamDo: [ :stream |
+			stream nextPutAll: (Smalltalk hasClassNamed: #OSWebDriver) printString ] ]
+		on: Error
+		do: [ :error | error return ]!
 
 prompt
 	"Also take the errors of the other processes back: an evaluation may have saved the image"

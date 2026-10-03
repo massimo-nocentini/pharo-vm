@@ -1,5 +1,5 @@
 #!/bin/sh
-# 20-smoke - the node CLI against the smoke checks S1-S21 (wasm-smoke.sh)
+# 20-smoke - the node CLI against the smoke checks S1-S22 (wasm-smoke.sh)
 #
 # build-wasm/node/pharo, the VM for node (memory64), on fresh copies of the
 # stock image: exact stdout of eval and st, the platform it reports, files,
@@ -7,7 +7,8 @@
 # save and reload in wasm and natively, exit statuses, time zones, the
 # builtin plugins, the slices of the return-to-host driver and the
 # placement of old space.  S14b, the reload on a native VM, needs
-# HOST_PHARO; without it, it is skipped, with the reason.
+# HOST_PHARO, and S22 the prepared image of the world (build-wasm/image/web);
+# without them they are skipped, with the reason.
 #
 # Environment (from make wasm-check): NODE, WASM_DIR, HOST_PHARO, SRCDIR,
 # TEST_DIR; and WASM_CHECK_TIMEOUT and WASM_CHECK_TRIES (see wasm-smoke.sh).

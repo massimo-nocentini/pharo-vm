@@ -31,8 +31,8 @@
 // blocked database): the callers report it, it is never fatal.  When the
 // database cannot be used at all, the error has `unavailable' set.
 //
-// Several pages may run at once (two tabs of the Console, say), and
-// share the slot.  The image of a slot reads its method sources
+// Several pages may run at once (two Console tabs, the Console and the
+// world) and share the slot.  The image of a slot reads its method sources
 // at offsets of its own .changes, so only the page that booted from a slot
 // or saved it may store its .changes again: syncChanges(changes, meta)
 // writes only while meta, which load or save answered, is still the slot,

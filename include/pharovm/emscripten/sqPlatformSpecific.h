@@ -50,6 +50,8 @@ extern void ioReturnToHostIfRequested(void);
 extern void emscriptenSliceCheck(double nowMs);
 /* The image is idle: end the slice and resume it after usecs at the latest. */
 extern void emscriptenRequestSleep(long long usecs);
+/* End the slice at the next event check, e.g. so that the host shows a frame. */
+extern void emscriptenRequestYield(void);
 /* The depth of callbacks into the image from host code; never return to the
  * host from inside one (always 0 while there is no FFI).
  */

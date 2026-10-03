@@ -5,7 +5,7 @@
 // WEB_DIR holds pharo-web.js and pharo-web.wasm (build-wasm/web), IMAGE_DIR
 // the stock image with its .changes and .sources (build-wasm/image/stock).
 // Every session boots a copy of the image in MEMFS as the Console page does:
-// /pharo/Pharo.image with the arguments of vmArgs(), which file in
+// /pharo/Pharo.image with the arguments of vmArgs('console'), which file in
 // packaging/emscripten/st/web-repl.st of this tree.  Prints every case and
 // their count, and exits with status 1 if any fails.  Lane 60
 // (tests/wasm/lanes/60-vm-harness.sh) runs it once in default node and once
@@ -94,7 +94,7 @@ async function session(opts = {}) {
     if (s.throwNext[name] > 0) { s.throwNext[name]--; throw new Error('injected ' + name); }
   };
   s.drv = await Driver.start(createPharoVM, {
-    args: opts.args || Driver.vmArgs(),
+    args: opts.args || Driver.vmArgs('console'),
     files: opts.files || consoleFiles(),
     sliceMs: opts.sliceMs,
     wasmModule: opts.noPrecompiled ? undefined : wasmModule,
@@ -583,11 +583,11 @@ const val = v => new RegExp('(^|> )' + v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') 
       return { path: '/pharo/' + f.path, data };
     });
     files.push({ path: '/pharo/st/web-repl.st', data: replSource });
-    const X = await session({ args: Driver.vmArgs('/pharo/' + manifest.image), files });
+    const X = await session({ args: Driver.vmArgs('console', '/pharo/' + manifest.image), files });
     await X.prompt();
-    X.send('3 + 4\n');
+    X.send('(Smalltalk hasClassNamed: #OSWebDriver) -> (3 + 4)\n');
     await X.prompt();
-    assert(X.since() === '7\nst> ', 'output ' + JSON.stringify(X.since()));
+    assert(X.since() === `${!!manifest.world}->7\nst> `, 'output ' + JSON.stringify(X.since()));
     X.drv.eof();
     await X.ended();
     assert(X.exit && X.exit.code === 0, 'onExit(0)');

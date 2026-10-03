@@ -35,7 +35,9 @@ set(WASM_INITIAL_MEMORY "32MB" CACHE STRING "Initial size of the memory; it must
 set(WASM_MAXIMUM_MEMORY "4GB" CACHE STRING "Maximum size of the memory")
 set(WASM_OLD_SPACE_BASE "0x20000000" CACHE STRING "Address of old space, a power of two above new space (PHARO_WASM_OLD_SPACE_BASE overrides it)")
 set(WASM_SLICE_MS "20" CACHE STRING "Length of a slice of the VM in milliseconds (PHARO_WASM_SLICE_MS overrides it)")
+option(WASM_WORLD "Prepare the image of the Pharo world for web/ (needs WASM_HOST_PHARO)" ON)
 set(WASM_IMAGE_ZIP "" CACHE FILEPATH "The Pharo 12 image zip, instead of downloading it")
+set(WASM_HOST_PHARO "" CACHE FILEPATH "A native Pharo VM, which prepares the image of the world")
 set(WASM_STAGE_DIR "${CMAKE_CURRENT_BINARY_DIR}" CACHE PATH "Where node/ and web/ are staged")
 
 if(NOT NODE_JS_EXECUTABLE)
@@ -255,8 +257,10 @@ macro(add_third_party_dependencies_per_platform)
     target_link_libraries(pharo-web ${VM_LIBRARY_NAME} ${PHARO_WASM_BUILTIN_PLUGINS})
     pharo_wasm_link_executable(pharo-web ${PHARO_WASM_WEB_LINK_FLAGS})
 
-    # The stock image, then node/ and web/
+    # The stock image, the image of the world (needs WASM_HOST_PHARO), then
+    # node/ and web/
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/emscripten/download.cmake)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/emscripten/webimage.cmake)
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/emscripten/stage.cmake)
 endmacro()
 

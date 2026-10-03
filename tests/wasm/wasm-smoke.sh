@@ -3,7 +3,7 @@
 #
 # usage: sh tests/wasm/wasm-smoke.sh [LANE ...]
 #
-#   default  every check, S1-S21, with build-wasm/node/pharo (memory64)
+#   default  every check, S1-S22, with build-wasm/node/pharo (memory64)
 #   liftoff  the checks that stress the engine, S2, S8 and S9, with Liftoff
 #            code only (--liftoff-only) and a 900 KB stack
 #            (NODE_OPTIONS_WASM), and S2t, which checks that V8 compiled no
@@ -22,7 +22,8 @@
 # does, as --no-wasm-dynamic-tiering added to them would.)
 #
 # Environment (from make wasm-check, see run-lanes.sh):
-#   WASM_DIR    the build directory: node/pharo and image/stock
+#   WASM_DIR    the build directory: node/pharo, image/stock and, for S22,
+#               the prepared image of the world in image/web
 #   TEST_DIR    a scratch directory; every check runs in a directory of its
 #               own there, on a fresh copy of the image, which is removed
 #               when the check passes
@@ -301,7 +302,7 @@ on the host: written by Pharo' s4
 	"[Smalltalk os environment at: 'WASM_T' put: 'x'. #set] on: Error do: [:e | #unsupported]"
 
     # the 13 plugins of the tree, and one for each src/emscripten/plugins/*.c
-    # (WebHostPlugin)
+    # (WebHostPlugin, then WebDisplayPlugin)
     modules=13
     for f in "$SRCDIR"/src/emscripten/plugins/*.c; do
 	if test -f "$f"; then modules=$((modules + 1)); fi
@@ -351,6 +352,14 @@ on the host: written by Pharo' s4
     fresh S21b
     expect_error S21b 'Invalid PHARO_WASM_OLD_SPACE_BASE 0x30000000: old space needs a power of two' \
 	s21 0x30000000
+
+    # the image of the world (WP11), which boots headless as the stock one
+    if test -f "$WASM_DIR/image/web/Pharo12-web.image"; then
+	fresh S22 "$WASM_DIR/image/web"
+	expect S22 '#(7 false)' $P eval '{3 + 4. OSWebDriver isSuitable}'
+    else
+	skip_check S22 "no prepared image in $WASM_DIR/image/web (WASM_WORLD=OFF or no WASM_HOST_PHARO)"
+    fi
 }
 
 # How each lane starts the VM (node_trace: V8 flags of S2t)

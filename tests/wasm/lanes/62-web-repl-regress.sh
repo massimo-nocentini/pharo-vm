@@ -5,8 +5,9 @@
 # packaging/emscripten/web/vm-driver.js, on copies of the stock image with
 # the REPL of packaging/emscripten/st/web-repl.st, as lane 60 does: a Stop
 # of an evaluation that did not start yet, a Warning that nothing handles,
-# and where a syntax error is.  An engine-level failure on its stderr fails
-# the lane too.
+# where a syntax error is, and the file that tells the Console page whether
+# the image can open the world.  An engine-level failure on its stderr
+# fails the lane too.
 #
 # Environment (from make wasm-check): NODE, WASM_DIR, SRCDIR, TEST_DIR.
 

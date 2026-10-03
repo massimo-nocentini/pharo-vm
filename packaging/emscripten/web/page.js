@@ -24,9 +24,10 @@
 //   that crashes or quits before is not, and Restart boots the saved image
 //   again.  When the saved image itself does not start, the notice offers
 //   Reset next to Restart.
-// - While a save is being stored, or code was changed that the saved image
-//   has not (the worker says "edited"), the browser asks before the page
-//   goes.
+// - The world page boots the saved image: when something was evaluated
+//   since it was saved, its link offers to Save first.  While a save is
+//   being stored, or code was changed that the saved image has not (the
+//   worker says "edited"), the browser asks before the page goes.
 // - The status pill is no live region: the one next to it says how the VM
 //   goes (loading, starting, ready, ended), not how far the loading got, nor
 //   the state of every evaluation, which the terminal, a log, tells.
@@ -44,6 +45,7 @@
   const PROMPT = 'st> ';
   const AT_PROMPT = /(^|\n)st> $/;
   const SAVE = 'Smalltalk snapshot: true andQuit: false';
+  const BOOTSTRAP = "CodeImporter evaluateFileNamed: '/pharo/st/web-bootstrap.st'";
 
   const BUILD = (document.querySelector('meta[name="pharo-build"]') || {}).content || '';
   const Q = BUILD && BUILD.indexOf('@') < 0 ? '?v=' + encodeURIComponent(BUILD) : '';
@@ -247,11 +249,13 @@
 
   let worker = null, gen = 0, ready = false, alive = false, prompted = false, state = null;
   let lastMsgAt = 0, watchdog = 0, eofSent = false, loadedText = 'Loading';
-  let unavailable = null;
+  let world = false, prepared = false, unavailable = null;
   let persisted = false;                // an image is saved in this browser (ready, saved, Reset)
-  // what the slot lacks: code changed (the worker's "edited"), a save not
-  // stored yet
-  let edited = false, storing = false;
+  // what the slot lacks: input evaluated since this VM started or was saved,
+  // code changed (the worker's "edited"), a save not stored yet
+  let evaluated = false, edited = false, storing = false;
+  let afterSave = null;                 // what to do once the next save is stored
+  let leaving = false;                  // the page goes, and asked first
   let upload = null;                    // {image, changes} to boot until the worker keeps it
   let source = null;                    // where the image of the worker came from (ready)
   const reqs = new Map();
@@ -291,6 +295,7 @@
     $('reset').disabled = !(worker && persisted);
     $('upload-btn').disabled = !!unavailable;
     $('restart').disabled = !!unavailable;
+    $('world').hidden = !(world && prepared);
   }
 
   // The notice under the terminal: text, a button doing action, if any, and
@@ -349,7 +354,8 @@
     worker = null;
     alive = ready = false;
     state = null;
-    edited = storing = false;
+    evaluated = edited = storing = false;
+    afterSave = null;
     for (const r of reqs.values()) r.reject(new Error('the VM was restarted'));
     reqs.clear();
     ackChars = 0;
@@ -403,6 +409,7 @@
       wasmModule: mod,
       manifestUrl: 'manifest.json' + Q,
       build: BUILD,
+      mode: 'console',
       persist: true,
       upload: upload || undefined,
     });
@@ -431,6 +438,8 @@
 
   function onReady(m) {
     ready = true;
+    world = m.world;
+    prepared = m.prepared;
     persisted = m.persisted;
     source = m.source;
     if (m.source === 'saved')
@@ -438,6 +447,8 @@
     else if (m.source === 'upload')
       note('Started the uploaded image.');
     if (m.storageError) note('Note: ' + m.storageError + '.');
+    if (world && !prepared)
+      showNotice('This image cannot open the Pharo world yet.', 'Prepare for the world', prepareWorld);
     updateControls();
     if (!touch && document.activeElement !== line) line.focus();
     updateStatus();
@@ -482,15 +493,24 @@
     case 'saved': {
       // the upload that this worker booted (m.upload), or an image it saved
       storing = false;
+      const then = afterSave;
+      afterSave = null;
       if (m.error) {
         showNotice((m.upload ? 'The uploaded image runs, but ' : 'Saved, but ') + m.error + '.', 'Download', download);
       } else {
         upload = null;                  // the slot holds this VM's image now
         persisted = true;
-        if (!m.upload)
+        // the REPL said, which the bytes of an upload may not have told
+        const unprepared = world && prepared && !m.prepared;
+        prepared = m.prepared;
+        if (!m.upload) {
+          evaluated = false;
           showNotice('The image is saved in this browser (' + mb(m.bytes) + ').', null, null, 6000);
-        else
+        } else if (unprepared)
+          showNotice('This image cannot open the Pharo world yet.', 'Prepare for the world', prepareWorld);
+        else if ($('notice').hidden)    // e.g. not over the offer to prepare it for the world
           showNotice('The uploaded image is now kept in this browser.', null, null, 6000);
+        if (then && !m.upload) then();
       }
       updateControls();
       break;
@@ -569,7 +589,7 @@
     worker.postMessage({ type: 'eof' });
   }
 
-  // ---- Save, Download, Upload, Reset
+  // ---- Save, Download, Upload, Reset, and the world
 
   function echo(text) {
     emit('in', text + '\n');
@@ -637,8 +657,32 @@
     restart();
   }
 
+  // File in OSWindow-Web (st/web-bootstrap.st), then save: the world page
+  // boots the saved image
+  function prepareWorld() {
+    if (!worker || !alive || !ready) return;
+    hideNotice();
+    echo(BOOTSTRAP);
+    worker.postMessage({ type: 'input', text: BOOTSTRAP + '\n' });
+    save();
+  }
+
+  // The world page boots the saved image: offer to save first what this
+  // VM did since
+  const lacking = () => !!worker && alive && ready && (evaluated || edited || storing);
+  function openWorld() {
+    leaving = true;
+    location.assign($('world').href);
+  }
+  $('world').addEventListener('click', e => {
+    if (!lacking() || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    showNotice('The world starts from the image saved in this browser, which lacks what you did here since it was saved.',
+               'Save, then open the world', () => { afterSave = openWorld; save(); }, 0,
+               { label: 'Open it without saving', action: openWorld });
+  });
   addEventListener('beforeunload', e => {
-    if (!worker || !(storing || (alive && edited))) return;
+    if (leaving || !worker || !(storing || (alive && edited))) return;
     e.preventDefault();
     e.returnValue = '';                 // older browsers ask for it
   });
@@ -665,6 +709,7 @@
     }
     histIdx = history.length;
     draft = '';
+    if (text.trim()) evaluated = true;
     // a chunk is evaluated at its LF: the line breaks within go as CRs
     worker.postMessage({ type: 'input', text: text.replace(/\r\n?|\n/g, '\r') + '\n' });
     line.value = '';

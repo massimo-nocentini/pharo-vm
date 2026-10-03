@@ -43,14 +43,68 @@
 //                      TEST_DIR/shots (default WEB_DIR/../tests-run/shots)
 //
 // The usual Playwright variables apply (PLAYWRIGHT_BROWSERS_PATH, ...).
+//
+// decodePNG(buffer) answers {width, height, data} with data the RGBA bytes
+// of a PNG, such as a screenshot of a canvas.
 
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import zlib from 'node:zlib';
 
 const require = createRequire(import.meta.url);
 const { handler } = await import(new URL('../../../packaging/emscripten/tools/serve.mjs', import.meta.url));
+
+export function decodePNG(buffer) {
+  const b = Buffer.from(buffer);
+  if (b.readUInt32BE(0) !== 0x89504e47) throw new Error('not a PNG');
+  let at = 8, width = 0, height = 0, depth = 0, type = 0, interlace = 0;
+  const idat = [];
+  while (at < b.length) {
+    const length = b.readUInt32BE(at), kind = b.toString('latin1', at + 4, at + 8), data = b.subarray(at + 8, at + 8 + length);
+    if (kind === 'IHDR') {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      depth = data[8];
+      type = data[9];
+      interlace = data[12];
+    } else if (kind === 'IDAT') idat.push(data);
+    else if (kind === 'IEND') break;
+    at += 12 + length;
+  }
+  const channels = { 0: 1, 2: 3, 4: 2, 6: 4 }[type];
+  if (depth !== 8 || !channels || interlace) throw new Error(`unsupported PNG (depth ${depth}, type ${type}, interlace ${interlace})`);
+  const raw = zlib.inflateSync(Buffer.concat(idat)), stride = width * channels;
+  const pixels = Buffer.alloc(stride * height);
+  for (let y = 0; y < height; y++) {
+    const filter = raw[y * (stride + 1)], row = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
+    const out = y * stride, up = out - stride;
+    for (let x = 0; x < stride; x++) {
+      const a = x >= channels ? pixels[out + x - channels] : 0;
+      const u = y ? pixels[up + x] : 0;
+      const c = x >= channels && y ? pixels[up + x - channels] : 0;
+      let v = row[x];
+      if (filter === 1) v += a;
+      else if (filter === 2) v += u;
+      else if (filter === 3) v += (a + u) >> 1;
+      else if (filter === 4) {
+        const p = a + u - c, pa = Math.abs(p - a), pb = Math.abs(p - u), pc = Math.abs(p - c);
+        v += pa <= pb && pa <= pc ? a : pb <= pc ? u : c;
+      }
+      pixels[out + x] = v & 255;
+    }
+  }
+  const data = Buffer.alloc(width * height * 4);
+  for (let i = 0, j = 0; i < width * height; i++, j += channels) {
+    const g = pixels[j];
+    data[i * 4] = channels >= 3 ? pixels[j] : g;
+    data[i * 4 + 1] = channels >= 3 ? pixels[j + 1] : g;
+    data[i * 4 + 2] = channels >= 3 ? pixels[j + 2] : g;
+    data[i * 4 + 3] = channels === 4 ? pixels[j + 3] : channels === 2 ? pixels[j + 1] : 255;
+  }
+  return { width, height, data };
+}
 
 export async function run(spec) {
   const pw = require(process.env.PLAYWRIGHT_MODULE || 'playwright');

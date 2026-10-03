@@ -339,6 +339,27 @@ await run(async t => {
     await evalTo('Smalltalk at: #PageMarker', /\n777\nst> $/);
   });
 
+  // An image without OSWindow-Web, the stock one of the build, is offered
+  // the preparation for the world page
+  const stock = path.join(t.webDir, '..', 'image', 'stock');
+  const stockImage = manifest.world && fs.existsSync(stock) && fs.readdirSync(stock).find(f => f.endsWith('.image'));
+  if (stockImage) await check('Prepare for the world: an uploaded stock image gets OSWindow-Web, saved', async () => {
+    assert(await page.isHidden('#world') === false, 'the world image links to the world');
+    await mark();
+    accept();                           // replace the saved image
+    await page.setInputFiles('#upload', [path.join(stock, stockImage), path.join(stock, stockImage.replace(/\.image$/, '.changes'))]);
+    await waitSince(/Started the uploaded image[\s\S]*st> $/, 90000);
+    await waitStatus('waiting');
+    await page.waitForFunction(() => /cannot open the Pharo world/.test(document.getElementById('notice-text').textContent));
+    assert(await page.isHidden('#world'), 'no world link yet');
+    await page.click('#notice-action');
+    await page.waitForFunction(() => /saved in this browser/.test(document.getElementById('notice-text').textContent),
+                               null, { timeout: 120000 });
+    assert(await page.isVisible('#world'), 'the world link is shown');
+    await waitStatus('waiting');
+    await evalTo('Smalltalk hasClassNamed: #OSWebDriver', /\ntrue\nst> $/);
+  });
+
   await check('a saved image that does not start: the notice offers Reset next to Restart', async () => {
     // the image of the slot, cut short, as by a broken save
     await page.evaluate(async () => {

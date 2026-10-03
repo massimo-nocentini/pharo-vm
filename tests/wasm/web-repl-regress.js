@@ -5,14 +5,16 @@
 // As vm-harness.js: WEB_DIR holds pharo-web.js and pharo-web.wasm
 // (build-wasm/web), IMAGE_DIR the stock image with its .changes and .sources
 // (build-wasm/image/stock), and each session boots a copy of the image in
-// MEMFS with the arguments of vmArgs(), which file in
+// MEMFS with the arguments of vmArgs('console'), which file in
 // packaging/emscripten/st/web-repl.st of this tree.  The checks:
 //
 // - a Stop that lands on an evaluation that did not start yet, queued
 //   behind a process of its priority that an earlier line forked, still
 //   lets the REPL go on (it used to wait for that evaluation for good);
 // - a Warning that nothing handles is reported, and the evaluation goes on;
-// - a syntax error says where it is, and which variable is not declared.
+// - a syntax error says where it is, and which variable is not declared;
+// - the REPL writes PHARO_WEB_WORLD_FILE, whether the image has OSWebDriver,
+//   when it starts and before the image is saved.
 //
 // Prints every case and their count, and exits with status 1 if any fails.
 // Lane 62 (tests/wasm/lanes/62-web-repl-regress.sh) runs it.
@@ -30,6 +32,7 @@ const { WAITING } = Driver;
 const wasmModule = new WebAssembly.Module(fs.readFileSync(path.join(webDir, 'pharo-web.wasm')));
 const replSource = fs.readFileSync(path.join(srcDir, 'packaging', 'emscripten', 'st', 'web-repl.st'));
 const ENGINE_ERRORS = /RuntimeError|RangeError|Aborted|unreachable|signature_mismatch|unsupported syscall/;
+const WORLD_FILE = '/pharo/.pharo-web-world';
 
 const only = (dir, ext) => {
   const names = fs.readdirSync(dir).filter(f => f.endsWith(ext));
@@ -71,13 +74,14 @@ async function waitFor(what, pred, ms = 30000) {
 // One VM: `all' has its output (both fds, in order), `out' and `err' that
 // of fd 1 and fd 2; send() starts a new window for since(), outSince() and
 // errSince()
-async function session() {
+async function session(env) {
   const s = { all: '', out: '', err: '', states: [], exit: null, crash: null, diag: '',
               markAt: 0, outAt: 0, errAt: 0, stateAt: 0 };
   const dec = { 1: new TextDecoder(), 2: new TextDecoder() };
   s.drv = await Driver.start(createPharoVM, {
-    args: Driver.vmArgs(),
+    args: Driver.vmArgs('console'),
     files,
+    env: env || {},
     wasmModule,
     schedule: f => setImmediate(f),
     later: (f, ms) => setTimeout(f, ms),
@@ -129,7 +133,10 @@ async function check(name, f) {
 function assert(c, msg) { if (!c) throw new Error('assertion failed: ' + msg); }
 
 (async () => {
-  const S = await session();
+  const S = await session({ PHARO_WEB_WORLD_FILE: WORLD_FILE });
+  const worldFile = () => {
+    try { return new TextDecoder().decode(S.drv.FS.readFile(WORLD_FILE)); } catch (e) { return null; }
+  };
 
   await check('1 a Stop of an evaluation that did not start yet does not wedge the REPL', async () => {
     // Line 1 forks a busy process at the priority of the evaluations, and a
@@ -192,6 +199,21 @@ function assert(c, msg) { if (!c) throw new Error('assertion failed: ' + msg); }
       await S.prompt();
       assert(S.errSince() === report, JSON.stringify(input) + ': ' + JSON.stringify(S.errSince()));
     }
+  });
+
+  await check('4 PHARO_WEB_WORLD_FILE: whether the image has OSWebDriver, at the start and when saved', async () => {
+    assert(worldFile() === 'false', 'at the start: ' + JSON.stringify(worldFile()));
+    // defined and saved in one evaluation: the file is written before the save
+    S.send("(Object << #OSWebDriver package: 'RegressWorld') install. Smalltalk snapshot: true andQuit: false. " +
+           "(FileSystem workingDirectory / '.pharo-web-world') contents\n");
+    await S.prompt(60000);
+    assert(/'true'\nst> $/.test(S.since()), 'output ' + JSON.stringify(S.since()));
+    assert(worldFile() === 'true', 'after the save: ' + JSON.stringify(worldFile()));
+    // without the variable, nothing is written
+    const N = await session({});
+    try {
+      assert(!N.drv.FS.analyzePath(WORLD_FILE).exists, 'no file without PHARO_WEB_WORLD_FILE');
+    } finally { current = S; }
   });
 
   for (const s of sessions) {

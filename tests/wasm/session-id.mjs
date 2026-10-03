@@ -115,7 +115,7 @@ async function boot(name, image, changes, base) {
   const dec = { 1: new TextDecoder(), 2: new TextDecoder() };
   const own = clock = { base, from: null };
   s.drv = await Driver.start(createPharoVM, {
-    args: Driver.vmArgs(),
+    args: Driver.vmArgs('console'),
     files: files(image, changes),
     wasmModule,
     schedule: f => setImmediate(f),

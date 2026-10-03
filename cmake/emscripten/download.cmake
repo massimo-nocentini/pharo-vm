@@ -10,12 +10,14 @@
 #                         image and .changes as Pharo.image and Pharo.changes,
 #                         whatever their names in the zip, and its .sources
 #
-# and sets WASM_STOCK_IMAGE_DIR for stage.cmake.  The target runs on every
-# build, and does something only when the zip, or image/stock, changed:
-# image/stock.stamp records the SHA256 and the path of the zip unpacked.
-# The zip is checked against its SHA256 (any zip given as WASM_IMAGE_ZIP is
-# accepted), and unpacked again when it differs from that one or a file of
-# image/stock is missing.
+# and sets WASM_STOCK_IMAGE_DIR and WASM_STOCK_IMAGE_DEPENDS (the target and
+# the image) for webimage.cmake and stage.cmake.  The fixed names keep the
+# paths a configuration records valid when the zip changes.  The target runs
+# on every build, and does something only when the zip, or image/stock,
+# changed: image/stock.stamp records the SHA256 and the path of the zip
+# unpacked.  The zip is checked against its SHA256 (any zip given as
+# WASM_IMAGE_ZIP is accepted), and unpacked again when it differs from that
+# one or a file of image/stock is missing.
 #
 # At build time the same file runs as a script:
 #
@@ -164,3 +166,4 @@ add_custom_target(wasm-stock-image ALL
     BYPRODUCTS "${WASM_STOCK_IMAGE_DIR}/Pharo.image" "${WASM_STOCK_IMAGE_DIR}/Pharo.changes"
                "${PHARO_WASM_STOCK_IMAGE_STAMP}"
     VERBATIM)
+set(WASM_STOCK_IMAGE_DEPENDS wasm-stock-image "${WASM_STOCK_IMAGE_DIR}/Pharo.image")

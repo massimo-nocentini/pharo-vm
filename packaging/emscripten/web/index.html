@@ -220,6 +220,7 @@ button, input, textarea { font: inherit; color: inherit; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
 .btn.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
 .btn.danger svg { color: var(--bad); }
+.btn.world { border-color: var(--accent); color: var(--accent); }
 
 main { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-top: 12px; }
 
@@ -322,8 +323,8 @@ code { font-family: var(--mono); font-size: .92em; }
 
 @media (max-width: 760px) {
   .brand p { display: none; }
-  .toolbar .label { display: none; }
-  .toolbar .btn { padding: 0 9px; }
+  .toolbar .label, .top .label { display: none; }
+  .toolbar .btn, .top .btn { padding: 0 9px; }
   .hints { display: none; }
   #term { padding: 10px 12px 4px; font-size: 13px; }
 }
@@ -357,6 +358,9 @@ code { font-family: var(--mono); font-size: .92em; }
       </div>
     </a>
     <span class="grow"></span>
+    <a class="btn world" id="world" href="world.html" hidden title="Open the Morphic world of the image saved in this browser">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg><span class="label">Open the Pharo world</span>
+    </a>
     <span id="status" class="pill" data-state="loading">
       <span class="dot" aria-hidden="true"></span><span id="status-text">Loading</span>
     </span>

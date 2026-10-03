@@ -7,7 +7,7 @@
 #   make wasm                 build-wasm/node/pharo, the VM for node, and
 #                             build-wasm/web/, the site of the browser VM
 #   make wasm-check           the node test lanes (tests/wasm/lanes)
-#   make wasm-check-browser   the Playwright spec (Playwright from
+#   make wasm-check-browser   the Playwright specs (Playwright from
 #                             PLAYWRIGHT_MODULE, or found by node)
 #   make wasm-serve           serves build-wasm/web on WASM_PORT (8080)
 #   make wasm-clean           removes the wasm build, keeping build-wasm/host,
@@ -75,6 +75,7 @@ WASM_INITIAL_MEMORY ?= 32MB
 WASM_MAXIMUM_MEMORY ?= 4GB
 WASM_OLD_SPACE_BASE ?= 0x20000000
 WASM_SLICE_MS ?= 20
+WASM_WORLD ?= ON
 # offline builds: the Pharo 12 image zip, the generated sources (a directory
 # holding generated/64), or the VMMaker image and the Pharo VM that runs it
 WASM_IMAGE_ZIP ?=
@@ -224,8 +225,8 @@ VMMAKER_VM := $(W)/host/build/vmmaker/vm/pharo
 HOST_VMMAKER_FLAGS += -DGENERATE_PHARO_VM=
 endif
 
-# The generated sources, and the native Pharo VM that runs the snapshot lane
-# (the VMMaker VM by default)
+# The generated sources, and the native Pharo VM that prepares the image of
+# the world and runs the snapshot lane (the VMMaker VM by default)
 ifeq ($(WASM_GENERATED),)
 GEN := $(W)/host
 GEN_STAMP := $(W)/host/.generated
@@ -247,7 +248,9 @@ WASM_CMAKE_FLAGS = \
   -DWASM_MAXIMUM_MEMORY=$(WASM_MAXIMUM_MEMORY) \
   -DWASM_OLD_SPACE_BASE=$(WASM_OLD_SPACE_BASE) \
   -DWASM_SLICE_MS=$(WASM_SLICE_MS) \
+  -DWASM_WORLD=$(WASM_WORLD) \
   "-DWASM_IMAGE_ZIP=$(IMAGE_ZIP)" \
+  "-DWASM_HOST_PHARO=$(HOST_PHARO)" \
   -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
   "-DGENERATED_SOURCE_DIR=$(GEN)" \
   "-DWASM_STAGE_DIR=$(W)" \
@@ -286,8 +289,10 @@ $(W)/config.make: FORCE | $(W)/.make-wasm
 	  echo "WASM_MAXIMUM_MEMORY = $(WASM_MAXIMUM_MEMORY)"; \
 	  echo "WASM_OLD_SPACE_BASE = $(WASM_OLD_SPACE_BASE)"; \
 	  echo "WASM_SLICE_MS = $(WASM_SLICE_MS)"; \
+	  echo "WASM_WORLD = $(WASM_WORLD)"; \
 	  echo "WASM_IMAGE_ZIP = $(IMAGE_ZIP)"; \
-	  echo "WASM_GENERATED = $(if $(WASM_GENERATED),$(GEN))"; } >$@.tmp
+	  echo "WASM_GENERATED = $(if $(WASM_GENERATED),$(GEN))"; \
+	  echo "WASM_HOST_PHARO = $(HOST_PHARO)"; } >$@.tmp
 	@if cmp -s $@.tmp $@; then rm $@.tmp; else mv $@.tmp $@ && echo "make wasm: settings recorded in $@"; fi
 
 $(W)/config-host.make: FORCE | $(W)/.make-wasm
@@ -299,8 +304,8 @@ $(W)/config-host.make: FORCE | $(W)/.make-wasm
 
 # The wasm build: configured again when a setting or the initial cache
 # changes.  (CMake configures it again itself when a plugin of
-# src/emscripten/plugins comes or goes.)  The knobs come before -C, so that
-# the initial cache sees them.
+# src/emscripten/plugins, or a class of the OSWindow-Web package, comes or
+# goes.)  The knobs come before -C, so that the initial cache sees them.
 # (The stamps of the two trees are touched only once CMake succeeded.)
 $(W)/cmake/.configured: $(W)/config.make $(SRCDIR)/cmake/Emscripten.cache.cmake | $(GEN_STAMP)
 	$(EMCMAKE) $(CMAKE) -S $(SRCDIR) -B $(W)/cmake $(WASM_CMAKE_FLAGS) -C $(SRCDIR)/cmake/Emscripten.cache.cmake
@@ -358,18 +363,25 @@ wasm-check: wasm
 	env NODE="$(NODE)" WASM_DIR="$(W)" GEN="$(GEN)/generated/64" HOST_PHARO="$(HOST_PHARO)" \
 	  SRCDIR="$(SRCDIR)" TEST_DIR="$(W)/tests-run" sh $(SRCDIR)/tests/wasm/run-lanes.sh
 
-# Playwright is no dependency of the build: the spec loads PLAYWRIGHT_MODULE,
+# Playwright is no dependency of the build: the specs load PLAYWRIGHT_MODULE,
 # or the playwright package that node finds from tests/wasm/lib, and the goal
-# fails without either.
+# fails without either.  world.spec.mjs needs the image of the world, which a
+# build without one (WASM_WORLD=OFF, or no host Pharo) skips, as lane 80 does.
 wasm-check-browser: wasm
 	@if test -z "$$PLAYWRIGHT_MODULE" && ! (cd $(SRCDIR)/tests/wasm/lib && \
 	    $(NODE) -e 'require.resolve("playwright")') >/dev/null 2>&1; then \
-	  echo "make wasm-check-browser: the browser spec needs Playwright: set PLAYWRIGHT_MODULE (and BROWSERS), e.g." >&2; \
+	  echo "make wasm-check-browser: the browser specs need Playwright: set PLAYWRIGHT_MODULE (and BROWSERS), e.g." >&2; \
 	  echo "  PLAYWRIGHT_MODULE=/path/to/node_modules/playwright BROWSERS=chromium,firefox make wasm-check-browser" >&2; \
-	  echo "(the spec is tests/wasm/page.spec.mjs)" >&2; \
+	  echo "(the specs are tests/wasm/page.spec.mjs and tests/wasm/world.spec.mjs)" >&2; \
 	  exit 1; \
 	fi
 	$(NODE) $(SRCDIR)/tests/wasm/page.spec.mjs $(W)/web
+	@if grep -q '"world": *true' $(W)/web/manifest.json; then \
+	  echo "$(NODE) $(SRCDIR)/tests/wasm/world.spec.mjs $(W)/web"; \
+	  $(NODE) $(SRCDIR)/tests/wasm/world.spec.mjs $(W)/web; \
+	else \
+	  echo "skip world.spec.mjs: $(W)/web/manifest.json has no world image (WASM_WORLD=OFF, or no host Pharo to prepare it)"; \
+	fi
 
 wasm-serve: wasm
 	$(NODE) $(SRCDIR)/packaging/emscripten/tools/serve.mjs $(W)/web $(WASM_PORT)

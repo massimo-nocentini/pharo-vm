@@ -9,9 +9,9 @@
 #   limit SECONDS CMD ...  CMD (a command, not a function), stopped after SECONDS
 #   copy_image FROM DIR    a copy of the image in directory FROM as DIR/Pharo.image
 #                          and DIR/Pharo.changes, with a link to its .sources
-#   fresh NAME             starts check NAME in a directory of its own,
-#                          TEST_DIR/<lane>-NAME, on a fresh copy of the stock
-#                          image (WASM_DIR/image/stock); the directory of the
+#   fresh NAME [FROM]      starts check NAME in a directory of its own,
+#                          TEST_DIR/<lane>-NAME, on a fresh copy of the image in
+#                          FROM (WASM_DIR/image/stock); the directory of the
 #                          check before is removed, unless that check failed
 #                          (which keeps it, less an unchanged image)
 #   measure FILE ARG ...   pharo.js in this node with ARG ... as its command
@@ -169,7 +169,7 @@ fresh() {
     check_dir=$TEST_DIR/$lane-$1
     rm -rf "$check_dir"
     mkdir -p "$check_dir" && cd "$check_dir" || exit 1
-    copy_image "$WASM_DIR/image/stock" "$check_dir"
+    copy_image "${2:-$WASM_DIR/image/stock}" "$check_dir"
 }
 
 finish() {

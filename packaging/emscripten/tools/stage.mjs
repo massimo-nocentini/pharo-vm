@@ -2,6 +2,7 @@
 //
 //   node stage.mjs --out <web dir> --module <pharo-web.js> --stock-image <dir>
 //        [--web <dir>] [--memory64 1|2] [--git <sha>] [--st <file>]...
+//        [--world-image <dir> [--world-st <file>]...]
 //
 // cmake/emscripten/stage.cmake runs it on every build.  It writes
 //
@@ -9,11 +10,13 @@
 //                              with @BUILD@ replaced by the build id in the
 //                              text files (for ?v=@BUILD@ cache busting)
 //   pharo-web.js, .wasm        the web module (--module)
-//   image/Pharo.image.gz       the stock image (--stock-image), its changes
-//   image/Pharo.changes.gz     and its .sources, gzipped (zlib level 9,
-//   image/<name>.sources.gz    deterministic)
-//   st/<file>                  the --st files
-//   manifest.json              {build, files, image, memory64, st}
+//   image/Pharo.image.gz       the image, its changes and its .sources,
+//   image/Pharo.changes.gz     gzipped (zlib level 9, deterministic); the
+//   image/<name>.sources.gz    image of the world from --world-image when
+//                              it has one, the stock one otherwise
+//   st/<file>                  the --st files, and with the world image its
+//                              OSWindow-Web.st and the --world-st files
+//   manifest.json              {build, files, image, memory64, st, world}
 //
 // The build id is the git sha, a dash and the first 12 hex digits of a
 // SHA256 over everything staged, so it changes whenever a staged file does.
@@ -25,6 +28,7 @@
 //          gzSize the size of the download
 //   image  the name of the image to boot, "Pharo.image"
 //   st     ["st/<file>", ...]: each file is at that url, and goes to /pharo/st
+//   world  true when the image is the image of the world
 //
 // Only files whose contents change are rewritten, and a file is gzipped
 // again only when its SHA256 changes.  Files of an earlier staging that are
@@ -41,6 +45,7 @@ const TEXT_EXTENSIONS = new Set(['.css', '.htm', '.html', '.js', '.json', '.mjs'
                                  '.webmanifest']);
 const IMAGE = 'Pharo.image';
 const CHANGES = 'Pharo.changes';
+const WORLD_IMAGE = 'Pharo12-web.image';
 
 const fail = (message) => {
   process.stderr.write(`stage.mjs: ${message}\n`);
@@ -48,10 +53,10 @@ const fail = (message) => {
 };
 
 const parseArguments = (argv) => {
-  const options = { st: [], memory64: '2', git: '' };
+  const options = { st: [], worldSt: [], memory64: '2', git: '' };
   const single = { '--out': 'out', '--web': 'web', '--module': 'module', '--memory64': 'memory64',
-                   '--git': 'git', '--stock-image': 'stockImage' };
-  const many = { '--st': 'st' };
+                   '--git': 'git', '--stock-image': 'stockImage', '--world-image': 'worldImage' };
+  const many = { '--st': 'st', '--world-st': 'worldSt' };
   for (let i = 0; i < argv.length; i++) {
     const name = argv[i];
     if (i + 1 >= argv.length || !(name in single || name in many)) fail(`bad argument ${name}`);
@@ -102,7 +107,9 @@ const main = async () => {
   const options = parseArguments(process.argv.slice(2));
   const out = resolve(options.out);
 
-  const image = imageFiles(options.stockImage);
+  // Which image: the world's when there is one
+  const world = !!options.worldImage && existsSync(join(options.worldImage, WORLD_IMAGE));
+  const image = imageFiles(world ? options.worldImage : options.stockImage);
 
   // What is staged: [path in web/, source, kind], kind being text (@BUILD@
   // replaced), copy or gzip
@@ -115,7 +122,9 @@ const main = async () => {
   entries.push([basename(module).replace(/\.js$/, '.wasm'), module.replace(/\.js$/, '.wasm'), 'copy']);
   const files = [[IMAGE, image.image], [CHANGES, image.changes], [basename(image.sources), image.sources]];
   for (const [name, source] of files) entries.push([`image/${name}.gz`, source, 'gzip']);
-  for (const file of options.st) {
+  const st = [...options.st];
+  if (world) st.push(join(options.worldImage, 'OSWindow-Web.st'), ...options.worldSt);
+  for (const file of st) {
     if (existsSync(file)) entries.push([`st/${basename(file)}`, file, 'copy']);
     else process.stderr.write(`stage.mjs: warning: ${file} does not exist, web/ goes without it\n`);
   }
@@ -126,7 +135,7 @@ const main = async () => {
     const data = readFileSync(source);
     inputs.set(rel, { data, sha256: sha256(data) });
   }
-  const digest = sha256([`memory64 ${options.memory64}`,
+  const digest = sha256([`memory64 ${options.memory64}`, `world ${world}`,
                          ...[...inputs].map(([rel, { sha256 }]) => `${rel} ${sha256}`).sort()].join('\n'));
   const build = (options.git ? `${options.git}-` : '') + digest.slice(0, 12);
 
@@ -182,6 +191,7 @@ const main = async () => {
     image: IMAGE,
     memory64: Number(options.memory64),
     st: entries.filter(([rel]) => rel.startsWith('st/')).map(([rel]) => rel).sort(),
+    world,
   });
   write('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2) + '\n', 'utf8'));
 

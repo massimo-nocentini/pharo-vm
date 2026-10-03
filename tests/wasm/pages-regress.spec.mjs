@@ -1,10 +1,10 @@
-// pages-regress.spec.mjs - regression checks of the Console page
+// pages-regress.spec.mjs - regression checks of the Console and world pages
 //
 // usage: node pages-regress.spec.mjs WEB_DIR
 //
-// A plain node script, like page.spec.mjs, which it does not repeat:
-// tests/wasm/lib/pw.mjs serves WEB_DIR and drives the page in each browser
-// named by BROWSERS (default "chromium"), with Playwright from
+// A plain node script, like page.spec.mjs and world.spec.mjs, which it does
+// not repeat: tests/wasm/lib/pw.mjs serves WEB_DIR and drives the pages in
+// each browser named by BROWSERS (default "chromium"), with Playwright from
 // PLAYWRIGHT_MODULE.  Run it by hand after a change of packaging/emscripten/web
 // or packaging/emscripten/st:
 //
@@ -14,9 +14,10 @@
 // page is hidden (no animation frames), the .changes stored soon after an
 // evaluation, the questions before the page goes, Reset after a failed boot,
 // two sites of one origin, a database connection that the browser closed,
-// and a browser without DecompressionStream.  The checks that make a page
-// fail on purpose do so in contexts of their own, whose errors are not
-// counted.
+// and a browser without DecompressionStream.  The world, when WEB_DIR has
+// it: its progress bar and live region, F6 and Tab, a refused clipboard
+// write, and a world that does not open.  The checks that make a page fail
+// on purpose do so in contexts of their own, whose errors are not counted.
 // Exits with status 1 if any check fails.
 
 import fs from 'node:fs';
@@ -25,7 +26,8 @@ import { run } from './lib/pw.mjs';
 
 // The init script of every context: document.hidden as the spec says
 // (__hide, __show), and no animation frames while hidden, as in a
-// background tab; the texts of the live region as they come
+// background tab; the texts of the live region and the values of the
+// progress bar as they come
 const INIT = () => {
   let hidden = false, queued = [];
   Object.defineProperty(Document.prototype, 'hidden', { configurable: true, get: () => hidden });
@@ -44,15 +46,18 @@ const INIT = () => {
   // from the start of the document, which the scripts of the page change
   // before DOMContentLoaded
   window.__said = [];
-  let said = '';
+  window.__progress = [];
+  let said = '', progress = null;
   new MutationObserver(() => {
-    const live = document.getElementById('status-live');
+    const live = document.getElementById('status-live'), bar = document.getElementById('loading');
     if (live && live.textContent !== said) window.__said.push(said = live.textContent);
+    if (bar && bar.tagName === 'DIV' && bar.getAttribute('aria-valuenow') !== progress)
+      window.__progress.push(progress = bar.getAttribute('aria-valuenow'));
   }).observe(document, { childList: true, characterData: true, attributes: true, subtree: true });
 };
 
 await run(async t => {
-  const { page, check, assert, base } = t;
+  const { page, check, assert, manifest, base } = t;
   await t.context.addInitScript(INIT);
 
   // ---- helpers on a Console page p
@@ -204,6 +209,23 @@ await run(async t => {
     assert(!dialogs.length, 'dialogs ' + dialogs);
   });
 
+  if (manifest.world) await check('Console: the world link offers to save first; the world then has the evaluation', async () => {
+    assert(await page.isVisible('#world'), 'the world link');
+    await evalIn(page, 'Smalltalk at: #PagesRegressMark put: 55', /\n55\nst> $/);
+    await page.click('#world');
+    await noticeSays(page, /lacks what you did here since it was saved/, 5000);
+    const labels = await page.evaluate(() => ['notice-action', 'notice-alt'].map(id => document.getElementById(id))
+                                         .filter(b => !b.hidden).map(b => b.textContent));
+    assert(JSON.stringify(labels) === '["Save, then open the world","Open it without saving"]', 'buttons ' + JSON.stringify(labels));
+    assert(/index\.html$/.test(page.url()), 'still on the Console');
+    await page.click('#notice-action');
+    await page.waitForURL(/world\.html$/, { timeout: 120000 });
+    await page.waitForFunction(() => window.PharoWorld && window.PharoWorld.stats.frames > 0, null, { timeout: 120000 });
+    await page.goto(base + 'index.html');
+    await started(page);
+    await evalIn(page, 'Smalltalk at: #PagesRegressMark ifAbsent: [ #none ]', /\n55\nst> $/);
+  });
+
   await check('Console: Reset deletes the saved image also after a boot that could not fetch the manifest', async () => {
     const context = await fresh();
     try {
@@ -278,7 +300,7 @@ await run(async t => {
     } finally { await context.close(); }
   });
 
-  await check('without DecompressionStream the page says so instead of crashing', async () => {
+  await check('without DecompressionStream the pages say so instead of crashing', async () => {
     const context = await fresh();
     try {
       await context.addInitScript(() => { delete window.DecompressionStream; });
@@ -286,6 +308,148 @@ await run(async t => {
       await p.goto(base + 'index.html');
       await waitState(p, 'error', 10000);
       assert(/DecompressionStream/.test(await p.textContent('#notice-text')), 'Console: ' + await p.textContent('#notice-text'));
+      if (manifest.world) {
+        await p.goto(base + 'world.html');
+        await waitState(p, 'error', 10000);
+        assert(/DecompressionStream/.test(await p.textContent('#notice-text')), 'world: ' + await p.textContent('#notice-text'));
+        assert(await p.isHidden('#notice-link'), 'no link to a Console that cannot run either');
+      }
+      await p.close();
+    } finally { await context.close(); }
+  });
+
+  if (!manifest.world) { console.log('  # no world image: the checks of the world page are skipped'); return; }
+
+  // ---- the world
+
+  // keeps the messages that world.js posts to its worker, and lets the spec
+  // post one to the page as the worker would
+  const WORKERS = () => {
+    window.__posted = [];
+    const W = window.Worker;
+    window.Worker = class extends W {
+      constructor(...a) { super(...a); window.__worker = this; }
+      postMessage(m, transfer) { window.__posted.push(m && m.type === 'display' ? { kind: m.kind, text: m.text } : null); return super.postMessage(m, transfer); }
+    };
+  };
+  const framed = p => p.waitForFunction(() => window.PharoWorld && window.PharoWorld.stats.frames > 0, null, { timeout: 120000 });
+
+  await check('world: the progress bar has values, the live region says loading, starting, running', async () => {
+    const context = await fresh();
+    try {
+      const p = await context.newPage();
+      t.watch(p);
+      await p.goto(base + 'world.html');
+      await framed(p);
+      const values = (await p.evaluate(() => window.__progress)).filter(v => v !== null).map(Number);
+      assert(values.length >= 5 && values.every(v => v >= 0 && v <= 100) && Math.max(...values) >= 99,
+             'aria-valuenow ' + JSON.stringify(values.slice(0, 10)) + '...');
+      await p.waitForFunction(() => document.getElementById('status-live').textContent === 'The Pharo world is running');
+      const said = await p.evaluate(() => window.__said);
+      assert(JSON.stringify(said) === '["Loading Pharo","Starting Pharo","The Pharo world is running"]', 'said ' + JSON.stringify(said));
+      const pill = await p.$eval('#status', e => [e.getAttribute('role'), e.getAttribute('aria-live')]);
+      assert(!pill[0] && !pill[1], 'the pill ' + JSON.stringify(pill));
+
+      // F6 leaves the world for the toolbar; Tab goes back into it
+      await p.waitForFunction(() => document.activeElement && document.activeElement.id === 'sink');
+      await p.keyboard.press('F6');
+      assert(await p.evaluate(() => document.activeElement.id) === 'stop', 'F6 went to ' + await p.evaluate(() => document.activeElement.id));
+      let at = '';
+      for (let i = 0; i < 6 && at !== 'sink'; i++) {
+        await p.keyboard.press('Tab');
+        at = await p.evaluate(() => document.activeElement.id);
+      }
+      assert(at === 'sink', 'Tab went to ' + at);
+      await p.close();
+    } finally { await context.close(); }
+  });
+
+  await check('world: after a refused clipboard write, a paste keeps the image\'s copy, until the page lost the focus', async () => {
+    const context = await fresh();
+    try {
+      await context.addInitScript(WORKERS);
+      await context.addInitScript(() => {
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+          writeText: () => Promise.reject(new DOMException('refused', 'NotAllowedError')) } });
+      });
+      const p = await context.newPage();
+      t.watch(p);
+      await p.goto(base + 'world.html');
+      await framed(p);
+      // (a paste event of the page's own: Firefox drops the clipboardData
+      // given to the constructor of a ClipboardEvent)
+      const paste = () => p.evaluate(() => {
+        const n = window.__posted.length, e = new Event('paste', { bubbles: true, cancelable: true });
+        Object.defineProperty(e, 'clipboardData', { value: { getData: type => type === 'text/plain' ? 'OLD SYSTEM TEXT' : '' } });
+        document.getElementById('sink').dispatchEvent(e);
+        return window.__posted.slice(n).filter(m => m && m.kind === 'clipboard').map(m => m.text);
+      });
+      assert(JSON.stringify(await paste()) === '["OLD SYSTEM TEXT"]', 'a paste before any copy');
+      await p.evaluate(() => window.__worker.onmessage({ data: { type: 'display', kind: 'clipboardSet', text: 'COPY' } }));
+      await noticeSays(p, /pastes within Pharo only/, 5000);
+      assert(JSON.stringify(await paste()) === '[]', 'the old text came over the copy');
+      await p.evaluate(() => window.dispatchEvent(new Event('blur')));
+      assert(JSON.stringify(await paste()) === '["OLD SYSTEM TEXT"]', 'a paste after the page lost the focus');
+      await p.close();
+    } finally { await context.close(); }
+  });
+
+  await check('world: a VM that ends before the world painted points to the Console', async () => {
+    const context = await fresh();
+    try {
+      await context.route('**/manifest.json*', r => r.fulfill({ status: 503, body: 'unavailable' }));
+      const p = await context.newPage();
+      await p.goto(base + 'world.html');
+      await p.waitForFunction(() => /^(crashed|exited)$/.test(document.getElementById('status').dataset.state), null,
+                              { timeout: 60000 });
+      assert(await p.textContent('#notice-action') === 'Restart' && await p.isVisible('#notice-alt') &&
+             await p.getAttribute('#notice-alt', 'href') === 'index.html' &&
+             await p.textContent('#notice-alt') === 'Open the Console', 'the notice ' + await p.textContent('#notice-text'));
+      await p.close();
+    } finally { await context.close(); }
+  });
+
+  const stock = path.join(t.webDir, '..', 'image', 'stock');
+  const stockImage = fs.existsSync(stock) && fs.readdirSync(stock).find(f => f.endsWith('.image'));
+  if (stockImage) await check('world: an image said prepared that does not open the world points to the Console', async () => {
+    // the slot of a stock image, as a byte scan that a string fooled saved it
+    const context = await fresh();
+    try {
+      const files = { '/__stock/image': path.join(stock, stockImage),
+                      '/__stock/changes': path.join(stock, stockImage.replace(/\.image$/, '.changes')) };
+      await context.route(u => new URL(u).pathname in files || new URL(u).pathname === '/__blank', r => {
+        const at = new URL(r.request().url()).pathname;
+        if (at === '/__blank') return r.fulfill({ contentType: 'text/html', body: '<!doctype html><title>blank</title>' });
+        return r.fulfill({ contentType: 'application/octet-stream', body: fs.readFileSync(files[at]) });
+      });
+      const p = await context.newPage();
+      await p.goto(base + '__blank');
+      await p.evaluate(async () => {
+        const [image, changes] = await Promise.all(['/__stock/image', '/__stock/changes'].map(u => fetch(u).then(r => r.blob())));
+        const db = await new Promise((resolve, reject) => {
+          const r = indexedDB.open('pharo-wasm', 1);
+          r.onupgradeneeded = () => r.result.createObjectStore('files');
+          r.onsuccess = () => resolve(r.result);
+          r.onerror = () => reject(r.error);
+        });
+        await new Promise((resolve, reject) => {
+          const tx = db.transaction('files', 'readwrite'), s = tx.objectStore('files');
+          s.put(image, 'Pharo.image');
+          s.put(changes, 'Pharo.changes');
+          s.put({ id: 'stock-prepared', image: 'Pharo.image', changes: 'Pharo.changes', imageSize: image.size,
+                  changesSize: changes.size, savedAt: Date.now(), syncedAt: Date.now(), prepared: true }, 'meta');
+          tx.oncomplete = resolve;
+          tx.onabort = () => reject(tx.error);
+        });
+        db.close();
+      });
+      await p.goto(base + 'world.html');
+      await p.waitForFunction(() => !document.getElementById('notice').hidden &&
+                              (/has not opened yet/.test(document.getElementById('notice-text').textContent) ||
+                               !document.getElementById('notice-alt').hidden), null, { timeout: 60000 });
+      const link = await p.evaluate(() => [...document.querySelectorAll('#notice a')].filter(a => !a.hidden)
+                                      .map(a => [a.textContent, a.getAttribute('href')]));
+      assert(JSON.stringify(link).includes('["Open the Console","index.html"]'), 'links ' + JSON.stringify(link));
       await p.close();
     } finally { await context.close(); }
   });
