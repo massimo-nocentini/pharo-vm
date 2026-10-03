@@ -1,7 +1,7 @@
 "What the Pharo world shows, for the tests of the world page: tests/wasm/world-harness.mjs
  and tests/wasm/world.spec.mjs boot the world image with it,
 
-	--headless /pharo/Pharo.image --no-default-preferences --interactive /pharo/st/world-probe.st
+	--headless /pharo/Pharo.image --no-default-preferences --interactive st /pharo/st/world-probe.st
 
  and read the JSON file it writes every 100 ms, probe.json next to the image:
 
@@ -10,10 +10,14 @@
 	world          the extent of the World, [width, height]
 	display        the extent of the renderer's Form, or null
 	hand           the position of the hand (the mouse)
-	menubar        the items of the menubar, [{label, bounds}], bounds [left, top, right, bottom]
+	menubar        the items of the menubar, [{label, bounds}], bounds [left, top, right, bottom],
+	               in the coordinates of the World, as all bounds
 	menus          the open menus, [{class, items: [{label, bounds}]}]
 	windows        the system windows, [{label, bounds, model}]
 	playground     the text of the Playground window and the bounds of its text, or null
+	               (in the World's coordinates too, unlike the bounds of the text morph,
+	               which are its owner's: in the smaller Playground of Pharo 15, the centre
+	               of those falls on the popover of print it)
 	printed        the texts of the popovers of print it (Ctrl+P)
 	debugger       whether a debugger window is open
 	error          what went wrong, when something did
@@ -37,7 +41,7 @@ Smalltalk globals
 			(items collect: [ :item |
 				Dictionary new
 					at: 'label' put: (text value: item);
-					at: 'bounds' put: (rect value: item bounds);
+					at: 'bounds' put: (rect value: item boundsInWorld);
 					yourself ]) asArray ].
 		[
 		| state |
@@ -71,7 +75,7 @@ Smalltalk globals
 		state at: 'windows' put: (World systemWindows asArray collect: [ :window |
 				 Dictionary new
 					 at: 'label' put: window label asString;
-					 at: 'bounds' put: (rect value: window bounds);
+					 at: 'bounds' put: (rect value: window boundsInWorld);
 					 at: 'model' put: window model class name;
 					 yourself ]).
 		playground := World systemWindows
@@ -84,7 +88,7 @@ Smalltalk globals
 		state at: 'playground' put: (area ifNotNil: [
 				 Dictionary new
 					 at: 'text' put: area text asString;
-					 at: 'bounds' put: (rect value: area bounds);
+					 at: 'bounds' put: (rect value: area boundsInWorld);
 					 yourself ]).
 		state at: 'printed' put: ((World allMorphs select: [ :morph |
 				  (morph isKindOf: RubEditingArea) and: [

@@ -148,7 +148,8 @@ await check('loose files: paired by base name; the only one; none; what else was
   c = await O.choose([img]);
   eq(O.describe(c), 'My.image, without a .changes', 'describe');
   o = await O.load(c);
-  assert(o.changes instanceof Blob && o.changes.size === 0 && o.sources === undefined, 'an empty .changes, no .sources');
+  assert(o.changes instanceof Blob && (await bytesOf(o.changes)).toString() === '"VERSION:1.0"!' && o.sources === undefined,
+         'a .changes with only its version header, no .sources');
 });
 
 await check('what cannot be chosen: no image, several, an empty one, several zips, a zip and files', async () => {

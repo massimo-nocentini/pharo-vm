@@ -3,11 +3,15 @@
  window gets the input; when it is destroyed, the one shown before comes back and
  draws itself whole again.  As osweb-native.st, it runs on a desktop Pharo VM, where
  every WebDisplayPlugin primitive fails and OSWebDriver>>#pushEvent: queues what the
- page would send.  It forces the driver and saves the image, so run it on a scratch
- copy of the prepared image of the world (build-wasm/image/web) only:
+ page would send.  The Emergency Debugger's window, or one such as it opened in Pharo 15,
+ which has no Emergency Debugger, stands for a window that handles events.  It forces
+ the driver and saves the image, so run it on a scratch copy of the prepared image of the
+ world (build-wasm/image/web) only:
 
-	pharo --headless <copy>.image --no-default-preferences --save --quit osweb-windows.st force
-	pharo --headless <copy>.image --no-default-preferences --interactive osweb-windows.st
+	pharo --headless <copy>.image --no-default-preferences st --save --quit osweb-windows.st
+	pharo --headless <copy>.image --no-default-preferences --interactive st osweb-windows.st
+
+ Only the second one, with the world (--interactive), checks.
 
  Each check prints 'ok <name>' or 'not ok <name>: <reason>', and the VM exits with 0
  when every check passed.  Lane 82 (tests/wasm/lanes/82-osweb-windows.sh) runs it."
@@ -20,7 +24,7 @@ OSWebDriver isSuitable ifFalse: [
 	^ true'
 		classified: 'primitives' ].
 
-(CommandLineArguments new commandLineArguments includes: 'force') ifFalse: [
+(CommandLineArguments new hasOption: 'interactive') ifTrue: [
 	| say |
 	say := [ :line |
 	       Stdio stdout
@@ -33,7 +37,7 @@ OSWebDriver isSuitable ifFalse: [
 	Smalltalk exit: 2 ] forkAt: Processor timingPriority - 1.
 	[
 	[
-	| failures check waitFor renderer driver push menus rightClick worldBackend plain ed blits |
+	| failures check waitFor renderer driver push menus rightClick worldBackend plain ed closeEd blits |
 	failures := 0.
 	check := [ :name :block |
 	         | result |
@@ -86,9 +90,24 @@ OSWebDriver isSuitable ifFalse: [
 	check value: 'which it keeps once that window is destroyed' value: [
 		driver window == worldBackend and: [ driver windows size = 1 and: [ rightClick value ] ] ].
 
-	"The Emergency Debugger's window takes the canvas and the input, then gives them back"
-	ed := EDDisplayInterface new.
-	ed ensureWindowOpen.
+	"The Emergency Debugger's window takes the canvas and the input, then gives them back.
+	 Pharo 15 has no Emergency Debugger: there, a window such as it opened, with an event
+	 handler and a Form renderer"
+	(Smalltalk hasClassNamed: #EDDisplayInterface)
+		ifTrue: [
+			ed := (Smalltalk at: #EDDisplayInterface) new.
+			ed ensureWindowOpen.
+			closeEd := [ ed terminateWindow ] ]
+		ifFalse: [
+			ed := OSWindow
+				      createWithAttributes: (OSWindowAttributes new
+						       title: 'Emergency Debugger';
+						       extent: 600 @ 400;
+						       resizable: false;
+						       yourself)
+				      eventHandler: OSWindowEventVisitor new.
+			ed newFormRenderer: (Form extent: 600 @ 400 depth: 32).
+			closeEd := [ ed destroy ] ].
 	check value: 'the Emergency Debugger''s window is shown, not the world' value: [
 		driver window ~~ worldBackend and: [ driver window handlesEvents and: [ worldBackend isShown not ] ] ].
 	check value: 'the world does not draw meanwhile' value: [
@@ -98,7 +117,7 @@ OSWebDriver isSuitable ifFalse: [
 		(Delay forMilliseconds: 300) wait.
 		blits value = before ].
 	check value: 'nor does it get the input' value: [ rightClick value not ].
-	ed terminateWindow.
+	closeEd value.
 	check value: 'once that window is destroyed the world is shown again' value: [
 		driver window == worldBackend and: [ worldBackend isShown and: [ driver windows size = 1 ] ] ].
 	check value: 'and gets the input again' value: [ rightClick value ].

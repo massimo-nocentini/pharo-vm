@@ -26,9 +26,10 @@
 //     primitive (its name does not start with 'prim'), for tables written by
 //     hand;
 //   - no function is wrapped by -sEMULATE_FUNCTION_POINTER_CASTS;
-//   - the builtin modules are the in-tree plugins linked into the VM plus
-//     one for each src/emscripten/plugins/*.c, and every row with an accessor
-//     depth in their sources is in the tables.
+//   - the builtin modules are the in-tree plugins linked into the VM (with
+//     UUIDPlugin when the CMake cache of the build turns FEATURE_PLUGIN_UUID
+//     on) plus one for each src/emscripten/plugins/*.c, and every row with an
+//     accessor depth in their sources is in the tables.
 //
 // Usage: node prim-audit.mjs [--srcdir <dir>] [--prims <dir>] <build-wasm/node/pharo.js>
 // where the source tree <dir> defaults to the one holding this script, and
@@ -349,6 +350,10 @@ function audit(js, srcdir, prims) {
 
     const pluginDir = resolve(srcdir, 'src/emscripten/plugins');
     const expected = new Set(IN_TREE_PLUGINS);
+    // (the CMake cache of the build holding the trampolines, cmake/wasm/prims)
+    const cache = resolve(prims, '..', '..', 'CMakeCache.txt');
+    if (existsSync(cache) && /^FEATURE_PLUGIN_UUID:BOOL=(ON|TRUE|YES|Y|1)$/mi.test(readFileSync(cache, 'utf8')))
+        expected.add('UUIDPlugin');
     if (existsSync(pluginDir))
         for (const file of readdirSync(pluginDir).filter((f) => f.endsWith('.c')))
             expected.add(basename(file, '.c'));

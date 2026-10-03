@@ -8,7 +8,8 @@
 // pages) through packaging/emscripten/web/vm-driver.js, the files of the
 // manifest in MEMFS, and display-worker.js of this tree as Module.webDisplay.
 // It has no canvas, so the display paints into its memory framebuffer.  The
-// arguments are the world's (vmArgs('world')) plus tests/wasm/st/world-probe.st,
+// arguments are the world's (vmArgs('world')) plus st tests/wasm/st/world-probe.st
+// (Pharo 15 takes a .st file through the st command only; Pharo 12 takes it so too),
 // whose probe.json says what the world shows.
 //
 // The harness first checks the canvas side of display-worker.js, which the
@@ -109,7 +110,7 @@ async function session() {
   });
   s.t0 = now();
   s.drv = await Driver.start(createPharoVM, {
-    args: Driver.vmArgs('world', '/pharo/' + manifest.image).concat(['/pharo/st/world-probe.st']),
+    args: Driver.vmArgs('world', '/pharo/' + manifest.image).concat(['st', '/pharo/st/world-probe.st']),
     files: worldFiles(),
     wasmModule,
     config: { webDisplay: s.display },

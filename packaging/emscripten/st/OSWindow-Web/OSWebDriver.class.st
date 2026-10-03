@@ -33,11 +33,9 @@ Class {
 
 { #category : 'class initialization' }
 OSWebDriver class >> initialize [
-	"Take part in the session startup (see #startUp:). Loading the package again must not register me twice"
+	"Take part in the session startup (see #startUp:), before the world opens: Pharo 12 opens it at the end of the startup list (ErrorHandlerSessionHandler), but Pharo 15 at the default priority of the System category (UIManager class>>#startUp:), so take a priority before it, that of FileLocator. Loading the package again does not register me twice: a registration replaces the one of the same name. (Pharo 15 refuses to unregister a class that is not registered)"
 
-	SessionManager default
-		unregisterClassNamed: self name;
-		registerSystemClassNamed: self name
+	SessionManager default registerSystemClassNamed: self name atPriority: 90
 ]
 
 { #category : 'testing' }
@@ -67,7 +65,7 @@ OSWebDriver class >> shutDown: quitting [
 
 { #category : 'system startup' }
 OSWebDriver class >> startUp: isImageStarting [
-	"I run in the System startup list, before ErrorHandlerSessionHandler opens the world. The image may have saved another driver class (the stock image saves OSSDL2Driver), so take over whenever the page provides a display. An image saved in the page keeps me as its driver class, so give the choice back when it starts elsewhere"
+	"I run in the System startup list, before the world opens (see #initialize). The image may have saved another driver class (the stock image saves OSSDL2Driver), so take over whenever the page provides a display. An image saved in the page keeps me as its driver class, so give the choice back when it starts elsewhere"
 
 	isImageStarting ifFalse: [ ^ self ].
 	self isSuitable ifFalse: [
@@ -142,8 +140,25 @@ OSWebDriver >> interruptLoop [
 
 { #category : 'events' }
 OSWebDriver >> interruptUser [
+	"Interrupt the busy process, as the user interrupt key does on desktop VMs. UserInterruptHandler>>#processToInterrupt takes the first process ready to run below my priority, which can be another process of the priority of the UI, while the UI process runs a loop: no debugger can open then, since the UI process draws it. So interrupt the UI process when it is ready to run, that is, waits on no semaphore, and leave the other cases to UserInterruptHandler"
 
-	UserInterruptHandler new handleUserInterrupt
+	| ui |
+	ui := MorphicUIManager uiProcess.
+	(ui isNil or: [ (self isReadyToRun: ui) not ]) ifTrue: [
+		^ UserInterruptHandler new handleUserInterrupt ].
+	UserInterruptHandler cmdDotEnabled ifFalse: [ ^ self ].
+	[ ui debugWithTitle: 'User Interrupt' ]
+		on: Error
+		fork: [ :ex | ex pass ]
+]
+
+{ #category : 'testing' }
+OSWebDriver >> isReadyToRun: aProcess [
+	"Whether aProcess is in a run queue of the Processor, rather than waiting on a semaphore (a Delay, say), suspended or terminated"
+
+	| list |
+	list := aProcess suspendingList.
+	^ list notNil and: [ (list isKindOf: Semaphore) not ]
 ]
 
 { #category : 'testing' }
@@ -199,6 +214,11 @@ OSWebDriver >> pushEvent: anArray [
 
 	pendingEvents nextPut: anArray.
 	inputSemaphore signal
+]
+
+{ #category : 'window creation' }
+OSWebDriver >> registerWindow: aBackendWindow [
+	"Pharo 15 takes the current driver for an OSSDL2Driver when it restarts the world renderer on another driver (OSWorldRenderer class>>#restart), which hands it the windows of OSSDL2Driver: they are not mine to show"
 ]
 
 { #category : 'events' }
@@ -268,6 +288,11 @@ OSWebDriver >> stopEventLoop [
 	Smalltalk
 		unregisterExternalObject: inputSemaphore;
 		unregisterExternalObject: interruptSemaphore
+]
+
+{ #category : 'window creation' }
+OSWebDriver >> unregisterWindowWithId: aWindowId [
+	"Pharo 15 takes the current driver for an OSSDL2Driver when it finalizes a window of SDL (SDL_Window class>>#finalizeResourceData:), as after a restart of the world renderer on another driver (see #registerWindow:): it is not mine"
 ]
 
 { #category : 'accessing' }

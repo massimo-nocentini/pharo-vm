@@ -18,7 +18,9 @@
 #     only for a build with the image of the world;
 #   - a class of OSWindow-Web that comes, goes or changes prepares the image
 #     of the world again (and one that goes breaks nothing), and nothing
-#     else does.
+#     else does; the preparation runs the command line that both Pharo 12
+#     and Pharo 15 take, and leaves no image of an earlier build, nor the
+#     .sources of another stock image, next to the world image.
 #
 # Environment (from make wasm-check): NODE, SRCDIR, TEST_DIR.  Needs GNU
 # make and cmake (from PATH, or MAKE and CMAKE); exits 77 without them.
@@ -108,13 +110,29 @@ cat >"$T/bin/vmmaker-vm" <<'EOF'
 echo "refresh" >>"$RULES_LOG"
 EOF
 # (the host Pharo of webimage.cmake: --headless IMAGE --no-default-preferences
-# --save --quit prepare-web-image.st ST-DIR WEB-IMAGE-DIR)
+# st --save --quit prepare-web-image.st, the command line of both Pharo 12 and
+# Pharo 15, with the directories in PHARO_WEB_ST_DIR and PHARO_WEB_IMAGE_DIR,
+# where the stock .sources must be already; it logs anything else)
 cat >"$T/bin/host-pharo" <<'EOF'
 #!/bin/sh
-mkdir -p "$8"
-cat "$7"/OSWindow-Web/*.st >"$8/OSWindow-Web.st"
-: >"$8/Pharo12-web.image"
-: >"$8/Pharo12-web.changes"
+case $#:$1:$2:$3:$4:$5:$6:$7 in
+7:--headless:*.image:--no-default-preferences:st:--save:--quit:*/prepare-web-image.st) ;;
+*)
+    echo "prepare with $*" >>"$RULES_LOG"
+    exit 1 ;;
+esac
+if test -z "$PHARO_WEB_ST_DIR" || test -z "$PHARO_WEB_IMAGE_DIR"; then
+    echo "prepare without PHARO_WEB_ST_DIR or PHARO_WEB_IMAGE_DIR" >>"$RULES_LOG"
+    exit 1
+fi
+if ! test -f "$PHARO_WEB_IMAGE_DIR/Pharo.sources"; then
+    echo "prepare before the stock .sources is in PHARO_WEB_IMAGE_DIR" >>"$RULES_LOG"
+    exit 1
+fi
+mkdir -p "$PHARO_WEB_IMAGE_DIR"
+cat "$PHARO_WEB_ST_DIR"/OSWindow-Web/*.st >"$PHARO_WEB_IMAGE_DIR/OSWindow-Web.st"
+: >"$PHARO_WEB_IMAGE_DIR/Pharo-web.image"
+: >"$PHARO_WEB_IMAGE_DIR/Pharo-web.changes"
 echo "prepare" >>"$RULES_LOG"
 EOF
 chmod +x "$T/bin/"*
@@ -281,11 +299,22 @@ wbuild() {
 }
 
 step="webimage.cmake, first build"
+# (over the image of an earlier build, under its former name, and the .sources
+# of another stock image, which stage.mjs would take for a second image and
+# .sources)
+mkdir -p "$wb/image/web"
+for f in Pharo12-web.image Pharo12-web.changes Other.sources; do : >"$wb/image/web/$f"; done
 "$cmake" -S "$wi" -B "$wb" >"$T/configure.out" 2>&1 || "$cmake" -H"$wi" -B"$wb" >"$T/configure.out" 2>&1 ||
     { cat "$T/configure.out"; fail "$step: configure failed"; }
 wbuild
 calls "prepare"
 grep -q OSWebB "$package" || fail "$step: no OSWebB in $package"
+for f in Pharo12-web.image Pharo12-web.changes Other.sources; do
+    if test -e "$wb/image/web/$f"; then fail "$step: $f is still in $wb/image/web"; fi
+done
+for f in Pharo-web.image Pharo-web.changes Pharo.sources; do
+    test -f "$wb/image/web/$f" || fail "$step: no $f in $wb/image/web"
+done
 step="webimage.cmake, nothing changed"
 wbuild
 calls

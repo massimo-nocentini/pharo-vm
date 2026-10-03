@@ -7,6 +7,10 @@ int MakeUUID(char *location);
 int sqUUIDInit(void);
 int sqUUIDShutdown(void);
 
+/* A builtin plugin has its own, as the VM has */
+#ifdef SQUEAK_BUILTIN_PLUGIN
+static
+#endif
 struct VirtualMachine* interpreterProxy;
 
 #ifdef _WIN32

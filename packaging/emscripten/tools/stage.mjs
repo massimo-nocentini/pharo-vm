@@ -45,7 +45,7 @@ const TEXT_EXTENSIONS = new Set(['.css', '.htm', '.html', '.js', '.json', '.mjs'
                                  '.webmanifest']);
 const IMAGE = 'Pharo.image';
 const CHANGES = 'Pharo.changes';
-const WORLD_IMAGE = 'Pharo12-web.image';
+const WORLD_IMAGE = 'Pharo-web.image';
 
 const fail = (message) => {
   process.stderr.write(`stage.mjs: ${message}\n`);

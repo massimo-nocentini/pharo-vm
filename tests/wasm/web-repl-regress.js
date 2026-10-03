@@ -189,10 +189,14 @@ function assert(c, msg) { if (!c) throw new Error('assertion failed: ' + msg); }
   });
 
   await check('3 a syntax error says where it is, and which variable is not declared', async () => {
+    // the class of the errors of the compiler: CodeError in Pharo 12, OCCodeError in Pharo 15
+    S.send('SystemVersion current major\n');
+    await S.prompt();
+    const codeError = parseInt(S.since(), 10) <= 12 ? 'CodeError' : 'OCCodeError';
     const cases = [
-      ['x := 3', 'Error: CodeError Undeclared variable x (line 1, column 1)\n'],
-      ['3 + ', 'Error: CodeError Variable or expression expected (line 1, column 5)\n'],
-      ['| a |\ra := 1.\rb := a', 'Error: CodeError Undeclared variable b (line 3, column 1)\n'],
+      ['x := 3', `Error: ${codeError} Undeclared variable x (line 1, column 1)\n`],
+      ['3 + ', `Error: ${codeError} Variable or expression expected (line 1, column 5)\n`],
+      ['| a |\ra := 1.\rb := a', `Error: ${codeError} Undeclared variable b (line 3, column 1)\n`],
     ];
     for (const [input, report] of cases) {
       S.send(input + '\n');

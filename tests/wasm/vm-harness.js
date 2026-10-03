@@ -162,6 +162,19 @@ function assert(c, msg) { if (!c) throw new Error('assertion failed: ' + msg); }
 // a result line, right after the input or after the prompt of an earlier line
 const val = v => new RegExp('(^|> )' + v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\n', 'm');
 
+// The REPL reports the class of an error and its frames as the image prints them, and
+// they differ: Pharo 15 (newer: a version after 12; only 12 and 15 are tested) names
+// the errors of the compiler OCCodeError, sends doesNotUnderstand: from
+// Symbol>>#handleDoesNotUnderstand:to:, which prints the selector as a string, and makes
+// a block that refers to nothing of its method a CleanBlockClosure, where Pharo 12 makes
+// every block a FullBlockClosure
+let newer = true;
+const codeError = () => (newer ? 'OCCodeError' : 'CodeError');
+const dnu = selector => (newer
+  ? `  ByteSymbol(Symbol)>>handleDoesNotUnderstand:to:\n  UndefinedObject(Object)>>doesNotUnderstand: '${selector}'\n`
+  : `  UndefinedObject(Object)>>doesNotUnderstand: #${selector}\n`);
+const blockClass = clean => (clean && newer ? 'CleanBlockClosure' : 'FullBlockClosure');
+
 (async () => {
   const t0 = now();
   let S, saved;
@@ -185,10 +198,17 @@ const val = v => new RegExp('(^|> )' + v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') 
     assert(S.since() === '7\nst> ', 'output ' + JSON.stringify(S.since()));
   });
 
+  // the version of the image, for codeError, dnu and blockClass
+  S.send('SystemVersion current major\n');
+  await S.prompt();
+  const major = parseInt(S.since(), 10);
+  newer = !(major <= 12);
+  console.log(`#   Pharo ${major}`);
+
   await check('3 a syntax error on stderr, then the REPL goes on', async () => {
     S.send('3 +\n');
     await S.prompt();
-    assert(/^Error: CodeError .+\n$/.test(S.errSince()), 'stderr ' + JSON.stringify(S.errSince()));
+    assert(new RegExp(`^Error: ${codeError()} .+\n$`).test(S.errSince()), 'stderr ' + JSON.stringify(S.errSince()));
     S.send('6 * 7\n');
     await S.expectOut(val('42'));
     await S.prompt();
@@ -244,7 +264,7 @@ const val = v => new RegExp('(^|> )' + v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') 
     S.send('nil foo\n');
     await S.prompt();
     assert(S.errSince() === 'Error: MessageNotUnderstood receiver of "foo" is nil\n' +
-           '  UndefinedObject(Object)>>doesNotUnderstand: #foo\n  UndefinedObject>>DoIt\n',
+           dnu('foo') + '  UndefinedObject>>DoIt\n',
            'stderr ' + JSON.stringify(S.errSince()));
     S.send('#(1 2) collect: [ :x | x / 0 ]\n');
     await S.prompt();
@@ -268,37 +288,38 @@ const val = v => new RegExp('(^|> )' + v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') 
     // fixed: the evaluation waits until the forked process ended, or that
     // process runs at userBackgroundPriority, once the REPL waits at its
     // prompt
-    const frames = '  [] in UndefinedObject>>DoIt\n  [] in FullBlockClosure(BlockClosure)>>newProcess\n';
+    // (the frames of the process, which forked a block that is clean, or not)
+    const frames = clean => `  [] in UndefinedObject>>DoIt\n  [] in ${blockClass(clean)}(BlockClosure)>>newProcess\n`;
     const bg = ' forkAt: Processor userBackgroundPriority. ';
     // during the evaluation: the report, and no prompt of its own
     S.send('| s | s := Semaphore new. [ [ 1/0 ] ensure: [ s signal ] ] fork. s wait. 42\n');
     await S.expectOut(/^Error[^]*\n42\nst> $/);
     await S.expectState(WAITING);
     assert(S.since() === 'Error: ZeroDivide\n  SmallInteger>>/\n  [] in UndefinedObject>>DoIt\n' +
-           '  FullBlockClosure(BlockClosure)>>ensure:\n' + frames + '42\nst> ', 'output ' + JSON.stringify(S.since()));
+           `  ${blockClass(true)}(BlockClosure)>>ensure:\n` + frames(false) + '42\nst> ', 'output ' + JSON.stringify(S.since()));
     // while the REPL waits at its prompt, which the report pushed up: it
     // prompts again
     S.send('[ 1/0 ]' + bg + '43\n');
     await S.expectOut(/^43\nst> Error[^]*\nst> $/);
     await S.expectState(WAITING);
-    assert(S.since() === '43\nst> Error: ZeroDivide\n  SmallInteger>>/\n' + frames + 'st> ',
+    assert(S.since() === '43\nst> Error: ZeroDivide\n  SmallInteger>>/\n' + frames(true) + 'st> ',
            'output ' + JSON.stringify(S.since()));
     // a Delay wakes it
     S.send('[ (Delay forMilliseconds: 100) wait. nil foo ]' + bg + '#forked\n');
     await S.expectOut(/^#forked\nst> Error[^]*\nst> $/, 5000);
     await S.expectState(WAITING);
     assert(S.since() === '#forked\nst> Error: MessageNotUnderstood receiver of "foo" is nil\n' +
-           '  UndefinedObject(Object)>>doesNotUnderstand: #foo\n' + frames + 'st> ', 'output ' + JSON.stringify(S.since()));
+           dnu('foo') + frames(true) + 'st> ', 'output ' + JSON.stringify(S.since()));
     // a Halt too; a Warning is reported and its process goes on
     S.send("[ self halt. Transcript show: 'not shown'; cr ]" + bg + '1\n');
     await S.expectOut(/^1\nst> Error[^]*\nst> $/);
     await S.expectState(WAITING);
-    assert(S.since() === '1\nst> Error: Halt\n  UndefinedObject(Object)>>halt\n' + frames + 'st> ',
+    assert(S.since() === '1\nst> Error: Halt\n  UndefinedObject(Object)>>halt\n' + frames(false) + 'st> ',
            'output ' + JSON.stringify(S.since()));
     S.send("[ Warning signal: 'careful'. Transcript show: 'went on'; cr ]" + bg + '2\n');
     await S.expectOut(/^2\nst> Error[^]*\nst> went on\n$/);
     await S.expectState(WAITING);
-    assert(S.since() === '2\nst> Error: Warning careful\n' + frames + 'st> went on\n', 'output ' + JSON.stringify(S.since()));
+    assert(S.since() === '2\nst> Error: Warning careful\n' + frames(true) + 'st> went on\n', 'output ' + JSON.stringify(S.since()));
     S.send('3 + 4\n');
     await S.prompt();
     assert(S.since() === '7\nst> ', 'the REPL goes on: ' + JSON.stringify(S.since()));

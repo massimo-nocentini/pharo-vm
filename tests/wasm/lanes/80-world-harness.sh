@@ -66,8 +66,9 @@ cat "$err" >&2
 # The image side natively.  The script forces OSWebDriver and saves the image
 # it runs in, so it gets a copy; the first run makes the copy boot through
 # OSWebDriver (no SDL), the second one drives the world.  The stack of the
-# interrupted processes goes to stderr, kept in the log.
-web_image=$WASM_DIR/image/web/Pharo12-web.image
+# interrupted processes goes to stderr, kept in the log.  (Pharo 15 takes a .st
+# file through the st command only; Pharo 12 takes it so too.)
+web_image=$WASM_DIR/image/web/Pharo-web.image
 if test -z "$HOST_PHARO" || ! test -x "$HOST_PHARO"; then
     echo "80-world-harness: no HOST_PHARO: osweb-native.st is not run"
 elif ! test -f "$web_image"; then
@@ -87,9 +88,9 @@ else
     (cd "$native" &&
         SDL_VIDEODRIVER=dummy && export SDL_VIDEODRIVER &&
         limit 600 "$HOST_PHARO" --headless Pharo.image --no-default-preferences \
-            --save --quit "$script" force &&
+            st --save --quit "$script" &&
         limit 600 "$HOST_PHARO" --headless Pharo.image --no-default-preferences \
-            --interactive "$script") >"$native/stdout.log" 2>"$native/stderr.log" || native_status=$?
+            --interactive st "$script") >"$native/stdout.log" 2>"$native/stderr.log" || native_status=$?
     if test "$native_status" -eq 0 && grep -q '^osweb-native: 0 failed$' "$native/stdout.log"; then
         grep -a '^ok\|^not ok\|^osweb-native' "$native/stdout.log"
         rm -f "$native/Pharo.image" "$native/Pharo.changes"

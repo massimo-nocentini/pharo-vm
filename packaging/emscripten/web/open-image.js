@@ -24,7 +24,8 @@
 // the files, each {name, size} (changes and sources may be null).
 //
 // load(choice, onProgress) answers {name, image, changes, sources}, the
-// files as Blobs: image, changes (an empty Blob when there was none), and
+// files as Blobs: image, changes (when there was none, one that holds only
+// the version header, since Pharo 15 refuses an empty .changes), and
 // sources as {name, data}, or undefined.  It inflates the entries of a zip,
 // deflated ones through DecompressionStream('deflate-raw') and stored ones
 // as they are, checks their sizes and CRC-32, and calls onProgress(loaded,
@@ -258,7 +259,7 @@
       : inflate(zip, from, f.entry, n => { loaded += n; if (onProgress) onProgress(loaded, total); });
     const image = await read(choice.image);
     await checkImage(image, choice.name);
-    const changes = (await read(choice.changes)) || new Blob([]);
+    const changes = (await read(choice.changes)) || new Blob(['"VERSION:1.0"!']);
     const sources = await read(choice.sources);
     return { name: choice.name, image, changes, sources: sources ? { name: choice.sources.name, data: sources } : undefined };
   }

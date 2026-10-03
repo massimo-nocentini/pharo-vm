@@ -22,8 +22,10 @@ set(FEATURE_FFI OFF CACHE BOOL "Enable FFI" FORCE)
 set(FEATURE_THREADED_FFI OFF CACHE BOOL "Enable Threaded (running in another thread) FFI" FORCE)
 set(FEATURE_JIT_SIMD OFF CACHE BOOL "Use SIMD support in JIT compilation when available" FORCE)
 
-# UUIDs come from SocketPlugin; there is no OpenSSL, nor libraries for the FFI
-set(FEATURE_PLUGIN_UUID OFF CACHE BOOL "Build UUID plugin" FORCE)
+# UUIDPlugin uses the uuid_generate of Emscripten's JavaScript library
+# (crypto.getRandomValues): Pharo 15 makes UUIDs with it only.  There is no
+# OpenSSL, nor libraries for the FFI
+set(FEATURE_PLUGIN_UUID ON CACHE BOOL "Build UUID plugin" FORCE)
 set(FEATURE_PLUGIN_SSL OFF CACHE BOOL "Build SqueakSSL plugin" FORCE)
 set(FEATURE_LIB_SDL2 OFF CACHE BOOL "Build SDL2 support" FORCE)
 set(FEATURE_LIB_CAIRO OFF CACHE BOOL "Build Cairo support" FORCE)

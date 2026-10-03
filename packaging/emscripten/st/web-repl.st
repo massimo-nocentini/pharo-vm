@@ -14,10 +14,11 @@
  At the end of the input the image quits.
 
  WebRepl is also the error handler of every other process (ErrorHandler
- defaultErrorHandler): an error that nothing handles in a process that an evaluation
- forked, or in a block that a Delay runs, is reported on stderr as well, and only that
- process is terminated, where the headless image would quit.  A Warning that nothing
- handles is reported, and its process goes on, as in the headless image.
+ defaultErrorHandler, or ErrorHandler default in Pharo 15): an error that nothing
+ handles in a process that an evaluation forked, or in a block that a Delay runs, is
+ reported on stderr as well, and only that process is terminated, where the headless
+ image would quit.  A Warning that nothing handles is reported, and its process goes on,
+ as in the headless image.
 
  The page's Stop calls vm_interrupt(), which signals the semaphore that WebRepl
  registered with the WebHostPlugin: the evaluation that runs is terminated.
@@ -27,11 +28,21 @@
  when it starts and before the image is saved.
 
  The page's stdin is a terminal that never blocks a read.  The script runs natively too,
- e.g. pharo --headless <image> st web-repl.st < input, but there is no Stop there."
+ e.g. pharo --headless <image> st web-repl.st < input, but there is no Stop there.
 
-(Object << #WebRepl
-	sharedVariables: { #Loop. #Watcher. #EvalProcess. #EvalDone. #InterruptSemaphore. #Generation. #Session. #AtPrompt };
-	package: 'WebRepl') install!
+ It files in with Pharo 12 and Pharo 15.  Every method has a methodsFor: section of its
+ own: Pharo 15 reads only one method in a section, takes the chunk after it for the
+ metadata of that method, and the next one for code to evaluate."
+
+"Define WebRepl, unless an image saved from the page has it already: Pharo 15 logs a class
+ definition to the .changes, an unchanged one too, which --no-source does not prevent"
+| shared |
+shared := { #Loop. #Watcher. #EvalProcess. #EvalDone. #InterruptSemaphore. #Generation. #Session. #AtPrompt. #Fallback }.
+((Smalltalk hasClassNamed: #WebRepl) and: [ (Smalltalk at: #WebRepl) classVarNames asSet = shared asSet ])
+	ifFalse: [
+		(Object << #WebRepl
+			sharedVariables: shared;
+			package: 'WebRepl') install ]!
 
 !WebRepl class methodsFor: 'running'!
 start
@@ -47,10 +58,8 @@ start
 	EvalProcess := EvalDone := nil.
 	AtPrompt := false.
 	self handleErrors.
-	"Before every save: see noteWorld"
-	SessionManager default
-		unregisterClassNamed: self name;
-		registerUserClassNamed: self name.
+	"Before every save: see noteWorld.  A registration replaces the one of the same name"
+	SessionManager default registerUserClassNamed: self name.
 	self noteWorld.
 	InterruptSemaphore ifNotNil: [ :old | Smalltalk unregisterExternalObject: old ].
 	semaphore := InterruptSemaphore := Semaphore new.
@@ -66,33 +75,53 @@ start
 handleError: anError
 	"An error, or a Halt, that nothing handled in another process than the evaluation, which
 	 catches its own: report it, and terminate that process.  The REPL's own processes cannot
-	 go on without it: the default handler quits the image then, as it always would"
+	 go on without it: the handler that WebRepl replaced quits the image then, as it always
+	 would"
 
 	| process |
 	process := Processor activeProcess.
 	(process == Loop or: [ process == Watcher ])
-		ifTrue: [ ^ UIManager default handleError: anError ].
+		ifTrue: [ ^ Fallback handleError: anError ].
 	self report: anError.
-	process terminate!
+	process terminate! !
 
+!WebRepl class methodsFor: 'error handling'!
 handleErrors
-	"Be the error handler of the processes that have none of their own.  Every start of the
-	 session, also after a snapshot, makes it the UIManager again (ErrorHandlerSessionHandler):
-	 so the loop calls this before every prompt"
+	"Be the error handler of the processes that have none of their own, and keep the one it
+	 replaces in Fallback.  Every start of the session, also after a snapshot, installs another
+	 one (ErrorHandlerSessionHandler): so the loop calls this before every prompt.  Pharo 12
+	 keeps it in ErrorHandler defaultErrorHandler, and Pharo 15 in ErrorHandler default"
 
-	ErrorHandler defaultErrorHandler == self ifFalse: [ ErrorHandler defaultErrorHandler: self ]!
+	| handler |
+	(ErrorHandler respondsTo: #defaultErrorHandler:)
+		ifTrue: [
+			handler := ErrorHandler defaultErrorHandler.
+			handler == self ifFalse: [ ErrorHandler defaultErrorHandler: self ] ]
+		ifFalse: [
+			handler := ErrorHandler default.
+			handler == self ifFalse: [ ErrorHandler default: self ] ].
+	handler == self ifFalse: [ Fallback := handler ]! !
 
+!WebRepl class methodsFor: 'error handling'!
 handleNotification: aNotification
 
-	^ UIManager default handleNotification: aNotification!
+	^ Fallback handleNotification: aNotification! !
 
+!WebRepl class methodsFor: 'error handling'!
 handleWarning: aWarning
 	"A Warning that nothing handled in another process than the evaluation: report it, and let
 	 that process go on, as the headless image would"
 
 	self report: aWarning.
-	^ aWarning resume!
+	^ aWarning resume! !
 
+!WebRepl class methodsFor: 'error handling'!
+onPrimitiveError: aString
+	"Pharo 15 sends it to the error handler"
+
+	^ Fallback onPrimitiveError: aString! !
+
+!WebRepl class methodsFor: 'error handling'!
 report: anException
 	"Write what describe: says about anException on stderr, for a process of its own.  When the
 	 loop waits at its prompt, which the report pushed up, prompt again"
@@ -107,11 +136,19 @@ shutDown: quitting
 	self noteWorld! !
 
 !WebRepl class methodsFor: 'private'!
+codeErrorClass
+	"The class of the errors of the compiler: Pharo 15 signals an OCCodeError, which its
+	 CodeError subclasses, and Pharo 12 has only CodeError"
+
+	^ Smalltalk globals at: #OCCodeError ifAbsent: [ Smalltalk globals at: #CodeError ]! !
+
+!WebRepl class methodsFor: 'private'!
 decode: aByteArray
 	"The page sends UTF-8; a native stdin may send anything"
 
-	^ [ aByteArray utf8Decoded ] on: Error do: [ aByteArray asString ]!
+	^ [ aByteArray utf8Decoded ] on: Error do: [ aByteArray asString ]! !
 
+!WebRepl class methodsFor: 'private'!
 describe: anException
 	"Error: <class> <message text>, then the frames that raised it, up to the evaluated code and at
 	 most 5.  A Halt comes as itself, any other exception in the UnhandledError of its default action.
@@ -123,10 +160,11 @@ describe: anException
 		ifFalse: [ anException ].
 	^ String streamContents: [ :stream |
 		stream nextPutAll: 'Error: '; nextPutAll: error class name.
-		error messageText asString ifNotEmpty: [ :text | stream space; nextPutAll: text ].
-		(error isKindOf: CodeError)
+		(error isKindOf: self codeErrorClass)
 			ifTrue: [ self describeSource: error on: stream ]
-			ifFalse: [ context := error signalerContext ].
+			ifFalse: [
+				error messageText asString ifNotEmpty: [ :text | stream space; nextPutAll: text ].
+				context := error signalerContext ].
 		5 timesRepeat: [
 			context ifNotNil: [
 				stream lf; nextPutAll: '  '; nextPutAll: (context isBlockContext
@@ -134,15 +172,23 @@ describe: anException
 					ifFalse: [ context printString ]).
 				context := (context isBlockContext not and: [ context selector == #DoIt ])
 					ifTrue: [ nil ]
-					ifFalse: [ context sender ] ] ] ]!
+					ifFalse: [ context sender ] ] ] ]! !
 
+!WebRepl class methodsFor: 'private'!
 describeSource: aCodeError on: aStream
-	"Where the syntax error is: ' x (line 1, column 1)' after 'Undeclared variable'.  The page sends
-	 the line breaks of multi-line input as CRs.  Say nothing that cannot be found out"
+	"What the compiler says, and where the syntax error is: ' Undeclared variable x (line 1,
+	 column 1)'.  Pharo 15 says 'Undeclared variable named x in DoIt' of the line evaluated: say
+	 it as Pharo 12 does.  The page sends the line breaks of multi-line input as CRs.  Say nothing
+	 that cannot be found out"
 
+	| undeclared |
+	undeclared := [ aCodeError notice isUndeclaredNotice ifTrue: [ aCodeError notice node name ] ]
+		on: Error
+		do: [ :error | error return: nil ].
+	undeclared
+		ifNil: [ aCodeError messageText asString ifNotEmpty: [ :text | aStream space; nextPutAll: text ] ]
+		ifNotNil: [ aStream nextPutAll: ' Undeclared variable '; nextPutAll: undeclared ].
 	[	| source position line column |
-		aCodeError notice isUndeclaredNotice ifTrue: [
-			aStream space; nextPutAll: aCodeError notice node name ].
 		source := aCodeError sourceCode asString.
 		position := aCodeError position.
 		line := column := 1.
@@ -159,8 +205,9 @@ describeSource: aCodeError on: aStream
 		aStream
 			nextPutAll: ' (line '; print: line;
 			nextPutAll: ', column '; print: column;
-			nextPut: $) ] on: Error do: [ :error | error return ]!
+			nextPut: $) ] on: Error do: [ :error | error return ]! !
 
+!WebRepl class methodsFor: 'private'!
 evaluate: aString generation: generation
 	"Evaluate aString in a process of its own, which Stop may terminate, and wait for it.  EvalDone
 	 is the semaphore that its end signals, for the watcher"
@@ -173,14 +220,16 @@ evaluate: aString generation: generation
 		forkAt: Processor userSchedulingPriority
 		named: 'WebRepl evaluation'.
 	done wait.
-	(self isCurrent: generation) ifTrue: [ EvalProcess := EvalDone := nil ]!
+	(self isCurrent: generation) ifTrue: [ EvalProcess := EvalDone := nil ]! !
 
+!WebRepl class methodsFor: 'private'!
 isCurrent: generation
 	"Whether the loop of generation is the one started last, in this session.  An image saved by
 	 an evaluation resumes in a new session, with the loop that waited for that evaluation"
 
-	^ generation = Generation and: [ Session == Smalltalk session ]!
+	^ generation = Generation and: [ Session == Smalltalk session ]! !
 
+!WebRepl class methodsFor: 'private'!
 loop: generation
 	"Prompt, then evaluate every line that comes on stdin, up to its LF, and prompt again.  At the
 	 end of the input, evaluate what is left of it and quit"
@@ -198,37 +247,41 @@ loop: generation
 	self evaluate: (self decode: pending) generation: generation.
 	(self isCurrent: generation) ifFalse: [ ^ self ].
 	self write: String lf on: Stdio stdout.
-	Smalltalk snapshot: false andQuit: true!
+	Smalltalk snapshot: false andQuit: true! !
 
+!WebRepl class methodsFor: 'private'!
 noteWorld
 	"Write whether the image has OSWindow-Web, true or false, to the file that the page's worker
 	 names in PHARO_WEB_WORLD_FILE, if it names one.  The worker reads it once the REPL prompted, or
 	 the image saved itself, and else looks for the name of the class in the bytes of the image"
 
-	| file |
-	file := (Smalltalk os environment at: 'PHARO_WEB_WORLD_FILE' ifAbsent: [ ^ self ])
-		asFileReference.
-	[	file ensureDelete.
+	[	| file |
+		file := (OSEnvironment current at: 'PHARO_WEB_WORLD_FILE' ifAbsent: [ ^ self ])
+			asFileReference.
+		file ensureDelete.
 		file writeStreamDo: [ :stream |
 			stream nextPutAll: (Smalltalk hasClassNamed: #OSWebDriver) printString ] ]
 		on: Error
-		do: [ :error | error return ]!
+		do: [ :error | error return ]! !
 
+!WebRepl class methodsFor: 'private'!
 prompt
 	"Also take the errors of the other processes back: an evaluation may have saved the image"
 
 	self handleErrors.
 	self write: 'st> ' on: Stdio stdout.
-	AtPrompt := true!
+	AtPrompt := true! !
 
+!WebRepl class methodsFor: 'private'!
 readChunk
 	"The next bytes of stdin, at most 4096, or none at the end of the input.  A terminal, as the
 	 page's stdin is, answers no bytes until it has some: wait for them.  Anything else, a file or
 	 a pipe, blocks the read, and the VM could not wait for a file"
 
 	(File fileDescriptorType: 0) = 1 ifTrue: [ Stdio stdin waitForData ].
-	^ Stdio stdin next: 4096!
+	^ Stdio stdin next: 4096! !
 
+!WebRepl class methodsFor: 'private'!
 run: aString generation: generation
 	"Print the value of aString on stdout, or the error it raised on stderr.  Catch any exception
 	 that nothing handles, a Halt too: the default action of the headless image is to quit.  But
@@ -247,8 +300,9 @@ run: aString generation: generation
 			self describe: exception ].
 	(self isCurrent: generation) ifFalse: [ ^ self ].
 	EvalProcess == Processor activeProcess ifTrue: [ EvalProcess := nil ].
-	self write: text , String lf on: (failed ifTrue: [ Stdio stderr ] ifFalse: [ Stdio stdout ])!
+	self write: text , String lf on: (failed ifTrue: [ Stdio stderr ] ifFalse: [ Stdio stdout ])! !
 
+!WebRepl class methodsFor: 'private'!
 watch: aSemaphore
 	"Stop signals aSemaphore: terminate the evaluation that runs.  When none runs, do nothing.  The
 	 ensure: of the evaluation tells the loop that it ended, and terminate waits for it.  But an
@@ -263,8 +317,9 @@ watch: aSemaphore
 			EvalProcess := EvalDone := nil.
 			self write: 'Interrupted.' , String lf on: Stdio stderr.
 			process terminate.
-			done ifNotNil: [ done signal ] ] ] repeat!
+			done ifNotNil: [ done signal ] ] ] repeat! !
 
+!WebRepl class methodsFor: 'private'!
 write: aString on: aStream
 	"Stdio streams are binary.  Flush at once: the page shows output as it comes"
 

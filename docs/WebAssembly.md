@@ -3,6 +3,7 @@
 The VM can be cross-built to WebAssembly with Emscripten.
 The build runs from the root of this repository, out of tree, by default in `build-wasm/`.
 It builds the StackVM, the interpreter (a JIT needs executable memory), for 64-bit images, with no FFI and no threads, and runs the stock Pharo 12 image.
+Pharo 15 images run too, in a site built with one (`WASM_IMAGE_ZIP`) or opened from disk in the pages: the Smalltalk of the pages works with both (see Pharo versions).
 Two VMs are linked from the same objects:
 
 - a command-line VM for node, with access to the host file system, environment and exit status;
@@ -73,8 +74,8 @@ It needs no special headers (no COOP or COEP, since nothing uses SharedArrayBuff
 - `build-wasm/web/world.html`: the world page.
   With the world (`WASM_WORLD=ON`, the default, and a native Pharo VM, `WASM_HOST_PHARO`), `web/` holds the world image, which is the stock image with the OSWindow-Web package and bitmap fonts, prepared at build time; both pages boot it.
   Without it, `web/` holds the stock image, and the world page says that the build has no world image.
-- `build-wasm/image/stock/`: the unpacked Pharo 12 image (as `Pharo.image` and `Pharo.changes`, with its `.sources`); `build-wasm/image/stock.stamp` records the SHA256 of the zip it came from.
-- `build-wasm/image/web/`: `Pharo12-web.image` and `.changes`, the world image, and `OSWindow-Web.st`, the package filed out for `web-bootstrap.st`.
+- `build-wasm/image/stock/`: the unpacked stock image (as `Pharo.image` and `Pharo.changes`, with its `.sources`); `build-wasm/image/stock.stamp` records the SHA256 of the zip it came from.
+- `build-wasm/image/web/`: `Pharo-web.image` and `.changes`, the world image, and `OSWindow-Web.st`, the package filed out for `web-bootstrap.st`.
 - `build-wasm/host/`: the native tree that generates the sources, in `host/generated/64/{vm,plugins}`, and its VMMaker image (in `host/build/vmmaker/image`, or in `host/vmmaker-image` for a copy of `WASM_VMMAKER_IMAGE`).
 - `build-wasm/cmake/`: the CMake tree of the WebAssembly build.
 - `build-wasm/downloads/` and `build-wasm/tests-run/`: the downloaded image zip, and the scratch directory of `make wasm-check`.
@@ -90,7 +91,7 @@ The node VM takes the usual arguments of the VM, for example on a copy of the st
 
 `index.html` runs the REPL of `st/web-repl.st` in the image, in a Web Worker.
 Each line typed is evaluated, and its value printed, or the error it raised, with up to five frames.
-A syntax error says where it is, as in `Error: CodeError Undeclared variable x (line 1, column 1)`.
+A syntax error says where it is, as in `Error: CodeError Undeclared variable x (line 1, column 1)` (`OCCodeError` in Pharo 15).
 A Warning that nothing handles is reported (as `Error: Warning ...`), and the evaluation goes on.
 The REPL is also the error handler of the other processes: an error in a process that an evaluation forked is reported, and only that process ends.
 Output streams as the VM writes it, and the terminal keeps the last 20000 lines.
@@ -138,13 +139,15 @@ The canvas has one pixel per CSS pixel and follows the size of the page.
   Pharo's Ctrl+O, Ctrl+W would close the tab, so the page asks before it goes while the world has taken input since the last save.
 - F6 (or Shift+F6) moves the keyboard from the world to the toolbar, and Tab goes back into the world.
 - Stop (or Alt+. in the world) interrupts the busy process and opens a debugger on it.
+  That is the UI process whenever it is ready to run, so that a loop evaluated in a Playground is interrupted even when another process of its priority is ready too: UserInterruptHandler alone may pick that one, and then no debugger opens, since the busy UI process would draw it.
   When the worker then says nothing for 3 s, it is replaced, as in the Console.
 - Save asks the image to save itself, and the worker keeps it as the Console does: the next visit, here or in the Console, boots it.
   Download gives the image and its `.changes`.
-- The canvas shows one OSWindow at a time: the newest one that has an event handler, such as the window of the Emergency Debugger, takes the canvas and the input, and the world comes back when it closes.
+- The canvas shows one OSWindow at a time: the newest one that has an event handler, such as the window of the Emergency Debugger of Pharo 12, takes the canvas and the input, and the world comes back when it closes.
 - The status pill says Busy while the VM has not slept for a second, or while it does not answer at all (a long primitive).
 - Open, or a drop of files on the page, starts an image of your own, as in the Console.
   An image without the OSWindow-Web package, a stock image say, is prepared first: the worker boots it with the REPL, files in the package and saves, the pill says Preparing meanwhile, and then the world boots from the saved image.
+  A Pharo 15 zip from files.pharo.org was prepared in about 3 s, and its world drew 4.3 s after it was chosen.
 - The Console button opens the Console page.
   When the world has not drawn 30 s after the VM started, or the VM ended before it drew, the notice points to the Console, which can run the image or reset it.
 
@@ -204,7 +207,7 @@ To keep two builds, give each its own `WASM_BUILDDIR`:
   With `WASM_GENERATED`, which skips the host tree, that is only `WASM_VMMAKER_VM`, or a VM left there by an earlier build of the same directory: give it otherwise.
   The lanes use it to load an image that the WebAssembly VM saved (S14b, which is skipped without it).
   It also prepares the world image (`packaging/emscripten/st/prepare-web-image.st`, in about a second), and lanes 80 and 82 run `tests/wasm/st/osweb-native.st` and `tests/wasm/st/osweb-windows.st` with it; without it, `web/` gets the stock image.
-- `WASM_IMAGE_ZIP`: a local copy of the Pharo 12 image zip, instead of downloading it into `build-wasm/downloads`.
+- `WASM_IMAGE_ZIP`: a local image zip, instead of downloading the pinned Pharo 12 one into `build-wasm/downloads`: a copy of that one for an offline build, or a Pharo 15 one (from https://files.pharo.org/image/150/), which the site then runs.
   Any zip holding one image, its `.changes` and a `.sources` is accepted; one that is not the pinned image gets a note with its SHA256.
 - `WASM_GENERATED`: a directory holding `generated/64`, the generated StackVM sources, which skips the host tree.
   For example, `make wasm WASM_BUILDDIR=build-wasm-2 WASM_GENERATED=build-wasm/host WASM_HOST_PHARO=build-wasm/host/build/vmmaker/vm/pharo` builds a second directory with the sources and the native VM of the first.
@@ -276,7 +279,8 @@ An image with perm space, or `--minPermSpaceSize`, does not start ("Cannot alloc
 
 There is no `dlopen`.
 The VM core and every plugin are static libraries, and the plugins are built in: FilePlugin, NewFilePlugin, FileAttributesPlugin, FloatArrayPlugin, LargeIntegers, MiscPrimitivePlugin, LocalePlugin, SocketPlugin, BitBltPlugin, B2DPlugin, DSAPrims, JPEGReaderPlugin and JPEGReadWriter2Plugin, and the plugins written for this platform in `src/emscripten/plugins`, such as WebHostPlugin, which Stop uses.
-`cmake/plugins.cmake` leaves out UnixOSProcessPlugin (fork) and SurfacePlugin on Emscripten, and the initial cache SqueakSSL and UUIDPlugin; `UUID new` still works, through SocketPlugin.
+UUIDPlugin is built in as well: it uses the `uuid_generate` of Emscripten's JavaScript library (`crypto.getRandomValues`), and Pharo 15 makes its UUIDs only with it.
+`cmake/plugins.cmake` leaves out UnixOSProcessPlugin (fork) and SurfacePlugin on Emscripten, and the initial cache SqueakSSL.
 
 WebAssembly checks the type of every indirect call.
 The interpreter calls every named primitive as `void (*)(void)`, while the plugins define many of them as `sqInt f(void)`, and such a call traps.
@@ -317,7 +321,7 @@ On the world page, `init.prepare` boots an image that has no OSWindow-Web with t
 
 ### The world
 
-The Pharo 12 world draws itself into a Form, and the VM only blits it.
+The Pharo world draws itself into a Form, and the VM only blits it.
 SDL2 under Emscripten would need the DOM of the main thread, or pthreads, and the image's SDL2 driver needs the FFI.
 So the world image has the OSWindow-Web package (`packaging/emscripten/st/OSWindow-Web`): OSWebDriver, a backend window and a Form renderer, which a startUp: hook picks whenever the page gives a display.
 It has bitmap fonts, since there is no FreeType without the FFI.
@@ -333,6 +337,15 @@ In the worker, `display-worker.js` paints the dirty rectangles, straight from th
 
 A stock image cannot open the world as it is: its world starts through OSSDL2Driver, which needs the FFI.
 The world page prepares the stock images that it opens, and the Console offers to ("Prepare for the world"): both run `packaging/emscripten/st/web-bootstrap.st`, which files in the package and switches the fonts, and then save.
+
+### Pharo versions
+
+The site runs the pinned Pharo 12 image by default, and was also tested with Pharo 15 (Pharo15.0-SNAPSHOT, build 41): built into the site with `WASM_IMAGE_ZIP`, and opened from disk on either page.
+The VM is the same; what differs is the Smalltalk of the pages (`packaging/emscripten/st`), which works with both:
+
+- Pharo 15's command line (Clap) takes a single file after `st`, with `--save` and `--quit` as its own options, and a file only after `st`: the world image is prepared with `st --save --quit prepare-web-image.st`, which finds its directories in `PHARO_WEB_ST_DIR` and `PHARO_WEB_IMAGE_DIR`.
+- Pharo 15's chunk reader takes one method per `methodsFor:` section, so `web-repl.st` and the `OSWindow-Web.st` that `prepare-web-image.st` writes (the same from both versions) give each method its section, and define every class before its methods.
+- Pharo 15 handles errors through `ErrorHandler default`, opens its world in `UIManager class>>startUp:` (so OSWebDriver registers for an earlier startup), and does not boot with an empty `.changes`: the pages give an image opened without one a `.changes` that holds only its version header, `"VERSION:1.0"!`.
 
 ## Tests
 
@@ -360,7 +373,7 @@ On the machine the port was made on, they passed in under 3 minutes:
 | 70-worker-harness | `tests/wasm/worker-harness.js`: `vm-worker.js` as staged, in worker threads behind a shim of the worker globals: the protocol, Stop, output credit, the downloads, persistence, two workers on one saved image, an image opened with a `.sources` of its own, and the preparation of an image for the world | 19 | 30 s |
 | 72-open-image | `tests/wasm/open-image.test.mjs` on `open-image.js` in node: zips (deflated and stored entries, data descriptors, UTF-8 names, directories and the files that the Finder adds, zip64), how the files are paired, every refusal, the image headers, drops, and the build's stock image zipped as files.pharo.org does and opened; `OPEN_ZIPS`, paths separated by colons, adds zips of your own | 11 | 2 s |
 | 80-world-harness | `tests/wasm/keymap.test.mjs`, then `tests/wasm/world-harness.mjs`, which plays the world page in node with a memory framebuffer, and `tests/wasm/st/osweb-native.st` on the native VM | 16 + 14 + 27 | 16 s |
-| 82-osweb-windows | `tests/wasm/st/osweb-windows.st` on the native VM: a second OSWindow without an event handler leaves the world shown, and the window of the Emergency Debugger takes the canvas and the input, then gives them back | 11 | 10 s |
+| 82-osweb-windows | `tests/wasm/st/osweb-windows.st` on the native VM: a second OSWindow without an event handler leaves the world shown, and the window of the Emergency Debugger (in Pharo 15, which has none, a window of the same kind) takes the canvas and the input, then gives them back | 11 | 10 s |
 
 The bench measured, on that machine with node 25.2.1:
 
@@ -392,7 +405,7 @@ The runner exits 2 when it may not use its `TEST_DIR`, or cannot make its lock t
 
 `tests/wasm/page.spec.mjs` drives the Console in real browsers through Playwright, which is not a build dependency.
 `tests/wasm/world.spec.mjs` does the same with the world page, after it.
-It boots the world with `tests/wasm/st/world-probe.st` too, which writes `/pharo/probe.json` (the menus, windows, Playground text and debuggers of the world), and reads it through `window.PharoWorld`, which the world page gives tests: `stats` (the workers started, the frames and when they came, the times from a key to the next frame), `state` (the status pill), `unsaved` and `readFile(path)`.
+It boots the world with `st /pharo/st/world-probe.st` too (`tests/wasm/st/world-probe.st`), which writes `/pharo/probe.json` (the menus, windows, Playground text and debuggers of the world), and reads it through `window.PharoWorld`, which the world page gives tests: `stats` (the workers started, the frames and when they came, the times from a key to the next frame), `state` (the status pill), `unsaved` and `readFile(path)`.
 `PLAYWRIGHT_MODULE` names the Playwright package, and `BROWSERS` the browsers (default `chromium`); Playwright's own variables, such as `PLAYWRIGHT_BROWSERS_PATH`, apply:
 
     PLAYWRIGHT_MODULE=/path/to/node_modules/playwright BROWSERS=chromium,firefox make wasm-check-browser

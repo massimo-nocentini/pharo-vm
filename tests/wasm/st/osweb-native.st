@@ -5,12 +5,14 @@
  on a scratch copy of the prepared image, or of a stock image with
  web-bootstrap.st, only:
 
-	pharo --headless <copy>.image --no-default-preferences --save --quit osweb-native.st force
-	pharo --headless <copy>.image --no-default-preferences --interactive osweb-native.st
+	pharo --headless <copy>.image --no-default-preferences st --save --quit osweb-native.st
+	pharo --headless <copy>.image --no-default-preferences --interactive st osweb-native.st
 
- Both make OSWebDriver suitable.  After the first one, the second one boots into
- the world through the OSWebDriver startUp: hook; alone, it restarts the world
- renderer on OSWebDriver, which web-bootstrap.st does too.  Each check prints
+ (Pharo 15 takes a .st file through the st command only; Pharo 12 takes it so
+ too.)  Both make OSWebDriver suitable, and only the second one, with the world
+ (--interactive), checks.  After the first one, the second one boots into the world
+ through the OSWebDriver startUp: hook; alone, it restarts the world renderer on
+ OSWebDriver, which web-bootstrap.st does too.  Each check prints
  'ok <name>' or 'not ok <name>: <reason>', the world is dumped to osweb-native.png
  next to the image, and the VM exits with 0 when every check passed.  The save
  request check saves the image with this script running in it: take a new copy
@@ -25,7 +27,7 @@ OSWebDriver isSuitable ifFalse: [
 	^ true'
 		classified: 'primitives' ].
 
-(CommandLineArguments new commandLineArguments includes: 'force') ifFalse: [
+(CommandLineArguments new hasOption: 'interactive') ifTrue: [
 	| say |
 	say := [ :line |
 	       Stdio stdout
@@ -38,7 +40,7 @@ OSWebDriver isSuitable ifFalse: [
 	Smalltalk exit: 2 ] forkAt: Processor timingPriority - 1.
 	[
 	[
-	| failures check waitFor renderer driver push click key type frameStats playground playgroundText popupMenus debuggers debugger busyUI busy png form before |
+	| failures check waitFor renderer driver push click key type frameStats desktop playground playgroundText popupMenus debuggers debugger busyUI busy png form before |
 	failures := 0.
 	check := [ :name :block |
 	         | result |
@@ -68,6 +70,16 @@ OSWebDriver isSuitable ifFalse: [
 	type := [ :string | string do: [ :character | push value: { 7. 0. 0. 0. 0. 0. character codePoint. 0 } ] ].
 	frameStats := [ renderer osWindowRenderer stats ].
 	popupMenus := [ World submorphs select: [ :morph | morph isKindOf: MenuMorph ] ].
+	"A point of the desktop, where no window is: a right click there opens the world
+	 menu.  (The windows differ: Pharo 15 opens a Welcome window, and a smaller Playground)"
+	desktop := [
+	           | found |
+	           (World bounds height - 60 to: 60 by: -20) do: [ :y |
+		           (World bounds width - 20 to: 20 by: -20) do: [ :x |
+			           found ifNil: [
+				           ((World morphsAt: x @ y) allSatisfy: [ :morph | morph == World ])
+					           ifTrue: [ found := x @ y ] ] ] ].
+	           found ].
 	playgroundText := [ (playground allMorphs detect: [ :morph | morph isKindOf: RubScrolledTextMorph ]) text asString ].
 	"The debugger windows, and the one on a process: their label is the print string of
 	 the interrupted context, which says nothing reliable"
@@ -136,10 +148,10 @@ OSWebDriver isSuitable ifFalse: [
 		waitFor value: [
 			(World submorphs anySatisfy: [ :morph | morph isKindOf: MenubarMenuMorph ]) and: [
 				frameStats value first > before first ] ] ].
-	click value: 700 @ 450 value: 1.
+	click value: desktop value value: 1.
 	check value: 'click on the desktop closes it' value: [
 		waitFor value: [ (World submorphs anySatisfy: [ :morph | morph isKindOf: MenubarMenuMorph ]) not ] ].
-	click value: 700 @ 450 value: 3.
+	click value: desktop value value: 3.
 	check value: 'right click opens the world menu' value: [ waitFor value: [ popupMenus value notEmpty ] ].
 	key value: 27 value: 0.
 	check value: 'Escape closes it' value: [ waitFor value: [ popupMenus value isEmpty ] ].
@@ -148,7 +160,7 @@ OSWebDriver isSuitable ifFalse: [
 	check value: 'Playground opens' value: [
 		waitFor value: [
 			(playground := World systemWindows detect: [ :window | window label = 'Playground' ] ifNone: [ nil ]) notNil ] ].
-	click value: (playground allMorphs detect: [ :morph | morph isKindOf: RubScrolledTextMorph ]) center rounded value: 1.
+	click value: (playground allMorphs detect: [ :morph | morph isKindOf: RubScrolledTextMorph ]) boundsInWorld center rounded value: 1.
 	type value: '3 + 4'.
 	check value: 'typing' value: [ (waitFor value: [ playgroundText value = '3 + 4' ]) or: [ playgroundText value ] ].
 	key value: 27 value: 0.
@@ -171,7 +183,7 @@ OSWebDriver isSuitable ifFalse: [
 	Clipboard clipboardText: 'from the web'.
 	check value: 'clipboard round trip' value: [ Clipboard clipboardText asString = 'from the web' ].
 	"A click in the Playground closes the popover of print it"
-	click value: (playground allMorphs detect: [ :morph | morph isKindOf: RubScrolledTextMorph ]) center rounded value: 1.
+	click value: (playground allMorphs detect: [ :morph | morph isKindOf: RubScrolledTextMorph ]) boundsInWorld center rounded value: 1.
 	key value: $v asInteger value: 2.
 	check value: 'Ctrl+V pastes it' value: [
 		(waitFor value: [ playgroundText value includesSubstring: 'from the web' ]) or: [ playgroundText value ] ].
@@ -209,7 +221,7 @@ OSWebDriver isSuitable ifFalse: [
 	push value: #( 8 0 0 0 976 0 665 0 ).
 	check value: 'the world comes back from 0x0' value: [
 		(waitFor value: [ renderer display extent = (976 @ 665) ]) and: [
-			click value: 700 @ 450 value: 3.
+			click value: desktop value value: 3.
 			(waitFor value: [ popupMenus value notEmpty ]) and: [ debuggers value isEmpty ] ] ].
 	key value: 27 value: 0.
 	waitFor value: [ popupMenus value isEmpty ].
@@ -221,7 +233,7 @@ OSWebDriver isSuitable ifFalse: [
 		waitFor value: [ Smalltalk imageFile modificationTime > before ] ].
 	check value: 'events after the save' value: [
 		(waitFor value: [ (driver instVarNamed: #eventProcess) notNil ]) and: [
-			click value: 700 @ 450 value: 3.
+			click value: desktop value value: 3.
 			waitFor value: [ popupMenus value notEmpty ] ] ].
 	key value: 27 value: 0.
 

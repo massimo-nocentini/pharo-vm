@@ -548,7 +548,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
   await check('12 upload: boots the uploaded image, which becomes the slot once it prompts', async () => {
     assert(saved, 'no saved image');
     memory.map.clear();
-    const U = session({ upload: { image: saved, changes: new TextEncoder().encode('') } });
+    const U = session({ upload: { image: saved, changes: new TextEncoder().encode('"VERSION:1.0"!') } });
     try {
       await waitFor('ready', () => U.ready || U.crash || U.error, 60000);
       U.alive();

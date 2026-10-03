@@ -1,5 +1,5 @@
-"Prepare a stock Pharo 12 image, uploaded to the page, for the browser world, as
- prepare-web-image.st does at build time.  The page stages this script next to
+"Prepare a stock Pharo 12 or Pharo 15 image, uploaded to the page, for the browser
+ world, as prepare-web-image.st does at build time.  The page stages this script next to
  OSWindow-Web.st, the package filed out by prepare-web-image.st, in /pharo/st.
 
  A stock image cannot open the world page yet: its world starts through
@@ -20,10 +20,10 @@
 (Smalltalk hasClassNamed: #OSWebDriver) ifFalse: [
 	package := FileLocator imageDirectory / 'st' / 'OSWindow-Web.st'.
 	package exists ifFalse: [ self error: 'web-bootstrap.st: no ' , package fullName ].
-	"The fileOut refers to some of its classes before it defines them"
-	[ CodeImporter evaluateFileNamed: package fullName ]
-		on: NewUndeclaredWarning
-		do: [ :warning | warning resume ] ].
+	"(the code importer of Pharo 15 fails on an empty file, with a MessageNotUnderstood)"
+	package size > 0 ifTrue: [ CodeImporter evaluateFileNamed: package fullName ].
+	(Smalltalk hasClassNamed: #OSWebDriver) ifFalse: [
+		self error: 'web-bootstrap.st: ' , package fullName , ' defines no OSWebDriver' ] ].
 driver := Smalltalk at: #OSWebDriver.
 
 FreeTypeSystemSettings loadFt2Library: false.

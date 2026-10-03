@@ -51,7 +51,7 @@ const probePatch = `
   var D = self.PharoVMDriver, start = D.start, vmArgs = D.vmArgs, probe = ${JSON.stringify(probeSource)};
   D.vmArgs = function (mode, image) {
     var args = vmArgs(mode, image);
-    return mode === 'world' ? args.concat(['/pharo/st/world-probe.st']) : args;
+    return mode === 'world' ? args.concat(['st', '/pharo/st/world-probe.st']) : args;
   };
   D.start = function (create, o) {
     o.files = (o.files || []).concat([{ path: '/pharo/st/world-probe.st', data: probe }]);
@@ -219,8 +219,19 @@ await run(async t => {
   async function openPlayground() {
     p = await probe('the world', p => p.menubar.length);
     const n = p.windows.filter(w => w.label === 'Playground').length;
-    await click(center(p.menubar.find(i => i.label === 'Browse').bounds));
-    p = await probe('the Browse menu', p => menuItem(p, 'Playground'));
+    // Pharo 15 under Firefox sometimes ignores the first click after the
+    // focus checks above, which leave pressed buttons and Shift released by
+    // the page: click again, at most twice, and say so
+    for (let tries = 1; ; tries++) {
+      await click(center(p.menubar.find(i => i.label === 'Browse').bounds));
+      try {
+        p = await probe('the Browse menu', p => menuItem(p, 'Playground'), tries < 3 ? 5000 : 30000);
+        break;
+      } catch (e) {
+        if (tries === 3) throw e;
+        console.log(`  # the Browse menu did not open after click ${tries}: click again`);
+      }
+    }
     await click(center(menuItem(p, 'Playground').bounds));
     p = await probe('a new Playground', p => p.playground && p.menus.length === 0 &&
                     p.windows.filter(w => w.label === 'Playground').length > n);

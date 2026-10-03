@@ -3,9 +3,9 @@
 # The browser world needs the OSWindow-Web package in the image, and bitmap
 # fonts, since the web VM has no FFI and therefore no FreeType.  A native
 # Pharo VM prepares that image at build time: it runs
-# packaging/emscripten/st/prepare-web-image.st on a copy of the stock Pharo 12
-# image.  That takes about a second, and keeps the world image independent of
-# the web VM being built.
+# packaging/emscripten/st/prepare-web-image.st on a copy of the stock image,
+# Pharo 12 or Pharo 15.  That takes about a second, and keeps the world image
+# independent of the web VM being built.
 #
 # Emscripten.cmake includes this file after download.cmake and before
 # stage.cmake, with
@@ -23,8 +23,8 @@
 #
 # and it defines the target
 #
-#     wasm-web-image           - ${WASM_WEB_IMAGE_DIR}/Pharo12-web.image,
-#                                Pharo12-web.changes and OSWindow-Web.st (the
+#     wasm-web-image           - ${WASM_WEB_IMAGE_DIR}/Pharo-web.image,
+#                                Pharo-web.changes and OSWindow-Web.st (the
 #                                package filed out for web-bootstrap.st), next
 #                                to a copy of the stock .sources
 #
@@ -61,20 +61,31 @@ if(CMAKE_SCRIPT_MODE_FILE)
     endif()
     get_filename_component(imageName "${stockImage}" NAME)
     set(outputs
-        "${WASM_WEB_IMAGE_DIR}/Pharo12-web.image"
-        "${WASM_WEB_IMAGE_DIR}/Pharo12-web.changes"
+        "${WASM_WEB_IMAGE_DIR}/Pharo-web.image"
+        "${WASM_WEB_IMAGE_DIR}/Pharo-web.changes"
         "${WASM_WEB_IMAGE_DIR}/OSWindow-Web.st")
 
     # Work on a copy: the stock image also goes to web/ when there is no
     # world, and the script saves the image it runs in.
     file(REMOVE_RECURSE "${WORK_DIR}")
     file(COPY "${stockImage}" "${stockChanges}" ${stockSources} DESTINATION "${WORK_DIR}")
-    file(REMOVE ${outputs})
+    # The image of an earlier build goes, also under the name it had before
+    # (Pharo12-web), and so does the .sources of another stock image: stage.mjs
+    # takes the one image and the one .sources of the directory.  The stock
+    # .sources comes first: the new image runs natively with it, and Pharo 15,
+    # which creates an empty one next to an image saved without one, keeps it.
+    file(GLOB oldSources "${WASM_WEB_IMAGE_DIR}/*.sources")
+    file(REMOVE ${outputs} ${oldSources}
+        "${WASM_WEB_IMAGE_DIR}/Pharo12-web.image" "${WASM_WEB_IMAGE_DIR}/Pharo12-web.changes")
+    file(COPY ${stockSources} DESTINATION "${WASM_WEB_IMAGE_DIR}")
 
+    # The st command of Pharo 15 takes nothing but its file: the directories
+    # go in the environment, which both Pharo 12 and Pharo 15 read.
+    set(ENV{PHARO_WEB_ST_DIR} "${PHARO_WASM_ST_DIR}")
+    set(ENV{PHARO_WEB_IMAGE_DIR} "${WASM_WEB_IMAGE_DIR}")
     execute_process(
         COMMAND "${WASM_HOST_PHARO}" --headless "${WORK_DIR}/${imageName}" --no-default-preferences
-                --save --quit "${PHARO_WASM_ST_DIR}/prepare-web-image.st"
-                "${PHARO_WASM_ST_DIR}" "${WASM_WEB_IMAGE_DIR}"
+                st --save --quit "${PHARO_WASM_ST_DIR}/prepare-web-image.st"
         WORKING_DIRECTORY "${WORK_DIR}"
         TIMEOUT 600
         RESULT_VARIABLE status)
@@ -86,9 +97,7 @@ if(CMAKE_SCRIPT_MODE_FILE)
             message(FATAL_ERROR "webimage.cmake: prepare-web-image.st did not write ${output}, see ${WORK_DIR}")
         endif()
     endforeach()
-    # With its .sources the new image runs natively too.  pharo-local holds
-    # the Epicea log of the preparation.
-    file(COPY ${stockSources} DESTINATION "${WASM_WEB_IMAGE_DIR}")
+    # pharo-local holds the Epicea log of the preparation.
     file(REMOVE_RECURSE "${WORK_DIR}" "${WASM_WEB_IMAGE_DIR}/pharo-local")
     return()
 endif()
@@ -110,8 +119,8 @@ if(NOT WASM_WEB_IMAGE_DIR)
 endif()
 
 set(PHARO_WASM_WEB_IMAGE_OUTPUTS
-    "${WASM_WEB_IMAGE_DIR}/Pharo12-web.image"
-    "${WASM_WEB_IMAGE_DIR}/Pharo12-web.changes"
+    "${WASM_WEB_IMAGE_DIR}/Pharo-web.image"
+    "${WASM_WEB_IMAGE_DIR}/Pharo-web.changes"
     "${WASM_WEB_IMAGE_DIR}/OSWindow-Web.st")
 
 file(GLOB PHARO_WASM_WEB_PACKAGE_FILES "${PHARO_WASM_ST_DIR}/OSWindow-Web/*.st")

@@ -186,9 +186,11 @@ default_checks() {
 
     check_s2
 
+    # (OSPlatform current and OSEnvironment current, not Smalltalk os, which
+    # Pharo 15 deprecates with a notification on stdout)
     fresh S3
     expect S3 "#(#Unix64Platform 'wasm64' 8 'unix' #NullFFIBackend)" $P eval \
-	'{Smalltalk os class name. Smalltalk vm architectureName. Smalltalk vm wordSize.
+	'{OSPlatform current class name. Smalltalk vm architectureName. Smalltalk vm wordSize.
 	  Smalltalk vm getSystemAttribute: 1001. FFIBackend current class name}'
 
     fresh S4
@@ -206,7 +208,7 @@ on the host: written by Pharo' s4
 
     # a value of HOME of its own, so that it cannot be the default
     fresh S5
-    s5() ( HOME=$check_dir/home; export HOME; $P eval "Smalltalk os environment at: 'HOME'" )
+    s5() ( HOME=$check_dir/home; export HOME; $P eval "OSEnvironment current at: 'HOME'" )
     expect S5 "'$check_dir/home'" s5
 
     fresh S6
@@ -299,11 +301,15 @@ on the host: written by Pharo' s4
     # setenv is reached through FFI only, which is off
     fresh S17
     expect S17 '#unsupported' $P eval \
-	"[Smalltalk os environment at: 'WASM_T' put: 'x'. #set] on: Error do: [:e | #unsupported]"
+	"[OSEnvironment current at: 'WASM_T' put: 'x'. #set] on: Error do: [:e | #unsupported]"
 
-    # the 13 plugins of the tree, and one for each src/emscripten/plugins/*.c
+    # the 13 plugins of the tree, UUIDPlugin when the CMake cache of the build
+    # turns FEATURE_PLUGIN_UUID on, and one for each src/emscripten/plugins/*.c
     # (WebHostPlugin, then WebDisplayPlugin)
     modules=13
+    if grep -Eiq '^FEATURE_PLUGIN_UUID:BOOL=(ON|TRUE|YES|Y|1)$' "$WASM_DIR/cmake/CMakeCache.txt" 2>/dev/null; then
+	modules=$((modules + 1))
+    fi
     for f in "$SRCDIR"/src/emscripten/plugins/*.c; do
 	if test -f "$f"; then modules=$((modules + 1)); fi
     done
@@ -354,7 +360,7 @@ on the host: written by Pharo' s4
 	s21 0x30000000
 
     # the image of the world (WP11), which boots headless as the stock one
-    if test -f "$WASM_DIR/image/web/Pharo12-web.image"; then
+    if test -f "$WASM_DIR/image/web/Pharo-web.image"; then
 	fresh S22 "$WASM_DIR/image/web"
 	expect S22 '#(7 false)' $P eval '{3 + 4. OSWebDriver isSuitable}'
     else
