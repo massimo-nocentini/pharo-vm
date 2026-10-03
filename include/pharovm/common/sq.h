@@ -148,6 +148,15 @@ sqInt sqGetFilenameFromString(char * aCharBuffer, char * aFilenameString, sqInt 
 
 #include "sqPlatformSpecific.h"
 
+/* Synchronous heartbeat poll, expanded by the interpreter just before the
+   stack-limit check of every interpreted method activation, full block
+   activation and backward jump.  Platforms without a heartbeat thread define
+   it in sqPlatformSpecific.h; everywhere else it expands to nothing.
+*/
+#ifndef PHARO_POLL_HEARTBEAT
+# define PHARO_POLL_HEARTBEAT() ((void)0)
+#endif
+
 /* Interpreter entry points. */
 
 sqInt checkedByteAt(sqInt byteAddress);

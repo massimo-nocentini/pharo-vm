@@ -1818,6 +1818,7 @@ StackInterpreter >> activateNewFullClosure: blockClosure method: theMethod numAr
 
 	"Now check for stack overflow or an event (interrupt, must scavenge, etc)"
 	switched := false.
+	self pollHeartbeat.
 	stackPointer < stackLimit ifTrue:
 		[switched := self handleStackOverflowOrEventAllowContextSwitch: mayContextSwitch].
 	self returnToExecutive: inInterpreter postContextSwitch: switched
@@ -1830,6 +1831,7 @@ StackInterpreter >> activateNewMethod [
 	methodHeader := self activateNewMethodInterpreted.
 
 	"Now check for stack overflow or an event (interrupt, must scavenge, etc)."
+	self pollHeartbeat.
 	stackPointer < stackLimit ifTrue: [
 		switched := self handleStackOverflowOrEventAllowContextSwitch:
 			            (self
@@ -7272,7 +7274,7 @@ StackInterpreter >> ifBackwardsCheckForEvents: offset [
 	"Backward jump means we're in a loop; check for possible interrupts."
 
 	<inline: true>
-	(offset < 0 and: [ stackPointer < stackLimit ]) ifTrue: [
+	(offset < 0 and: [ self pollHeartbeat. stackPointer < stackLimit ]) ifTrue: [
 		self checkForEventsMayContextSwitch: true ]
 ]
 
@@ -10420,6 +10422,16 @@ StackInterpreter >> penultimateLiteralOf: aMethodOop [
 	<api>
 	self assert: (objectMemory isOopCompiledMethod: aMethodOop).
 	^self literal: (objectMemory literalCountOf: aMethodOop) - 2 ofMethod: aMethodOop
+]
+
+{ #category : 'process primitive support' }
+StackInterpreter >> pollHeartbeat [
+	"A platform without a heartbeat thread (Emscripten) drives the heartbeat
+	 synchronously, from a countdown polled just before the stack-limit check of
+	 every interpreted method activation, full block activation and backward jump
+	 (a send answered by a primitive activates nothing and does not poll).
+	 Everywhere else PHARO_POLL_HEARTBEAT() expands to nothing (see sq.h)."
+	<cmacro: '() PHARO_POLL_HEARTBEAT()'>
 ]
 
 { #category : 'internal interpreter access' }
