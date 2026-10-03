@@ -132,7 +132,7 @@ VMMemoryMap >> allocateNewObjectsSpace [
 	
 	self newSpaceStart = memoryMapConfiguration newSpaceInitialAddress 
 		ifFalse: [ 
-			self logError: 'Could not allocate newSpace in the expected place (%p), got %p' _: self newSpaceStart _: memoryMapConfiguration newSpaceInitialAddress.
+			self logError: 'Could not allocate newSpace in the expected place (%p), got %p' _: memoryMapConfiguration newSpaceInitialAddress _: self newSpaceStart.
 			self error: 'Error allocating' ].
 			
 	self newSpaceEnd: self newSpaceStart + newSpaceSizeToAllocate.
@@ -177,7 +177,7 @@ VMMemoryMap >> allocatePermObjectsSpace [
 
 	self permSpaceStart = memoryMapConfiguration permSpaceInitialAddress 
 		ifFalse: [ 
-			self logError: 'Could not allocate permSpace in the expected place (%p), got %p' _: self permSpaceStart _: memoryMapConfiguration permSpaceInitialAddress.
+			self logError: 'Could not allocate permSpace in the expected place (%p), got %p' _: memoryMapConfiguration permSpaceInitialAddress _: self permSpaceStart.
 			self error: 'Error allocating' ].
 
 	self permSpaceEnd: self permSpaceStart + minSize.
