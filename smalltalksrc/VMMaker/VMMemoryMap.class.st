@@ -384,6 +384,11 @@ VMMemoryMap >> ensureAtLeastPermSpaceOf: requestedSize [
 	
 	self permSpaceStart = 0 
 		ifTrue: [ 
+			"WebAssembly memory cannot reach the address of perm space
+			 (src/emscripten/memoryEmscripten.c refuses it): answer false, so
+			 that the perm-space primitives fail rather than abort the VM in
+			 allocatePermObjectsSpace."
+			self cppIf: #__EMSCRIPTEN__ ifTrue: [ ^ false ].
 			self initialPermSpaceSize: requestedSize.
 			self allocatePermObjectsSpace.
 			

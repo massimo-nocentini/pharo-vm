@@ -28,6 +28,7 @@ VMMemoryMapConfigurationFor64Bits >> newSpaceInitialAddress [
 
 "	self cppIf: WIN32 ifTrue: [ ^ 16r480000000 ""18GB"" ]."
 	self cppIf: #__APPLE__ ifTrue: [ ^ 16rF000000000 "960GB" ].
+	self cppIf: #__EMSCRIPTEN__ ifTrue: [ ^ 16r8000000 "128MB" ].
 
 	^ 16r360000000 "13.5GB"
 ]
@@ -51,6 +52,8 @@ VMMemoryMapConfigurationFor64Bits >> stackPagesInitialAddress [
 
 	"self cppIf: WIN32 ifTrue: [ ^ 16r400000000 ""16GB"" ]."
 	self cppIf: #__APPLE__ ifTrue: [ ^ 16rD000000000 "832GB" ].
+	"WebAssembly linear memory starts at 0 and only grows: keep the fixed spaces low."
+	self cppIf: #__EMSCRIPTEN__ ifTrue: [ ^ 16r4000000 "64MB" ].
 
 	^ 16r300000000 "12GB"
 ]
