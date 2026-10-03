@@ -773,6 +773,15 @@ vm_parameters_parse(int argc, const char** argv, VMParameters* parameters)
 #else
 	fullPath = getFullPath(argv[0], fullPathBuffer, FILENAME_MAX);
 #endif
+	if(!fullPath)
+	{
+		/* argv[0] names no file from here (a command found through the
+		   PATH, or a VM whose file system does not hold it): keep it as
+		   it is */
+		strncpy(fullPathBuffer, argv[0], FILENAME_MAX - 1);
+		fullPathBuffer[FILENAME_MAX - 1] = 0;
+		fullPath = fullPathBuffer;
+	}
 	setVMPath(fullPath);
 	free(fullPathBuffer);
 
