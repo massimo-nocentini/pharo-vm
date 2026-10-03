@@ -6,7 +6,7 @@ It builds the StackVM, the interpreter (a JIT needs executable memory), for 64-b
 Two VMs are linked from the same objects:
 
 - a command-line VM for node, with access to the host file system, environment and exit status;
-- a VM for a Web Worker, which a static web site runs: the Console, a Smalltalk REPL with Stop, Save, Download and Upload.
+- a VM for a Web Worker, which a static web site runs: the Console, a Smalltalk REPL with Stop, Save, Download and Open, which starts an image of your own.
 
 The site also has the world page: the Morphic world of the image in a canvas, drawn through the WebDisplayPlugin.
 
@@ -105,8 +105,13 @@ Output streams as the VM writes it, and the terminal keeps the last 20000 lines.
   When the page goes away, the worker tries to store it too, but may not have the time.
 - The browser asks before the page goes while a save is being stored, or when code was changed since the image was last stored.
 - Download gives the image and its `.changes` as last saved.
-- Upload starts an image of your own: choose its `.image` and `.changes`.
+- Open, or a drop of files on the page, starts an image of your own: a Pharo `.zip` as files.pharo.org gives them, even with the files in a directory, or an `.image` with its `.changes`, and its `.sources` when it has one of its own.
+  The page unpacks the zip in the browser, with its progress, while the VM goes on, and checks the size and CRC-32 of every entry and that the image is a 64-bit Spur image.
+  It refuses anything else, and says why (no image or several, not a whole zip, a damaged or encrypted entry, a method other than deflate, a split zip, a 32-bit image), and the session goes on as it was.
+  The `.changes` and the `.sources` are those of the image's base name, or else the only ones of their kind.
+  The image gets its own `.sources` when it has one, and the site's otherwise.
   It replaces the saved image only once it has started: one that crashes or quits before leaves the saved image as it was.
+  The saved image then keeps its own `.sources` too, and the page asks before it replaces a saved image.
 - Reset deletes the saved image, and starts the original one.
   When the saved image itself does not start, the notice offers Reset next to Restart.
 - Restart starts the VM again from the saved image.
@@ -116,7 +121,7 @@ Output streams as the VM writes it, and the terminal keeps the last 20000 lines.
 - For screen readers, a live region next to the status pill says how the VM goes: loading, starting, ready, and how it ended.
 
 On a site built with the world, the Console links to the world page when the image can open it, and offers to save first when something was evaluated since the last save.
-An image that cannot yet (an upload of a stock image) gets the offer "Prepare for the world", which files in the OSWindow-Web package (`CodeImporter evaluateFileNamed: '/pharo/st/web-bootstrap.st'`) and saves.
+An image that cannot yet (a stock image opened from disk) gets the offer "Prepare for the world", which files in the OSWindow-Web package (`CodeImporter evaluateFileNamed: '/pharo/st/web-bootstrap.st'`) and saves.
 
 ## The world page
 
@@ -138,8 +143,10 @@ The canvas has one pixel per CSS pixel and follows the size of the page.
   Download gives the image and its `.changes`.
 - The canvas shows one OSWindow at a time: the newest one that has an event handler, such as the window of the Emergency Debugger, takes the canvas and the input, and the world comes back when it closes.
 - The status pill says Busy while the VM has not slept for a second, or while it does not answer at all (a long primitive).
+- Open, or a drop of files on the page, starts an image of your own, as in the Console.
+  An image without the OSWindow-Web package, a stock image say, is prepared first: the worker boots it with the REPL, files in the package and saves, the pill says Preparing meanwhile, and then the world boots from the saved image.
 - The Console button opens the Console page.
-  When the world has not drawn 30 s after the VM started, or the VM ended before it drew, the notice points to the Console, which can prepare the image or reset it.
+  When the world has not drawn 30 s after the VM started, or the VM ended before it drew, the notice points to the Console, which can run the image or reset it.
 
 The first frame came about 1 s (Chromium) to 1.6 s (Firefox) after the page was opened on localhost, and a key took 35 to 50 ms (median) to reach the canvas.
 
@@ -303,6 +310,11 @@ The database belongs to the directory of the site: `pharo-wasm` for a site at th
 The store is guarded by a per-save id, so that a tab never pairs its `.changes` with the image of another tab.
 In the Console, the worker names the file `/pharo/.pharo-web-world` in `PHARO_WEB_WORLD_FILE`, and the REPL writes there whether the image has OSWebDriver, when it starts and before it saves: so the page knows whether the image can open the world.
 
+What the user opens is read by `open-image.js`, which both pages load: it reads the central directory of a zip, inflates its entries with `DecompressionStream('deflate-raw')` (and takes stored ones as they are), pairs the files, and checks the image's header before the VM is touched.
+The page gives the files to a new worker in `init.upload` (`{image, changes, sources}`).
+A `.sources` of the image's own goes to `/pharo/<its name>` instead of the site's, which is then not fetched, and the saved image keeps it in IndexedDB under the key `Pharo.sources`.
+On the world page, `init.prepare` boots an image that has no OSWindow-Web with the REPL, which evaluates `CodeImporter evaluateFileNamed: '/pharo/st/web-bootstrap.st'. Smalltalk snapshot: true andQuit: false`; the worker answers `prepared {error, saved}`, and the page then boots the world from the saved image.
+
 ### The world
 
 The Pharo 12 world draws itself into a Form, and the VM only blits it.
@@ -319,8 +331,8 @@ The title, the cursor (1-bit Forms, as RGBA), the clipboard and the focus go to 
 In the worker, `display-worker.js` paints the dirty rectangles, straight from the VM's memory, into the OffscreenCanvas that the page transferred to it.
 `world.js` sends it the size of the canvas and the input, which `keymap.js` maps to SDL keycodes, scancodes and modifiers.
 
-A stock image cannot open the world page: its world starts through OSSDL2Driver, which needs the FFI.
-The Console's "Prepare for the world" runs `packaging/emscripten/st/web-bootstrap.st`, which files in the package and switches the fonts, and then saves.
+A stock image cannot open the world as it is: its world starts through OSSDL2Driver, which needs the FFI.
+The world page prepares the stock images that it opens, and the Console offers to ("Prepare for the world"): both run `packaging/emscripten/st/web-bootstrap.st`, which files in the package and switches the fonts, and then save.
 
 ## Tests
 
@@ -345,7 +357,8 @@ On the machine the port was made on, they passed in under 3 minutes:
 | 56-memory-unit | `tests/wasm/memory-unit.c` drives `src/emscripten/memoryEmscripten.c` as Spur does, against a stub of `pharovm/pharo.h`: fixed spaces, segments that grow again where freed ones were and come back zeroed, old space that never leaves its window, and a first segment larger than the window | 55 + 2 | 1 s |
 | 60-vm-harness | `tests/wasm/vm-harness.js`: the web VM and the REPL through `vm-driver.js`, in node, with the default engine and then in Liftoff code only | 32 + 32 | 30 s |
 | 62-web-repl-regress | `tests/wasm/web-repl-regress.js`, through `vm-driver.js` as lane 60: a Stop of an evaluation that has not started yet, a Warning that nothing handles, where a syntax error is, and the file in which the REPL tells the page about its image | 4 | 3 s |
-| 70-worker-harness | `tests/wasm/worker-harness.js`: `vm-worker.js` as staged, in worker threads behind a shim of the worker globals: the protocol, Stop, output credit, the downloads, persistence, two workers on one saved image | 17 | 25 s |
+| 70-worker-harness | `tests/wasm/worker-harness.js`: `vm-worker.js` as staged, in worker threads behind a shim of the worker globals: the protocol, Stop, output credit, the downloads, persistence, two workers on one saved image, an image opened with a `.sources` of its own, and the preparation of an image for the world | 19 | 30 s |
+| 72-open-image | `tests/wasm/open-image.test.mjs` on `open-image.js` in node: zips (deflated and stored entries, data descriptors, UTF-8 names, directories and the files that the Finder adds, zip64), how the files are paired, every refusal, the image headers, drops, and the build's stock image zipped as files.pharo.org does and opened; `OPEN_ZIPS`, paths separated by colons, adds zips of your own | 11 | 2 s |
 | 80-world-harness | `tests/wasm/keymap.test.mjs`, then `tests/wasm/world-harness.mjs`, which plays the world page in node with a memory framebuffer, and `tests/wasm/st/osweb-native.st` on the native VM | 16 + 14 + 27 | 16 s |
 | 82-osweb-windows | `tests/wasm/st/osweb-windows.st` on the native VM: a second OSWindow without an event handler leaves the world shown, and the window of the Emergency Debugger takes the canvas and the input, then gives them back | 11 | 10 s |
 
@@ -388,8 +401,9 @@ or for one spec, on any staged site:
 
     PLAYWRIGHT_MODULE=/path/to/node_modules/playwright BROWSERS=chromium,firefox node tests/wasm/page.spec.mjs build-wasm/web
 
-The Console spec has 33 checks per browser, and passed in Chromium 153 and Firefox 155 in about 80 s.
-The world spec has 25, and passed in both in about 80 s.
+The Console spec has 37 checks per browser, and passed in Chromium 153 and Firefox 155 in about 90 s.
+The world spec has 29, and passed in both in about 100 s.
+Both open images from disk as a user would, through the file chooser and by drops; `OPEN_ZIPS` (paths separated by colons, Pharo downloads say) makes the Console spec open those zips too.
 `tests/wasm/pages-regress.spec.mjs` holds regression checks of the pages, and runs the same way; `make wasm-check-browser` does not run it.
 `SHOTS=1` saves screenshots of the pages, light and dark, at 1280 and 360 px, in `build-wasm/tests-run/shots`.
 

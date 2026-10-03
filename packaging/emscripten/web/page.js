@@ -2,8 +2,8 @@
 //
 // The page side of the REPL: owns the VM's worker (vm-worker.js, see there
 // for the message protocol), renders its output, and handles input,
-// history, Stop, Save, Download, Upload, Reset and the theme.  No
-// dependencies.
+// history, Stop, Save, Download, Open, Reset and the theme.  No
+// dependencies but open-image.js.
 //
 // - pharo-web.wasm is compiled once here and handed to every worker, so
 //   Restart only instantiates it.  A generation number per worker drops
@@ -20,10 +20,17 @@
 // - The worker keeps the image in this browser whenever the image is saved,
 //   by Save or otherwise, and boots it the next time; Reset forgets it.
 //   Another tab may save over it: this one says so, and Save keeps it again.
-//   An uploaded image is kept once it has started (its first prompt): one
+//   An opened image is kept once it has started (its first prompt): one
 //   that crashes or quits before is not, and Restart boots the saved image
 //   again.  When the saved image itself does not start, the notice offers
 //   Reset next to Restart.
+// - Open (or files dropped on the page) starts an image of your own: a
+//   Pharo .zip, or an .image, its .changes and its .sources, which
+//   open-image.js chooses, unpacks and checks while the VM goes on, the
+//   notice saying how far it got.  Only then is the VM replaced: a file it
+//   cannot open leaves the session as it was.  The image's own .sources
+//   goes with it (the worker keeps it with the image), else it gets the
+//   one of the site.
 // - The world page boots the saved image: when something was evaluated
 //   since it was saved, its link offers to Save first.  While a save is
 //   being stored, or code was changed that the saved image has not (the
@@ -256,7 +263,8 @@
   let evaluated = false, edited = false, storing = false;
   let afterSave = null;                 // what to do once the next save is stored
   let leaving = false;                  // the page goes, and asked first
-  let upload = null;                    // {image, changes} to boot until the worker keeps it
+  let upload = null;                    // {name, image, changes, sources} to boot until the worker keeps it
+  let opening = false;                  // Open unpacks files
   let source = null;                    // where the image of the worker came from (ready)
   const reqs = new Map();
   let reqId = 0;
@@ -293,7 +301,7 @@
     for (const id of ['send', 'stop', 'save']) $(id).disabled = !on;
     $('download').disabled = !(worker && ready);
     $('reset').disabled = !(worker && persisted);
-    $('upload-btn').disabled = !!unavailable;
+    $('open').disabled = !!unavailable || opening;
     $('restart').disabled = !!unavailable;
     $('world').hidden = !(world && prepared);
   }
@@ -428,7 +436,7 @@
     let alt;
     if (!prompted && !eofSent && source === 'upload') {
       upload = null;
-      notice = 'The uploaded image did not start; it was not kept.';
+      notice = 'The opened image did not start; it was not kept.';
     } else if (!prompted && !eofSent && source === 'saved') {
       notice = 'The image saved in this browser did not start.';
       alt = { label: 'Reset saved image', action: resetSaved };
@@ -445,7 +453,8 @@
     if (m.source === 'saved')
       note('Started the image saved in this browser on ' + new Date(m.savedAt).toLocaleString() + '.');
     else if (m.source === 'upload')
-      note('Started the uploaded image.');
+      note('Started the opened image, ' + (upload ? upload.name : m.image) +
+           (upload && !upload.sources && m.sources ? ', with the .sources of this site, ' + m.sources : '') + '.');
     if (m.storageError) note('Note: ' + m.storageError + '.');
     if (world && !prepared)
       showNotice('This image cannot open the Pharo world yet.', 'Prepare for the world', prepareWorld);
@@ -458,7 +467,7 @@
     lastMsgAt = performance.now();
     switch (m.type) {
     case 'progress': {
-      const pct = Math.floor(100 * m.loaded / Math.max(1, m.total)) + '%';
+      const pct = (m.total ? Math.floor(100 * m.loaded / m.total) : 100) + '%';
       loadedText = m.phase === 'boot' ? 'Starting' : 'Loading ' + pct;
       const loading = $('loading');
       if (loading) {
@@ -496,7 +505,7 @@
       const then = afterSave;
       afterSave = null;
       if (m.error) {
-        showNotice((m.upload ? 'The uploaded image runs, but ' : 'Saved, but ') + m.error + '.', 'Download', download);
+        showNotice((m.upload ? 'The opened image runs, but ' : 'Saved, but ') + m.error + '.', 'Download', download);
       } else {
         upload = null;                  // the slot holds this VM's image now
         persisted = true;
@@ -509,7 +518,7 @@
         } else if (unprepared)
           showNotice('This image cannot open the Pharo world yet.', 'Prepare for the world', prepareWorld);
         else if ($('notice').hidden)    // e.g. not over the offer to prepare it for the world
-          showNotice('The uploaded image is now kept in this browser.', null, null, 6000);
+          showNotice('The opened image is now kept in this browser.', null, null, 6000);
         if (then && !m.upload) then();
       }
       updateControls();
@@ -589,7 +598,7 @@
     worker.postMessage({ type: 'eof' });
   }
 
-  // ---- Save, Download, Upload, Reset, and the world
+  // ---- Save, Download, Open, Reset, and the world
 
   function echo(text) {
     emit('in', text + '\n');
@@ -627,23 +636,52 @@
     note('Downloaded ' + files.map(f => f.name + ' (' + mb(f.data.length) + ')').join(' and ') + '.');
   }
 
-  async function uploadFiles(files) {
-    const image = files.find(f => /\.image$/i.test(f.name));
-    const changes = files.find(f => /\.changes$/i.test(f.name));
-    if (!image) { note('Choose a .image file, and its .changes.'); return; }
-    if (persisted && !confirm('Replace the image saved in this browser with ' + image.name + '?')) return;
-    let data;
+  // Open the files chosen or dropped (open-image.js); the VM is replaced
+  // only once they are unpacked and checked.  The progress goes to the
+  // notice, which is kept quiet meanwhile (aria-busy): the live region says
+  // what is unpacked, once.
+  async function openFiles(files) {
+    if (unavailable || opening || !files.length) return;
+    opening = true;
+    updateControls();
+    let opened = null, what = '';
     try {
-      data = {
-        image: new Uint8Array(await image.arrayBuffer()),
-        changes: changes ? new Uint8Array(await changes.arrayBuffer()) : new Uint8Array(0),
+      const choice = await PharoOpen.choose(files);
+      if (persisted && !confirm('Replace the image saved in this browser with ' + choice.name + '?')) return;
+      let shown = -1;
+      const progress = (loaded, total) => {
+        const pct = Math.floor(100 * loaded / Math.max(1, total));
+        if (pct !== shown) showNotice('Unpacking ' + choice.from + '… ' + (shown = pct) + '%');
       };
-    } catch (e) { note('Could not read ' + image.name + ': ' + e.message); return; }
-    upload = data;
+      if (choice.from) {
+        progress(0, 1);
+        $('notice').setAttribute('aria-busy', 'true');
+        say('Unpacking ' + choice.from);
+      }
+      opened = await PharoOpen.load(choice, progress);
+      what = PharoOpen.describe(choice);
+    } catch (e) {
+      const text = String((e && e.message) || e);
+      note('Could not open it: ' + text);
+      showNotice(text, 'Open another', chooseFile);
+    } finally {
+      opening = false;
+      $('notice').removeAttribute('aria-busy');
+      updateControls();
+    }
+    if (!opened) return;
+    hideNotice();
+    upload = opened;
     render();
-    note('Starting ' + image.name + (changes ? ' with ' + changes.name : ', without a .changes') + '…');
+    note('Starting ' + what + '…');
     spawn();
   }
+  const chooseFile = () => $('open-file').click();
+  PharoOpen.drops(window, {
+    enabled: () => !$('open').disabled,
+    show: on => { $('drop').hidden = !on; },
+    open: openFiles,
+  });
 
   async function resetSaved() {
     if (!worker) return;
@@ -784,11 +822,11 @@
   $('restart').addEventListener('click', restart);
   $('save').addEventListener('click', () => { save(); refocus(); });
   $('download').addEventListener('click', download);
-  $('upload-btn').addEventListener('click', () => $('upload').click());
-  $('upload').addEventListener('change', e => {
+  $('open').addEventListener('click', chooseFile);
+  $('open-file').addEventListener('change', e => {
     const files = [...e.target.files];
     e.target.value = '';
-    uploadFiles(files);
+    openFiles(files);
   });
   $('reset').addEventListener('click', resetSaved);
   $('clear').addEventListener('click', () => { clearTerm(); refocus(); });

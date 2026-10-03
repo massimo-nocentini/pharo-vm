@@ -6,7 +6,9 @@
   canvas: the worker draws it there (display-worker.js), and world.js
   passes it the pointer, wheel and keyboard (keymap.js), the size of the
   canvas, pastes and focus.  The image is the one the Console page saves
-  in this browser, or the build's.  The build (stage.mjs) replaces the
+  in this browser, or the build's, or one that Open gives (open-image.js),
+  which the worker prepares for the world when it lacks OSWindow-Web.
+  The build (stage.mjs) replaces the
   BUILD placeholder, in the pharo-build meta tag and the URLs below, with a
   build id, which the page passes as ?v= on every script, worker and .wasm
   URL.  No external resources: it must be served over plain HTTP (make
@@ -43,6 +45,7 @@
   --bad: #b42318;
   --shadow: 0 1px 2px rgb(15 30 50 / .06), 0 4px 16px rgb(15 30 50 / .06);
   --float: 0 2px 6px rgb(15 30 50 / .12), 0 8px 28px rgb(15 30 50 / .14);
+  --scrim: rgb(15 30 50 / .32);
   --radius: 10px;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
   color-scheme: light;
@@ -70,6 +73,7 @@
     --bad: #ff8a80;
     --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 6px 20px rgb(0 0 0 / .3);
     --float: 0 2px 6px rgb(0 0 0 / .5), 0 8px 28px rgb(0 0 0 / .45);
+    --scrim: rgb(0 0 0 / .55);
     color-scheme: dark;
   }
 }
@@ -95,6 +99,7 @@
   --bad: #ff8a80;
   --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 6px 20px rgb(0 0 0 / .3);
   --float: 0 2px 6px rgb(0 0 0 / .5), 0 8px 28px rgb(0 0 0 / .45);
+  --scrim: rgb(0 0 0 / .55);
   color-scheme: dark;
 }
 
@@ -199,7 +204,7 @@ button { font: inherit; color: inherit; }
 .pill[data-state="running"] { color: var(--text); }
 .pill[data-state="busy"] .dot { background: var(--busy); animation: pulse 1s ease-in-out infinite; }
 .pill[data-state="saving"] .dot { background: var(--sleep); animation: pulse 1s ease-in-out infinite; }
-.pill[data-state="loading"] .dot, .pill[data-state="starting"] .dot { background: var(--wait); animation: pulse 1s ease-in-out infinite; }
+.pill[data-state="loading"] .dot, .pill[data-state="starting"] .dot, .pill[data-state="preparing"] .dot { background: var(--wait); animation: pulse 1s ease-in-out infinite; }
 .pill[data-state="exited"] .dot, .pill[data-state="crashed"] .dot, .pill[data-state="error"] .dot { background: var(--bad); }
 @keyframes pulse { 50% { opacity: .3; } }
 @media (prefers-reduced-motion: reduce) { .pill .dot { animation: none !important; } }
@@ -293,6 +298,37 @@ button { font: inherit; color: inherit; }
 .notice span { flex: 1; min-width: 12ch; overflow-wrap: anywhere; }
 .notice .close { min-height: 30px; padding: 0 8px; }
 
+/* what a drag of files over the page shows: dropping them opens them */
+.drop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--scrim);
+  pointer-events: none;
+}
+.drop-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: min(420px, 100%);
+  padding: 26px 22px;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--float);
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+}
+.drop-card svg { width: 30px; height: 30px; color: var(--accent); }
+.drop-card p { margin: 0; }
+.drop-card strong { display: block; color: var(--text); font-size: 15px; font-weight: 600; }
+
 @media (max-width: 760px) {
   .brand h1 { display: none; }
   .toolbar .label, .top .label { display: none; }
@@ -329,6 +365,10 @@ button { font: inherit; color: inherit; }
       <button class="btn ghost" id="download" type="button" aria-label="Download" title="Download the image and its .changes, as last saved" disabled>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg><span class="label">Download</span>
       </button>
+      <button class="btn ghost" id="open" type="button" aria-label="Open image" title="Start an image of your own: a Pharo .zip (as files.pharo.org has them), or an .image with its .changes and its .sources; one without OSWindow-Web is prepared for the world first. You can also drop them on the page.">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V6a2 2 0 0 1 2-2h3.5l2 2H18a2 2 0 0 1 2 2v3"/><path d="M4 20h14.4a1.5 1.5 0 0 0 1.4-1l2.1-6.4a1.2 1.2 0 0 0-1.1-1.6H7.7a1.5 1.5 0 0 0-1.4 1z"/></svg><span class="label">Open</span>
+      </button>
+      <input type="file" id="open-file" accept=".zip,.image,.changes,.sources" multiple hidden>
     </div>
     <span class="grow"></span>
     <a class="btn console" id="console" href="index.html" title="The Console: a Smalltalk REPL on the image saved in this browser">
@@ -359,8 +399,16 @@ button { font: inherit; color: inherit; }
   </main>
 </div>
 
+<div class="drop" id="drop" hidden aria-hidden="true">
+  <div class="drop-card">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V6a2 2 0 0 1 2-2h3.5l2 2H18a2 2 0 0 1 2 2v3"/><path d="M4 20h14.4a1.5 1.5 0 0 0 1.4-1l2.1-6.4a1.2 1.2 0 0 0-1.1-1.6H7.7a1.5 1.5 0 0 0-1.4 1z"/></svg>
+    <p><strong>Drop to open</strong>a Pharo .zip, or an .image with its .changes and its .sources</p>
+  </div>
+</div>
+
 <noscript><p style="padding:16px">This page needs JavaScript and WebAssembly.</p></noscript>
 <script src="keymap.js?v=@BUILD@"></script>
+<script src="open-image.js?v=@BUILD@"></script>
 <script src="world.js?v=@BUILD@"></script>
 </body>
 </html>

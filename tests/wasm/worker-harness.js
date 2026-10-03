@@ -16,9 +16,14 @@
 //
 // The test plays the page: it sends the messages of vm-worker.js's protocol
 // and acks the output it gets.  Every session has a URL prefix of its own,
-// so that the server can log its requests and serve it as asked.  Prints
-// every case and their count, and exits with status 1 if any fails.  Lane
-// 70 (tests/wasm/lanes/70-worker-harness.sh) runs it.
+// so that the server can log its requests and serve it as asked (with
+// Content-Encoding: gzip, or other contents for some files).  Besides the
+// protocol, Stop, the output credit, the downloads and the persistence, it
+// checks what Open gives the worker: an image with a .sources of its own,
+// which the slot keeps with it, and the preparation for the world of an
+// image without OSWindow-Web (init.prepare).  Prints every case and their
+// count, and exits with status 1 if any fails.  Lane 70
+// (tests/wasm/lanes/70-worker-harness.sh) runs it.
 
 'use strict';
 const { Worker, MessageChannel } = require('worker_threads');
@@ -119,7 +124,7 @@ const prelude = `
 
 // ---- the server: WEB_DIR under /s<session>/, each with its own log and mode
 
-const servers = new Map();              // session number -> {log, encodeGzip}
+const servers = new Map();              // session number -> {log, encodeGzip, override}
 let base = null, serveHandler = null;
 function startServer() {
   return import(pathToFileURL(path.join(srcDir, 'packaging', 'emscripten', 'tools', 'serve.mjs'))).then(serve => {
@@ -130,6 +135,12 @@ function startServer() {
       if (!s) { res.writeHead(404); res.end(); return; }
       const rel = m[2].replace(/\?.*/, '');
       s.log.push(rel);
+      // other contents for this file
+      if (s.override && rel in s.override) {
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+        res.end(s.override[rel]);
+        return;
+      }
       // as a server that sends .gz files with Content-Encoding: gzip, which
       // the client inflates on the way
       if (s.encodeGzip && rel.endsWith('.gz')) {
@@ -170,12 +181,12 @@ const sessions = [];
 
 // One worker.  `autoAck' acks every output message, as the page does after
 // rendering it.
-function session(init = {}, { autoAck = true, encodeGzip = false, display = false } = {}) {
+function session(init = {}, { autoAck = true, encodeGzip = false, display = false, override = null } = {}) {
   const n = ++sessionCount;
   const s = { n, msgs: [], out: '', err: '', states: [], progress: [], ready: null, exit: null, crash: null,
-              saved: [], superseded: 0, files: [], ticks: 0, error: null, diag: '', log: [],
+              saved: [], prepared: null, superseded: 0, files: [], ticks: 0, error: null, diag: '', log: [],
               markAt: 0, errAt: 0, stateAt: 0, msgAt: 0, acked: 0 };
-  servers.set(n, { log: s.log, encodeGzip });
+  servers.set(n, { log: s.log, encodeGzip, override });
   const store = new MessageChannel();
   store.port1.on('message', async ({ n: id, op, args }) => {
     try {
@@ -216,6 +227,7 @@ function session(init = {}, { autoAck = true, encodeGzip = false, display = fals
     case 'state':    s.states.push(m.state); break;
     case 'tick':     s.ticks++; break;
     case 'saved':    s.saved.push(m); break;
+    case 'prepared': s.prepared = m; break;
     case 'superseded': s.superseded++; break;
     case 'file':     s.files.push(m); break;
     case 'exit':     s.exit = m.code; break;
@@ -271,6 +283,8 @@ const val = v => new RegExp('(^|> )' + v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') 
 const fetched = (s, name) => s.log.includes('/' + manifest.files.find(f => f.path === name).url);
 const imageName = manifest.image, changesName = imageName.replace(/\.image$/, '.changes');
 const sourcesName = manifest.files.find(f => f.path.endsWith('.sources')).path;
+// a file of the manifest, inflated
+const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, manifest.files.find(f => f.path === name).url)));
 
 (async () => {
   const t0 = now();
@@ -749,6 +763,126 @@ const sourcesName = manifest.files.find(f => f.path.endsWith('.sources')).path;
     let e = null;
     try { await PharoStorage.open(PharoStorage.indexedDB(refused)).load(); } catch (x) { e = x; }
     assert(e && e.unavailable === true && e.name === 'SecurityError' && /insecure/.test(e.message), 'load: ' + e);
+    // the .sources of a slot: saved, loaded, kept as stored by a save of the
+    // slot that has it, written again when another page saved meanwhile,
+    // deleted by a save without one
+    await st.reset();
+    const src = { name: 'Other.sources', data: new Blob([bytes(11)]) };
+    const s1 = await st.save(bytes(3), bytes(2), {}, src, null);
+    const stored = m.map.get('Pharo.sources');
+    assert(s1.sources === 'Pharo.sources' && s1.sourcesName === 'Other.sources' && s1.sourcesSize === 11 && stored.size === 11,
+           'saved with its .sources: ' + JSON.stringify(s1));
+    const l1 = await st.load();
+    assert(l1.sources && l1.sources.name === 'Other.sources' && l1.sources.data.length === 11, 'loaded with it');
+    const s2 = await st.save(bytes(4), bytes(2), {}, src, s1);
+    assert(m.map.get('Pharo.sources') === stored && m.map.get('meta').id === s2.id && s2.sourcesSize === 11,
+           'kept as stored when the slot had it');
+    const other = await st.save(bytes(5), bytes(2), {}, null, null);
+    assert(!m.map.has('Pharo.sources') && !other.sources, 'deleted by a save without one');
+    const s3 = await st.save(bytes(4), bytes(2), {}, { name: 'Other.sources', data: bytes(11) }, s2);
+    assert(m.map.get('Pharo.sources').size === 11 && s3.sourcesName === 'Other.sources', 'written again once superseded');
+    const l3 = await st.load();
+    assert(l3.image.length === 4 && l3.sources.data.length === 11, 'the slot of s3');
+    m.map.delete('Pharo.sources');
+    e = null;
+    try { await st.load(); } catch (x) { e = x; }
+    assert(e && /\.sources of the saved image is missing/.test(e.message), 'a missing .sources: ' + e);
+  });
+
+  await check('18 an upload with a .sources of its own: in /pharo, not fetched; the slot keeps it; a save does not write it again', async () => {
+    memory.map.clear();
+    // the .sources of the site, with a line more: the same name, another size
+    const site = manifestFile(sourcesName);
+    const own = Buffer.concat([site, Buffer.from('\r"harness: a .sources of its own"\r')]);
+    const image = manifestFile(imageName), changes = manifestFile(changesName);
+    const sizeOfSources = '(FileLocator imageDirectory / ' + JSON.stringify(sourcesName).replace(/"/g, "'") + ') size\n';
+    // Blobs, as open-image.js gives them
+    const U = session({ upload: { image: new Blob([image]), changes: new Blob([changes]),
+                                  sources: { name: sourcesName, data: new Blob([own]) } } });
+    try {
+      await U.started();
+      assert(U.ready.source === 'upload' && U.ready.sources === sourcesName, 'ready ' + JSON.stringify(U.ready));
+      assert(!fetched(U, sourcesName) && !fetched(U, imageName), 'nothing fetched: ' + U.log.join(' '));
+      U.send(sizeOfSources);
+      await U.expectOut(val(String(own.length)));
+      await U.prompt();
+      U.send('(Object >> #printString) sourceCode lines first\n');
+      await U.expectOut(val("'printString'"));
+      await U.prompt();
+      await waitFor('saved {upload}', () => U.saved.length, 30000);
+      assert(!U.saved[0].error, 'saved ' + JSON.stringify(U.saved[0]));
+      const meta = memory.map.get('meta');
+      assert(meta.sourcesName === sourcesName && meta.sourcesSize === own.length &&
+             memory.map.get('Pharo.sources').size === own.length, 'the slot keeps it: ' + JSON.stringify(meta));
+    } finally { await U.close(); }
+    const R = session();
+    try {
+      await R.started();
+      current = R;
+      assert(R.ready.source === 'saved' && R.ready.sources === sourcesName, 'ready ' + JSON.stringify(R.ready));
+      assert(!fetched(R, sourcesName), 'the .sources of the site is not fetched: ' + R.log.join(' '));
+      R.send(sizeOfSources);
+      await R.expectOut(val(String(own.length)));
+      await R.prompt();
+      const stored = memory.map.get('Pharo.sources');
+      R.post({ type: 'save' });
+      await waitFor('saved', () => R.saved.length, 60000);
+      await R.prompt(60000);
+      const meta = memory.map.get('meta');
+      assert(!R.saved[0].error && meta.sourcesName === sourcesName, 'saved ' + JSON.stringify(R.saved[0]));
+      assert(memory.map.get('Pharo.sources') === stored, 'the .sources was written again');
+    } finally { await R.close(); current = S; }
+    // the .sources of the site, given: not fetched, and not kept in the slot
+    const M = session({ upload: { image, changes, sources: { name: sourcesName, data: site } } });
+    try {
+      await M.started();
+      assert(M.ready.sources === sourcesName && !fetched(M, sourcesName), 'not fetched: ' + M.log.join(' '));
+      await waitFor('saved {upload}', () => M.saved.length, 30000);
+      assert(!memory.map.get('meta').sources && !memory.map.has('Pharo.sources'), 'the slot has no .sources of its own');
+    } finally { await M.close(); }
+  });
+
+  const stockDir = path.join(webDir, '..', 'image', 'stock');
+  const stock = manifest.world && fs.existsSync(path.join(stockDir, 'Pharo.image'))
+    ? { image: fs.readFileSync(path.join(stockDir, 'Pharo.image')), changes: fs.readFileSync(path.join(stockDir, 'Pharo.changes')) }
+    : null;
+  if (!stock) console.log('# skip 19: no world image, or no stock image in ' + stockDir);
+  else await check('19 init.prepare: a stock image in the world is prepared in the REPL, saved, and kept; or says why not', async () => {
+    const world = { mode: 'world', prepare: true, display: { canvas: 'stub' } };
+    // an OSWindow-Web.st that defines nothing: web-bootstrap.st fails, and
+    // the image is not saved (but kept, as it booted)
+    memory.map.clear();
+    const F = session(Object.assign({ upload: stock }, world), { display: true, override: { '/st/OSWindow-Web.st': '' } });
+    try {
+      await waitFor('prepared', () => F.prepared || F.crash || F.exit !== null, 120000);
+      assert(F.ready.preparing === true && F.ready.prepared === false, 'ready ' + JSON.stringify(F.ready));
+      assert(!F.msgs.some(m => m.type === 'display'), 'no display while preparing');
+      assert(F.prepared.saved === false && /OSWebDriver/.test(F.prepared.error || ''), 'prepared ' + JSON.stringify(F.prepared));
+      await waitFor('saved {upload}', () => F.saved.length, 30000);
+      await sleep(500);
+      assert(F.saved.length === 1 && F.saved[0].upload && !F.saved[0].prepared && memory.map.get('meta').prepared === false,
+             'only the upload was stored: ' + JSON.stringify(F.saved));
+    } finally { await F.close(); }
+    const t = now();
+    const P = session(Object.assign({ upload: stock }, world), { display: true });
+    try {
+      current = P;
+      await waitFor('prepared', () => P.prepared || P.crash || P.exit !== null, 300000);
+      P.alive();
+      assert(!P.prepared.error && P.prepared.saved === true, 'prepared ' + JSON.stringify(P.prepared));
+      console.log(`#   prepared in ${((now() - t) / 1000).toFixed(1)} s`);
+      const saves = P.saved.map(m => [!!m.upload, m.prepared, !!m.error]);
+      assert(JSON.stringify(saves) === '[[true,false,false],[false,true,false]]', 'saved ' + JSON.stringify(P.saved));
+      assert(P.msgs.indexOf(P.prepared) > P.msgs.indexOf(P.saved[1]), 'prepared after saved');
+      assert(memory.map.get('meta').prepared === true, 'the slot is prepared');
+    } finally { await P.close(); current = S; }
+    const W = session(world, { display: true });
+    try {
+      await waitFor('ready', () => W.ready || W.crash, 60000);
+      assert(W.ready.source === 'saved' && W.ready.prepared === true && W.ready.preparing === false,
+             'ready ' + JSON.stringify(W.ready));
+      assert(W.msgs.some(m => m.type === 'display' && m.kind === 'created'), 'a display');
+    } finally { await W.close(); }
   });
 
   await S.close();

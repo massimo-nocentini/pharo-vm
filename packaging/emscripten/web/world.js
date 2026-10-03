@@ -6,7 +6,7 @@
 // transferred to it as an OffscreenCanvas.  The page sends the display the
 // size of the canvas and its input, as the event records of the image's
 // OSWebDriver (packaging/emscripten/st/OSWindow-Web), and shows what the
-// display asks for.  No dependencies but keymap.js.
+// display asks for.  No dependencies but keymap.js and open-image.js.
 //
 // - pharo-web.wasm is compiled once here and handed to every worker, so a
 //   restart only instantiates it.  A canvas can be transferred only once:
@@ -39,6 +39,15 @@
 // - Save asks the image to save itself (a save request record); the worker
 //   keeps the saved image in this browser, and the next visit, here or in
 //   the Console, boots it.  Download gives the image and its .changes.
+// - Open (or files dropped on the page) starts an image of your own, as in
+//   the Console: open-image.js chooses, unpacks and checks the files while
+//   the world goes on, the notice saying how far it got, and the image
+//   replaces the one saved in this browser once it has started.
+// - An image that cannot open the world (it lacks OSWindow-Web: a stock
+//   image, opened here or in the Console) is prepared for it: the worker
+//   (init.prepare) files in st/web-bootstrap.st and saves it, as the
+//   Console's "Prepare for the world" does, and says "prepared"; the page
+//   then boots the world from the image saved in this browser.
 // - The display's title, cursor (RGBA, as a CSS cursor), clipboard
 //   (navigator.clipboard.writeText) and focus.  When the browser refuses to
 //   write the clipboard, the system clipboard still has older text, which
@@ -47,7 +56,7 @@
 //   another window, or a copy of the page changed the clipboard.
 // - A world that did not paint after START_MS, or a VM that ended before
 //   it painted, may be an image that cannot open the world: the notice
-//   points to the Console, which can prepare it, or reset it.
+//   points to the Console, which can run it, or reset it.
 // - The status pill is no live region: the one next to it says how the VM
 //   goes (loading, starting, running, ended), not how far the loading got.
 //
@@ -91,8 +100,14 @@
 
   let worker = null, gen = 0, ready = false, alive = false, framed = false, state = null;
   let lastMsgAt = 0, idleAt = 0, watchdog = 0, saving = false, loadedText = 'Loading', startTimer = 0;
+  let unavailable = null;               // why the page cannot run the world at all
   let heardAt = 0, pingAt = 0;          // when the worker last said anything, and was asked
   let restarted = '';                   // why the worker was replaced, said until the next one is ready
+  let upload = null;                    // {name, image, changes, sources} to boot until the worker keeps it
+  let kept = false;                     // the worker kept the upload it booted (or failed to)
+  let source = null, persisted = false; // where the image came from, and whether one is saved (ready)
+  let preparing = false;                // the worker prepares the image for the world (ready.preparing)
+  let opening = false;                  // Open unpacks files
   const reqs = new Map();
   let reqId = 0;
   // workers started; frames of this one, when it started and they came, and
@@ -107,6 +122,7 @@
     if (statusText.textContent !== text) statusText.textContent = text;
     if (key === 'loading') say('Loading Pharo');
     else if (key === 'starting') say('Starting Pharo');
+    else if (key === 'preparing') say('Preparing the image for the world');
     else if (key === 'running' && said === 'Starting Pharo') say('The Pharo world is running');
     else if (key === 'exited' || key === 'crashed' || key === 'error') say(text);
   }
@@ -118,6 +134,7 @@
   function updateStatus() {
     if (!alive) return;
     if (!ready) return setStatus('loading', loadedText);
+    if (preparing) return setStatus('preparing', 'Preparing');
     if (!framed) return setStatus('starting', 'Starting');
     if (saving) return setStatus('saving', 'Saving');
     const now = performance.now();
@@ -139,10 +156,11 @@
   }
   setInterval(() => { ping(); updateStatus(); }, BUSY_MS / 4);
   function updateControls() {
-    const on = !!worker && alive && ready;
+    const on = !!worker && alive && ready && !preparing;
     $('stop').disabled = !on;
     $('save').disabled = !(on && framed);
     $('download').disabled = !(worker && ready);
+    $('open').disabled = !!unavailable || opening;
   }
 
   // the card over the canvas: a text, and how far the loading is (0..1),
@@ -218,7 +236,7 @@
     flushPaste(true);
     if (worker) worker.terminate();
     worker = null;
-    alive = ready = framed = saving = false;
+    alive = ready = framed = saving = preparing = kept = false;
     state = null;
     pingAt = 0;
     for (const r of reqs.values()) r.reject(new Error('the VM was restarted'));
@@ -305,6 +323,8 @@
       build: BUILD,
       mode: 'world',
       persist: true,
+      upload: upload || undefined,
+      prepare: true,
       display: { canvas: offscreen, width, height },
     }, [offscreen]);
     // queued by the worker until it is ready, so before the image boots,
@@ -314,14 +334,21 @@
   }
 
   // The VM ended; the worker stays, for Download.  Before the world
-  // painted, the image may be one that cannot open it: the Console can
-  // prepare it, or reset it
+  // painted, the image may be one that cannot open it: the Console can run
+  // it, or reset it.  An upload that did not start is not kept, and Restart
+  // boots the saved image.
   function ended(status, text, notice) {
     clearTimeout(watchdog);
     clearTimeout(startTimer);
+    if (!framed && !kept && source === 'upload') {
+      upload = null;
+      notice = 'The opened image did not start; it was not kept. ' + notice;
+    } else if (preparing) {
+      notice = 'The image could not be prepared for the world: ' + notice;
+    }
     alive = false;
     restarted = '';
-    saving = false;
+    saving = preparing = false;
     releaseAll(false);
     sink.tabIndex = -1;
     setStatus(status, text);
@@ -331,36 +358,70 @@
   }
 
   function respawn() {
+    if (!framed && !kept && source === 'upload') upload = null;   // it hung before it started
     restarted = 'VM restarted (unsaved changes lost).';
     spawn();
   }
 
+  // The worker prepared the image for the world (m.error absent), and the
+  // world boots from the image saved in this browser; or it could not: the
+  // VM still runs the REPL, which Download can save from
+  function onPrepared(m) {
+    preparing = false;
+    if (!m.error) {
+      upload = null;
+      restarted = 'The image is prepared for the world (OSWindow-Web and bitmap fonts), and saved in this browser.';
+      spawn();
+      return;
+    }
+    console.warn('pharo: the image could not be prepared for the world: ' + m.error);
+    alive = false;
+    setStatus('error', 'Not prepared');
+    showOverlay('This image could not be prepared for the world.', false);
+    updateControls();
+    const why = String(m.error).split('\n')[0].replace(/\.$/, '');
+    if (m.saved) showNotice('This image could not be prepared for the world: ' + why + '.', 'Download', download, 0, CONSOLE);
+    else showNotice('This image could not be prepared for the world: ' + why + '.', 'Restart', spawn, 0, CONSOLE);
+  }
+
   function onReady(m) {
     ready = true;
+    source = m.source;
+    persisted = m.persisted;
     if (!m.world) {
       fatal('This build has no world image: build it with WASM_WORLD=ON and a host Pharo (WASM_HOST_PHARO).',
             'Open the Console', 'index.html');
       return;
     }
-    if (!m.prepared) {
-      fatal('The image saved in this browser cannot open the Pharo world yet: in the Console, ' +
-            'choose "Prepare for the world", which saves it prepared.', 'Open the Console', 'index.html');
+    if (!m.prepared && !m.preparing) {
+      fatal('This image cannot open the Pharo world: it lacks OSWindow-Web.', 'Open the Console', 'index.html');
       return;
     }
     const notes = [restarted];
     restarted = '';
     if (m.source === 'saved')
       notes.push('Started the image saved in this browser on ' + new Date(m.savedAt).toLocaleString() + '.');
+    else if (m.source === 'upload')
+      notes.push('Started the opened image, ' + (upload ? upload.name : m.image) + '.');
     if (m.storageError) notes.push('Note: ' + m.storageError + '.');
     const note = notes.filter(Boolean).join(' ');
+    if (m.preparing) {
+      // a stock image: OSWindow-Web is filed in, and the image saved
+      preparing = true;
+      showOverlay('Preparing the image for the world: filing in OSWindow-Web, then saving it…', null);
+      if (note) showNotice(note, null, null, m.storageError ? 10000 : 6000);
+      updateControls();
+      updateStatus();
+      return;
+    }
     if (note) showNotice(note, null, null, m.storageError ? 10000 : 6000);
     showOverlay('Starting Pharo…', null);
     const g = gen;
     startTimer = setTimeout(() => {
       if (g !== gen || framed || !alive) return;
       notStarted = true;
-      showNotice('The world has not opened yet: this image may not open it. In the Console, choose ' +
-                 '"Prepare for the world", or Reset the saved image.', 'Open the Console', 'index.html', 0);
+      showNotice('The world has not opened yet: this image may not open it. The Console can run it, ' +
+                 'or Reset the saved image.', 'Open the Console', 'index.html', 0);
     }, START_MS);
     updateControls();
     updateStatus();
@@ -416,7 +477,7 @@
       lastMsgAt = heardAt;
     switch (m.type) {
     case 'progress': {
-      const fraction = m.loaded / Math.max(1, m.total);
+      const fraction = m.total ? m.loaded / m.total : 1;
       loadedText = m.phase === 'boot' ? 'Starting' : 'Loading ' + Math.floor(100 * fraction) + '%';
       if (m.phase === 'boot') showOverlay('Starting Pharo…', null);
       else showOverlay((m.phase === 'restore' ? 'Restoring the saved image… ' : 'Downloading Pharo… ') +
@@ -441,6 +502,17 @@
         showNotice('This image registered nothing for Stop to interrupt.', 'Restart', spawn, 10000);
       break;
     case 'saved':
+      if (m.upload) {                   // the upload booted, and is kept
+        kept = true;
+        if (m.error) showNotice('The opened image runs, but ' + m.error + '.', 'Download', download);
+        else {
+          upload = null;
+          persisted = true;
+          if (!preparing) showNotice('The opened image is now kept in this browser.', null, null, 6000);
+        }
+        break;
+      }
+      if (preparing) break;             // "prepared" says how it went
       saving = false;
       if (m.error) showNotice('Saved, but ' + m.error + '.', 'Download', download);
       else {
@@ -449,6 +521,9 @@
       }
       inputWhileSaving = false;
       updateStatus();
+      break;
+    case 'prepared':
+      onPrepared(m);
       break;
     case 'superseded':
       // what this VM did since it started is kept nowhere now
@@ -571,7 +646,7 @@
     if (saving) inputWhileSaving = true;
   }
   addEventListener('beforeunload', e => {
-    if (!worker || !alive || !unsaved) return;
+    if (!worker || !alive || !(unsaved || preparing)) return;
     e.preventDefault();
     e.returnValue = '';                 // older browsers ask for it
   });
@@ -831,10 +906,62 @@
     showNotice('Downloaded ' + files.map(f => f.name + ' (' + mb(f.data.length) + ')').join(' and ') + '.', null, null, 6000);
   }
 
+  // ---- Open: an image of your own (open-image.js)
+
+  // Open the files chosen or dropped; the VM is replaced only once they are
+  // unpacked and checked.  The progress goes to the notice, which is kept
+  // quiet meanwhile (aria-busy): the live region says what is unpacked, once.
+  async function openFiles(files) {
+    if (unavailable || opening || !files.length) return;
+    opening = true;
+    updateControls();
+    let opened = null;
+    try {
+      const choice = await PharoOpen.choose(files);
+      const lost = live() && unsaved ? ' What the world did since it was last saved is lost.' : '';
+      if ((persisted || lost) &&
+          !confirm((persisted ? 'Replace the image saved in this browser with ' + choice.name + '?' : 'Open ' + choice.name + '?') + lost))
+        return;
+      let shown = -1;
+      const progress = (loaded, total) => {
+        const pct = Math.floor(100 * loaded / Math.max(1, total));
+        if (pct !== shown) showNotice('Unpacking ' + choice.from + '… ' + (shown = pct) + '%', null, null);
+      };
+      if (choice.from) {
+        progress(0, 1);
+        $('notice').setAttribute('aria-busy', 'true');
+        say('Unpacking ' + choice.from);
+      }
+      opened = await PharoOpen.load(choice, progress);
+    } catch (e) {
+      showNotice(String((e && e.message) || e), 'Open another', chooseFile);
+    } finally {
+      opening = false;
+      $('notice').removeAttribute('aria-busy');
+      updateControls();
+    }
+    if (!opened) return;
+    upload = opened;
+    restarted = '';
+    spawn();
+  }
+  const chooseFile = () => $('open-file').click();
+  PharoOpen.drops(window, {
+    enabled: () => !$('open').disabled,
+    show: on => { $('drop').hidden = !on; },
+    open: openFiles,
+  });
+
   const refocus = () => { if (framed) focusSink(); };
   $('stop').addEventListener('click', () => { stop(); refocus(); });
   $('save').addEventListener('click', () => { save(); refocus(); });
   $('download').addEventListener('click', () => { download(); refocus(); });
+  $('open').addEventListener('click', chooseFile);
+  $('open-file').addEventListener('change', e => {
+    const files = [...e.target.files];
+    e.target.value = '';
+    openFiles(files);
+  });
   $('notice-action').addEventListener('click', () => { const f = noticeAction; hideNotice(); if (f) f(); refocus(); });
   $('notice-close').addEventListener('click', () => { hideNotice(); refocus(); });
 
@@ -854,7 +981,7 @@
 
   // ---- start
 
-  let unavailable = null, consoleWorks = false;
+  let consoleWorks = false;
   if (location.protocol === 'file:')
     unavailable = HTTP_HINT + '\nBrowsers do not run workers or fetch .wasm files from file:// URLs.';
   else if (typeof WebAssembly !== 'object' || typeof Worker !== 'function')

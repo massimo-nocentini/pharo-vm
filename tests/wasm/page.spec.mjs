@@ -9,20 +9,54 @@
 // and dark screenshots at 1280 and 360 px.  Each browser gets a context of
 // its own, so its IndexedDB starts empty.  Exits with status 1 if any check
 // fails or the page logs an error.
+//
+// Open is checked with zips that tests/wasm/lib/zip.mjs writes: the stock
+// image of the build (WASM_DIR/image/stock), zipped in a directory as
+// files.pharo.org does, with a line added to its .sources, so that it is a
+// .sources of its own, which the saved image must keep; one cut short, one
+// without an image and a damaged one.  The Download of a check is opened
+// again, dropped with the .sources of the site.  OPEN_ZIPS names more zips
+// to open (paths separated by colons, such as Pharo downloads of
+// files.pharo.org): each must be unpacked and started with its own
+// .sources, whether its image then runs the REPL or not.
 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { run } from './lib/pw.mjs';
+import { run, dropFiles } from './lib/pw.mjs';
+import { zip, imageZip } from './lib/zip.mjs';
 
 const tmp = fs.mkdtempSync(path.join(process.env.TEST_DIR || os.tmpdir(), 'page-spec-'));
 process.on('exit', () => fs.rmSync(tmp, { recursive: true, force: true }));
+
+// The zips of the checks of Open, written once
+const SOURCES_TAIL = '\r"page.spec.mjs: a .sources of its own"\r';
+let zips = null;
+function specZips(webDir) {
+  if (zips) return zips;
+  const stock = path.join(webDir, '..', 'image', 'stock'), base = 'Pharo12.0-SNAPSHOT-64bit-spec';
+  const sources = fs.readdirSync(stock).find(f => f.endsWith('.sources'));
+  zips = { base, own: path.join(tmp, 'spec12.zip'), cut: path.join(tmp, 'cut.zip'), noImage: path.join(tmp, 'no-image.zip'),
+           damaged: path.join(tmp, 'damaged.zip'), ownSize: fs.statSync(path.join(stock, sources)).size + SOURCES_TAIL.length };
+  const full = imageZip(stock, { base, folder: base, sourcesTail: SOURCES_TAIL });
+  fs.writeFileSync(zips.own, full);
+  fs.writeFileSync(zips.cut, full.subarray(0, full.length >> 1));
+  fs.writeFileSync(zips.noImage, zip([{ name: 'README.txt', data: 'no image here' }, { name: 'Pharo.changes', data: 'x' }]));
+  const image = Buffer.alloc(100000, 1);
+  image.writeUInt32LE(68021, 0);
+  fs.writeFileSync(zips.damaged, zip([{ name: 'Damaged.image', data: image, method: 0, crc: 1 }, { name: 'Damaged.changes', data: 'x' }]));
+  return zips;
+}
+const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 await run(async t => {
   const { page, check, assert, manifest } = t;
   const imageUrl = '/' + manifest.files.find(f => f.path === manifest.image).url;
   const changesUrl = '/' + manifest.files.find(f => f.path === manifest.image.replace(/\.image$/, '.changes')).url;
-  const sourcesUrl = '/' + manifest.files.find(f => f.path.endsWith('.sources')).url;
+  const siteSources = manifest.files.find(f => f.path.endsWith('.sources'));
+  const sourcesUrl = '/' + siteSources.url;
+  // the size of the .sources that the image reads
+  const sourcesSize = `(FileLocator imageDirectory / '${siteSources.path}') size`;
 
   const term = () => page.$eval('#term', e => e.textContent);
   const waitStatus = (st, timeout = 30000) =>
@@ -101,14 +135,38 @@ await run(async t => {
                       new RegExp(src).test(document.getElementById('notice-text').textContent), re.source, { timeout });
   const buttons = p => p.evaluate(() => ['notice-action', 'notice-alt'].map(id => document.getElementById(id))
                                     .filter(b => !b.hidden).map(b => b.textContent));
+  // the meta of the image saved in this browser (vm-storage.js), or null
+  const slotMeta = () => page.evaluate(async () => {
+    const db = await new Promise((resolve, reject) => {
+      const r = indexedDB.open('pharo-wasm', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('files');
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+    try {
+      return await new Promise(resolve => {
+        const r = db.transaction('files').objectStore('files').get('meta');
+        r.onsuccess = () => resolve(r.result || null);
+      });
+    } finally { db.close(); }
+  });
+  async function slotSays(pred, what, timeout = 30000) {
+    let meta = null;
+    for (const t0 = Date.now(); Date.now() - t0 < timeout; await page.waitForTimeout(200))
+      if (pred(meta = await slotMeta())) return meta;
+    throw new Error('the image saved in this browser is not ' + what + ': ' + JSON.stringify(meta));
+  }
 
-  // the texts of the status pill, as they come
+  // the texts of the status pill and of the notice, as they come
   await t.context.addInitScript(() => {
     window.statusLog = [];
+    window.noticeLog = [];
     document.addEventListener('DOMContentLoaded', () => {
-      const el = document.getElementById('status-text');
-      if (el) new MutationObserver(() => window.statusLog.push(el.textContent))
-        .observe(el, { childList: true, characterData: true, subtree: true });
+      for (const [id, log] of [['status-text', window.statusLog], ['notice-text', window.noticeLog]]) {
+        const el = document.getElementById(id);
+        if (el) new MutationObserver(() => log.push(el.textContent))
+          .observe(el, { childList: true, characterData: true, subtree: true });
+      }
     });
   });
 
@@ -295,13 +353,13 @@ await run(async t => {
     await evalTo('Smalltalk at: #PageMarker ifAbsent: [ #none ]', /\n#none\nst> $/);
   });
 
-  await check('Upload starts the downloaded image and keeps it once it prompts, also across a reload', async () => {
+  await check('Open starts the downloaded image and keeps it once it prompts, also across a reload', async () => {
     assert(downloaded, 'nothing downloaded');
     await mark();
-    await page.setInputFiles('#upload', [downloaded.image, downloaded.changes]);
-    await waitSince(/Started the uploaded image\."\n[\s\S]*st> $/, 90000);
+    await page.setInputFiles('#open-file', [downloaded.image, downloaded.changes]);
+    await waitSince(/"Started the opened image, [^"]*Pharo\.image, with the \.sources of this site, [^"]*\."\n[\s\S]*st> $/, 90000);
     await waitStatus('waiting');
-    await noticeSays(page, /The uploaded image is now kept in this browser/, 30000);
+    await noticeSays(page, /The opened image is now kept in this browser/, 30000);
     assert(!(await page.isDisabled('#reset')), 'Reset enabled');
     await evalTo('Smalltalk at: #PageMarker', /\n777\nst> $/);
     const n = t.requests.length;
@@ -310,7 +368,7 @@ await run(async t => {
     await evalTo('Smalltalk at: #PageMarker', /\n777\nst> $/);
   });
 
-  await check('an upload that does not start is not kept: Restart starts the saved image', async () => {
+  await check('an opened image that does not start is not kept: Restart starts the saved image', async () => {
     assert(downloaded, 'nothing downloaded');
     const broken = path.join(tmp, t.name + '-broken.image');
     fs.writeFileSync(broken, fs.readFileSync(downloaded.image).subarray(0, 1 << 20));
@@ -318,19 +376,19 @@ await run(async t => {
     try {
       await mark();
       accept();                           // replace the saved image
-      await page.setInputFiles('#upload', [broken]);
+      await page.setInputFiles('#open-file', [broken]);
       await waitStatus('crashed', 90000);
-      await noticeSays(page, /^The uploaded image did not start; it was not kept\.$/, 5000);
+      await noticeSays(page, /^The opened image did not start; it was not kept\.$/, 5000);
       assert(JSON.stringify(await buttons(page)) === '["Restart"]', 'buttons ' + JSON.stringify(await buttons(page)));
       // the saved image is still there: Reset may delete it, and another
       // upload asks before it replaces it
       assert(!(await page.isDisabled('#reset')), 'Reset is disabled');
       let asked = null;
       onDialog(d => { asked = d.message(); d.dismiss(); });
-      await page.setInputFiles('#upload', [broken]);
+      await page.setInputFiles('#open-file', [broken]);
       for (let i = 0; i < 50 && asked === null; i++) await new Promise(r => setTimeout(r, 100));
       assert(/^Replace the image saved in this browser with /.test(asked || ''), 'asked ' + JSON.stringify(asked));
-      assert(await page.$eval('#status', e => e.dataset.state) === 'crashed', 'a dismissed upload starts nothing');
+      assert(await page.$eval('#status', e => e.dataset.state) === 'crashed', 'a dismissed Open starts nothing');
       await mark();
       await page.click('#notice-action');
       await waitSince(/Started the image saved in this browser[\s\S]*st> $/, 90000);
@@ -339,16 +397,86 @@ await run(async t => {
     await evalTo('Smalltalk at: #PageMarker', /\n777\nst> $/);
   });
 
+  await check('what cannot be opened: the notice says why, offers another, and the session goes on', async () => {
+    const z = specZips(t.webDir);
+    for (const [file, re] of [[z.cut, /^cut\.zip is not a zip file, or not a whole one/],
+                              [z.noImage, /^no-image\.zip holds no \.image file\.$/],
+                              [z.damaged, /^damaged\.zip: Damaged\.image is damaged \(its CRC-32 does not match\)$/]]) {
+      await page.evaluate(() => { document.getElementById('notice-text').textContent = ''; });
+      accept();                           // (a zip of an image asks before it unpacks)
+      await page.setInputFiles('#open-file', file);
+      await noticeSays(page, re, 30000);
+      assert(JSON.stringify(await buttons(page)) === '["Open another"]', 'buttons ' + JSON.stringify(await buttons(page)));
+      assert(await page.$eval('#status', e => e.dataset.state) === 'waiting', 'the VM goes on');
+    }
+    onDialog(null);
+    await evalTo('Smalltalk at: #PageMarker', /\n777\nst> $/);
+  });
+
+  await check('Open a Pharo zip: unpacked, with the progress; started with its own .sources; kept once it prompts', async () => {
+    const z = specZips(t.webDir);
+    await mark();
+    accept();                             // replace the saved image
+    await page.evaluate(() => { window.noticeLog.length = 0; });
+    const n = t.requests.length;
+    await page.setInputFiles('#open-file', z.own);
+    await waitSince(new RegExp('"Starting ' + esc(z.base) + '\\.image from spec12\\.zip…"\\n[\\s\\S]*' +
+                               '"Started the opened image, ' + esc(z.base) + '\\.image\\."\\n[\\s\\S]*st> $'), 90000);
+    await waitStatus('waiting');
+    // kept with its .sources (a stock image of a site with the world is
+    // offered the preparation instead of the notice that says so)
+    await slotSays(m => m && m.sourcesName === siteSources.path && m.sourcesSize === z.ownSize && m.imageSize > 50e6,
+                   'the opened one, with its .sources');
+    await noticeSays(page, /The opened image is now kept in this browser|This image cannot open the Pharo world yet/, 30000);
+    const log = await page.evaluate(() => window.noticeLog);
+    assert(log.some(s => /^Unpacking spec12\.zip… [1-9]\d?%$/.test(s)) && log.includes('Unpacking spec12.zip… 100%'),
+           'progress ' + JSON.stringify(log.slice(0, 6)));
+    const served = requestsSince(n);
+    assert(![imageUrl, changesUrl, sourcesUrl].some(u => served.includes(u)), 'fetched ' + served.join(' '));
+    await evalTo(sourcesSize, new RegExp('\\n' + z.ownSize + '\\nst> $'));
+    await evalTo('(Object >> #printString) sourceCode lines first', /\n'printString'\nst> $/);
+    await evalTo('Smalltalk at: #PageMarker ifAbsent: [ #none ]', /\n#none\nst> $/);
+  });
+
+  await check('reload: the opened image boots from IndexedDB, with its own .sources', async () => {
+    const z = specZips(t.webDir);
+    const n = t.requests.length;
+    await reload();
+    const served = requestsSince(n);
+    assert(![imageUrl, changesUrl, sourcesUrl].some(u => served.includes(u)), 'fetched ' + served.join(' '));
+    assert(/Started the image saved in this browser/.test(await term()), 'from the slot');
+    await evalTo(sourcesSize, new RegExp('\\n' + z.ownSize + '\\nst> $'));
+  });
+
+  await check('a drop of the downloaded image, its .changes and the .sources of the site opens it; that .sources is not kept', async () => {
+    assert(downloaded, 'nothing downloaded');
+    await mark();
+    accept();                             // replace the saved image
+    const d = await dropFiles(page, [downloaded.image, downloaded.changes,
+                                     path.join(t.webDir, '..', 'image', 'stock', siteSources.path)]);
+    assert(d.shown && d.took && d.hidden, 'the drop ' + JSON.stringify(d));
+    await waitSince(new RegExp('"Starting [^"]*Pharo\\.image with [^"]*Pharo\\.changes and ' + esc(siteSources.path) + '…"\\n' +
+                               '[\\s\\S]*"Started the opened image, [^"]*Pharo\\.image\\."\\n[\\s\\S]*st> $'), 90000);
+    await waitStatus('waiting');
+    await noticeSays(page, /The opened image is now kept in this browser/, 30000);
+    await slotSays(m => m && !m.sources && !m.sourcesName, 'without a .sources of its own');
+    await evalTo('Smalltalk at: #PageMarker', /\n777\nst> $/);
+    const n = t.requests.length;
+    await reload();
+    assert(requestsSince(n).includes(sourcesUrl) && !requestsSince(n).includes(imageUrl), 'restored, with the .sources of the site');
+    await evalTo(sourcesSize, new RegExp('\\n' + siteSources.size + '\\nst> $'));
+  });
+
   // An image without OSWindow-Web, the stock one of the build, is offered
   // the preparation for the world page
   const stock = path.join(t.webDir, '..', 'image', 'stock');
   const stockImage = manifest.world && fs.existsSync(stock) && fs.readdirSync(stock).find(f => f.endsWith('.image'));
-  if (stockImage) await check('Prepare for the world: an uploaded stock image gets OSWindow-Web, saved', async () => {
+  if (stockImage) await check('Prepare for the world: an opened stock image gets OSWindow-Web, saved', async () => {
     assert(await page.isHidden('#world') === false, 'the world image links to the world');
     await mark();
     accept();                           // replace the saved image
-    await page.setInputFiles('#upload', [path.join(stock, stockImage), path.join(stock, stockImage.replace(/\.image$/, '.changes'))]);
-    await waitSince(/Started the uploaded image[\s\S]*st> $/, 90000);
+    await page.setInputFiles('#open-file', [path.join(stock, stockImage), path.join(stock, stockImage.replace(/\.image$/, '.changes'))]);
+    await waitSince(/Started the opened image[\s\S]*st> $/, 90000);
     await waitStatus('waiting');
     await page.waitForFunction(() => /cannot open the Pharo world/.test(document.getElementById('notice-text').textContent));
     assert(await page.isHidden('#world'), 'no world link yet');
@@ -585,6 +713,35 @@ await run(async t => {
     assert(/^End the session\?/.test(asked), 'confirmation asked: ' + JSON.stringify(asked));
     await page.click('#notice-action');
     await started();
+  });
+
+  // (last: they leave the image they opened in this browser)
+  for (const z of (process.env.OPEN_ZIPS || '').split(':').filter(Boolean)) await check('Open ' + z + ': unpacked, started with its own .sources', async () => {
+    await mark();
+    accept();                             // replace the saved image
+    const n = t.requests.length;
+    crashing = true;                      // it may not run the REPL
+    try {
+      await page.setInputFiles('#open-file', path.resolve(z));
+      await waitSince(/"Started the opened image, [^"]*"\n/, 120000);
+      const said = /"Started the opened image, ([^"]*)\."/.exec(await since())[1];
+      assert(!/with the \.sources of this site/.test(said), 'its own .sources: ' + said);
+      assert(!requestsSince(n).includes(sourcesUrl), 'the .sources of the site is not fetched');
+      await page.waitForFunction(() => /^(waiting|exited|crashed)$/.test(document.getElementById('status').dataset.state) &&
+                                 (document.getElementById('status').dataset.state !== 'waiting' ||
+                                  /(^|\n)st> $/.test(document.getElementById('term').textContent)), null, { timeout: 120000 });
+      const state = await page.$eval('#status', e => e.dataset.state);
+      if (state === 'waiting') {
+        await evalTo('Smalltalk version', /\nst> $/);
+        console.log('  # ' + said + ' runs: ' + (await since()).trim().split('\n').slice(-2, -1)[0]);
+      } else {
+        console.log('  # ' + said + ' did not start: ' + await page.textContent('#notice-text') + ' / ' +
+                    (await since()).trim().split('\n').filter(Boolean).slice(-3).join(' | ').slice(0, 300));
+        await mark();
+        await page.click('#notice-action');   // Restart: the saved image
+        await started();
+      }
+    } finally { crashing = false; }
   });
 
   await check('a database that cannot be opened (a private window): a note, Save offers Download', async () => {

@@ -46,6 +46,13 @@
 //
 // decodePNG(buffer) answers {width, height, data} with data the RGBA bytes
 // of a PNG, such as a screenshot of a canvas.
+//
+// dropFiles(page, paths) drops the files of paths on the page, as a user
+// dragging them from the desktop: it serves them to the page, which makes
+// them Files of a DataTransfer, and dispatches dragenter, dragover and drop
+// on its body.  Answers {shown, took, hidden}: whether the page showed its
+// #drop element after the dragenter, took the files (prevented the default
+// of the drop) and hid that element again.
 
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
@@ -104,6 +111,29 @@ export function decodePNG(buffer) {
     data[i * 4 + 3] = channels === 4 ? pixels[j + 3] : channels === 2 ? pixels[j + 1] : 255;
   }
   return { width, height, data };
+}
+
+let drops = 0;
+export async function dropFiles(page, paths) {
+  const urls = [];
+  for (const file of paths) {
+    const url = '/__drop__/' + (++drops) + '/' + encodeURIComponent(path.basename(file));
+    await page.route('**' + url, route => route.fulfill({ path: file, contentType: 'application/octet-stream' }));
+    urls.push(url);
+  }
+  return page.evaluate(async urls => {
+    const data = new DataTransfer();
+    for (const url of urls) {
+      const blob = await (await fetch(url)).blob();
+      data.items.add(new File([blob], decodeURIComponent(url.slice(url.lastIndexOf('/') + 1))));
+    }
+    const fire = type => document.body.dispatchEvent(new DragEvent(type, { dataTransfer: data, bubbles: true, cancelable: true }));
+    fire('dragenter');
+    const drop = document.getElementById('drop'), shown = !!drop && !drop.hidden;
+    fire('dragover');
+    const took = !fire('drop');
+    return { shown, took, hidden: !drop || drop.hidden };
+  }, urls);
 }
 
 export async function run(spec) {

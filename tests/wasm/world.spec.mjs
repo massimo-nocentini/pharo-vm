@@ -19,15 +19,24 @@
 // pointer and keyboard events, and prints the first-frame and
 // keystroke-to-canvas latencies.  An init script keeps the input records
 // that world.js posts to the worker, for the checks of the wheel, the focus
-// and the buttons.  Exits with status 1 if any check fails, the page logs an
-// error, or a worker warns of an engine error or an exception of the display
-// (what the emscripten runtime says goes to the console as warnings).
+// and the buttons, and the states of the status pill, the overlay and the
+// notice.  Exits with status 1 if any check fails, the page logs an error,
+// or a worker warns of an engine error or an exception of the display (what
+// the emscripten runtime says goes to the console as warnings).
+//
+// Open is checked with the stock image of the build (WASM_DIR/image/stock),
+// zipped by tests/wasm/lib/zip.mjs in a directory as files.pharo.org does,
+// with a line added to its .sources (a .sources of its own): the page must
+// prepare it for the world, then boot it, also from the image saved in
+// this browser.  Then the world image of the Download check is dropped on
+// the page, which boots it at once.
 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { run, decodePNG } from './lib/pw.mjs';
+import { run, decodePNG, dropFiles } from './lib/pw.mjs';
+import { imageZip } from './lib/zip.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const scratch = process.env.TEST_DIR || os.tmpdir();
@@ -56,6 +65,20 @@ const ENGINE_ERRORS = /RuntimeError|RangeError|Aborted|unreachable|signature_mis
 // The record types of OSWebDriver
 const PRESS = 2, RELEASE = 3, WHEEL = 4, KEY_DOWN = 5, KEY_UP = 6, FOCUS = 9;
 
+// The stock image of the build, zipped as files.pharo.org does, with a
+// .sources of its own; written once
+const SOURCES_TAIL = '\r"world.spec.mjs: a .sources of its own"\r';
+let stockZip = null;
+function zipStock(webDir) {
+  if (stockZip) return stockZip;
+  const stock = path.join(webDir, '..', 'image', 'stock');
+  const sources = fs.readdirSync(stock).find(f => f.endsWith('.sources'));
+  stockZip = { path: path.join(tmp, 'stock12.zip'), name: 'Pharo12.0-SNAPSHOT-64bit-world.image',
+               ownSize: fs.statSync(path.join(stock, sources)).size + SOURCES_TAIL.length };
+  fs.writeFileSync(stockZip.path, imageZip(stock, { base: 'Pharo12.0-SNAPSHOT-64bit-world', folder: 'world', sourcesTail: SOURCES_TAIL }));
+  return stockZip;
+}
+
 const median = a => { const s = a.slice().sort((x, y) => x - y); return s.length ? s[Math.floor((s.length - 1) / 2)] : NaN; };
 const center = b => [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
 const inside = (p, b) => p[0] >= b[0] && p[0] < b[2] && p[1] >= b[1] && p[1] < b[3];
@@ -64,6 +87,8 @@ await run(async t => {
   const { page, check, assert, manifest } = t;
   if (!manifest.world) throw new Error(t.webDir + '/manifest.json has no world image (world: false)');
   const imageUrl = '/' + manifest.files.find(f => f.path === manifest.image).url;
+  const siteSources = manifest.files.find(f => f.path.endsWith('.sources'));
+  const sourcesUrl = '/' + siteSources.url;
 
   await t.context.route('**/vm-driver.js*', async route => {
     const body = fs.readFileSync(path.join(t.webDir, 'vm-driver.js'), 'utf8');
@@ -78,7 +103,8 @@ await run(async t => {
   const diag = [];
   page.on('worker', w => w.on('console', m => { if (ENGINE_ERRORS.test(m.text())) diag.push(m.text()); }));
 
-  // The input records that world.js posts, and the worker it posts them to
+  // The input records that world.js posts, and the worker it posts them to;
+  // and the states of the pill, the texts of the overlay and of the notice
   await page.addInitScript(() => {
     const post = Worker.prototype.postMessage;
     window.__records = [];
@@ -87,7 +113,28 @@ await run(async t => {
       if (m && m.type === 'display' && m.kind === 'event') window.__records.push(m.event);
       return post.call(this, m, transfer);
     };
+    window.__log = { states: [], overlays: [], notices: [] };
+    document.addEventListener('DOMContentLoaded', () => {
+      const watch = (id, f, log) => new MutationObserver(() => log.push(f(document.getElementById(id))))
+        .observe(document.getElementById(id), { attributes: true, childList: true, characterData: true, subtree: true });
+      watch('status', e => e.dataset.state, window.__log.states);
+      watch('overlay-text', e => e.textContent, window.__log.overlays);
+      watch('notice-text', e => e.textContent, window.__log.notices);
+    });
   });
+  const clearLog = () => page.evaluate(() => { for (const k in window.__log) window.__log[k].length = 0; });
+  const log = () => page.evaluate(() => window.__log);
+  // the dialogs of f, answered with accept
+  async function accepting(f) {
+    const dialogs = [];
+    const dialog = d => { dialogs.push(d.message() || d.type()); d.accept(); };
+    page.on('dialog', dialog);
+    try { await f(); } finally { page.off('dialog', dialog); }
+    return dialogs;
+  }
+  const noticeSays = (re, timeout = 30000) =>
+    page.waitForFunction(src => !document.getElementById('notice').hidden &&
+                         new RegExp(src).test(document.getElementById('notice-text').textContent), re.source, { timeout });
   const records = () => page.evaluate(() => window.__records.splice(0));
   // the records of these types, as [type, a, mods & 0xFF, buttons, c, d]
   const kinds = (list, ...types) => list.filter(r => types.includes(r[0])).map(r => [r[0], r[4], r[5] & 0xff, r[5] >> 8, r[6], r[7]]);
@@ -369,6 +416,7 @@ await run(async t => {
     await waitState('running');
   });
 
+  let downloaded = null;
   await check('Download gives the image (at least 50 MB) and its .changes', async () => {
     const files = [];
     const got = d => files.push(d);
@@ -379,13 +427,14 @@ await run(async t => {
       while (files.length < 2 && Date.now() - t1 < 30000) await page.waitForTimeout(100);
     } finally { page.off('download', got); }
     assert(files.length === 2, files.length + ' downloads');
-    const sizes = {};
+    const sizes = {}, saved = {};
     for (const d of files) {
-      const file = path.join(tmp, t.name + '-' + d.suggestedFilename());
+      const file = saved[d.suggestedFilename()] = path.join(tmp, t.name + '-' + d.suggestedFilename());
       await d.saveAs(file);
       sizes[d.suggestedFilename()] = fs.statSync(file).size;
     }
     assert(sizes['Pharo.image'] >= 50e6 && sizes['Pharo.changes'] > 0, 'files ' + JSON.stringify(sizes));
+    downloaded = { image: saved['Pharo.image'], changes: saved['Pharo.changes'] };
   });
 
   await check('a long primitive that never yields shows Busy; Stop then replaces the worker', async () => {
@@ -483,6 +532,81 @@ await run(async t => {
     assert(dialogs.join() === 'beforeunload', 'one beforeunload dialog: ' + dialogs);
     await waitState('running');
     p = await probe('the world, as saved', p => p.playground && p.playground.text === '#savedInThisBrowser');
+  });
+
+  await check('what cannot be opened: the notice says why, offers another, and the world goes on', async () => {
+    const notImage = path.join(tmp, 'notes.image');
+    fs.writeFileSync(notImage, 'these are notes, not an image');
+    const starts = (await stats()).starts;
+    const dialogs = await accepting(async () => {
+      await page.setInputFiles('#open-file', notImage);
+      await noticeSays(/^notes\.image is not a Pharo image that this VM can run \(its header says format \d+, not 68021\)\.$/);
+    });
+    assert(dialogs.length === 1 && /^Replace the image saved in this browser with notes\.image\?$/.test(dialogs[0]), 'asked ' + dialogs);
+    assert(await page.textContent('#notice-action') === 'Open another' && await page.isVisible('#notice-action'), 'Open another');
+    assert((await stats()).starts === starts && await page.evaluate(() => window.PharoWorld.state) === 'running', 'the world goes on');
+    p = await probe('the world still', p => p.driver === 'OSWebDriver');
+  });
+
+  await check('Open a stock Pharo zip: unpacked, prepared for the world, saved with its .sources, and the world opens', async () => {
+    const z = zipStock(t.webDir);
+    const starts = (await stats()).starts, n = t.requests.length, t1 = Date.now();
+    await clearLog();
+    const dialogs = await accepting(async () => {
+      await page.setInputFiles('#open-file', z.path);
+      await page.waitForFunction(n => window.PharoWorld.stats.starts >= n + 2 && window.PharoWorld.stats.frames > 0, starts,
+                                 { timeout: 240000 });
+    });
+    console.log('  # unpacked, prepared, and painted in ' + (Date.now() - t1) + ' ms');
+    assert(dialogs.length === 1 && dialogs[0] === 'Replace the image saved in this browser with ' + z.name + '?', 'asked ' + dialogs);
+    await waitState('running');
+    const l = await log();
+    assert(l.notices.some(s => /^Unpacking stock12\.zip… [1-9]\d?%$/.test(s)), 'the progress ' + JSON.stringify(l.notices.slice(0, 4)));
+    assert(l.states.includes('preparing') && l.overlays.some(s => /^Preparing the image for the world/.test(s)),
+           'Preparing shown: ' + JSON.stringify(l.states) + ' ' + JSON.stringify(l.overlays));
+    assert(/^The image is prepared for the world \(OSWindow-Web and bitmap fonts\), and saved in this browser\./.test(
+      await page.textContent('#notice-text')), 'the notice ' + await page.textContent('#notice-text'));
+    const served = t.requests.slice(n);
+    assert(!served.includes(imageUrl) && !served.includes(sourcesUrl), 'fetched ' + served.join(' '));
+    p = await probe('the world of the prepared image', p => p.driver === 'OSWebDriver' && p.menubar.length);
+    const size = await page.evaluate(f => window.PharoWorld.readFile(f).then(d => d.length), '/pharo/' + siteSources.path);
+    assert(size === z.ownSize, 'its own .sources: ' + size);
+  });
+
+  await check('reload: the prepared image boots from IndexedDB, with its own .sources', async () => {
+    const z = zipStock(t.webDir), n = t.requests.length;
+    await clearLog();
+    const dialogs = await accepting(async () => {
+      await page.reload();
+      await page.waitForFunction(() => window.PharoWorld && window.PharoWorld.stats.frames > 0, null, { timeout: 60000 });
+    });
+    assert(!dialogs.length, 'dialogs ' + dialogs);
+    const served = t.requests.slice(n);
+    assert(!served.includes(imageUrl) && !served.includes(sourcesUrl), 'fetched ' + served.join(' '));
+    assert(!(await log()).states.includes('preparing'), 'prepared already');
+    assert(/Started the image saved in this browser/.test(await page.textContent('#notice-text')), 'the note');
+    p = await probe('the world', p => p.driver === 'OSWebDriver' && p.menubar.length);
+    const size = await page.evaluate(f => window.PharoWorld.readFile(f).then(d => d.length), '/pharo/' + siteSources.path);
+    assert(size === z.ownSize, 'its own .sources: ' + size);
+  });
+
+  await check('a drop of the downloaded world image and its .changes boots it at once, and keeps it', async () => {
+    assert(downloaded, 'nothing downloaded');
+    const starts = (await stats()).starts, n = t.requests.length;
+    await clearLog();
+    let drop;
+    const dialogs = await accepting(async () => {
+      drop = await dropFiles(page, [downloaded.image, downloaded.changes]);
+      await page.waitForFunction(n => window.PharoWorld.stats.starts > n && window.PharoWorld.stats.frames > 0, starts, { timeout: 90000 });
+      await noticeSays(/^The opened image is now kept in this browser\.$/, 60000);
+    });
+    assert(drop.shown && drop.took && drop.hidden, 'the drop ' + JSON.stringify(drop));
+    assert(dialogs.length === 1 && /^Replace the image saved in this browser with [^ ]*Pharo\.image\?$/.test(dialogs[0]), 'asked ' + dialogs);
+    assert((await stats()).starts === starts + 1 && !(await log()).states.includes('preparing'), 'no preparation');
+    assert((await log()).notices.some(s => /^Started the opened image, [^ ]*Pharo\.image\.$/.test(s)), 'the note');
+    assert(t.requests.slice(n).includes(sourcesUrl) && !t.requests.slice(n).includes(imageUrl), 'the .sources of the site');
+    await waitState('running');
+    p = await probe('the world of the dropped image', p => p.driver === 'OSWebDriver' && p.menubar.length);
   });
 
   if (t.shots) {

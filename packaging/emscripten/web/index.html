@@ -2,7 +2,8 @@
 <!-- index.html - the Console page of the Pharo VM for WebAssembly
 
   The page runs the Pharo VM in a Web Worker (vm-worker.js), booting the
-  image with the REPL of st/web-repl.st; page.js drives it.  The build
+  image with the REPL of st/web-repl.st; page.js drives it, and
+  open-image.js opens the images of the user's own.  The build
   (stage.mjs) replaces the BUILD placeholder, in the pharo-build meta tag
   and the URLs below, with a build id, which the page passes as ?v= on
   every script, worker and .wasm URL.  No external resources: it must be
@@ -42,6 +43,7 @@
   --sleep: #7c3aed;
   --bad: #b42318;
   --shadow: 0 1px 2px rgb(15 30 50 / .06), 0 4px 16px rgb(15 30 50 / .06);
+  --scrim: rgb(15 30 50 / .32);
   --radius: 10px;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Cascadia Code", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
@@ -73,6 +75,7 @@
     --sleep: #c4a5ff;
     --bad: #ff8a80;
     --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 6px 20px rgb(0 0 0 / .3);
+    --scrim: rgb(0 0 0 / .55);
     color-scheme: dark;
   }
 }
@@ -101,6 +104,7 @@
   --sleep: #c4a5ff;
   --bad: #ff8a80;
   --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 6px 20px rgb(0 0 0 / .3);
+  --scrim: rgb(0 0 0 / .55);
   color-scheme: dark;
 }
 
@@ -321,6 +325,37 @@ kbd {
 }
 code { font-family: var(--mono); font-size: .92em; }
 
+/* what a drag of files over the page shows: dropping them opens them */
+.drop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--scrim);
+  pointer-events: none;
+}
+.drop-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: min(420px, 100%);
+  padding: 26px 22px;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+}
+.drop-card svg { width: 30px; height: 30px; color: var(--accent); }
+.drop-card p { margin: 0; }
+.drop-card strong { display: block; color: var(--text); font-size: 15px; font-weight: 600; }
+
 @media (max-width: 760px) {
   .brand p { display: none; }
   .toolbar .label, .top .label { display: none; }
@@ -382,10 +417,10 @@ code { font-family: var(--mono); font-size: .92em; }
       <button class="btn ghost" id="download" type="button" aria-label="Download" title="Download the image and its .changes, as last saved" disabled>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg><span class="label">Download</span>
       </button>
-      <button class="btn ghost" id="upload-btn" type="button" aria-label="Upload" title="Start an image of your own: choose its .image and .changes">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3"/><path d="M7 8l5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg><span class="label">Upload</span>
+      <button class="btn ghost" id="open" type="button" aria-label="Open image" title="Start an image of your own: a Pharo .zip (as files.pharo.org has them), or an .image with its .changes and its .sources. You can also drop them on the page.">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V6a2 2 0 0 1 2-2h3.5l2 2H18a2 2 0 0 1 2 2v3"/><path d="M4 20h14.4a1.5 1.5 0 0 0 1.4-1l2.1-6.4a1.2 1.2 0 0 0-1.1-1.6H7.7a1.5 1.5 0 0 0-1.4 1z"/></svg><span class="label">Open</span>
       </button>
-      <input type="file" id="upload" accept=".image,.changes" multiple hidden>
+      <input type="file" id="open-file" accept=".zip,.image,.changes,.sources" multiple hidden>
       <button class="btn ghost" id="reset" type="button" aria-label="Reset saved image" title="Delete the image saved in this browser" disabled>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></svg><span class="label">Reset</span>
       </button>
@@ -417,11 +452,19 @@ code { font-family: var(--mono); font-size: .92em; }
         <button class="btn primary" id="send" type="submit" disabled>Run</button>
       </form>
     </div>
-    <p class="hints"><kbd>Enter</kbd> evaluates, <kbd>Shift</kbd>+<kbd>Enter</kbd> adds a line, <kbd>Esc</kbd> or <kbd>Ctrl</kbd>+<kbd>C</kbd> stops, <kbd>↑</kbd>/<kbd>↓</kbd> recall history, <kbd>Ctrl</kbd>+<kbd>L</kbd> clears, <kbd>Ctrl</kbd>+<kbd>D</kbd> ends the session. Save keeps the image in this browser.</p>
+    <p class="hints"><kbd>Enter</kbd> evaluates, <kbd>Shift</kbd>+<kbd>Enter</kbd> adds a line, <kbd>Esc</kbd> or <kbd>Ctrl</kbd>+<kbd>C</kbd> stops, <kbd>↑</kbd>/<kbd>↓</kbd> recall history, <kbd>Ctrl</kbd>+<kbd>L</kbd> clears, <kbd>Ctrl</kbd>+<kbd>D</kbd> ends the session. Save keeps the image in this browser; Open, or a drop on the page, starts a Pharo .zip or .image of your own.</p>
   </main>
 </div>
 
+<div class="drop" id="drop" hidden aria-hidden="true">
+  <div class="drop-card">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V6a2 2 0 0 1 2-2h3.5l2 2H18a2 2 0 0 1 2 2v3"/><path d="M4 20h14.4a1.5 1.5 0 0 0 1.4-1l2.1-6.4a1.2 1.2 0 0 0-1.1-1.6H7.7a1.5 1.5 0 0 0-1.4 1z"/></svg>
+    <p><strong>Drop to open</strong>a Pharo .zip, or an .image with its .changes and its .sources</p>
+  </div>
+</div>
+
 <noscript><p style="padding:16px">This page needs JavaScript and WebAssembly.</p></noscript>
+<script src="open-image.js?v=@BUILD@"></script>
 <script src="page.js?v=@BUILD@"></script>
 </body>
 </html>

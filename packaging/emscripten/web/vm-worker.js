@@ -4,16 +4,18 @@
 // world.js (the world).  Messages:
 //
 //   page -> worker   init {wasmModule, manifestUrl, build, mode, sliceMs,
-//                          persist, upload: {image, changes}, display},
+//                          persist, upload: {image, changes, sources},
+//                          prepare, display},
 //                    input {text}, eof, interrupt, save, ack {chars},
 //                    fs {id, op, path, data}, download {id},
 //                    resetStorage {id}, flush, display {...}
 //   worker -> page   progress {phase, loaded, total},
 //                    ready {image, source, persisted, savedAt, world,
-//                           prepared, storageError},
+//                           prepared, preparing, sources, storageError},
 //                    output {fd, text}, state {state, waiting}, tick,
 //                    interrupted {registered}, edited {edited},
 //                    storing, saved {bytes, prepared, error, upload},
+//                    prepared {error, saved},
 //                    superseded, reset {id, error}, exit {code},
 //                    crash {message, stack, stacks}, fs-result {id, ...},
 //                    file {id, name, data, count}, error {id, message},
@@ -30,15 +32,22 @@
 // Boot.  init.manifestUrl is web/manifest.json, written by stage.mjs.  The
 // image and its .changes come from init.upload, else from the slot of
 // vm-storage.js when init.persist and there is one, else from the manifest,
-// like the .sources and the st files, which always do.  Every file of the
-// manifest is fetched and inflated as it comes (DecompressionStream) into a
-// buffer of its size, unless its first bytes are not gzip's 1f 8b: a server
-// that sent it with Content-Encoding: gzip had the browser inflate it.
-// Everything goes into /pharo, the working directory and the VM's directory
-// (thisProgram is /pharo/pharo), which must be writable.  The VM then boots
-// with PharoVMDriver.vmArgs(init.mode): the REPL of st/web-repl.st, or the
-// world.  progress says how far the loading got: "fetch" (the bytes of the
-// files, inflated), "restore" (the slot), then "boot".
+// like the st files, which always do.  So does the .sources, unless the
+// image comes with one: init.upload {image, changes, sources: {name, data}}
+// (Uint8Arrays, ArrayBuffers or Blobs, as open-image.js gives them; sources
+// is optional), or the slot, which keeps the .sources of its image when
+// that is its own, not the one of the manifest (another name, or size).
+// The .sources goes into /pharo under its name, which is the name that the
+// image looks for, and ready.sources says which one the VM got.  Every
+// file of the manifest is fetched and inflated as it comes
+// (DecompressionStream) into a buffer of its size, unless its first bytes
+// are not gzip's 1f 8b: a server that sent it with Content-Encoding: gzip
+// had the browser inflate it.  Everything goes into /pharo, the working
+// directory and the VM's directory (thisProgram is /pharo/pharo), which
+// must be writable.  The VM then boots with PharoVMDriver.vmArgs(init.mode):
+// the REPL of st/web-repl.st, or the world.  progress says how far the
+// loading got: "fetch" (the bytes of the files, inflated), "restore" (the
+// slot), then "boot".
 //
 // Output.  What the VM writes to fd 1 and 2 is decoded as UTF-8 (one
 // streaming decoder per fd), coalesced up to 64 KB, and posted at the end
@@ -50,7 +59,8 @@
 //
 // Persistence.  When the VM has written an image (HOST_IMAGE_SAVED, which
 // comes after the slice that saved it), the worker reads it and its .changes
-// from /pharo, says "storing", stores them as the new slot and says "saved".
+// from /pharo, says "storing", stores them as the new slot, with the
+// .sources of the image when it has its own, and says "saved".
 // The slot says whether its image can open the world (prepared): in the
 // Console the REPL tells, in the file WORLD_FILE (st/web-repl.st), else the
 // name of the class of OSWindow-Web must be in the bytes of the image.  An
@@ -73,6 +83,20 @@
 // "edited" says whether the .changes of the VM differs from the one it had
 // when it first waited for input, or when its image was last stored: code
 // was changed that the slot does not have.
+//
+// Preparation.  The world page sends init.prepare: an image that cannot
+// open the world (not prepared) is then prepared for it, as the Console's
+// "Prepare for the world" does it.  The worker boots it as the Console
+// would, with the REPL and without a display, and says ready {preparing:
+// true}.  Once the REPL waits for input (an upload is then kept, as in the
+// Console), the worker types PREPARE, which files in st/web-bootstrap.st
+// (OSWindow-Web) and saves, in one evaluation that an error stops before
+// the save.  "prepared" ends it: without error once the image saved, which
+// the REPL says can open the world, is stored as the slot, which the page
+// then boots in a world worker of its own; else error says why, with
+// saved: true when the image saved itself (Download gives it) but could not
+// be stored or still cannot open the world, and saved: false when the
+// evaluation failed (error is then what it wrote on stderr).
 //
 // M2.  With init.display the worker loads display-worker.js, whose
 // PharoDisplay.create(init.display, post) is the webDisplay of the VM.  It
@@ -105,6 +129,8 @@ const SAVE = 'Smalltalk snapshot: true andQuit: false';
 const WORLD_CLASS = 'OSWebDriver';
 // Where the REPL says whether its image has it (PHARO_WEB_WORLD_FILE)
 const WORLD_FILE = DIR + '/.pharo-web-world';
+// What prepares an image for the world, in one evaluation of the REPL
+const PREPARE = "CodeImporter evaluateFileNamed: '" + DIR + "/st/web-bootstrap.st'. " + SAVE;
 
 let drv = null, settled = false, queue = [];
 let mode = null, manifest = null, display = null;
@@ -117,6 +143,12 @@ let owned = null, syncTimer = 0, syncedKey = '', syncedAt = 0, settleTimer = 0;
 let editedBase = null, edited = false;
 // {image, changes, prepared}: the upload that this VM booted, not stored yet
 let upload = null;
+// {name, data (a Blob)}: the .sources of the image when it is its own, kept
+// in the slot with it
+let ownSources = null;
+// the preparation (init.prepare): 0 none, 1 the REPL boots, 2 it evaluates
+// PREPARE, 3 over; what it wrote on stderr meanwhile, and whether it saved
+let preparing = 0, prepareErr = '', prepareSaved = false;
 let imagePath = DIR + '/Pharo.image', changesPath = DIR + '/Pharo.changes';
 let storing = Promise.resolve();        // the storage work, in order
 let out = [], outLen = 0, unacked = 0;
@@ -131,6 +163,8 @@ function post(m, transfer) {
 const changesOf = path => path.replace(/\.image$/, '') + '.changes';
 // the bytes of a Uint8Array or an ArrayBuffer of the page, not copied
 const bytes = data => data instanceof Uint8Array ? data : new Uint8Array(data || 0);
+// and those of a Blob too, read
+const read = async data => data instanceof Blob ? new Uint8Array(await data.arrayBuffer()) : bytes(data);
 const errorText = e => String((e && (e.message || e.name || e.code)) || e);
 
 // ---- output
@@ -138,6 +172,7 @@ const errorText = e => String((e && (e.message || e.name || e.code)) || e);
 function addOut(fd, bytes) {
   const text = decoders[fd].decode(bytes, { stream: true });
   if (!text) return;
+  if (preparing === 2 && fd === 2 && prepareErr.length < 4096) prepareErr += text;
   const last = out[out.length - 1];
   if (last && last.fd === fd) last.text += text; else out.push({ fd, text });
   outLen += text.length;
@@ -156,6 +191,7 @@ function flushOut() {
 function onState(st) {
   flushOut();
   if (upload && (st === WAITING || (mode === 'world' && st === SLEEPING))) keepUpload();
+  if (preparing && st === WAITING) prepareStep();
   if (st === WAITING || st === SLEEPING) {
     settle();
     if (mode === 'console') noteEdited(st);
@@ -301,7 +337,7 @@ function keepUpload() {
   post({ type: 'storing' });
   enqueue(async () => {
     try {
-      owned = await store.save(image, changes, { build: manifest.build, prepared });
+      owned = await store.save(image, changes, { build: manifest.build, prepared }, ownSources, null);
       startSync();
       post({ type: 'saved', bytes: image.length, prepared, upload: true });
     } catch (e) {
@@ -325,22 +361,49 @@ function imageSaved(path) {
   const key = syncedKey;
   upload = null;                        // this save is the slot now
   const prepared = isPrepared(image);
+  const prepare = preparing === 2;
+  if (prepare) prepareSaved = true;
   if (!store) {
-    post({ type: 'saved', bytes: image.length, prepared,
-           error: storageError || 'this page does not keep images; use Download to keep a copy' });
+    const error = storageError || 'this page does not keep images; use Download to keep a copy';
+    post({ type: 'saved', bytes: image.length, prepared, error });
+    if (prepare) prepareEnd(error);
     return;
   }
   post({ type: 'storing' });
   enqueue(async () => {
     try {
-      owned = await store.save(image, changes, { build: manifest.build, prepared });
+      // (a .sources that the slot of this VM has stays as stored)
+      owned = await store.save(image, changes, { build: manifest.build, prepared }, ownSources, owned);
       startSync();
       post({ type: 'saved', bytes: image.length, prepared });
       storedChanges(key);
+      if (prepare) prepareEnd(prepared ? null : 'the image still cannot open the world after web-bootstrap.st');
     } catch (e) {
       post({ type: 'saved', bytes: image.length, prepared, error: storageFailure(e) });
+      if (prepare) prepareEnd(storageFailure(e));
     }
   });
+}
+
+// ---- the preparation for the world (init.prepare)
+
+// The REPL waits for input: first type PREPARE; when it waits again and
+// the evaluation did not save, the preparation failed
+function prepareStep() {
+  if (preparing === 1) {
+    preparing = 2;
+    drv.feed(PREPARE + '\n');
+    stateDirty = true;
+  } else if (preparing === 2 && !prepareSaved) {
+    preparing = 3;
+    post({ type: 'prepared', saved: false,
+           error: prepareErr.trim() || 'web-bootstrap.st did not save the image' });
+  }
+}
+// The image that PREPARE saved is stored (error null), or not
+function prepareEnd(error) {
+  preparing = 3;
+  post(error ? { type: 'prepared', saved: true, error } : { type: 'prepared', saved: true });
 }
 
 // ---- loading
@@ -417,10 +480,17 @@ function progress(phase, total) {
 async function load(m) {
   const v = '?v=' + encodeURIComponent(manifest.build);
   const imageName = manifest.image, changesName = changesOf(imageName);
+  const siteSources = manifest.files.find(f => /\.sources$/.test(f.path)) || null;
   let image = null, changes = null, source = 'download', savedAt = null, prepared = !!manifest.world;
+  let sources = null;                   // {name, data}: the .sources that came with the image
   if (m.upload) {
-    image = bytes(m.upload.image);
-    changes = bytes(m.upload.changes);
+    image = await read(m.upload.image);
+    changes = await read(m.upload.changes);
+    if (m.upload.sources) {
+      const name = String(m.upload.sources.name || '');
+      if (!/^[^/]+\.sources$/.test(name)) throw new Error('the .sources of the upload is named ' + JSON.stringify(name));
+      sources = { name, data: m.upload.sources.data };
+    }
     source = 'upload';
     prepared = isPrepared(image);
   } else if (store) {
@@ -430,6 +500,7 @@ async function load(m) {
       if (saved) {
         image = saved.image;
         changes = saved.changes;
+        sources = saved.sources;
         source = 'saved';
         savedAt = saved.meta.savedAt;
         prepared = saved.meta.prepared === undefined ? isPrepared(image) : !!saved.meta.prepared;
@@ -441,7 +512,16 @@ async function load(m) {
         : 'the saved image could not be read (' + errorText(e) + ')';
     }
   }
-  const wanted = manifest.files.filter(f => !image || (f.path !== imageName && f.path !== changesName));
+  // the .sources of the image is its own unless it is the one of the
+  // manifest, which is then not fetched either
+  let sourcesData = null;
+  if (sources) {
+    sourcesData = await read(sources.data);
+    if (!siteSources || sources.name !== siteSources.path || sourcesData.length !== siteSources.size)
+      ownSources = { name: sources.name, data: sources.data instanceof Blob ? sources.data : new Blob([sourcesData]) };
+  }
+  const wanted = manifest.files.filter(f => (!image || (f.path !== imageName && f.path !== changesName)) &&
+                                       !(sourcesData && f === siteSources));
   const report = progress('fetch', wanted.reduce((n, f) => n + f.size, 0));
   let loaded = 0;
   const [fetched, st] = await Promise.all([
@@ -454,6 +534,7 @@ async function load(m) {
     files.push({ path: DIR + '/' + imageName, data: image });
     files.push({ path: DIR + '/' + changesName, data: changes });
   }
+  if (sourcesData) files.push({ path: DIR + '/' + sources.name, data: sourcesData });
   // An upload becomes the slot once it has booted (keepUpload): a broken
   // one must not replace the image saved in this browser
   if (m.upload && store) upload = { image, changes, prepared };
@@ -464,7 +545,8 @@ async function load(m) {
   if (!stored && store) {
     try { stored = !!(await store.meta()); } catch (e) { /* none that can be used */ }
   }
-  return { files, source, savedAt, prepared, stored };
+  return { files, source, savedAt, prepared, stored,
+           sources: sourcesData ? sources.name : siteSources ? siteSources.path : null };
 }
 
 async function boot(m) {
@@ -475,10 +557,15 @@ async function boot(m) {
   manifest = await fetchManifest(m.manifestUrl || 'manifest.json' + q);
   if (m.build && m.build !== manifest.build)
     console.warn('vm-worker: the page is of build ' + m.build + ', the files of build ' + manifest.build);
-  const { files, source, savedAt, prepared, stored } = await load(m);
+  const { files, source, savedAt, prepared, stored, sources } = await load(m);
+  // an image that cannot open the world is prepared for it, in the REPL
+  if (m.prepare && mode === 'world' && manifest.world && !prepared) {
+    preparing = 1;
+    mode = 'console';
+  }
   post({ type: 'progress', phase: 'boot', loaded: 0, total: 1 });
   let config;
-  if (m.display) {
+  if (m.display && !preparing) {
     importScripts('display-worker.js' + q);
     display = PharoDisplay.create(m.display, post);
     config = { webDisplay: display };
@@ -521,7 +608,7 @@ async function boot(m) {
   remember(image);
   if (owned) startSync();
   post({ type: 'ready', image, source, persisted: stored, savedAt, world: !!manifest.world, prepared,
-         storageError });
+         preparing: !!preparing, sources, storageError });
   drv.begin();
 }
 

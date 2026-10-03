@@ -4,12 +4,15 @@
 // in node (the worker harness).  It uses no DOM.
 //
 // The pages keep one image, the one saved last: its .image and its .changes,
-// as Blobs in the object store 'files' of the database of the site, under the
-// keys 'Pharo.image' and 'Pharo.changes', and a record 'meta' that makes them
-// a slot: {id, image, changes, imageSize, changesSize, savedAt, syncedAt, ...}
-// with an id of its own, the names of the two files and what the saver added
-// (the build, ...).  A save writes all three in one transaction, so a slot is
-// never half there.
+// and the .sources it reads when that is not the one of the site (an image
+// of another Pharo version, opened in a page), as Blobs in the object store
+// 'files' of the database of the site, under the keys 'Pharo.image',
+// 'Pharo.changes' and 'Pharo.sources', and a record 'meta' that makes them a
+// slot: {id, image, changes, imageSize, changesSize, savedAt, syncedAt, ...}
+// with an id of its own, the keys of the two files and what the saver added
+// (the build, ...), and, when the slot has a .sources, {sources, sourcesName,
+// sourcesSize}: its key, the name the image reads it under and its size.  A
+// save writes them all in one transaction, so a slot is never half there.
 //
 // IndexedDB is per origin, but the sites of an origin are its directories
 // (the project sites of GitHub Pages, /stable/ and /preview/ of a host): the
@@ -18,15 +21,23 @@
 // root keeps the name all of them had before, 'pharo-wasm'.
 //
 //   const store = PharoStorage.open();     // or open(backend)
-//   await store.load(onProgress)            // null, or {meta, image, changes}
+//   await store.load(onProgress)            // null, or {meta, image, changes, sources}
 //   await store.meta()                      // null, or the meta of the slot
-//   await store.save(image, changes, extra) // a new slot; answers its meta
+//   await store.save(image, changes, extra, sources, kept)
+//                                           // a new slot; answers its meta
 //   await store.syncChanges(changes, meta)  // the .changes of the slot alone
 //   await store.reset()                     // no slot any more
 //   await store.estimate()                  // {usage, quota}, or null
 //
-// image and changes are Uint8Arrays.  onProgress(loaded, total) counts the
-// bytes of the slot read so far.  Every method answers a promise, which is
+// image and changes are Uint8Arrays.  sources is the .sources of the slot,
+// {name, data} with data a Uint8Array or a Blob, or null when it has none
+// (and load answers it so, data a Uint8Array): a save without one deletes
+// the one of the slot before.  A .sources is large (46 MB for Pharo 15) and
+// never changes, so a save does not write it again when kept, the meta of
+// the slot that this page booted from or saved, is still the slot and has
+// a .sources of that name and size: the new slot then keeps it as stored.
+// onProgress(loaded, total) counts the bytes of the slot read so far.
+// Every method answers a promise, which is
 // rejected when the browser refuses (QuotaExceededError, a private window, a
 // blocked database): the callers report it, it is never fatal.  When the
 // database cannot be used at all, the error has `unavailable' set.
@@ -60,7 +71,7 @@
   'use strict';
 
   const DATABASE = 'pharo-wasm', VERSION = 1, STORE = 'files';
-  const IMAGE = 'Pharo.image', CHANGES = 'Pharo.changes', META = 'meta';
+  const IMAGE = 'Pharo.image', CHANGES = 'Pharo.changes', SOURCES = 'Pharo.sources', META = 'meta';
 
   // The database of the site whose page or worker has the URL href (default
   // the location of this global): DATABASE, and the directory of the site
@@ -193,35 +204,53 @@
       async load(onProgress) {
         // the three are read one after the other: when another page saved
         // meanwhile (a new id), read its slot instead
-        let meta, image, changes;
+        let meta, image, changes, sources;
         for (let tries = 0; ; tries++) {
           meta = await b.get(META);
           if (!meta) return null;
           image = await b.get(meta.image);
           changes = await b.get(meta.changes);
+          sources = meta.sources ? await b.get(meta.sources) : null;
           const now = await b.get(META);
           if (now && now.id === meta.id) break;
           if (tries === 3) throw new Error('the saved image keeps changing');
         }
         if (!image || !changes) return null;
-        const total = (meta.imageSize || 0) + (meta.changesSize || 0);
-        const imageBytes = await bytesOf(image);
-        if (onProgress) onProgress(imageBytes.length, total);
-        const changesBytes = await bytesOf(changes);
-        if (onProgress) onProgress(imageBytes.length + changesBytes.length, total);
-        return { meta, image: imageBytes, changes: changesBytes };
+        if (meta.sources && !sources) throw new Error('the .sources of the saved image is missing');
+        const total = (meta.imageSize || 0) + (meta.changesSize || 0) + (meta.sourcesSize || 0);
+        let loaded = 0;
+        const read = async value => {
+          const data = await bytesOf(value);
+          loaded += data.length;
+          if (onProgress) onProgress(loaded, total);
+          return data;
+        };
+        const imageBytes = await read(image), changesBytes = await read(changes);
+        return { meta, image: imageBytes, changes: changesBytes,
+                 sources: sources ? { name: meta.sourcesName, data: await read(sources) } : null };
       },
       // whether there is a slot, without reading its files
       async meta() {
         return (await b.get(META)) || null;
       },
-      async save(image, changes, extra) {
+      async save(image, changes, extra, sources, kept) {
         const now = Date.now();
         const meta = Object.assign({}, extra, {
           id: newId(now), image: IMAGE, changes: CHANGES, imageSize: image.length, changesSize: changes.length,
           savedAt: now, syncedAt: now,
         });
-        await b.write([[IMAGE, new Blob([image])], [CHANGES, new Blob([changes])], [META, meta]]);
+        const entries = [[IMAGE, new Blob([image])], [CHANGES, new Blob([changes])], [META, meta]];
+        if (sources) {
+          const data = sources.data, size = data.size !== undefined ? data.size : data.length;
+          Object.assign(meta, { sources: SOURCES, sourcesName: sources.name, sourcesSize: size });
+          // the .sources of the slot kept is still stored: leave it there
+          if (kept && kept.sources && kept.sourcesName === sources.name && kept.sourcesSize === size &&
+              await b.write(entries, { key: META, id: kept.id })) return meta;
+          entries.push([SOURCES, typeof Blob !== 'undefined' && data instanceof Blob ? data : new Blob([data])]);
+        } else {
+          entries.push([SOURCES, undefined]);
+        }
+        await b.write(entries);
         return meta;
       },
       async syncChanges(changes, meta) {
