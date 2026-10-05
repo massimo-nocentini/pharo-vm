@@ -21,8 +21,11 @@
 # VM has FreeType, PHARO_WASM_HAS_FREETYPE of deps/options.cmake, bitmap
 # otherwise: what webimage.cmake prepares, and web-bootstrap.st in the page),
 # the version of the package OSWindow-Web, which stage.mjs reads from
-# packaging/emscripten/st/OSWindow-Web/OSWebDriver.class.st, and the
-# placeholders of the libraries of the FFI (below).
+# packaging/emscripten/st/OSWindow-Web/OSWebDriver.class.st, whether the VM
+# has libgit2 (PHARO_WASM_HAS_LIBGIT2: make wasm-check-browser runs git.spec
+# only then) and its smart-HTTP transport (PHARO_WASM_HAS_LIBGIT2_HTTP: the
+# Console then shows the Settings of its CORS proxy), and the placeholders
+# of the libraries of the FFI (below).
 #
 # web/ gets the image of the world when webimage.cmake defines its target
 # wasm-web-image, and the stock image otherwise.
@@ -252,6 +255,16 @@ if(PHARO_WASM_HAS_FREETYPE)
 else()
     set(PHARO_WASM_STAGE_FONTS bitmap)
 endif()
+if(PHARO_WASM_HAS_LIBGIT2)
+    set(PHARO_WASM_STAGE_LIBGIT2 1)
+else()
+    set(PHARO_WASM_STAGE_LIBGIT2 0)
+endif()
+if(PHARO_WASM_HAS_LIBGIT2 AND PHARO_WASM_HAS_LIBGIT2_HTTP)
+    set(PHARO_WASM_STAGE_LIBGIT2_HTTP 1)
+else()
+    set(PHARO_WASM_STAGE_LIBGIT2_HTTP 0)
+endif()
 set(PHARO_WASM_STAGE_ARGUMENTS
     --out "${PHARO_WASM_WEB_DIR}"
     --web "${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/web"
@@ -260,6 +273,8 @@ set(PHARO_WASM_STAGE_ARGUMENTS
     --git "${PharoVM_VERSION_GIT_SHA}"
     --ffi ${PHARO_WASM_STAGE_FFI}
     --fonts ${PHARO_WASM_STAGE_FONTS}
+    --libgit2 ${PHARO_WASM_STAGE_LIBGIT2}
+    --libgit2-http ${PHARO_WASM_STAGE_LIBGIT2_HTTP}
     --web-package "${PHARO_WASM_ST_SOURCE_DIR}/OSWindow-Web/OSWebDriver.class.st"
     --notices "${PHARO_WASM_NOTICES_FILE}"
     ${PHARO_WASM_STAGE_LIBRARIES}

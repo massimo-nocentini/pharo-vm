@@ -1,0 +1,29 @@
+# adapted-66.txt - the functions whose declarations the width adapter of the
+# FFI (src/emscripten/ffiAdapt.c) may adapt while lane 66
+# (tests/wasm/lanes/66-libgit2.sh) runs tests/wasm/st/iceflow.st on the
+# stock image or the image of the world, Pharo 12 or Pharo 15
+#
+# A line is '<function>', or '<function> required': every function that the
+# trace of the adapter names (PHARO_WASM_FFI_TRACE=1) must be one of these
+# lines, and the required ones must be named.  A function that the trace
+# names and that is not here is a declaration of the image that does not
+# match its C function at the width of an integer, a new one: look at it
+# (the trace says both widths), then add it here.  '#' lines and blank lines
+# are comments.
+
+# size_t git_tree_entrycount (const git_tree *), which
+# LGitTree>>tree_entrycount: declares with an int result: every commit,
+# diff and checkout of Iceberg calls it, and without the adapter the first
+# commit fails there (the negative control of the lane)
+git_tree_entrycount required
+
+# int git_oid_nfmt (char *, size_t, const git_oid *), which
+# LGitId>>oid_fmt:size:id: declares void, with an int for the size_t
+git_oid_nfmt
+
+# FreeType's FT_Error, an int, which FT2Types declares long: the stock image
+# of Pharo 15 draws text with FreeType at its start, before the flow (see
+# adapted-65.txt)
+FT_Load_Char
+FT_Outline_Get_Bitmap
+FT_Set_Pixel_Sizes

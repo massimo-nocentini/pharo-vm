@@ -3,8 +3,8 @@
 //   node stage.mjs --out <web dir> --module <pharo-web.js> --stock-image <dir>
 //        --web-package <OSWebDriver.class.st>
 //        [--web <dir>] [--memory64 1|2] [--git <sha>] [--ffi 0|1]
-//        [--fonts freetype|bitmap] [--notices <file>] [--st <file>]...
-//        [--library-file <name>]...
+//        [--fonts freetype|bitmap] [--libgit2 0|1] [--libgit2-http 0|1]
+//        [--notices <file>] [--st <file>]... [--library-file <name>]...
 //        [--world-image <dir> [--world-st <file>]...]
 //
 // cmake/emscripten/stage.cmake runs it on every build.  It writes
@@ -23,8 +23,9 @@
 //                              it has one, the stock one otherwise
 //   st/<file>                  the --st files, and with the world image its
 //                              OSWindow-Web.st and the --world-st files
-//   manifest.json              {build, ffi, files, fonts, image, libraries,
-//                              memory64, st, webPackage, world}
+//   manifest.json              {build, ffi, files, fonts, git, gitHttp,
+//                              image, libraries, memory64, st, webPackage,
+//                              world}
 //
 // The build id is the git sha, a dash and the first 12 hex digits of a
 // SHA256 over everything staged, so it changes whenever a staged file does.
@@ -41,6 +42,13 @@
 //          the fonts that the preparation of an image for the world sets
 //          up, the build's (webimage.cmake) and the page's
 //          (web-bootstrap.st), which the page names in its notice
+//   git    true when the VM has libgit2 (--libgit2 1, from
+//          PHARO_WASM_HAS_LIBGIT2, that is WASM_LIBGIT2 with the FFI): make
+//          wasm-check-browser runs git.spec.mjs only then
+//   gitHttp  true when it also has the smart-HTTP transport of libgit2
+//          (--libgit2-http 1, from PHARO_WASM_HAS_LIBGIT2_HTTP, that is
+//          WASM_LIBGIT2_HTTP), whose CORS proxy the Console's Settings hold;
+//          never true without git
 //   image  the name of the image to boot, "Pharo.image"
 //   libraries  ["libcairo.so.2", ...], sorted: the --library-file names, the
 //          placeholders of the libraries of the FFI (the FILES of
@@ -82,9 +90,11 @@ const fail = (message) => {
 };
 
 const parseArguments = (argv) => {
-  const options = { st: [], worldSt: [], libraries: [], memory64: '2', git: '', ffi: '0', fonts: 'bitmap' };
+  const options = { st: [], worldSt: [], libraries: [], memory64: '2', git: '', ffi: '0', fonts: 'bitmap',
+                    libgit2: '0', libgit2Http: '0' };
   const single = { '--out': 'out', '--web': 'web', '--module': 'module', '--memory64': 'memory64',
                    '--git': 'git', '--ffi': 'ffi', '--fonts': 'fonts', '--notices': 'notices',
+                   '--libgit2': 'libgit2', '--libgit2-http': 'libgit2Http',
                    '--stock-image': 'stockImage', '--web-package': 'webPackage', '--world-image': 'worldImage' };
   const many = { '--st': 'st', '--world-st': 'worldSt', '--library-file': 'libraries' };
   for (let i = 0; i < argv.length; i++) {
@@ -99,6 +109,8 @@ const parseArguments = (argv) => {
   if (!/^[12]$/.test(options.memory64)) fail(`--memory64 must be 1 or 2, not ${options.memory64}`);
   if (!/^[01]$/.test(options.ffi)) fail(`--ffi must be 0 or 1, not ${options.ffi}`);
   if (!/^(freetype|bitmap)$/.test(options.fonts)) fail(`--fonts must be freetype or bitmap, not ${options.fonts}`);
+  if (!/^[01]$/.test(options.libgit2)) fail(`--libgit2 must be 0 or 1, not ${options.libgit2}`);
+  if (!/^[01]$/.test(options.libgit2Http)) fail(`--libgit2-http must be 0 or 1, not ${options.libgit2Http}`);
   if (!existsSync(options.webPackage)) fail(`--web-package ${options.webPackage} does not exist`);
   if (options.notices && !existsSync(options.notices)) fail(`--notices ${options.notices} does not exist`);
   // (a name in /pharo, which the worker writes)
@@ -205,8 +217,11 @@ const main = async () => {
     inputs.set(rel, { data, sha256: sha256(data) });
   }
   const ffi = options.ffi == '1';
+  // (the transport is a part of libgit2)
+  const git = options.libgit2 == '1', gitHttp = git && options.libgit2Http == '1';
   const webPackage = webPackageOf(options.webPackage);
-  const digest = sha256([`ffi ${ffi}`, `fonts ${options.fonts}`, `libraries ${options.libraries.join(' ')}`,
+  const digest = sha256([`ffi ${ffi}`, `fonts ${options.fonts}`, `git ${git}`, `gitHttp ${gitHttp}`,
+                         `libraries ${options.libraries.join(' ')}`,
                          `memory64 ${options.memory64}`, `webPackage ${webPackage}`, `world ${world}`,
                          ...[...inputs].map(([rel, { sha256 }]) => `${rel} ${sha256}`).sort()].join('\n'));
   const build = (options.git ? `${options.git}-` : '') + digest.slice(0, 12);
@@ -262,6 +277,8 @@ const main = async () => {
     ffi,
     files: manifestFiles.sort((a, b) => a.path < b.path ? -1 : 1),
     fonts: options.fonts,
+    git,
+    gitHttp,
     image: IMAGE,
     libraries: options.libraries,
     memory64: Number(options.memory64),

@@ -5,14 +5,15 @@
 //
 //   page -> worker   init {wasmModule, manifestUrl, build, mode, sliceMs,
 //                          persist, upload: {image, changes, sources},
-//                          prepare, display},
+//                          prepare, display, gitProxy},
 //                    input {text}, eof, interrupt, save, ack {chars},
 //                    fs {id, op, path, data}, download {id},
-//                    resetStorage {id}, flush, display {...}
+//                    resetStorage {id}, flush, display {...},
+//                    gitProxy {gitProxy}
 //   worker -> page   progress {phase, loaded, total},
 //                    ready {image, source, persisted, savedAt, world,
 //                           prepared, webPackage, preparing, sources,
-//                           storageError, fonts},
+//                           storageError, fonts, git, gitHttp},
 //                    output {fd, text}, state {state, waiting}, tick,
 //                    interrupted {registered}, edited {edited},
 //                    storing, saved {bytes, prepared, webPackage, error,
@@ -123,6 +124,17 @@
 // message {kind: 'attach'} (which asks for nothing else), and then the
 // "display" messages of the page, with PharoDisplay.onMessage.
 //
+// Git.  init.gitProxy, and later "gitProxy", is the CORS proxy of git's
+// HTTP requests, which the user typed into the Console's Settings (page.js
+// keeps it, world.js reads it): an http: or https: URL prefix, or '' for
+// none.  The worker makes it Module.gitHttpProxy, which the smart-HTTP
+// transport of libgit2 (src/emscripten/gitSupport.c) reads at each request,
+// so a change holds from the next one.  It goes nowhere else: not into the
+// environment of the image, nor to any server but the proxy itself.
+// ready.git says whether the VM has libgit2 (manifest.git, WASM_LIBGIT2),
+// ready.gitHttp whether it has that transport (manifest.gitHttp,
+// WASM_LIBGIT2_HTTP), which is what the proxy is for.
+//
 // The worker URL's ?v= query (the build id) is passed on to every script.
 
 'use strict';
@@ -189,6 +201,8 @@ const bytes = data => data instanceof Uint8Array ? data : new Uint8Array(data ||
 // and those of a Blob too, read
 const read = async data => data instanceof Blob ? new Uint8Array(await data.arrayBuffer()) : bytes(data);
 const errorText = e => String((e && (e.message || e.name || e.code)) || e);
+// The proxy of git's requests that the page gave, or '' (the page checked it)
+const gitProxyOf = p => typeof p === 'string' && /^https?:\/\//i.test(p) ? p : '';
 
 // ---- output
 
@@ -632,12 +646,14 @@ async function boot(m) {
     mode = 'console';
   }
   post({ type: 'progress', phase: 'boot', loaded: 0, total: 1 });
-  let config;
+  const config = {};
   if (m.display && !preparing) {
     importScripts('display-worker.js' + q);
     display = PharoDisplay.create(m.display, post);
-    config = { webDisplay: display };
+    config.webDisplay = display;
   }
+  const gitProxy = gitProxyOf(m.gitProxy);
+  if (gitProxy) config.gitHttpProxy = gitProxy;
   const image = DIR + '/' + manifest.image;
   const env = mode === 'console' ? { PHARO_WEB_WORLD_FILE: WORLD_FILE } : {};
   if (m.sliceMs > 0) env.PHARO_WASM_SLICE_MS = String(m.sliceMs);
@@ -676,7 +692,8 @@ async function boot(m) {
   remember(image);
   if (owned) startSync();
   post({ type: 'ready', image, source, persisted: stored, savedAt, world: !!manifest.world, prepared, webPackage,
-         preparing: !!preparing, sources, storageError, fonts: manifest.fonts || null });
+         preparing: !!preparing, sources, storageError, fonts: manifest.fonts || null, git: !!manifest.git,
+         gitHttp: !!(manifest.git && manifest.gitHttp) });
   drv.begin();
 }
 
@@ -762,6 +779,9 @@ function handle(m) {
     break;
   case 'display':
     if (display && live) PharoDisplay.onMessage(m, drv);
+    break;
+  case 'gitProxy':
+    if (drv) drv.module.gitHttpProxy = gitProxyOf(m.gitProxy);
     break;
   }
 }

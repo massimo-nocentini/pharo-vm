@@ -1,0 +1,189 @@
+# The sources of libgit2 1.4.4 for the Emscripten VM, relative to the
+# archive's top directory, which cmake/emscripten/deps/libgit2.cmake
+# compiles with git2/sys/features.h: those of libgit2's own CMake build
+# (the objects of its git2internal target, and its bundled http-parser), with
+# the options of that file, but not its bundled zlib (deps/zlib), since the
+# VM has one zlib (cmake/emscripten/deps/zlib.cmake).  They were listed from
+# the compile_commands.json of a configure of the archive:
+#
+#     emcmake cmake <libgit2-1.4.4> -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+#         -DCMAKE_BUILD_TYPE=MinSizeRel -DBUILD_SHARED_LIBS=OFF \
+#         -DBUILD_TESTS=OFF -DBUILD_CLI=OFF -DBUILD_EXAMPLES=OFF \
+#         -DUSE_THREADS=OFF -DUSE_SSH=OFF -DUSE_HTTPS=OFF \
+#         -DUSE_SHA1=CollisionDetection -DUSE_GSSAPI=OFF -DUSE_NTLMCLIENT=OFF \
+#         -DUSE_ICONV=OFF -DUSE_HTTP_PARSER=builtin -DUSE_BUNDLED_ZLIB=ON \
+#         -DREGEX_BACKEND=regcomp \
+#         -DCMAKE_C_FLAGS="-m64 -sSUPPORT_LONGJMP=wasm -sWASM_LEGACY_EXCEPTIONS=0"
+#
+# which also wrote src/git2/sys/features.h.  deps/http-parser/http_parser.c
+# is compiled as C of the compiler's default standard, the others as C90.
+set(PHARO_WASM_LIBGIT2_SOURCES
+    deps/http-parser/http_parser.c
+    src/alloc.c
+    src/allocators/failalloc.c
+    src/allocators/stdalloc.c
+    src/allocators/win32_leakcheck.c
+    src/annotated_commit.c
+    src/apply.c
+    src/attr.c
+    src/attr_file.c
+    src/attrcache.c
+    src/blame.c
+    src/blame_git.c
+    src/blob.c
+    src/branch.c
+    src/buf.c
+    src/cache.c
+    src/checkout.c
+    src/cherrypick.c
+    src/clone.c
+    src/commit.c
+    src/commit_graph.c
+    src/commit_list.c
+    src/config.c
+    src/config_cache.c
+    src/config_entries.c
+    src/config_file.c
+    src/config_mem.c
+    src/config_parse.c
+    src/config_snapshot.c
+    src/crlf.c
+    src/date.c
+    src/delta.c
+    src/describe.c
+    src/diff.c
+    src/diff_driver.c
+    src/diff_file.c
+    src/diff_generate.c
+    src/diff_parse.c
+    src/diff_print.c
+    src/diff_stats.c
+    src/diff_tform.c
+    src/diff_xdiff.c
+    src/email.c
+    src/errors.c
+    src/fetch.c
+    src/fetchhead.c
+    src/filebuf.c
+    src/filter.c
+    src/fs_path.c
+    src/futils.c
+    src/graph.c
+    src/hash.c
+    src/hash/sha1/collisiondetect.c
+    src/hash/sha1/sha1dc/sha1.c
+    src/hash/sha1/sha1dc/ubc_check.c
+    src/hashsig.c
+    src/ident.c
+    src/idxmap.c
+    src/ignore.c
+    src/index.c
+    src/indexer.c
+    src/iterator.c
+    src/libgit2.c
+    src/mailmap.c
+    src/merge.c
+    src/merge_driver.c
+    src/merge_file.c
+    src/message.c
+    src/midx.c
+    src/mwindow.c
+    src/net.c
+    src/netops.c
+    src/notes.c
+    src/object.c
+    src/object_api.c
+    src/odb.c
+    src/odb_loose.c
+    src/odb_mempack.c
+    src/odb_pack.c
+    src/offmap.c
+    src/oid.c
+    src/oidarray.c
+    src/oidmap.c
+    src/pack-objects.c
+    src/pack.c
+    src/parse.c
+    src/patch.c
+    src/patch_generate.c
+    src/patch_parse.c
+    src/path.c
+    src/pathspec.c
+    src/pool.c
+    src/posix.c
+    src/pqueue.c
+    src/proxy.c
+    src/push.c
+    src/rand.c
+    src/reader.c
+    src/rebase.c
+    src/refdb.c
+    src/refdb_fs.c
+    src/reflog.c
+    src/refs.c
+    src/refspec.c
+    src/regexp.c
+    src/remote.c
+    src/repository.c
+    src/reset.c
+    src/revert.c
+    src/revparse.c
+    src/revwalk.c
+    src/runtime.c
+    src/signature.c
+    src/sortedcache.c
+    src/stash.c
+    src/status.c
+    src/str.c
+    src/strarray.c
+    src/streams/mbedtls.c
+    src/streams/openssl.c
+    src/streams/openssl_dynamic.c
+    src/streams/openssl_legacy.c
+    src/streams/registry.c
+    src/streams/socket.c
+    src/streams/stransport.c
+    src/streams/tls.c
+    src/strmap.c
+    src/submodule.c
+    src/sysdir.c
+    src/tag.c
+    src/thread.c
+    src/threadstate.c
+    src/trace.c
+    src/trailer.c
+    src/transaction.c
+    src/transport.c
+    src/transports/auth.c
+    src/transports/auth_negotiate.c
+    src/transports/auth_ntlm.c
+    src/transports/credential.c
+    src/transports/credential_helpers.c
+    src/transports/git.c
+    src/transports/http.c
+    src/transports/httpclient.c
+    src/transports/local.c
+    src/transports/smart.c
+    src/transports/smart_pkt.c
+    src/transports/smart_protocol.c
+    src/transports/ssh.c
+    src/transports/winhttp.c
+    src/tree-cache.c
+    src/tree.c
+    src/tsort.c
+    src/unix/map.c
+    src/unix/realpath.c
+    src/utf8.c
+    src/util.c
+    src/varint.c
+    src/vector.c
+    src/wildmatch.c
+    src/worktree.c
+    src/xdiff/xdiffi.c
+    src/xdiff/xemit.c
+    src/xdiff/xhistogram.c
+    src/xdiff/xmerge.c
+    src/xdiff/xpatience.c
+    src/xdiff/xprepare.c
+    src/xdiff/xutils.c
+    src/zstream.c)

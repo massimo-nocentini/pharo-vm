@@ -82,6 +82,9 @@ WASM_FREETYPE ?= ON
 # cairo: AUTO (built with FreeType), ON or OFF (cmake/emscripten/deps/options.cmake)
 WASM_CAIRO ?= AUTO
 WASM_CAIRO_PDF ?= OFF
+# libgit2, for Iceberg (opt-in), and its smart-HTTP transport over XHR
+WASM_LIBGIT2 ?= OFF
+WASM_LIBGIT2_HTTP ?= ON
 # offline builds: the Pharo 12 image zip, a directory holding the pinned
 # archives of the libraries (cmake/emscripten/deps/fetch.cmake), the
 # generated sources (a directory holding generated/64), or the VMMaker image
@@ -263,6 +266,8 @@ WASM_CMAKE_FLAGS = \
   -DWASM_FREETYPE=$(WASM_FREETYPE) \
   -DWASM_CAIRO=$(WASM_CAIRO) \
   -DWASM_CAIRO_PDF=$(WASM_CAIRO_PDF) \
+  -DWASM_LIBGIT2=$(WASM_LIBGIT2) \
+  -DWASM_LIBGIT2_HTTP=$(WASM_LIBGIT2_HTTP) \
   "-DWASM_IMAGE_ZIP=$(IMAGE_ZIP)" \
   "-DWASM_DEPS_DIR=$(DEPS_DIR)" \
   "-DWASM_HOST_PHARO=$(HOST_PHARO)" \
@@ -309,6 +314,8 @@ $(W)/config.make: FORCE | $(W)/.make-wasm
 	  echo "WASM_FREETYPE = $(WASM_FREETYPE)"; \
 	  echo "WASM_CAIRO = $(WASM_CAIRO)"; \
 	  echo "WASM_CAIRO_PDF = $(WASM_CAIRO_PDF)"; \
+	  echo "WASM_LIBGIT2 = $(WASM_LIBGIT2)"; \
+	  echo "WASM_LIBGIT2_HTTP = $(WASM_LIBGIT2_HTTP)"; \
 	  echo "WASM_IMAGE_ZIP = $(IMAGE_ZIP)"; \
 	  echo "WASM_DEPS_DIR = $(DEPS_DIR)"; \
 	  echo "WASM_GENERATED = $(if $(WASM_GENERATED),$(GEN))"; \
@@ -387,14 +394,15 @@ wasm-check: wasm
 # or the playwright package that node finds from tests/wasm/lib, and the goal
 # fails without either.  world.spec.mjs needs the image of the world, which a
 # build without one (WASM_WORLD=OFF, or no host Pharo) skips, as lane 80 does,
-# and ffi.spec.mjs the FFI, which a build without it (WASM_FFI=OFF) skips.
+# ffi.spec.mjs the FFI, which a build without it (WASM_FFI=OFF) skips, and
+# git.spec.mjs libgit2, which only a build with WASM_LIBGIT2=ON has.
 # web/manifest.json says what the build has.
 wasm-check-browser: wasm
 	@if test -z "$$PLAYWRIGHT_MODULE" && ! (cd $(SRCDIR)/tests/wasm/lib && \
 	    $(NODE) -e 'require.resolve("playwright")') >/dev/null 2>&1; then \
 	  echo "make wasm-check-browser: the browser specs need Playwright: set PLAYWRIGHT_MODULE (and BROWSERS), e.g." >&2; \
 	  echo "  PLAYWRIGHT_MODULE=/path/to/node_modules/playwright BROWSERS=chromium,firefox make wasm-check-browser" >&2; \
-	  echo "(the specs are tests/wasm/page.spec.mjs, world.spec.mjs and ffi.spec.mjs)" >&2; \
+	  echo "(the specs are tests/wasm/page.spec.mjs, world.spec.mjs, ffi.spec.mjs and git.spec.mjs)" >&2; \
 	  exit 1; \
 	fi
 	$(NODE) $(SRCDIR)/tests/wasm/page.spec.mjs $(W)/web
@@ -409,6 +417,12 @@ wasm-check-browser: wasm
 	  $(NODE) $(SRCDIR)/tests/wasm/ffi.spec.mjs $(W)/web; \
 	else \
 	  echo "skip ffi.spec.mjs: $(W)/web/manifest.json has no FFI (WASM_FFI=OFF)"; \
+	fi
+	@if grep -q '"git": *true' $(W)/web/manifest.json; then \
+	  echo "$(NODE) $(SRCDIR)/tests/wasm/git.spec.mjs $(W)/web"; \
+	  $(NODE) $(SRCDIR)/tests/wasm/git.spec.mjs $(W)/web; \
+	else \
+	  echo "skip git.spec.mjs: $(W)/web/manifest.json has no libgit2 (WASM_LIBGIT2=OFF, the default, or WASM_FFI=OFF)"; \
 	fi
 
 wasm-serve: wasm

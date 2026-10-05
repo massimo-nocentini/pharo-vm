@@ -84,6 +84,23 @@ if(PHARO_WASM_HAS_CAIRO)
         FILES libcairo.so.2)
 endif()
 
+# libgit2 (LGitLibrary, libgit2.so.1.4.4), pharo_git2 of
+# cmake/emscripten/deps/libgit2.cmake, with PHARO_WASM_HAS_LIBGIT2
+# (options.cmake).  The table lists the functions Iceberg binds, which git2.h
+# declares (with the deprecated names of git2/deprecated.h: giterr_last), and
+# git2/sys/transport.h and git2/sys/diff.h.  LGitLibrary looks for the file
+# libgit2.so.1.4.4 before it loads the library: the staging writes it,
+# empty.  The first load calls pharoWasmGitInit (src/emscripten/gitSupport.c),
+# which initialises libgit2 once and registers its HTTP transport.
+if(PHARO_WASM_HAS_LIBGIT2)
+    pharo_wasm_ffi_library(git2
+        HEADERS git2.h git2/sys/transport.h git2/sys/diff.h
+        SYMBOLS_FILE ${CMAKE_CURRENT_LIST_DIR}/ffi/symbols/git2.txt
+        LINK pharo_git2
+        FILES libgit2.so.1.4.4
+        ON_LOAD pharoWasmGitInit)
+endif()
+
 # The library of the FFI tests (ffiTestLibrary, libTestLibrary.so to the
 # image), compiled where its table is: it has no header that declares its
 # functions.  It is in the node VM, for lane 58 (tests/wasm/lanes/58-ffi.sh)

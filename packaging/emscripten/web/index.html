@@ -7,7 +7,9 @@
   (stage.mjs) replaces the BUILD placeholder, in the pharo-build meta tag
   and the URLs below, with a build id, which the page passes as ?v= on
   every script, worker and .wasm URL.  No external resources: it must be
-  served over plain HTTP (make wasm-serve), not from file://. -->
+  served over plain HTTP (make wasm-serve), not from file://.  Settings
+  (shown when the VM has libgit2's smart-HTTP transport) holds the CORS
+  proxy of git's requests, which page.js keeps in this browser. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -366,6 +368,40 @@ code { font-family: var(--mono); font-size: .92em; }
 .drop-card p { margin: 0; }
 .drop-card strong { display: block; color: var(--text); font-size: 15px; font-weight: 600; }
 
+/* Settings: the proxy of git's HTTP requests */
+.dialog {
+  width: min(480px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  overflow: auto;
+}
+.dialog::backdrop { background: var(--scrim); }
+.dialog form { display: flex; flex-direction: column; gap: 6px; padding: 18px 18px 14px; }
+.dialog h2 { margin: 0 0 8px; font-size: 16px; font-weight: 650; }
+.dialog label { font-size: 13.5px; font-weight: 600; }
+.dialog input {
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--term-bg);
+  font: 13.5px/1.4 var(--mono);
+}
+.dialog input:focus-visible { outline-offset: 0; }
+.dialog input[aria-invalid="true"] { border-color: var(--bad); }
+.dialog .state { margin: 0; min-height: 1.5em; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.dialog .state[data-kind="proxy"] { color: var(--text); }
+.dialog .state[data-kind="bad"] { color: var(--bad); }
+.dialog .about { margin: 2px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+.dialog .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.dialog .actions .grow { flex: 1; }
+
 @media (max-width: 760px) {
   .brand p { display: none; }
   .toolbar .label, .top .label { display: none; }
@@ -435,6 +471,9 @@ code { font-family: var(--mono); font-size: .92em; }
       <button class="btn ghost" id="theme" type="button" aria-label="Theme: System" title="Theme: follow the system">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg><span class="label" id="theme-label">System</span>
       </button>
+      <button class="btn ghost" id="settings" type="button" aria-label="Settings" aria-haspopup="dialog" title="Settings: the proxy of git's HTTP requests" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span class="label">Settings</span>
+      </button>
     </div>
   </div>
 
@@ -469,6 +508,22 @@ code { font-family: var(--mono); font-size: .92em; }
     <p><strong>Drop to open</strong>a Pharo .zip, or an .image with its .changes and its .sources</p>
   </div>
 </div>
+
+<dialog class="dialog" id="settings-dialog" aria-labelledby="settings-title">
+  <form id="settings-form" method="dialog" novalidate>
+    <h2 id="settings-title">Settings</h2>
+    <label for="git-proxy">Git HTTP proxy</label>
+    <input id="git-proxy" type="url" inputmode="url" placeholder="https://git-proxy.example/" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-describedby="git-proxy-state git-proxy-about">
+    <p class="state" id="git-proxy-state" aria-live="polite"></p>
+    <p class="about" id="git-proxy-about">Iceberg's https:// clones and fetches go to this CORS proxy: each request goes to the proxy's URL followed by the host and the path of the repository, such as github.com/pharo-project/pharo.git. The proxy sees the code and any credentials that pass through it, so give only one that you run or trust. When it is empty, the requests go to the repository itself, which works only for a server that lets this page in (CORS). This browser keeps it; a link cannot set it.</p>
+    <div class="actions">
+      <button class="btn ghost" id="git-proxy-clear" type="button">Clear</button>
+      <span class="grow"></span>
+      <button class="btn" id="settings-cancel" type="button">Cancel</button>
+      <button class="btn primary" id="settings-save" type="submit">Save</button>
+    </div>
+  </form>
+</dialog>
 
 <noscript><p style="padding:16px">This page needs JavaScript and WebAssembly.</p></noscript>
 <script src="open-image.js?v=@BUILD@"></script>

@@ -148,6 +148,25 @@ if(FEATURE_FFI)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/emscripten/ffiAdapt.c)
 endif()
 
+# libgit2 (WASM_LIBGIT2): src/emscripten/gitSupport.c has the function the
+# registry calls when the image loads it (pharoWasmGitInit, the ON_LOAD of
+# ffiLibraries.cmake), its smart-HTTP transport (WASM_LIBGIT2_HTTP), and
+# the getaddrinfo that the links give it (-Wl,--wrap=getaddrinfo, below).
+# It is compiled with the headers of pharo_git2 (cmake/emscripten/deps/
+# libgit2.cmake).
+if(PHARO_WASM_HAS_LIBGIT2)
+    set(PHARO_WASM_GIT_SUPPORT ${CMAKE_CURRENT_SOURCE_DIR}/src/emscripten/gitSupport.c)
+    list(APPEND EXTRACTED_SOURCES ${PHARO_WASM_GIT_SUPPORT})
+    if(PHARO_WASM_HAS_LIBGIT2_HTTP)
+        set(PHARO_WASM_GIT_HTTP 1)
+    else()
+        set(PHARO_WASM_GIT_HTTP 0)
+    endif()
+    set_source_files_properties(${PHARO_WASM_GIT_SUPPORT} PROPERTIES
+        INCLUDE_DIRECTORIES "$<TARGET_PROPERTY:pharo_git2,INTERFACE_INCLUDE_DIRECTORIES>"
+        COMPILE_DEFINITIONS PHARO_WASM_GIT_HTTP=${PHARO_WASM_GIT_HTTP})
+endif()
+
 set(VM_FRONTEND_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/emscripten/emscriptenMain.c)
 
@@ -237,6 +256,13 @@ if(FEATURE_FFI)
         -sEXPORTED_FUNCTIONS=_main,_malloc,_free,_emscripten_stack_get_current,__emscripten_stack_restore,__emscripten_stack_alloc)
 else()
     list(APPEND PHARO_WASM_LINK_FLAGS -sEXPORTED_FUNCTIONS=_main)
+endif()
+# libgit2 resolves the hosts of its git:// (and, without its HTTP transport,
+# http://) remotes with getaddrinfo, which aborts a memory64 runtime here:
+# it calls __wrap_getaddrinfo of src/emscripten/gitSupport.c instead, which
+# fails.  libgit2 is its only caller (the SocketPlugin calls none here).
+if(PHARO_WASM_HAS_LIBGIT2)
+    list(APPEND PHARO_WASM_LINK_FLAGS -Wl,--wrap=getaddrinfo)
 endif()
 # Debug: assertions in the JavaScript and the system libraries, and a checked
 # stack.  The stack cookies sit at the end of the stack, at the bottom of

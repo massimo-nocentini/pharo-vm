@@ -2,10 +2,13 @@
 #
 # The files of the libraries that need zlib include this file: libpng
 # (cmake/emscripten/deps/libpng.cmake), and so cairo, and cairo's PDF,
-# PostScript and script surfaces (WASM_CAIRO_PDF).  It defines its target
-# once, for whoever includes it first.  The target, pharo_zlib, is not in the
-# registry of the FFI: no image binds zlib, which the libraries call
-# directly.
+# PostScript and script surfaces (WASM_CAIRO_PDF), and libgit2
+# (cmake/emscripten/deps/libgit2.cmake), whose objects and packs are
+# deflated, with or without cairo.  It defines its target once, for whoever
+# includes it first: one zlib in the VM (libgit2's own copy of zlib is left
+# out, whose symbols would be those of this one).  The target, pharo_zlib, is
+# not in the registry of the FFI: no image binds zlib, which the libraries
+# call directly.
 #
 # This file takes the pinned release archive (cmake/emscripten/deps/
 # fetch.cmake), the one zlib.net and the release of GitHub give (signed by

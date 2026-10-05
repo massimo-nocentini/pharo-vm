@@ -19,6 +19,13 @@
 #                              libpng and zlib, on that FreeType
 #     PHARO_WASM_HAS_CAIRO_PDF the PDF, PostScript and script surfaces of
 #                              cairo
+#     PHARO_WASM_HAS_LIBGIT2   libgit2, for Iceberg (LGitLibrary): local
+#                              repositories, file:// clones
+#     PHARO_WASM_HAS_LIBGIT2_HTTP
+#                              the smart-HTTP transport of libgit2 over
+#                              synchronous XHR (src/emscripten/gitSupport.c),
+#                              for http:// and https:// remotes behind a CORS
+#                              proxy
 #
 # Every library is an FFI library, so none is built without the FFI.  One
 # STATUS line gives the result.
@@ -57,6 +64,14 @@ option(WASM_FREETYPE "Build FreeType, for the fonts of the image (needs WASM_FFI
 set(WASM_CAIRO AUTO CACHE STRING "Build cairo, for Athens and Roassal: AUTO (with FreeType), ON or OFF")
 set_property(CACHE WASM_CAIRO PROPERTY STRINGS AUTO ON OFF)
 option(WASM_CAIRO_PDF "Build the PDF, PostScript and script surfaces of cairo (with cairo)" OFF)
+# libgit2 1.4.4 (the version whose structures Pharo 12's LGit binds), for
+# Iceberg: off by default, since it costs about 260 KB of gzipped wasm
+# (650 KB raw) and only Iceberg uses it.  Its HTTP transport (on by default
+# with libgit2) fetches http:// and https:// remotes with synchronous XHR,
+# through the CORS proxy the user gives; there is no SSH, nor libgit2's own
+# TLS and sockets.
+option(WASM_LIBGIT2 "Build libgit2, for Iceberg (needs WASM_FFI)" OFF)
+option(WASM_LIBGIT2_HTTP "Give libgit2 its smart-HTTP transport over XHR (with libgit2)" ON)
 
 # WASM_CAIRO is AUTO or a boolean (ON, OFF, 1, 0, YES, NO...)
 string(TOUPPER "${WASM_CAIRO}" PHARO_WASM_CAIRO_SETTING)
@@ -105,11 +120,28 @@ if(WASM_FFI)
             string(APPEND PHARO_WASM_CAIRO_STATUS ", cairo pdf OFF (no cairo)")
         endif()
     endif()
-    message(STATUS "wasm deps: ffi ON, freetype ${PHARO_WASM_HAS_FREETYPE}, ${PHARO_WASM_CAIRO_STATUS}")
+    if(WASM_LIBGIT2)
+        set(PHARO_WASM_HAS_LIBGIT2 ON)
+        if(WASM_LIBGIT2_HTTP)
+            set(PHARO_WASM_HAS_LIBGIT2_HTTP ON)
+            set(PHARO_WASM_LIBGIT2_STATUS "libgit2 ON, libgit2 http ON")
+        else()
+            set(PHARO_WASM_HAS_LIBGIT2_HTTP OFF)
+            set(PHARO_WASM_LIBGIT2_STATUS "libgit2 ON, libgit2 http OFF")
+        endif()
+    else()
+        set(PHARO_WASM_HAS_LIBGIT2 OFF)
+        set(PHARO_WASM_HAS_LIBGIT2_HTTP OFF)
+        set(PHARO_WASM_LIBGIT2_STATUS "libgit2 OFF")
+    endif()
+    message(STATUS "wasm deps: ffi ON, freetype ${PHARO_WASM_HAS_FREETYPE}, ${PHARO_WASM_CAIRO_STATUS}, "
+        "${PHARO_WASM_LIBGIT2_STATUS}")
 else()
     set(PHARO_WASM_HAS_FFI OFF)
     set(PHARO_WASM_HAS_FREETYPE OFF)
     set(PHARO_WASM_HAS_CAIRO OFF)
     set(PHARO_WASM_HAS_CAIRO_PDF OFF)
-    message(STATUS "wasm deps: ffi OFF (WASM_FFI=OFF): no library is built, freetype OFF, cairo OFF")
+    set(PHARO_WASM_HAS_LIBGIT2 OFF)
+    set(PHARO_WASM_HAS_LIBGIT2_HTTP OFF)
+    message(STATUS "wasm deps: ffi OFF (WASM_FFI=OFF): no library is built, freetype OFF, cairo OFF, libgit2 OFF")
 endif()

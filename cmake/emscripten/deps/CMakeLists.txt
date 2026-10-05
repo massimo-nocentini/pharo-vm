@@ -14,6 +14,8 @@
 #       pixman.cmake    pharo_pixman
 #       libpng.cmake    pharo_png
 #       zlib.cmake      pharo_zlib (for libpng, and the PDF surface)
+#     libgit2.cmake   pharo_git2, libgit2 for Iceberg (PHARO_WASM_HAS_LIBGIT2),
+#                     on the same pharo_zlib
 #
 # The libraries are compiled with flags of their own, not with those of the
 # VM: a directory starts with what its parent set, and CMakeLists.txt and
@@ -25,8 +27,9 @@
 # and the setjmp/longjmp flags, which every object of a link must share, and
 # no compile options, definitions or flags of the build type.  Each library
 # then gets, with pharo_wasm_dep_flags(<target> <optimisation>), its
-# optimisation, whatever the build type, -g in a Debug build only, and -w:
-# their warnings are not the VM's business.
+# optimisation, whatever the build type (-O2, or -Os for libgit2, which only
+# Iceberg calls), -g in a Debug build only, and -w: their warnings are not
+# the VM's business.
 
 set_directory_properties(PROPERTIES COMPILE_OPTIONS "" COMPILE_DEFINITIONS "")
 set(CMAKE_C_FLAGS "-m64 ${PHARO_WASM_SJLJ_C_FLAGS}")
@@ -54,4 +57,7 @@ if(PHARO_WASM_HAS_FREETYPE)
 endif()
 if(PHARO_WASM_HAS_CAIRO)
     include(${CMAKE_CURRENT_LIST_DIR}/cairo.cmake)
+endif()
+if(PHARO_WASM_HAS_LIBGIT2)
+    include(${CMAKE_CURRENT_LIST_DIR}/libgit2.cmake)
 endif()

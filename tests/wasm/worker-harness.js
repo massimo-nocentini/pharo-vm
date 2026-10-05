@@ -31,7 +31,12 @@
 // libcairo.so.2; and an image of version 2 (OSWindow-Web without its
 // AthensCairoSurface extension: Athens needs the SurfacePlugin, which the
 // VM lacks) is prepared to version 3 on its world boot, and then draws
-// Roassal.  Prints every case and their count, and exits with
+// Roassal; an image of version 3 (Iceberg's stock remotes, scp-like URLs
+// over SSH, which a browser cannot reach) is prepared to version 4 on its
+// world boot, and then has Iceberg's https:// remotes (remoteTypeSelector
+// #httpsUrl), which the smart-HTTP transport of libgit2 clones (case 26,
+// on every build: the setting is the image's, with or without libgit2).
+// Prints every case and their count, and exits with
 // status 1 if any fails.  Lane 70 (tests/wasm/lanes/70-worker-harness.sh)
 // runs it.
 
@@ -1208,6 +1213,63 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       await R.prompt(60000);
       assert(val('#(0 0 255)').test(R.since()),
              'the centre of the Roassal canvas: ' + JSON.stringify(R.since() + R.errSince()).slice(0, 400));
+    } finally { await R.close(); current = S; }
+  });
+
+  // ---- version 3 of OSWindow-Web to 4: Iceberg's https:// remotes
+  const iceberg = versions && webPackage >= 4;
+  if (!iceberg) console.log('# skip 26: ' + (!versions ? 'no versions (see 20-23)' : 'manifest.webPackage is ' + webPackage));
+  if (iceberg) await check('26 an image of version 3, whose Iceberg clones over SSH, is prepared to 4 on the world boot; then its remotes are https:// ones', async () => {
+    memory.map.clear();
+    // the site's image, made what a site of version 3 saved: the stock
+    // remote type of Iceberg (scp-like URLs, SSH, which a browser cannot
+    // reach), and version 3
+    const C = session();
+    try {
+      current = C;
+      await C.started();
+      C.send('Iceberg remoteTypeSelector\n');
+      await C.expectOut(val('#httpsUrl'));
+      await C.prompt();
+      C.send("Iceberg remoteTypeSelector: #scpUrl. OSWebDriver class compile: 'packageVersion ^ 3'; " +
+             "compile: 'packageMarker ^ #OSWindowWebPackage3'. { OSWebDriver packageVersion. Iceberg remoteTypeSelector }\n");
+      await C.expectOut(val('#(3 #scpUrl)'));
+      await C.prompt();
+      C.post({ type: 'save' });
+      await waitFor('saved', () => C.saved.length, 60000);
+      await C.prompt(60000);
+      const m = C.saved[0];
+      assert(!m.error && m.webPackage === 3 && m.prepared === false, 'saved ' + JSON.stringify(m));
+      const meta = memory.map.get('meta');
+      assert(meta.webPackage === 3 && meta.prepared === false, 'meta ' + JSON.stringify(meta));
+    } finally { await C.close(); current = S; }
+    // the world boot prepares it
+    const t = now();
+    const P = session(world, { display: true });
+    try {
+      current = P;
+      await waitFor('prepared', () => P.prepared || P.crash || P.exit !== null, 300000);
+      P.alive();
+      console.log(`#   prepared from version 3 in ${((now() - t) / 1000).toFixed(1)} s`);
+      assert(P.ready.source === 'saved' && P.ready.preparing === true && P.ready.prepared === false &&
+             P.ready.webPackage === 3, 'ready ' + JSON.stringify(P.ready));
+      assert(!P.prepared.error && P.prepared.saved === true && P.prepared.webPackage === webPackage,
+             'prepared ' + JSON.stringify(P.prepared));
+      assert(P.saved.length === 1 && P.saved[0].prepared === true && P.saved[0].webPackage === webPackage,
+             'saved ' + JSON.stringify(P.saved));
+      const meta = memory.map.get('meta');
+      assert(meta.prepared === true && meta.webPackage === webPackage, 'meta ' + JSON.stringify(meta));
+    } finally { await P.close(); current = S; }
+    // the image has the package of the site, and Iceberg's https:// remotes
+    const R = session();
+    try {
+      current = R;
+      await R.started();
+      assert(R.ready.source === 'saved' && R.ready.webPackage === webPackage && R.ready.prepared === true,
+             'ready ' + JSON.stringify(R.ready));
+      R.send('{ OSWebDriver packageVersion. Iceberg remoteTypeSelector }\n');
+      await R.expectOut(val(`#(${webPackage} #httpsUrl)`));
+      await R.prompt();
     } finally { await R.close(); current = S; }
   });
 

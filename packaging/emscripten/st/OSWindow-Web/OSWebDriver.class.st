@@ -70,14 +70,14 @@ OSWebDriver class >> isSupported [
 OSWebDriver class >> packageMarker [
 	"A symbol of its own for each #packageVersion, which the image keeps as a literal of this method: the worker of the page finds the version of an image in its bytes without booting it. It is the name of the package and the version"
 
-	^ #OSWindowWebPackage3
+	^ #OSWindowWebPackage4
 ]
 
 { #category : 'versions' }
 OSWebDriver class >> packageVersion [
-	"The version of this package: web-bootstrap.st files the package in again over an older one, and the page sets an image of an older version up again (see #setUpImage). Version 1 had neither this method nor #setUpImage, and bitmap fonts; 2 keeps the FreeType fonts of the stock image when the VM has FreeType; 3 draws Athens with cairo without the SurfacePlugin, which the web VMs lack (the AthensCairoSurface extension of this package). Change #packageMarker with it. packaging/emscripten/tools/stage.mjs reads both from this file, for the manifest of the page"
+	"The version of this package: web-bootstrap.st files the package in again over an older one, and the page sets an image of an older version up again (see #setUpImage). Version 1 had neither this method nor #setUpImage, and bitmap fonts; 2 keeps the FreeType fonts of the stock image when the VM has FreeType; 3 draws Athens with cairo without the SurfacePlugin, which the web VMs lack (the AthensCairoSurface extension of this package); 4 gives Iceberg https:// remotes (#setUpGit). Change #packageMarker with it. packaging/emscripten/tools/stage.mjs reads both from this file, for the manifest of the page"
 
-	^ 3
+	^ 4
 ]
 
 { #category : 'primitives' }
@@ -131,10 +131,20 @@ OSWebDriver class >> setUpFreeTypeFonts [
 ]
 
 { #category : 'image setup' }
+OSWebDriver class >> setUpGit [
+	"Iceberg makes the remote of a github:// repository an SSH one (#scpUrl) by default, which no web VM can reach: they have no libssh2, and a browser opens no socket. An https:// remote goes through the smart-HTTP transport of a web VM built with libgit2 (WASM_LIBGIT2), behind the CORS proxy of the Console's Settings. Set it whatever the VM, also at build time on a native VM, whose libgit2 does not tell what the web VM has: nothing else works in a browser. An image without Iceberg is left alone"
+
+	(Smalltalk hasClassNamed: #Iceberg) ifFalse: [ ^ self ].
+	(Smalltalk at: #Iceberg) remoteTypeSelector: #httpsUrl
+]
+
+{ #category : 'image setup' }
 OSWebDriver class >> setUpImage [
 	"Set the image up for the web VMs: prepare-web-image.st calls me at build time, and web-bootstrap.st in the page. Both call nothing else of the kind, so that a new version of this package changes only me"
 
-	self setUpFonts
+	self
+		setUpFonts;
+		setUpGit
 ]
 
 { #category : 'system startup' }

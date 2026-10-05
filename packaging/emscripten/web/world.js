@@ -62,6 +62,11 @@
 //   points to the Console, which can run it, or reset it.
 // - The status pill is no live region: the one next to it says how the VM
 //   goes (loading, starting, running, ended), not how far the loading got.
+// - The CORS proxy of git's HTTP requests is the one that the Console's
+//   Settings keep in this browser (pharo-wasm.gitProxy, see page.js), read
+//   at each start of a worker and given in init.gitProxy, and given to the
+//   running VM when the Console changes it (a storage event).  Like the
+//   Console, the page never takes it from its URL.
 //
 // window.PharoWorld tells tests and the curious how it goes: stats (the
 // workers started, the frames of this one, when they came and the size of
@@ -98,6 +103,23 @@
     const theme = localStorage.getItem('pharo-wasm.theme');
     if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
   } catch (e) { /* no storage: follow the system */ }
+
+  // The proxy of git's HTTP requests that the Console keeps (page.js), or
+  // '': an http: or https: URL without credentials or fragment, as the
+  // Console checks it
+  const GIT_PROXY_KEY = 'pharo-wasm.gitProxy';
+  function gitProxy() {
+    let s = null;
+    try { s = localStorage.getItem(GIT_PROXY_KEY); } catch (e) { /* no storage: no proxy */ }
+    if (!s) return '';
+    try {
+      const u = new URL(s);
+      return /^https?:$/.test(u.protocol) && !u.username && !u.password && s.indexOf('#') < 0 ? s : '';
+    } catch (e) { return ''; }
+  }
+  addEventListener('storage', e => {
+    if (worker && (e.key === GIT_PROXY_KEY || e.key === null)) worker.postMessage({ type: 'gitProxy', gitProxy: gitProxy() });
+  });
 
   // ---- status, overlay and notice
 
@@ -330,6 +352,7 @@
       upload: upload || undefined,
       prepare: true,
       display: { canvas: offscreen, width, height },
+      gitProxy: gitProxy(),
     }, [offscreen]);
     // queued by the worker until it is ready, so before the image boots,
     // which then opens the world at the size of the canvas

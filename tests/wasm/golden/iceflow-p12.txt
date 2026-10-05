@@ -1,0 +1,102 @@
+# iceflow-p12.txt - what tests/wasm/st/iceflow.st prints on the stock image
+# of Pharo 12, with the libgit2 of the WebAssembly VMs
+# (cmake/emscripten/deps/libgit2.cmake: libgit2 1.4.4, with WASM_LIBGIT2)
+#
+# Lane 66 (tests/wasm/lanes/66-libgit2.sh) runs iceflow.st in the node VM on
+# the stock image and on the image of the world, and each line below must
+# be a line of what it prints, which must have no other 'ffi method' line;
+# '#' lines and blank lines are comments, and a value '<id>' stands for the
+# short id of a commit, 7 hexadecimal digits, which changes with the time.
+# These lines are the reference: a native Pharo VM (HOST_PHARO, 10.3.9 or
+# later) is compared with them only as an advice.  The Linux host VM 10.3.1,
+# with its libgit2 1.4.4, prints the same lines.
+#
+# 'ffi method' lines are the methods of LGit whose callouts the flow
+# compiled, 65 of them; 'callback classes' the classes of the 9 kinds of
+# callbacks that it made for libgit2.  When Iceberg, LGit or the image
+# change on purpose, run iceflow.st as lane 66 does, look at what changed,
+# and update these lines.
+major: 12
+backend: TFFIBackend
+library: libgit2.so.1.4.4
+libgit2 version: 1.4.4
+create repo: wasmdemo
+make class: WasmIceDemo
+add package: #(#WasmIceDemo)
+commit 1: <id>
+modify: 3
+commit 2: <id>
+log: second / first from Pharo
+branch: feature
+status: 0
+file clone: feature
+ffi methods: 65
+ffi method: LGitBlob>>blob_is_binary:
+ffi method: LGitBlob>>blob_rawcontent:
+ffi method: LGitBlob>>blob_rawsize:
+ffi method: LGitCloneOptionsV140>>clone_init_options:version:
+ffi method: LGitCommit class>>commit_free:
+ffi method: LGitCommit>>commit_author:
+ffi method: LGitCommit>>commit_lookup:repo:id:
+ffi method: LGitCommit>>commit_message:
+ffi method: LGitCommit>>commit_message_encoding:
+ffi method: LGitCommit>>commit_parent_id:n:
+ffi method: LGitCommit>>commit_parentcount:
+ffi method: LGitCommit>>commit_time:
+ffi method: LGitCommit>>commit_time_offset:
+ffi method: LGitCommit>>commit_tree:commit:
+ffi method: LGitCommitBuilder>>commit_create:repo:update_ref:author:committer:message_encoding:message:tree:parent_count:parents:
+ffi method: LGitDiff>>diff_foreach:file_cb:binary_cb:hunk_cb:line_cb:payload:
+ffi method: LGitDiff>>diff_tree_to_tree:repo:old_tree:new_tree:opts:
+ffi method: LGitDiffOptions>>diff_init_options:version:
+ffi method: LGitError class>>giterr_last
+ffi method: LGitFetchOptionsV140>>fetch_init_options:version:
+ffi method: LGitId>>oid_fmt:size:id:
+ffi method: LGitIndex class>>index_free:
+ffi method: LGitIndex>>index_add_all:pathspec:flags:callback:payload:
+ffi method: LGitIndex>>index_read:force:
+ffi method: LGitIndex>>index_write
+ffi method: LGitIndex>>index_write_tree:index:
+ffi method: LGitLibrary>>libgit2_init
+ffi method: LGitLibrary>>libgit2_version:minor:rev:
+ffi method: LGitObject class>>object_free:
+ffi method: LGitObject>>object_lookup:repo:id:type:
+ffi method: LGitObject>>object_type:
+ffi method: LGitReference>>reference_create:repo:name:id:force:log_message:
+ffi method: LGitReference>>reference_is_branch:
+ffi method: LGitReference>>reference_name:
+ffi method: LGitReference>>reference_target:
+ffi method: LGitReference>>reference_type:
+ffi method: LGitRemote>>remote_lookup:repo:name:
+ffi method: LGitRemote>>remote_set_url:remote:url:
+ffi method: LGitRemote>>remote_url
+ffi method: LGitRemoteCallbacksV120>>remote_init_callbacks:version:
+ffi method: LGitRepository class>>repository_free:
+ffi method: LGitRepository>>branch_lookup:branch_name:branch_type:
+ffi method: LGitRepository>>clone:url:local_path:options:
+ffi method: LGitRepository>>remote_list:
+ffi method: LGitRepository>>repository_head:of:
+ffi method: LGitRepository>>repository_index:repo:
+ffi method: LGitRepository>>repository_init:path:is_bare:
+ffi method: LGitRepository>>repository_is_unborn:
+ffi method: LGitRepository>>repository_open:bare_path:
+ffi method: LGitRepository>>repository_set_head:log_message:
+ffi method: LGitRepository>>signature_default:repo:
+ffi method: LGitRevwalk class>>revwalk_free:
+ffi method: LGitRevwalk>>revwalk_new:repo:
+ffi method: LGitRevwalk>>revwalk_next:walk:
+ffi method: LGitRevwalk>>revwalk_push_ref:refname:
+ffi method: LGitStringArray class>>strarray_free:
+ffi method: LGitTree class>>tree_free:
+ffi method: LGitTree>>tree_entry_byindex:idx:
+ffi method: LGitTree>>tree_entry_bypath:path:
+ffi method: LGitTree>>tree_entrycount:
+ffi method: LGitTree>>tree_lookup:repo:id:
+ffi method: LGitTree>>tree_owner:
+ffi method: LGitTreeEntry>>tree_entry_name:
+ffi method: LGitTreeEntry>>tree_entry_to_object:repo:entry:
+ffi method: LGitTreeEntry>>tree_entry_type:
+callback classes: IceGitCheckoutProgress IceGitTransferProgress LGitCredAcquireCallback LGitDiffBinaryCallback LGitDiffFileCallback LGitDiffHunkCallback LGitDiffLineCallback LGitIndexMatchedPathCallback LGitTransportCertificateCheckCallback
+clone log: second / first from Pharo
+after: 7
+errors: none

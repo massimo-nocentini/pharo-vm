@@ -19,6 +19,15 @@
 // to open (paths separated by colons, such as Pharo downloads of
 // files.pharo.org): each must be unpacked and started with its own
 // .sources, whether its image then runs the REPL or not.
+//
+// Settings, the CORS proxy of git's requests, is checked in contexts of
+// their own, on any build: one without libgit2's smart-HTTP transport is
+// given a manifest that says it has it, so that the page shows Settings.
+// The proxy typed in is checked, shown with its origin, kept in
+// localStorage and given to the worker (init.gitProxy, then "gitProxy"),
+// also by the world page; a ?gitProxy= of the URL is ignored; without
+// localStorage it holds for the session.  A clone through the proxy is
+// git.spec.mjs's.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -742,6 +751,154 @@ await run(async t => {
         await started();
       }
     } finally { crashing = false; }
+  });
+
+  // Settings: the CORS proxy of git's requests.  In contexts of their own,
+  // whose pages record what they tell their workers of it; a build without
+  // libgit2's smart-HTTP transport gets a manifest that says it has it, for
+  // the page to show Settings (its VM never reads the proxy then)
+  async function gitContext(blockStorage) {
+    const context = await t.browser.newContext();
+    if (!(manifest.git && manifest.gitHttp)) {
+      const body = JSON.stringify(Object.assign({}, manifest, { git: true, gitHttp: true }));
+      await context.route(url => url.pathname.endsWith('/manifest.json'),
+                          route => route.fulfill({ contentType: 'application/json', body }));
+    }
+    await context.addInitScript(blocked => {
+      window.gitProxySent = [];
+      const post = Worker.prototype.postMessage;
+      Worker.prototype.postMessage = function (m, ...rest) {
+        if (m && (m.type === 'init' || m.type === 'gitProxy')) window.gitProxySent.push([m.type, m.gitProxy]);
+        return post.call(this, m, ...rest);
+      };
+      if (blocked) Object.defineProperty(window, 'localStorage', { configurable: true,
+        get() { throw new DOMException('The operation is insecure.', 'SecurityError'); } });
+    }, blockStorage);
+    return context;
+  }
+  const EVIL = 'http://proxy-from-a-link.invalid/';
+  const PROXY = 'http://127.0.0.1:9';
+  const gitPage = async (context, file) => {
+    const p = await context.newPage();
+    t.watch(p);
+    listen(p);
+    await p.goto(t.base + file + '?gitProxy=' + encodeURIComponent(EVIL));
+    return p;
+  };
+  const prompt = p => p.waitForFunction(() => document.getElementById('status').dataset.state === 'waiting' &&
+                                        /(^|\n)st> $/.test(document.getElementById('term').textContent), null, { timeout: 90000 });
+  const sent = p => p.evaluate(() => window.gitProxySent);
+  const stored = p => p.evaluate(() => localStorage.getItem('pharo-wasm.gitProxy'));
+  const proxyState = p => p.$eval('#git-proxy-state', e => [e.dataset.kind, e.textContent]);
+  async function typeProxy(p, text) {
+    await p.fill('#git-proxy', text);
+    await p.press('#git-proxy', 'Enter');
+  }
+
+  await check('Settings: the git proxy is typed in, shown with its origin, kept in this browser, never taken from the URL', async () => {
+    const context = await gitContext(false);
+    const hosts = new Set();
+    context.on('request', r => hosts.add(new URL(r.url()).host));
+    try {
+      const p = await gitPage(context, 'index.html');
+      await prompt(p);
+      assert(JSON.stringify(await sent(p)) === '[["init",""]]', 'init without a proxy: ' + JSON.stringify(await sent(p)));
+      assert(await stored(p) === null, 'nothing stored from the URL');
+      assert(!/Git requests/.test(await p.$eval('#term', e => e.textContent)), 'no note of a proxy');
+      assert(await p.isVisible('#settings'), 'Settings shown');
+
+      // typed in: rejected, then accepted
+      await p.click('#settings');
+      assert(await p.$eval('#settings-dialog', d => d.open), 'the dialog opens');
+      assert(await p.inputValue('#git-proxy') === '', 'empty');
+      assert((await proxyState(p))[0] === 'none', 'no proxy: ' + await proxyState(p));
+      for (const [bad, why] of [['ftp://127.0.0.1/', /http:\/\/ or https:\/\//], ['http://me:pw@127.0.0.1:9/', /user name/],
+                                [PROXY + '/#x', /fragment/], ['git proxy', /not a URL/]]) {
+        await typeProxy(p, bad);
+        const [kind, text] = await proxyState(p);
+        assert(kind === 'bad' && why.test(text), `${bad}: ${kind} ${text}`);
+        assert(await p.$eval('#settings-dialog', d => d.open), bad + ' is not saved');
+      }
+      await p.fill('#git-proxy', PROXY);
+      assert(JSON.stringify(await proxyState(p)) === JSON.stringify(['proxy', 'Git requests go to ' + PROXY + '.']),
+             'the origin shown: ' + await proxyState(p));
+      if (t.shots) {
+        await p.screenshot({ path: t.shot('page-settings.png') });
+        await p.setViewportSize({ width: 360, height: 740 });
+        await p.emulateMedia({ colorScheme: 'dark' });
+        await p.waitForTimeout(300);      // (past the transitions of the buttons)
+        await p.screenshot({ path: t.shot('page-settings-dark-360.png') });
+        await p.setViewportSize({ width: 1280, height: 800 });
+        await p.emulateMedia({ colorScheme: 'light' });
+      }
+      await p.press('#git-proxy', 'Enter');
+      assert(!(await p.$eval('#settings-dialog', d => d.open)), 'closed by Save');
+      assert(await stored(p) === PROXY + '/', 'stored with its /: ' + await stored(p));
+      assert(JSON.stringify((await sent(p)).slice(-1)) === JSON.stringify([['gitProxy', PROXY + '/']]),
+             'given to the VM: ' + JSON.stringify(await sent(p)));
+      await p.waitForFunction(o => document.getElementById('term').textContent.includes(
+        '"Git requests now go through the proxy at ' + o + '."'), PROXY);
+      await evalIn(p, '3 + 4', /\n7\nst> $/);
+
+      // Cancel and Escape keep it
+      for (const close of ['#settings-cancel', 'Escape']) {
+        await p.click('#settings');
+        assert(await p.inputValue('#git-proxy') === PROXY + '/', 'the dialog shows it');
+        await p.fill('#git-proxy', 'https://other.invalid/');
+        if (close === 'Escape') await p.keyboard.press('Escape'); else await p.click(close);
+        assert(!(await p.$eval('#settings-dialog', d => d.open)) && await stored(p) === PROXY + '/', close + ' keeps it');
+      }
+      assert((await sent(p)).length === 2, 'nothing more sent: ' + JSON.stringify(await sent(p)));
+      assert(await p.$eval('#status', e => e.dataset.state) === 'waiting', 'Escape in the dialog stops nothing');
+
+      // a reload, from a link that names another proxy
+      await p.reload();
+      await prompt(p);
+      assert(JSON.stringify(await sent(p)) === JSON.stringify([['init', PROXY + '/']]), 'init: ' + JSON.stringify(await sent(p)));
+      assert((await p.$eval('#term', e => e.textContent)).includes('"Git requests go through the proxy at ' + PROXY + ' (Settings)."'),
+             'a note names it');
+
+      // the world page reads it, and hears of its changes
+      const w = await context.newPage();
+      const worldErrors = [];
+      w.on('pageerror', e => worldErrors.push(e.message));
+      await w.goto(t.base + 'world.html?gitProxy=' + encodeURIComponent(EVIL));
+      await w.waitForFunction(() => window.gitProxySent.length > 0, null, { timeout: 30000 });
+      assert(JSON.stringify(await sent(w)) === JSON.stringify([['init', PROXY + '/']]), 'world init: ' + JSON.stringify(await sent(w)));
+      await p.click('#settings');
+      await p.click('#git-proxy-clear');
+      assert((await proxyState(p))[0] === 'none', 'cleared');
+      await p.click('#settings-save');
+      assert(await stored(p) === null, 'removed');
+      assert(JSON.stringify((await sent(p)).slice(-1)) === '[["gitProxy",""]]', 'the VM forgets it');
+      await w.waitForFunction(() => window.gitProxySent.length > 1, null, { timeout: 10000 });
+      assert(JSON.stringify((await sent(w)).slice(-1)) === '[["gitProxy",""]]', 'and the world: ' + JSON.stringify(await sent(w)));
+      assert(!worldErrors.length, 'world: ' + worldErrors.join(' | '));
+      await w.close();
+      await p.waitForFunction(() => document.getElementById('term').textContent.includes(
+        '"Git requests now go to the repositories themselves, without a proxy."'));
+      assert(![...hosts].some(h => /invalid|:9$/.test(h)), 'no request to a proxy: ' + [...hosts].join(' '));
+      await p.close();
+    } finally { await context.close(); }
+  });
+
+  await check('Settings without localStorage: the git proxy holds for the session, and the page says so', async () => {
+    const context = await gitContext(true);
+    try {
+      const p = await gitPage(context, 'index.html');
+      await prompt(p);
+      assert(JSON.stringify(await sent(p)) === '[["init",""]]', 'init: ' + JSON.stringify(await sent(p)));
+      await p.click('#settings');
+      await typeProxy(p, PROXY + '/git/');
+      assert(JSON.stringify((await sent(p)).slice(-1)) === JSON.stringify([['gitProxy', PROXY + '/git/']]), 'given to the VM');
+      await p.waitForFunction(() => !document.getElementById('notice').hidden &&
+                              /cannot keep the setting: it holds for this session only/.test(document.getElementById('notice-text').textContent));
+      await p.click('#restart');
+      await p.waitForFunction(() => window.gitProxySent.filter(([type]) => type === 'init').length === 2, null, { timeout: 30000 });
+      assert(JSON.stringify((await sent(p)).slice(-1)) === JSON.stringify([['init', PROXY + '/git/']]), 'Restart keeps it');
+      await prompt(p);
+      await p.close();
+    } finally { await context.close(); }
   });
 
   await check('a database that cannot be opened (a private window): a note, Save offers Download', async () => {

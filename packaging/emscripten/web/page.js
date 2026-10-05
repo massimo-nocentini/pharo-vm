@@ -38,8 +38,19 @@
 // - The status pill is no live region: the one next to it says how the VM
 //   goes (loading, starting, ready, ended), not how far the loading got, nor
 //   the state of every evaluation, which the terminal, a log, tells.
-// - History and the theme live in localStorage when available; everything
-//   works without it.
+// - Settings, shown when the VM has the smart-HTTP transport of libgit2
+//   (ready.gitHttp), holds the CORS proxy of git's requests: a URL prefix
+//   that the requests of Iceberg's https:// remotes go to, followed by the
+//   host and the path of the repository (src/emscripten/gitSupport.c).  It
+//   is kept in localStorage (pharo-wasm.gitProxy, which world.js reads too)
+//   and goes to the worker in init.gitProxy, and to a running VM at once
+//   ("gitProxy"), also when another tab changes it; the worker makes it
+//   Module.gitHttpProxy.  It is set only in the dialog, never from the URL:
+//   a link must not send someone's git traffic, code and credentials, to a
+//   proxy of its choosing.  The dialog and a note at the start name the
+//   origin that the requests go to.
+// - History, the theme and the proxy live in localStorage when available;
+//   everything works without it (the proxy then only for this session).
 
 (function () {
   'use strict';
@@ -66,8 +77,12 @@
       try { const v = localStorage.getItem('pharo-wasm.' + k); return v === null ? d : v; }
       catch (e) { return d; }
     },
+    // (whether it could)
     set(k, v) {
-      try { localStorage.setItem('pharo-wasm.' + k, v); } catch (e) { /* ignore */ }
+      try { localStorage.setItem('pharo-wasm.' + k, v); return true; } catch (e) { return false; }
+    },
+    remove(k) {
+      try { localStorage.removeItem('pharo-wasm.' + k); return true; } catch (e) { return false; }
     },
   };
   const touch = matchMedia('(pointer: coarse)').matches;
@@ -83,6 +98,23 @@
     $('theme').title = 'Theme: ' + (theme === 'auto' ? 'follow the system' : THEMES[theme].toLowerCase());
   }
   applyTheme();
+
+  // The proxy of git's HTTP requests, as typed: {value: ''} for none, else
+  // {value, origin} for an http: or https: URL without credentials or
+  // fragment (a bare origin gets its /, which the host of the repository
+  // follows), else {error}.  world.js checks what it reads in the same way.
+  function parseGitProxy(text) {
+    const s = String(text || '').trim();
+    if (!s) return { value: '' };
+    let u;
+    try { u = new URL(s); } catch (e) { return { error: 'This is not a URL.' }; }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return { error: 'The proxy must be an http:// or https:// URL.' };
+    if (u.username || u.password) return { error: 'Give the URL of the proxy without a user name or password.' };
+    if (u.hash || s.indexOf('#') >= 0) return { error: 'The URL of the proxy cannot have a #fragment.' };
+    return { value: u.pathname === '/' && !u.search ? u.origin + '/' : s, origin: u.origin };
+  }
+  // the stored one, '' when none or not a valid one
+  let gitProxy = parseGitProxy(store.get('gitProxy', '')).value || '';
 
   // ---- terminal output
 
@@ -266,6 +298,7 @@
   let upload = null;                    // {name, image, changes, sources} to boot until the worker keeps it
   let opening = false;                  // Open unpacks files
   let source = null;                    // where the image of the worker came from (ready)
+  let gitHttp = false;                  // the VM has libgit2's smart-HTTP transport (ready)
   const reqs = new Map();
   let reqId = 0;
 
@@ -304,6 +337,7 @@
     $('open').disabled = !!unavailable || opening;
     $('restart').disabled = !!unavailable;
     $('world').hidden = !(world && prepared);
+    $('settings').hidden = !gitHttp;
   }
 
   // The notice under the terminal: text, a button doing action, if any, and
@@ -420,6 +454,7 @@
       mode: 'console',
       persist: true,
       upload: upload || undefined,
+      gitProxy,
     });
   }
 
@@ -456,6 +491,8 @@
       note('Started the opened image, ' + (upload ? upload.name : m.image) +
            (upload && !upload.sources && m.sources ? ', with the .sources of this site, ' + m.sources : '') + '.');
     if (m.storageError) note('Note: ' + m.storageError + '.');
+    gitHttp = !!m.gitHttp;
+    if (gitHttp && gitProxy) note('Git requests go through the proxy at ' + parseGitProxy(gitProxy).origin + ' (Settings).');
     if (world && !prepared)
       showNotice('This image cannot open the Pharo world yet.', 'Prepare for the world', prepareWorld);
     updateControls();
@@ -725,6 +762,55 @@
     e.returnValue = '';                 // older browsers ask for it
   });
 
+  // ---- Settings: the proxy of git's HTTP requests
+
+  const dialog = $('settings-dialog'), proxyInput = $('git-proxy'), proxyState = $('git-proxy-state');
+  // what the dialog says of the text in the field
+  function showProxyState() {
+    const p = parseGitProxy(proxyInput.value);
+    proxyInput.setAttribute('aria-invalid', p.error ? 'true' : 'false');
+    proxyState.dataset.kind = p.error ? 'bad' : p.value ? 'proxy' : 'none';
+    proxyState.textContent = p.error ||
+      (p.value ? 'Git requests go to ' + p.origin + '.' : 'No proxy: git requests go to the repository itself.');
+    return p;
+  }
+  function openSettings() {
+    proxyInput.value = gitProxy;
+    showProxyState();
+    dialog.showModal();
+    proxyInput.focus();
+    proxyInput.select();
+  }
+  // Keep the proxy, and give it to the running VM: its next request goes there
+  function saveSettings() {
+    const p = showProxyState();
+    if (p.error) { proxyInput.focus(); return; }
+    dialog.close();
+    if (p.value === gitProxy) return;
+    gitProxy = p.value;
+    const kept = gitProxy ? store.set('gitProxy', gitProxy) : store.remove('gitProxy');
+    if (worker) worker.postMessage({ type: 'gitProxy', gitProxy });
+    note(gitProxy ? 'Git requests now go through the proxy at ' + p.origin + '.'
+                  : 'Git requests now go to the repositories themselves, without a proxy.');
+    if (!kept) showNotice('This browser cannot keep the setting: it holds for this session only.', null, null, 8000);
+  }
+  $('settings').addEventListener('click', openSettings);
+  proxyInput.addEventListener('input', showProxyState);
+  $('settings-form').addEventListener('submit', e => { e.preventDefault(); saveSettings(); });
+  $('git-proxy-clear').addEventListener('click', () => { proxyInput.value = ''; showProxyState(); proxyInput.focus(); });
+  $('settings-cancel').addEventListener('click', () => dialog.close());
+  dialog.addEventListener('close', () => refocus());
+  // a click on the backdrop, outside the form, cancels
+  dialog.addEventListener('click', e => { if (e.target === dialog) dialog.close(); });
+  // the Settings of another tab of the Console
+  addEventListener('storage', e => {
+    if (e.key !== 'pharo-wasm.gitProxy' && e.key !== null) return;
+    const now = parseGitProxy(store.get('gitProxy', '')).value || '';
+    if (now === gitProxy) return;
+    gitProxy = now;
+    if (worker) worker.postMessage({ type: 'gitProxy', gitProxy });
+  });
+
   // ---- input and history
 
   let history = [];
@@ -796,6 +882,7 @@
 
   document.addEventListener('keydown', e => {
     if (composing(e)) return;           // Escape cancels the composition
+    if (dialog.open) return;            // its keys: Escape closes it
     const k = e.key.toLowerCase();
     if (e.key === 'Escape') { e.preventDefault(); stop(); }
     else if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && k === 'c') {
