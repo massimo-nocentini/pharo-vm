@@ -28,7 +28,8 @@
 //   thisProgram  argv[0] (default '/pharo/pharo': the VM's directory is /pharo)
 //   env          {name: value} added to the environment of the VM
 //   sliceMs      the time slice in ms (default PHARO_WASM_SLICE_MS of the build)
-//   config       more properties of the emscripten Module (M2: webDisplay)
+//   config       more properties of the emscripten Module (M2: webDisplay;
+//                sdl.html: canvas)
 //   wasmModule   a precompiled WebAssembly.Module (optional)
 //   locateFile   emscripten's locateFile hook (optional)
 //   schedule(f)  run f soon, as a macrotask, so that JS events get a turn
@@ -84,10 +85,12 @@
 
   // The arguments of the VM for the modes of the pages: 'console', the REPL
   // of web-repl.st (filed in at every boot, so without logging its source
-  // to the .changes again each time), and 'world', the Morphic world.
+  // to the .changes again each time), 'world', the Morphic world, and 'sdl',
+  // the same world, which the image then opens through its OSSDL2Driver
+  // (sdl.html), the VM having no display for its OSWebDriver.
   function vmArgs(mode, image) {
     image = image || '/pharo/Pharo.image';
-    if (mode === 'world') return ['--headless', image, '--no-default-preferences', '--interactive'];
+    if (mode === 'world' || mode === 'sdl') return ['--headless', image, '--no-default-preferences', '--interactive'];
     return ['--headless', image, '--no-default-preferences', 'st', '--no-source', '/pharo/st/web-repl.st'];
   }
 

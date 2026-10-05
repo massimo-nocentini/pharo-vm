@@ -194,8 +194,9 @@ endif()
 # Libraries and builtin plugins
 #
 # Every plugin of cmake/plugins.cmake (which leaves out UnixOSProcessPlugin
-# and SurfacePlugin here) is compiled as builtin, and its <NAME>.c is
-# replaced by the translation unit that includes it and adds its trampolines.
+# here, and SurfacePlugin but with SDL2) is compiled as builtin, and its
+# <NAME>.c is replaced by the translation unit that includes it and adds its
+# trampolines.
 function(pharo_wasm_add_builtin_plugin NAME)
     set(sources ${ARGN})
     set(main "")

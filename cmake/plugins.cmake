@@ -46,9 +46,12 @@ if (${FEATURE_NETWORK})
   endif()
 endif()
 
-# The manual surfaces of SurfacePlugin (sqManualSurface.c) cannot be built
-# in, and Emscripten has only builtin plugins
-if(NOT EMSCRIPTEN)
+# Emscripten has only builtin plugins: there sqManualSurface.c takes the
+# surface functions of SurfacePlugin through ioLoadFunctionFrom.  The
+# Emscripten VM has SurfacePlugin only with SDL2 (WASM_SDL2,
+# cmake/emscripten/deps/options.cmake), since OSWindow-SDL2 blits through
+# its manual surfaces
+if(NOT EMSCRIPTEN OR PHARO_WASM_HAS_SDL2)
     add_vm_plugin(SurfacePlugin TRUE FALSE)
 endif()
 add_vm_plugin(FloatArrayPlugin TRUE FALSE)

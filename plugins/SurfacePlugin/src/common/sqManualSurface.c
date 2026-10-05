@@ -34,9 +34,27 @@ int createManualSurface(int width, int height, int rowPitch, int depth, int isMS
 int destroyManualSurface(int surfaceID);
 int setManualSurfacePointer(int surfaceID, void* ptr);
 
+#if defined(__EMSCRIPTEN__) && defined(SQUEAK_BUILTIN_PLUGIN)
+/* Built in, the surface functions of SurfacePlugin.c are static: take them
+   from its exports table, with their own prototypes (sqInt results), since
+   WebAssembly checks the type of an indirect call. */
+static sqInt (*wasm_ioRegisterSurface)(sqIntptr_t, sqSurfaceDispatch *, int *);
+static sqInt (*wasm_ioUnregisterSurface)(int);
+static sqInt (*wasm_ioFindSurface)(int, sqSurfaceDispatch *, sqIntptr_t *);
+static void wasm_loadSurfaceFunctions(void) {
+	if (wasm_ioFindSurface) return;
+	wasm_ioRegisterSurface = interpreterProxy->ioLoadFunctionFrom("ioRegisterSurface", "SurfacePlugin");
+	wasm_ioUnregisterSurface = interpreterProxy->ioLoadFunctionFrom("ioUnregisterSurface", "SurfacePlugin");
+	wasm_ioFindSurface = interpreterProxy->ioLoadFunctionFrom("ioFindSurface", "SurfacePlugin");
+}
+#define ioRegisterSurface(h, fn, id) (wasm_loadSurfaceFunctions(), (int)wasm_ioRegisterSurface(h, fn, id))
+#define ioUnregisterSurface(id) (wasm_loadSurfaceFunctions(), (int)wasm_ioUnregisterSurface(id))
+#define ioFindSurface(id, fn, h) (wasm_loadSurfaceFunctions(), (int)wasm_ioFindSurface(id, fn, h))
+#else
 EXPORT(int) ioRegisterSurface(sqIntptr_t surfaceHandle, sqSurfaceDispatch *fn, int *surfaceID);
 EXPORT(int) ioUnregisterSurface(int surfaceID);
 EXPORT(int) ioFindSurface(int surfaceID, sqSurfaceDispatch *fn, sqIntptr_t *surfaceHandle);
+#endif
 
 
 /* This is the structure that represents a "manual surface".  These are 

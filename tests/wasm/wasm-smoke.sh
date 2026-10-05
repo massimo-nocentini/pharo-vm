@@ -316,10 +316,17 @@ on the host: written by Pharo' s4
     fi
 
     # the 13 plugins of the tree, UUIDPlugin when the CMake cache of the build
-    # turns FEATURE_PLUGIN_UUID on, and one for each src/emscripten/plugins/*.c
-    # (WebHostPlugin, then WebDisplayPlugin)
+    # turns FEATURE_PLUGIN_UUID on, SurfacePlugin when it turns WASM_SDL2 on
+    # and the build has the FFI (SDL2, with which cmake/plugins.cmake builds
+    # it in, is an FFI library: cmake/emscripten/deps/options.cmake), and one
+    # for each src/emscripten/plugins/*.c (WebHostPlugin, then
+    # WebDisplayPlugin)
     modules=13
     if grep -Eiq '^FEATURE_PLUGIN_UUID:BOOL=(ON|TRUE|YES|Y|1)$' "$WASM_DIR/cmake/CMakeCache.txt" 2>/dev/null; then
+	modules=$((modules + 1))
+    fi
+    if test $backend = TFFIBackend &&
+	grep -Eiq '^WASM_SDL2:BOOL=(ON|TRUE|YES|Y|1)$' "$WASM_DIR/cmake/CMakeCache.txt" 2>/dev/null; then
 	modules=$((modules + 1))
     fi
     for f in "$SRCDIR"/src/emscripten/plugins/*.c; do

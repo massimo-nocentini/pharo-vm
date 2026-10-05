@@ -28,7 +28,9 @@
 //   - no function is wrapped by -sEMULATE_FUNCTION_POINTER_CASTS;
 //   - the builtin modules are the in-tree plugins linked into the VM (with
 //     UUIDPlugin when the CMake cache of the build turns FEATURE_PLUGIN_UUID
-//     on) plus one for each src/emscripten/plugins/*.c, and every row with an
+//     on, and SurfacePlugin when it turns WASM_SDL2 and FEATURE_FFI on: SDL2,
+//     with which cmake/plugins.cmake builds it in, is an FFI library) plus
+//     one for each src/emscripten/plugins/*.c, and every row with an
 //     accessor depth in their sources is in the tables;
 //   - when the CMake cache turns FEATURE_FFI on, the module-less table
 //     vmsupport_exports is the one genSupportTable.cmake wrote into the
@@ -401,6 +403,9 @@ function audit(js, srcdir, prims) {
     if (/^FEATURE_PLUGIN_UUID:BOOL=(ON|TRUE|YES|Y|1)$/mi.test(cacheText))
         expected.add('UUIDPlugin');
     const ffi = /^FEATURE_FFI:BOOL=(ON|TRUE|YES|Y|1)$/mi.test(cacheText);
+    // (SDL2 only with the FFI, as cmake/emscripten/deps/options.cmake has it)
+    if (ffi && /^WASM_SDL2:BOOL=(ON|TRUE|YES|Y|1)$/mi.test(cacheText))
+        expected.add('SurfacePlugin');
     if (existsSync(pluginDir))
         for (const file of readdirSync(pluginDir).filter((f) => f.endsWith('.c')))
             expected.add(basename(file, '.c'));

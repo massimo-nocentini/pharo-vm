@@ -101,6 +101,21 @@ if(PHARO_WASM_HAS_LIBGIT2)
         ON_LOAD pharoWasmGitInit)
 endif()
 
+# SDL2 (the SDL2 class of OSWindow-SDL2, libSDL2-2.0.so.0), pharo_sdl2 of
+# cmake/emscripten/deps/sdl2.cmake, with PHARO_WASM_HAS_SDL2 (options.cmake).
+# The table lists the functions OSWindow-SDL2 binds, and SDL_PushEvent, for
+# the tests that give the world events of their own; SDL.h declares them,
+# and SDL_syswm.h SDL_GetWindowWMInfo.  The SDL2 class looks for the file
+# libSDL2-2.0.so.0 before it loads the library: the staging writes it,
+# empty.
+if(PHARO_WASM_HAS_SDL2)
+    pharo_wasm_ffi_library(SDL2
+        HEADERS SDL.h SDL_syswm.h
+        SYMBOLS_FILE ${CMAKE_CURRENT_LIST_DIR}/ffi/symbols/SDL2.txt
+        LINK pharo_sdl2
+        FILES libSDL2-2.0.so.0)
+endif()
+
 # The library of the FFI tests (ffiTestLibrary, libTestLibrary.so to the
 # image), compiled where its table is: it has no header that declares its
 # functions.  It is in the node VM, for lane 58 (tests/wasm/lanes/58-ffi.sh)

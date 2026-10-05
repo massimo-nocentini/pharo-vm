@@ -29,13 +29,14 @@
 // error, not in a loop.  The placeholders of the libraries of the FFI
 // (manifest.libraries) are empty files of /pharo, where CairoLibrary finds
 // libcairo.so.2; and an image of version 2 (OSWindow-Web without its
-// AthensCairoSurface extension: Athens needs the SurfacePlugin, which the
-// VM lacks) is prepared to version 3 on its world boot, and then draws
-// Roassal; an image of version 3 (Iceberg's stock remotes, scp-like URLs
-// over SSH, which a browser cannot reach) is prepared to version 4 on its
-// world boot, and then has Iceberg's https:// remotes (remoteTypeSelector
-// #httpsUrl), which the smart-HTTP transport of libgit2 clones (case 26,
-// on every build: the setting is the image's, with or without libgit2).
+// AthensCairoSurface extension: Athens needs the SurfacePlugin, which only
+// a VM with SDL2 has, manifest.sdl2) is prepared to version 3 on its world
+// boot, and then draws Roassal; an image of version 3 (Iceberg's stock
+// remotes, scp-like URLs over SSH, which a browser cannot reach) is
+// prepared to version 4 on its world boot, and then has Iceberg's https://
+// remotes (remoteTypeSelector #httpsUrl), which the smart-HTTP transport of
+// libgit2 clones (case 26, on every build: the setting is the image's, with
+// or without libgit2).
 // Prints every case and their count, and exits with
 // status 1 if any fails.  Lane 70 (tests/wasm/lanes/70-worker-harness.sh)
 // runs it.
@@ -1161,9 +1162,12 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       C.send(EXTENSION('/pharo/extension-2.txt'));
       await C.expectOut(val('0'));
       await C.prompt();
+      // (a VM with SDL2 has SurfacePlugin built in, cmake/plugins.cmake,
+      // where the stock Athens draws too)
       C.send(SURFACE);
       await C.prompt();
-      assert(/(^|> )'Unable to register surface with SurfacePlugin'\n/m.test(C.since()),
+      assert((manifest.sdl2 ? /(^|> )#drawn\n/m
+                            : /(^|> )'Unable to register surface with SurfacePlugin'\n/m).test(C.since()),
              'Athens of version 2: ' + JSON.stringify(C.since() + C.errSince()).slice(0, 400));
       C.post({ type: 'save' });
       await waitFor('saved', () => C.saved.length, 60000);

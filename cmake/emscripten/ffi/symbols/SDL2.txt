@@ -1,0 +1,146 @@
+# The functions of SDL2 in the FFI registry of the Emscripten VM, the
+# library SDL2 (the SDL2 class of OSWindow-SDL2, libSDL2-2.0.so.0, of
+# cmake/emscripten/ffiLibraries.cmake), with WASM_SDL2.
+# cmake/emscripten/ffiRegistry.cmake describes the format: a name per line,
+# '#' starting a comment, and the '# unavailable' sections, whose names are
+# left out.  Every other name must be declared by the headers of
+# ffiLibraries.cmake, or the build stops.
+#
+# What Pharo 12 (build 1599) and Pharo 15 (build 41) bind to it, test
+# packages included, as packaging/emscripten/tools/ffi-symbols.st lists them
+# (the library SDL2 in its output), with the host VM:
+#
+#     pharo --headless <image> --no-default-preferences st ffi-symbols.st
+#
+# Both images bind the same 119, in OSWindow-SDL2 (the SDL2 class and the
+# SDL_Window, SDL_Renderer, SDL_Texture... handles), audio, joysticks, game
+# controllers and OpenGL included, which this SDL has but answers errors for
+# (no device, no GL context).  The Windows API that OSWindow-SDL2 also binds
+# (SDLWindowsPlatform: User32, Kernel32, Wtsapi32) is not SDL's, and is in
+# no library of the registry.
+#
+SDL_CloseAudioDevice
+SDL_ComposeCustomBlendMode
+SDL_CreateCursor
+SDL_CreateRenderer
+SDL_CreateRGBSurface
+SDL_CreateRGBSurfaceFrom
+SDL_CreateSystemCursor
+SDL_CreateTexture
+SDL_CreateWindow
+SDL_Delay
+SDL_DestroyRenderer
+SDL_DestroyTexture
+SDL_DestroyWindow
+SDL_DisableScreenSaver
+SDL_EventState
+SDL_FreeCursor
+SDL_FreeSurface
+SDL_GameControllerClose
+SDL_GameControllerGetAttached
+SDL_GameControllerGetAxis
+SDL_GameControllerGetButton
+SDL_GameControllerName
+SDL_GameControllerNameForIndex
+SDL_GameControllerOpen
+SDL_GetAudioDeviceName
+SDL_GetClipboardText
+SDL_GetDisplayDPI
+SDL_GetError
+SDL_GetModState
+SDL_GetMouseState
+SDL_GetNumAudioDevices
+SDL_GetQueuedAudioSize
+SDL_GetRendererInfo
+SDL_GetRendererOutputSize
+SDL_GetTicks
+SDL_GetVersion
+SDL_GetWindowDisplayIndex
+SDL_GetWindowFlags
+SDL_GetWindowID
+SDL_GetWindowPosition
+SDL_GetWindowSize
+SDL_GetWindowSurface
+SDL_GetWindowTitle
+SDL_GetWindowWMInfo
+SDL_GL_CreateContext
+SDL_GL_DeleteContext
+SDL_GL_GetAttribute
+SDL_GL_GetDrawableSize
+SDL_GL_GetProcAddress
+SDL_GL_MakeCurrent
+SDL_GL_SetAttribute
+SDL_GL_SwapWindow
+SDL_HideWindow
+SDL_Init
+SDL_InitSubSystem
+SDL_IsGameController
+SDL_IsTextInputActive
+SDL_JoystickClose
+SDL_JoystickEventState
+SDL_JoystickGetAttached
+SDL_JoystickGetAxis
+SDL_JoystickGetButton
+SDL_JoystickName
+SDL_JoystickNumAxes
+SDL_JoystickNumBalls
+SDL_JoystickNumButtons
+SDL_JoystickNumHats
+SDL_JoystickOpen
+SDL_LockSurface
+SDL_LockTexture
+SDL_MaximizeWindow
+SDL_MinimizeWindow
+SDL_NumJoysticks
+SDL_OpenAudioDevice
+SDL_PauseAudioDevice
+SDL_PollEvent
+SDL_QueueAudio
+SDL_Quit
+SDL_QuitSubSystem
+SDL_RaiseWindow
+SDL_RenderClear
+SDL_RenderCopy
+SDL_RenderDrawLine
+SDL_RenderDrawPoint
+SDL_RenderDrawRect
+SDL_RenderFillRect
+SDL_RenderGetLogicalSize
+SDL_RenderPresent
+SDL_RenderSetClipRect
+SDL_RenderTargetSupported
+SDL_RestoreWindow
+SDL_SetClipboardText
+SDL_SetCursor
+SDL_SetHint
+SDL_SetRelativeMouseMode
+SDL_SetRenderDrawBlendMode
+SDL_SetRenderDrawColor
+SDL_SetRenderTarget
+SDL_SetTextInputRect
+SDL_SetTextureAlphaMod
+SDL_SetTextureBlendMode
+SDL_SetTextureColorMod
+SDL_SetWindowBordered
+SDL_SetWindowFullscreen
+SDL_SetWindowHitTest
+SDL_SetWindowIcon
+SDL_SetWindowPosition
+SDL_SetWindowSize
+SDL_SetWindowTitle
+SDL_ShowCursor
+SDL_ShowWindow
+SDL_StartTextInput
+SDL_StopTextInput
+SDL_UnlockSurface
+SDL_UnlockTexture
+SDL_UpdateTexture
+SDL_UpdateWindowSurface
+SDL_UpdateWindowSurfaceRects
+SDL_WasInit
+#
+# Bound by no image: tests/wasm/st/sdl-session.st binds it, to give the
+# world the events of a user (clicks, keys, text), as SDL's Emscripten video
+# driver queues those of the page.
+#
+SDL_PushEvent

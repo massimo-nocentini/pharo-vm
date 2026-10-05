@@ -11,11 +11,12 @@
 #   parity    every line of the golden file of the image's version,
 #             tests/wasm/golden/athens-p<major>.txt, must be a line of what it
 #             prints: TFFIBackend, the extension of OSWindow-Web that copies
-#             the pixels of a surface into a Form (there is no SurfacePlugin),
-#             cairo 1.18.4, and the SHA256 of the bits of each scene.  The
-#             golden files are the reference; with HOST_PHARO, the same script
-#             on the same image, natively, is compared with them as an advice
-#             only (a note, never a failure): a native VM ships its own cairo;
+#             the pixels of a surface into a Form (a default build has no
+#             SurfacePlugin), cairo 1.18.4, and the SHA256 of the bits of
+#             each scene.  The golden files are the reference; with
+#             HOST_PHARO, the same script on the same image, natively, is
+#             compared with them as an advice only (a note, never a failure):
+#             a native VM ships its own cairo;
 #   adapted   the same run is made with PHARO_WASM_FFI_TRACE=1, which has the
 #             width adapter of the FFI (src/emscripten/ffiAdapt.c) name each
 #             function whose declaration it adapted, once, on stderr: every
@@ -30,7 +31,14 @@
 #             mismatch, and the trace must name nothing;
 #   stock     the negative control of the extension: on the stock image,
 #             which does not have it, Athens shapes must fail with 'Unable to
-#             register surface with SurfacePlugin', without a failed callout;
+#             register surface with SurfacePlugin', without a failed callout.
+#             A build with SDL2 (WASM_SDL2=ON in its CMake cache) has
+#             SurfacePlugin built in (cmake/plugins.cmake): there the stock
+#             image's Athens registers its surface with it, and Athens shapes
+#             must draw instead: an extent and a SHA256, which is not that
+#             of the golden file (the stock asForm, whose Form BitBlt reads
+#             through SurfacePlugin, does not give the bits of the
+#             extension's copy);
 #   hidden    the negative control of the registry: with cairo hidden from
 #             the VM (PHARO_WASM_FFI_HIDE=cairo), Athens shapes must fail with
 #             a SymbolNotFoundError, without a crash or a failed callout.
@@ -239,11 +247,23 @@ if test -n "$web"; then
     }
 fi
 
+# (SurfacePlugin is built in with SDL2, which needs the FFI that this lane
+# requires, as in wasm-smoke.sh's S18)
+surface_plugin=
+if grep -Eiq '^WASM_SDL2:BOOL=(ON|TRUE|YES|Y|1)$' "$WASM_DIR/cmake/CMakeCache.txt" 2>/dev/null; then
+    surface_plugin=yes
+fi
 fresh stock
 run stock shapes && quiet stock && {
     shapes_line=$(value athens-shapes)
     if test "x$(value surface)" = xOSWindow-Web; then
 	fail stock "the stock image has the extension of OSWindow-Web"
+    elif test -n "$surface_plugin"; then
+	if echo "$shapes_line" | grep -Eqx '[0-9]+x[0-9]+ [0-9a-f]{64}'; then
+	    ok stock "SurfacePlugin built in (WASM_SDL2): $shapes_line"
+	else
+	    fail stock "with SurfacePlugin built in (WASM_SDL2), the stock image's Athens shapes did not draw: '$(echo "$shapes_line" | cut -c 1-200)'"
+	fi
     else
 	case $shapes_line in
 	    *'Unable to register surface with SurfacePlugin'*) ok stock "$shapes_line" ;;

@@ -15,11 +15,12 @@
 #     VMMaker image and generates the sources again, and nothing else does;
 #   - an edit of cmake/Emscripten.cache.cmake configures the wasm build again,
 #     and so does a change of WASM_FFI, WASM_FREETYPE, WASM_LIBGIT2,
-#     WASM_LIBGIT2_HTTP or WASM_DEPS_DIR, which config.make records (a
-#     WASM_DEPS_DIR that does not exist is refused);
+#     WASM_LIBGIT2_HTTP, WASM_SDL2 or WASM_DEPS_DIR, which config.make
+#     records (a WASM_DEPS_DIR that does not exist is refused);
 #   - wasm-check-browser fails without Playwright, and runs world.spec.mjs
 #     only for a build with the image of the world, ffi.spec.mjs only for
-#     one with the FFI, and git.spec.mjs only for one with libgit2;
+#     one with the FFI, git.spec.mjs only for one with libgit2, and
+#     sdl.spec.mjs only for one with SDL2;
 #   - a class of OSWindow-Web that comes, goes or changes prepares the image
 #     of the world again (and one that goes breaks nothing), and nothing
 #     else does; the preparation runs the command line that both Pharo 12
@@ -174,6 +175,7 @@ echo 'console.log("page.spec.mjs " + process.argv[2])' >"$src/tests/wasm/page.sp
 echo 'console.log("world.spec.mjs " + process.argv[2])' >"$src/tests/wasm/world.spec.mjs"
 echo 'console.log("ffi.spec.mjs " + process.argv[2])' >"$src/tests/wasm/ffi.spec.mjs"
 echo 'console.log("git.spec.mjs " + process.argv[2])' >"$src/tests/wasm/git.spec.mjs"
+echo 'console.log("sdl.spec.mjs " + process.argv[2])' >"$src/tests/wasm/sdl.spec.mjs"
 mkdir -p "$T/vmmaker"
 : >"$T/vmmaker/VMMaker.image"
 
@@ -295,6 +297,19 @@ wmake "$W/cmake/.configured"
 calls "emcmake" "configure cmake"
 grep -qx 'WASM_LIBGIT2 = OFF' "$W/config.make" || { cat "$W/config.make"; fail "$step: config.make does not record WASM_LIBGIT2 = OFF"; }
 grep -qx 'WASM_LIBGIT2_HTTP = ON' "$W/config.make" || { cat "$W/config.make"; fail "$step: config.make does not record WASM_LIBGIT2_HTTP = ON"; }
+step="SDL2 is turned on"
+wmake "$W/cmake/.configured" WASM_SDL2=ON
+calls "emcmake" "configure cmake"
+grep -qx 'WASM_SDL2 = ON' "$W/config.make" || { cat "$W/config.make"; fail "$step: config.make does not record WASM_SDL2 = ON"; }
+grep -q -- ' -DWASM_SDL2=ON ' "$log.configure" || { cat "$log.configure"; fail "$step: cmake was not given -DWASM_SDL2=ON"; }
+step="nothing changed with SDL2"
+wmake "$W/cmake/.configured" WASM_SDL2=ON
+calls
+step="SDL2 is off again, by default"
+wmake "$W/cmake/.configured"
+calls "emcmake" "configure cmake"
+grep -qx 'WASM_SDL2 = OFF' "$W/config.make" || { cat "$W/config.make"; fail "$step: config.make does not record WASM_SDL2 = OFF"; }
+grep -q -- ' -DWASM_SDL2=OFF ' "$log.configure" || { cat "$log.configure"; fail "$step: cmake was not given -DWASM_SDL2=OFF"; }
 step="a WASM_DEPS_DIR that does not exist"
 if HOME=$T/home "$make" -s --no-print-directory -f "$src/GNUmakefile" -C "$src" $knobs \
     "WASM_DEPS_DIR=$T/no-archives" "$W/cmake/.configured" >"$T/make.out" 2>&1; then
@@ -315,7 +330,7 @@ calls
 # ---- wasm-check-browser (on a web/ of its own; wasm is taken as built)
 
 mkdir -p "$W/web"
-echo '{ "world": false, "ffi": false, "git": false }' >"$W/web/manifest.json"
+echo '{ "world": false, "ffi": false, "git": false, "sdl2": false }' >"$W/web/manifest.json"
 step="wasm-check-browser without Playwright"
 if (cd "$src/tests/wasm/lib" && HOME=$T/home "$NODE" -e 'require.resolve("playwright")') >/dev/null 2>&1; then
     echo "05-build-rules: node finds a playwright package here: the goal without one is not checked"
@@ -327,7 +342,7 @@ elif ! grep -q 'need Playwright' "$T/make.out" || grep -q 'spec.mjs /' "$T/make.
     cat "$T/make.out"
     fail "$step: no message, or a spec ran"
 fi
-step="wasm-check-browser, no image of the world, no FFI, no libgit2"
+step="wasm-check-browser, no image of the world, no FFI, no libgit2, no SDL2"
 PLAYWRIGHT_MODULE=$T/playwright wmake -o wasm wasm-check-browser
 grep -q "^page.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: page.spec.mjs did not run"; }
 if grep -q "^world.spec.mjs" "$T/make.out" || ! grep -q "^skip world.spec.mjs" "$T/make.out"; then
@@ -342,6 +357,10 @@ if grep -q "^git.spec.mjs" "$T/make.out" || ! grep -q "^skip git.spec.mjs" "$T/m
     cat "$T/make.out"
     fail "$step: git.spec.mjs ran, or no skip was reported"
 fi
+if grep -q "^sdl.spec.mjs" "$T/make.out" || ! grep -q "^skip sdl.spec.mjs" "$T/make.out"; then
+    cat "$T/make.out"
+    fail "$step: sdl.spec.mjs ran, or no skip was reported"
+fi
 step="wasm-check-browser, with the image of the world and the FFI, no libgit2"
 printf '{\n  "world": true,\n  "ffi": true,\n  "git": false\n}\n' >"$W/web/manifest.json"
 PLAYWRIGHT_MODULE=$T/playwright wmake -o wasm wasm-check-browser
@@ -351,12 +370,30 @@ if grep -q "^git.spec.mjs" "$T/make.out" || ! grep -q "^skip git.spec.mjs" "$T/m
     cat "$T/make.out"
     fail "$step: git.spec.mjs ran, or no skip was reported"
 fi
-step="wasm-check-browser, with the image of the world, the FFI and libgit2"
-printf '{\n  "world": true,\n  "ffi": true,\n  "git": true\n}\n' >"$W/web/manifest.json"
+step="wasm-check-browser, with the image of the world, the FFI and libgit2, no SDL2"
+printf '{\n  "world": true,\n  "ffi": true,\n  "git": true,\n  "sdl2": false\n}\n' >"$W/web/manifest.json"
 PLAYWRIGHT_MODULE=$T/playwright wmake -o wasm wasm-check-browser
 grep -q "^world.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: world.spec.mjs did not run"; }
 grep -q "^ffi.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: ffi.spec.mjs did not run"; }
 grep -q "^git.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: git.spec.mjs did not run"; }
+if grep -q "^sdl.spec.mjs" "$T/make.out" || ! grep -q "^skip sdl.spec.mjs" "$T/make.out"; then
+    cat "$T/make.out"
+    fail "$step: sdl.spec.mjs ran, or no skip was reported"
+fi
+step="wasm-check-browser, with the image of the world, the FFI and SDL2, no libgit2"
+printf '{\n  "world": true,\n  "ffi": true,\n  "git": false,\n  "sdl2": true\n}\n' >"$W/web/manifest.json"
+PLAYWRIGHT_MODULE=$T/playwright wmake -o wasm wasm-check-browser
+grep -q "^sdl.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: sdl.spec.mjs did not run"; }
+if grep -q "^git.spec.mjs" "$T/make.out" || ! grep -q "^skip git.spec.mjs" "$T/make.out"; then
+    cat "$T/make.out"
+    fail "$step: git.spec.mjs ran, or no skip was reported"
+fi
+step="wasm-check-browser, with the image of the world, the FFI, libgit2 and SDL2"
+printf '{\n  "world": true,\n  "ffi": true,\n  "git": true,\n  "sdl2": true\n}\n' >"$W/web/manifest.json"
+PLAYWRIGHT_MODULE=$T/playwright wmake -o wasm wasm-check-browser
+for spec in page world ffi git sdl; do
+    grep -q "^$spec.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: $spec.spec.mjs did not run"; }
+done
 if grep -q "^skip " "$T/make.out"; then cat "$T/make.out"; fail "$step: a spec was skipped"; fi
 step="wasm-check-browser, playwright found by node"
 mkdir -p "$src/tests/node_modules/playwright"
