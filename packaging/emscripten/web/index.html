@@ -130,7 +130,7 @@ button, input, textarea { font: inherit; color: inherit; }
   height: 100dvh;
   max-width: 1120px;
   margin: 0 auto;
-  padding: 0 max(16px, env(safe-area-inset-right)) 12px max(16px, env(safe-area-inset-left));
+  padding: 0 max(16px, env(safe-area-inset-right)) 6px max(16px, env(safe-area-inset-left));
   display: flex;
   flex-direction: column;
 }
@@ -322,6 +322,19 @@ kbd {
 }
 code { font-family: var(--mono); font-size: .92em; }
 
+/* the footer: a link to the licences of the libraries in the VM */
+.foot {
+  display: flex;
+  flex: none;
+  justify-content: flex-end;
+  padding: 5px 2px 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--muted);
+}
+.foot a { color: inherit; text-underline-offset: 2px; }
+.foot a:hover { color: var(--accent); }
+
 /* what a drag of files over the page shows: dropping them opens them */
 .drop {
   position: fixed;
@@ -445,6 +458,9 @@ code { font-family: var(--mono); font-size: .92em; }
     </div>
     <p class="hints"><kbd>Enter</kbd> evaluates, <kbd>Shift</kbd>+<kbd>Enter</kbd> adds a line, <kbd>Esc</kbd> or <kbd>Ctrl</kbd>+<kbd>C</kbd> stops, <kbd>↑</kbd>/<kbd>↓</kbd> recall history, <kbd>Ctrl</kbd>+<kbd>L</kbd> clears, <kbd>Ctrl</kbd>+<kbd>D</kbd> ends the session. Save keeps the image in this browser; Open, or a drop on the page, starts a Pharo .zip or .image of your own.</p>
   </main>
+  <footer class="foot">
+    <a href="THIRD-PARTY-NOTICES.txt?v=@BUILD@" target="_blank" rel="noopener" title="The licences of the libraries in this VM, in a new tab">Third-party notices</a>
+  </footer>
 </div>
 
 <div class="drop" id="drop" hidden aria-hidden="true">

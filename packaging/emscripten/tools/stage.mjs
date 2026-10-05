@@ -1,7 +1,8 @@
 // stage.mjs - writes web/, the static site of the Pharo VM for WebAssembly
 //
 //   node stage.mjs --out <web dir> --module <pharo-web.js> --stock-image <dir>
-//        [--web <dir>] [--memory64 1|2] [--git <sha>] [--st <file>]...
+//        [--web <dir>] [--memory64 1|2] [--git <sha>] [--ffi 0|1]
+//        [--notices <file>] [--st <file>]...
 //        [--world-image <dir> [--world-st <file>]...]
 //
 // cmake/emscripten/stage.cmake runs it on every build.  It writes
@@ -10,18 +11,25 @@
 //                              with @BUILD@ replaced by the build id in the
 //                              text files (for ?v=@BUILD@ cache busting)
 //   pharo-web.js, .wasm        the web module (--module)
+//   THIRD-PARTY-NOTICES.txt    the licences of the libraries in the VM
+//                              (--notices, which stage.cmake assembles),
+//                              copied unchanged; index.html and world.html
+//                              link it
 //   image/Pharo.image.gz       the image, its changes and its .sources,
 //   image/Pharo.changes.gz     gzipped (zlib level 9, deterministic); the
 //   image/<name>.sources.gz    image of the world from --world-image when
 //                              it has one, the stock one otherwise
 //   st/<file>                  the --st files, and with the world image its
 //                              OSWindow-Web.st and the --world-st files
-//   manifest.json              {build, files, image, memory64, st, world}
+//   manifest.json              {build, ffi, files, image, memory64, st, world}
 //
 // The build id is the git sha, a dash and the first 12 hex digits of a
 // SHA256 over everything staged, so it changes whenever a staged file does.
-// manifest.json lists what the worker writes into /pharo:
+// manifest.json describes the build, and lists what the worker writes into
+// /pharo:
 //
+//   ffi    true when the VM has the FFI (--ffi 1, from FEATURE_FFI, that is
+//          WASM_FFI): make wasm-check-browser runs ffi.spec.mjs only then
 //   files  [{gzSize, path, sha256, size, url}], sorted by path: path is the
 //          name under /pharo, url the gzipped file relative to web/ (the
 //          worker adds ?v=<build>), size and sha256 those of the file, and
@@ -46,6 +54,7 @@ const TEXT_EXTENSIONS = new Set(['.css', '.htm', '.html', '.js', '.json', '.mjs'
 const IMAGE = 'Pharo.image';
 const CHANGES = 'Pharo.changes';
 const WORLD_IMAGE = 'Pharo-web.image';
+const NOTICES = 'THIRD-PARTY-NOTICES.txt';
 
 const fail = (message) => {
   process.stderr.write(`stage.mjs: ${message}\n`);
@@ -53,9 +62,10 @@ const fail = (message) => {
 };
 
 const parseArguments = (argv) => {
-  const options = { st: [], worldSt: [], memory64: '2', git: '' };
+  const options = { st: [], worldSt: [], memory64: '2', git: '', ffi: '0' };
   const single = { '--out': 'out', '--web': 'web', '--module': 'module', '--memory64': 'memory64',
-                   '--git': 'git', '--stock-image': 'stockImage', '--world-image': 'worldImage' };
+                   '--git': 'git', '--ffi': 'ffi', '--notices': 'notices', '--stock-image': 'stockImage',
+                   '--world-image': 'worldImage' };
   const many = { '--st': 'st', '--world-st': 'worldSt' };
   for (let i = 0; i < argv.length; i++) {
     const name = argv[i];
@@ -67,6 +77,8 @@ const parseArguments = (argv) => {
   for (const required of ['out', 'module', 'stockImage'])
     if (!options[required]) fail(`--${required.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase())} is missing`);
   if (!/^[12]$/.test(options.memory64)) fail(`--memory64 must be 1 or 2, not ${options.memory64}`);
+  if (!/^[01]$/.test(options.ffi)) fail(`--ffi must be 0 or 1, not ${options.ffi}`);
+  if (options.notices && !existsSync(options.notices)) fail(`--notices ${options.notices} does not exist`);
   return options;
 };
 
@@ -120,6 +132,9 @@ const main = async () => {
   const module = resolve(options.module);
   entries.push([basename(module), module, 'copy']);
   entries.push([basename(module).replace(/\.js$/, '.wasm'), module.replace(/\.js$/, '.wasm'), 'copy']);
+  // (copied: the licence texts are staged as they are, without @BUILD@)
+  if (options.notices) entries.push([NOTICES, resolve(options.notices), 'copy']);
+  else process.stderr.write(`stage.mjs: warning: no --notices, web/ goes without the ${NOTICES} that the pages link\n`);
   const files = [[IMAGE, image.image], [CHANGES, image.changes], [basename(image.sources), image.sources]];
   for (const [name, source] of files) entries.push([`image/${name}.gz`, source, 'gzip']);
   const st = [...options.st];
@@ -135,7 +150,8 @@ const main = async () => {
     const data = readFileSync(source);
     inputs.set(rel, { data, sha256: sha256(data) });
   }
-  const digest = sha256([`memory64 ${options.memory64}`, `world ${world}`,
+  const ffi = options.ffi == '1';
+  const digest = sha256([`ffi ${ffi}`, `memory64 ${options.memory64}`, `world ${world}`,
                          ...[...inputs].map(([rel, { sha256 }]) => `${rel} ${sha256}`).sort()].join('\n'));
   const build = (options.git ? `${options.git}-` : '') + digest.slice(0, 12);
 
@@ -187,6 +203,7 @@ const main = async () => {
 
   const manifest = sortKeys({
     build,
+    ffi,
     files: manifestFiles.sort((a, b) => a.path < b.path ? -1 : 1),
     image: IMAGE,
     memory64: Number(options.memory64),

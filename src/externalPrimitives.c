@@ -119,6 +119,16 @@ ioFindExternalFunctionInAccessorDepthInto(char *lookupName, void *moduleHandle,
     if (!*lookupName) /* avoid errors in dlsym from eitherPlugin: code. */
       return 0;
 
+#if defined(__EMSCRIPTEN__)
+    /* Every plugin is built in, and its primitives are found in the tables
+     * of src/common/sqNamedPrims.c: the functions of a library of the FFI
+     * have signatures of their own, and the interpreter must not call them
+     * as primitives.
+     */
+    if (accessorDepthPtr)
+      return 0;
+#endif
+
     function = getModuleSymbol(moduleHandle, lookupName);
 
     if (function && accessorDepthPtr)
@@ -203,6 +213,183 @@ getModuleSymbol(void *module, const char *symbol)
 	}
 
     return (void*) address;
+}
+
+#elif defined(__EMSCRIPTEN__)
+
+/* Emscripten defines __unix__ too, but there is no dlopen.  The plugins are
+ * built in (src/common/sqNamedPrims.c looks them up in its tables), and the
+ * libraries of the FFI are linked in and listed in the registry of
+ * include/pharovm/emscripten/ffiRegistry.h: a module handle is a library of
+ * the registry.  Without the FFI there are no modules: the image then finds
+ * no primitiveLoadSymbolFromModule, and uses its NullFFIBackend.
+ */
+
+#if FEATURE_FFI
+
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+#include "pharovm/emscripten/ffiRegistry.h"
+
+typedef struct {
+	char *pluginName;
+	char *primitiveName;
+	void *primitiveAddress;
+} sqExport;
+
+extern sqExport *pluginExports[];
+
+/* The name of fileName that the registry knows: its base name, without a
+ * leading "lib", nor anything from its first '.' on (.so.6, .dylib, .dll),
+ * nor a version after a '-' (libSDL2-2.0.so.0 is SDL2, libc.so.6 is c,
+ * libgit2.so.1.4.4 is git2).
+ */
+static void
+reduceLibraryName(const char *fileName, char *reduced, size_t size)
+{
+	const char *base = strrchr(fileName, '/');
+	size_t length = 0;
+
+	base = base ? base + 1 : fileName;
+	if (strncmp(base, "lib", 3) == 0 && base[3] && base[3] != '.')
+		base += 3;
+	while (base[length] && base[length] != '.' && length + 1 < size)
+		length += 1;
+	memcpy(reduced, base, length);
+	reduced[length] = 0;
+	for (char *dash = strchr(reduced, '-'); dash; dash = strchr(dash + 1, '-'))
+		if (isdigit((unsigned char)dash[1])) {
+			*dash = 0;
+			break;
+		}
+}
+
+/* Whether PHARO_WASM_FFI_HIDE, a comma-separated list of reduced names that
+ * the environment gives (read at the first load), holds name: the negative
+ * controls of the tests make a library of the registry missing so.
+ */
+static int
+isHiddenLibrary(const char *name)
+{
+	static const char *hidden;
+	static int read = 0;
+	size_t length = strlen(name);
+
+	if (!read) {
+		hidden = getenv("PHARO_WASM_FFI_HIDE");
+		hidden = hidden ? strdup(hidden) : NULL;
+		read = 1;
+	}
+	for (const char *item = hidden; item && *item; ) {
+		const char *end = strchr(item, ',');
+		size_t itemLength = end ? (size_t)(end - item) : strlen(item);
+
+		if (itemLength == length && strncmp(item, name, length) == 0)
+			return 1;
+		item = end ? end + 1 : item + itemLength;
+	}
+	return 0;
+}
+
+/* The library of the registry that the reduced name of fileName, or one of
+ * its aliases, names, unless PHARO_WASM_FFI_HIDE holds that name or the
+ * library's own.  The first time a library is answered, its onLoad function
+ * (if it has one) is called.
+ */
+void *
+loadModuleHandle(const char *fileName)
+{
+	static unsigned char *loaded;	/* one flag for each library */
+	char reduced[FILENAME_MAX];
+
+	reduceLibraryName(fileName, reduced, sizeof(reduced));
+	if (!reduced[0])
+		return NULL;
+	for (int i = 0; pharoFFILibraries[i]; i++) {
+		const PharoFFILibrary *library = pharoFFILibraries[i];
+		int found = strcmp(library->name, reduced) == 0;
+
+		for (int j = 0; !found && library->aliases && library->aliases[j]; j++)
+			found = strcmp(library->aliases[j], reduced) == 0;
+		if (!found)
+			continue;
+		if (isHiddenLibrary(reduced) || isHiddenLibrary(library->name)) {
+			logTrace("Library %s (%s) hidden by PHARO_WASM_FFI_HIDE\n", fileName, library->name);
+			return NULL;
+		}
+		if (library->onLoad) {
+			if (!loaded) {
+				int count = 0;
+
+				while (pharoFFILibraries[count])
+					count += 1;
+				if (!(loaded = calloc(count, 1))) {
+					logError("No memory to load the library %s\n", library->name);
+					return NULL;
+				}
+			}
+			if (!loaded[i]) {
+				loaded[i] = 1;
+				library->onLoad();
+			}
+		}
+		return (void *)library;
+	}
+	logTrace("No library %s (%s) in the FFI registry\n", fileName, reduced);
+	return NULL;
+}
+
+static int
+compareSymbol(const void *name, const void *symbol)
+{
+	return strcmp((const char *)name, ((const PharoFFISymbol *)symbol)->name);
+}
+
+/* A symbol of a library of the registry (its rows are sorted by strcmp);
+ * with no module, a function of the VM's own module-less tables (vm_exports,
+ * vmsupport_exports...), as dlsym(RTLD_DEFAULT) would find it natively:
+ * TFFIBackend>>isAvailable looks up primitiveLoadSymbolFromModule so.  (The
+ * names of those tables carry the accessor depth after their NUL.)
+ */
+void *
+getModuleSymbol(void *module, const char *symbol)
+{
+	if (module) {
+		const PharoFFILibrary *library = module;
+		const PharoFFISymbol *found = bsearch(symbol, library->symbols, library->count,
+			sizeof(PharoFFISymbol), compareSymbol);
+
+		return found ? found->address : NULL;
+	}
+	for (int list = 0; pluginExports[list]; list++)
+		for (sqExport *row = pluginExports[list]; row->pluginName || row->primitiveName; row++)
+			if ((!row->pluginName || !row->pluginName[0])
+			 && row->primitiveName && strcmp(row->primitiveName, symbol) == 0)
+				return row->primitiveAddress;
+	return NULL;
+}
+
+#else /* FEATURE_FFI */
+
+void *
+loadModuleHandle(const char *fileName)
+{
+	return NULL;
+}
+
+void *
+getModuleSymbol(void *module, const char *symbol)
+{
+	return NULL;
+}
+
+#endif /* FEATURE_FFI */
+
+sqInt
+freeModuleHandle(void *module)
+{
+	return 0;
 }
 
 #elif defined(__linux__) || defined(__unix__) || defined(__APPLE__)

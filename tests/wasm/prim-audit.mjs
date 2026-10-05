@@ -29,7 +29,15 @@
 //   - the builtin modules are the in-tree plugins linked into the VM (with
 //     UUIDPlugin when the CMake cache of the build turns FEATURE_PLUGIN_UUID
 //     on) plus one for each src/emscripten/plugins/*.c, and every row with an
-//     accessor depth in their sources is in the tables.
+//     accessor depth in their sources is in the tables;
+//   - when the CMake cache turns FEATURE_FFI on, the module-less table
+//     vmsupport_exports is the one genSupportTable.cmake wrote into the
+//     trampolines' directory, and it lists exactly the support primitives of
+//     the same-thread FFI, every Primitive() and PrimitiveWithDepth() of
+//     src/ffi but those of src/ffi/worker (the threaded FFI), each with its
+//     accessor depth: then the lookups find them as dlsym does natively.
+//     Without the FFI, none of them is in the tables but the stand-in
+//     primitiveInitilizeCallbacks of src/emscripten/emscriptenSupport.c.
 //
 // Usage: node prim-audit.mjs [--srcdir <dir>] [--prims <dir>] <build-wasm/node/pharo.js>
 // where the source tree <dir> defaults to the one holding this script, and
@@ -259,8 +267,9 @@ function parseModule(bytes) {
 // module '-' for the VM's own rows, conditional when the row is inside an
 // #if of its table.  Each <X>_primitives.c of prims #includes the source of
 // <X>_exports; vmsupport_exports, which needs no trampolines, is in
-// src/emscripten/emscriptenSupport.c.
-function depthRows(prims, srcdir, failures) {
+// src/emscripten/emscriptenSupport.c, or with the FFI (ffi) in
+// vmsupport_exports.c of prims.
+function depthRows(prims, srcdir, ffi, failures) {
     const rows = new Map();
     if (!existsSync(prims) || !statSync(prims).isDirectory()) {
         failures.push(`${prims} does not hold the generated trampolines (<X>_primitives.c): pass --prims`);
@@ -277,7 +286,10 @@ function depthRows(prims, srcdir, failures) {
         else
             failures.push(`${join(prims, file)} includes no source`);
     }
-    tables.push({ source: resolve(srcdir, 'src/emscripten/emscriptenSupport.c'), table: 'vmsupport_exports' });
+    // (with the FFI, the table of the support primitives of src/ffi that
+    // genSupportTable.cmake writes next to the trampolines)
+    tables.push({ source: ffi ? join(prims, 'vmsupport_exports.c') : resolve(srcdir, 'src/emscripten/emscriptenSupport.c'),
+        table: 'vmsupport_exports' });
     for (const { source, table } of tables) {
         const text = existsSync(source) ? readFileSync(source, 'utf8').replace(/\r\n/g, '\n') : '';
         const module = /^static char _m\[\] = "([^"]*)";$/m.exec(text);
@@ -303,6 +315,39 @@ function depthRows(prims, srcdir, failures) {
         }
     }
     return rows;
+}
+
+// The support primitives of the same-thread FFI: Map name -> accessor
+// depth of every Primitive(name) and PrimitiveWithDepth(name, N) definition
+// (include/pharovm/macros.h) of the sources of src/ffi, those of
+// src/ffi/worker excepted, which genSupportTable.cmake lists.
+function ffiPrimitives(srcdir, failures) {
+    const primitives = new Map();
+    const walk = (dir) => {
+        for (const entry of readdirSync(dir).sort()) {
+            const path = join(dir, entry);
+            if (statSync(path).isDirectory()) {
+                if (entry !== 'worker')
+                    walk(path);
+            } else if (entry.endsWith('.c')) {
+                for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+                    if (!/^[ \t]*Primitive(WithDepth)?[ \t]*\(/.test(line))
+                        continue;
+                    const m = /^[ \t]*Primitive(?:WithDepth[ \t]*\([ \t]*([A-Za-z_]\w*)[ \t]*,[ \t]*(-?\d+)|[ \t]*\([ \t]*([A-Za-z_]\w*))[ \t]*\)/.exec(line);
+                    if (m)
+                        primitives.set(m[1] ?? m[3], m[1] ? Number(m[2]) : 0);
+                    else
+                        failures.push(`${path}: cannot read the primitive definition '${line.trim()}'`);
+                }
+            }
+        }
+    };
+    const dir = resolve(srcdir, 'src/ffi');
+    if (existsSync(dir))
+        walk(dir);
+    if (primitives.size === 0)
+        failures.push(`${dir} defines no support primitive of the FFI`);
+    return primitives;
 }
 
 function signature(type) {
@@ -352,8 +397,10 @@ function audit(js, srcdir, prims) {
     const expected = new Set(IN_TREE_PLUGINS);
     // (the CMake cache of the build holding the trampolines, cmake/wasm/prims)
     const cache = resolve(prims, '..', '..', 'CMakeCache.txt');
-    if (existsSync(cache) && /^FEATURE_PLUGIN_UUID:BOOL=(ON|TRUE|YES|Y|1)$/mi.test(readFileSync(cache, 'utf8')))
+    const cacheText = existsSync(cache) ? readFileSync(cache, 'utf8') : '';
+    if (/^FEATURE_PLUGIN_UUID:BOOL=(ON|TRUE|YES|Y|1)$/mi.test(cacheText))
         expected.add('UUIDPlugin');
+    const ffi = /^FEATURE_FFI:BOOL=(ON|TRUE|YES|Y|1)$/mi.test(cacheText);
     if (existsSync(pluginDir))
         for (const file of readdirSync(pluginDir).filter((f) => f.endsWith('.c')))
             expected.add(basename(file, '.c'));
@@ -380,7 +427,7 @@ function audit(js, srcdir, prims) {
     for (const row of rows)
         if (!firstRow.has(`${row.module} ${row.name}`))
             firstRow.set(`${row.module} ${row.name}`, row);
-    const depths = depthRows(prims, srcdir, failures);
+    const depths = depthRows(prims, srcdir, ffi, failures);
     if (lookups.length !== rows.length)
         failures.push(`vm_list_builtin_lookups() listed ${counted(lookups.length, 'lookup')} for ${counted(rows.length, 'row')}`
             + (lookups.length === 0 ? ' (an older VM, or an emscriptenSupport.c without it)' : ''));
@@ -446,6 +493,31 @@ function audit(js, srcdir, prims) {
             + `${count === 1 ? 'it' : 'them'} no accessor depth `
             + `(e.g. ${unreadRows[0]} of ${owner(module)})`);
     }
+    // The support primitives of the FFI: with it, the table lists them all,
+    // with their depths, and the lookups found them with those depths (above);
+    // without it, none is in the tables but the stand-in.
+    const support = ffiPrimitives(srcdir, failures);
+    const vmRows = new Set(rows.filter((row) => row.module === '-').map((row) => row.name));
+    if (ffi) {
+        const table = new Map([...depths].filter(([, source]) => source.table === 'vmsupport_exports')
+            .map(([where, source]) => [where.slice(2), source.depth]));
+        for (const [name, depth] of support) {
+            if (!table.has(name))
+                failures.push(`- ${name}: a support primitive of src/ffi, but not in vmsupport_exports`);
+            else if (table.get(name) !== depth)
+                failures.push(`- ${name}: accessor depth ${table.get(name)} in vmsupport_exports, ${depth} in src/ffi`);
+            if (!vmRows.has(name))
+                failures.push(`- ${name}: a support primitive of src/ffi, but not in the builtin tables`);
+        }
+        for (const name of table.keys())
+            if (!support.has(name))
+                failures.push(`- ${name}: in vmsupport_exports, but not a support primitive of src/ffi`);
+    } else {
+        for (const name of support.keys())
+            if (name !== 'primitiveInitilizeCallbacks' && vmRows.has(name))
+                failures.push(`- ${name}: a support primitive of src/ffi in the tables, but the build has no FFI`);
+    }
+
     const listed = new Set([...modules, '-']);
     for (const [where, source] of depths)
         if (!source.conditional && listed.has(where.split(' ')[0]) && !firstRow.has(where))
@@ -455,7 +527,8 @@ function audit(js, srcdir, prims) {
         console.log(`prim-audit: ${basename(wasm)}: ${rows.length} rows in ${modules.size} modules, `
             + `${trampolines} through void trampolines, ${depthChecked} primitives with an accessor depth `
             + `all () -> (), ${typed} typed exports, ${lookups.length} lookups as listed, `
-            + `every table index >= ${TABLE_BASE}, no fpcast-emu wrappers`);
+            + `every table index >= ${TABLE_BASE}, no fpcast-emu wrappers, `
+            + (ffi ? `the ${support.size} support primitives of src/ffi` : 'no FFI'));
     return failures;
 }
 

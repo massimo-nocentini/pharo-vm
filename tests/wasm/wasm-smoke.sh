@@ -188,8 +188,14 @@ default_checks() {
 
     # (OSPlatform current and OSEnvironment current, not Smalltalk os, which
     # Pharo 15 deprecates with a notification on stdout)
+    # The FFI backend: TFFIBackend when the build has the FFI (FEATURE_FFI in
+    # the CMake cache of the build, WASM_FFI), NullFFIBackend otherwise
+    backend=NullFFIBackend
+    if grep -Eiq '^FEATURE_FFI:BOOL=(ON|TRUE|YES|Y|1)$' "$WASM_DIR/cmake/CMakeCache.txt" 2>/dev/null; then
+	backend=TFFIBackend
+    fi
     fresh S3
-    expect S3 "#(#Unix64Platform 'wasm64' 8 'unix' #NullFFIBackend)" $P eval \
+    expect S3 "#(#Unix64Platform 'wasm64' 8 'unix' #$backend)" $P eval \
 	'{OSPlatform current class name. Smalltalk vm architectureName. Smalltalk vm wordSize.
 	  Smalltalk vm getSystemAttribute: 1001. FFIBackend current class name}'
 
@@ -298,10 +304,16 @@ on the host: written by Pharo' s4
     fresh S16b
     expect_match S16b '^0:0[12]:00:00$' s16 Europe/Rome
 
-    # setenv is reached through FFI only, which is off
+    # setenv is reached through the FFI only: with it, LibC's setenv, which
+    # getenv then sees; without it, an error
     fresh S17
-    expect S17 '#unsupported' $P eval \
-	"[OSEnvironment current at: 'WASM_T' put: 'x'. #set] on: Error do: [:e | #unsupported]"
+    if test $backend = TFFIBackend; then
+	expect S17 "'x'" $P eval \
+	    "[OSEnvironment current at: 'WASM_T' put: 'x'. OSEnvironment current at: 'WASM_T'] on: Error do: [:e | #unsupported]"
+    else
+	expect S17 '#unsupported' $P eval \
+	    "[OSEnvironment current at: 'WASM_T' put: 'x'. #set] on: Error do: [:e | #unsupported]"
+    fi
 
     # the 13 plugins of the tree, UUIDPlugin when the CMake cache of the build
     # turns FEATURE_PLUGIN_UUID on, and one for each src/emscripten/plugins/*.c

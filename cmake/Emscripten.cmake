@@ -14,7 +14,9 @@
 # The VM runs in slices on the thread of its host, node or a Web Worker of a
 # browser, and returns to it between slices (src/emscripten/emscriptenMain.c).
 # There is no dlopen: the VM core and every plugin are static libraries, the
-# plugins built in and listed in pharoBuiltinPlugins.h.  WebAssembly checks
+# plugins built in and listed in pharoBuiltinPlugins.h, and so are the
+# libraries the FFI calls (cmake/emscripten/deps), which it finds in a
+# registry (cmake/emscripten/ffiLibraries.cmake).  WebAssembly checks
 # the type of every indirect call, so the named primitives are called through
 # trampolines (cmake/emscripten/primitiveTables.cmake).  Two executables are
 # linked from the same objects:
@@ -48,8 +50,8 @@ if(NOT NODE_JS_EXECUTABLE)
 endif()
 
 # What the initial cache sets, and what comes of it
-if(NOT FLAVOUR STREQUAL "StackVM" OR NOT SIZEOF_VOID_P EQUAL 8 OR FEATURE_FFI OR PHARO_VM_IN_WORKER_THREAD)
-    message(FATAL_ERROR "The Emscripten VM is a 64-bit StackVM without FFI and threads: "
+if(NOT FLAVOUR STREQUAL "StackVM" OR NOT SIZEOF_VOID_P EQUAL 8 OR FEATURE_THREADED_FFI OR PHARO_VM_IN_WORKER_THREAD)
+    message(FATAL_ERROR "The Emscripten VM is a 64-bit StackVM without threads (and without the threaded FFI): "
         "configure it with -C ${CMAKE_CURRENT_SOURCE_DIR}/cmake/Emscripten.cache.cmake")
 endif()
 if(NOT WASM_WEB_MEMORY64 MATCHES "^[12]$")
@@ -81,6 +83,15 @@ if(NOT CMAKE_BUILD_TYPE MATCHES "Debug")
     string(REGEX REPLACE "(^| )-g( |$)" " " CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 endif()
 
+#
+# The libraries: their settings (WASM_FFI, WASM_DEPS_DIR...) and what comes
+# of them (PHARO_WASM_HAS_FFI...), then their directory, which builds them
+# from their pinned archives, with flags of its own (libffi for
+# cmake/importLibFFI.cmake)
+#
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/emscripten/deps/options.cmake)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cmake/emscripten/deps)
+
 function(add_platform_headers)
 target_include_directories(${VM_LIBRARY_NAME}
 PUBLIC
@@ -103,6 +114,37 @@ set(EXTRACTED_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/emscripten/emscriptenSupport.c
 )
 
+#
+# The FFI: the same-thread runner of src/ffi (CMakeLists.txt adds its
+# sources with FEATURE_FFI), on upstream libffi
+#
+# The support primitives of src/ffi have no module, and natively are found
+# by a global dlsym: genSupportTable.cmake lists them in vmsupport_exports.
+# The libraries of the FFI are linked in, and src/externalPrimitives.c looks
+# their symbols up in their registry (include/pharovm/emscripten/
+# ffiRegistry.h, made by cmake/emscripten/ffiRegistry.cmake from
+# ffiLibraries.cmake).
+if(FEATURE_FFI)
+    set(PHARO_WASM_FFI_PRIMITIVE_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ffi/functionDefinitionPrimitives.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ffi/primitiveCalls.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ffi/primitiveUtils.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ffi/typesPrimitives.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ffi/sameThread/sameThread.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/ffi/callbacks/callbackPrimitives.c)
+    set(PHARO_WASM_SUPPORT_TABLE "${CMAKE_BINARY_DIR}/wasm/prims/vmsupport_exports.c")
+    add_custom_command(
+        OUTPUT "${PHARO_WASM_SUPPORT_TABLE}"
+        COMMAND ${CMAKE_COMMAND} "-DOUTPUT=${PHARO_WASM_SUPPORT_TABLE}"
+                "-DSOURCES=${PHARO_WASM_FFI_PRIMITIVE_SOURCES}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/emscripten/genSupportTable.cmake"
+        COMMAND ${CMAKE_COMMAND} -E touch_nocreate "${PHARO_WASM_SUPPORT_TABLE}"
+        DEPENDS ${PHARO_WASM_FFI_PRIMITIVE_SOURCES} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/emscripten/genSupportTable.cmake"
+        COMMENT "Generating the table of the FFI support primitives"
+        VERBATIM)
+    list(APPEND EXTRACTED_SOURCES "${PHARO_WASM_SUPPORT_TABLE}")
+endif()
+
 set(VM_FRONTEND_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/emscripten/emscriptenMain.c)
 
@@ -119,6 +161,12 @@ endif()
 pharo_wasm_check_markers(${VMSOURCEFILES})
 pharo_wasm_primitive_table(PHARO_WASM_VM_PRIMITIVES SOURCE ${VMSOURCEFILES} TABLE vm_exports MARKERS)
 set(VMSOURCEFILES ${PHARO_WASM_VM_PRIMITIVES})
+# The callouts of the interpreter go through emscriptenFFICall()
+# (emscriptenSupport.c), which turns what ffi_call throws in JavaScript (a
+# declaration that does not match the function) into a primitive failure.
+if(FEATURE_FFI)
+    set_property(SOURCE ${PHARO_WASM_VM_PRIMITIVES} APPEND PROPERTY COMPILE_DEFINITIONS "ffi_call=emscriptenFFICall")
+endif()
 
 #
 # Libraries and builtin plugins
@@ -176,8 +224,17 @@ set(PHARO_WASM_LINK_FLAGS
     -sSTACK_SIZE=${WASM_STACK_SIZE}
     -Wl,--stack-first
     -Wl,--fatal-warnings
-    -sFORCE_FILESYSTEM=1
-    -sEXPORTED_FUNCTIONS=_main)
+    -sFORCE_FILESYSTEM=1)
+# libffi's closures grow the table, and call _malloc and _free from
+# JavaScript; its $stackSave and friends need the stack exports, which the
+# links do not add by themselves with SUPPORT_LONGJMP=wasm.
+if(FEATURE_FFI)
+    list(APPEND PHARO_WASM_LINK_FLAGS
+        -sALLOW_TABLE_GROWTH=1
+        -sEXPORTED_FUNCTIONS=_main,_malloc,_free,_emscripten_stack_get_current,__emscripten_stack_restore,__emscripten_stack_alloc)
+else()
+    list(APPEND PHARO_WASM_LINK_FLAGS -sEXPORTED_FUNCTIONS=_main)
+endif()
 # Debug: assertions in the JavaScript and the system libraries, and a checked
 # stack.  The stack cookies sit at the end of the stack, at the bottom of
 # memory with --stack-first, and the glue writes one at address 0 too: a read
@@ -255,6 +312,14 @@ macro(add_third_party_dependencies_per_platform)
 
     add_executable(pharo-web ${VM_FRONTEND_SOURCES})
     target_link_libraries(pharo-web ${VM_LIBRARY_NAME} ${PHARO_WASM_BUILTIN_PLUGINS})
+
+    # The libraries of the FFI and their registry, one per VM: the node VM
+    # also has those of the tests (NODE_ONLY)
+    if(FEATURE_FFI)
+        include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/emscripten/ffiLibraries.cmake)
+        target_link_libraries(${VM_EXECUTABLE_NAME} pharo_ffi_registry_node)
+        target_link_libraries(pharo-web pharo_ffi_registry_web)
+    endif()
     pharo_wasm_link_executable(pharo-web ${PHARO_WASM_WEB_LINK_FLAGS})
 
     # The stock image, the image of the world (needs WASM_HOST_PHARO), then

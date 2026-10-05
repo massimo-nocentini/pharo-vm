@@ -149,6 +149,12 @@ StackInterpreterPrimitives >> doPrimitiveSameThreadCallout [
 		_: returnHolder
 		_: parameters.
 
+	"The callout can fail: on Emscripten, ffi_call is emscriptenFFICall,
+	which fails with PrimErrFFIException when the function threw, as it does
+	when the declaration does not match it.  Leave the stack as it was then.
+	(Natively ffi_call does not fail, and the primitive has not failed here.)"
+	self failed ifTrue: [ ^ self ].
+
 	self marshallAndPushReturnValueFrom: returnHolder ofType: cif returnType poping: 3.	
 ]
 

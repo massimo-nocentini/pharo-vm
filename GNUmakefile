@@ -11,7 +11,8 @@
 #                             PLAYWRIGHT_MODULE, or found by node)
 #   make wasm-serve           serves build-wasm/web on WASM_PORT (8080)
 #   make wasm-clean           removes the wasm build, keeping build-wasm/host,
-#                             build-wasm/downloads and build-wasm/image
+#                             build-wasm/downloads (the image zip and the
+#                             archives of the libraries) and build-wasm/image
 #   make wasm-distclean       also removes build-wasm/host, build-wasm/image
 #                             and the recorded settings (and with
 #                             WASM_CLEAN_DOWNLOADS=1 build-wasm/downloads)
@@ -76,9 +77,13 @@ WASM_MAXIMUM_MEMORY ?= 4GB
 WASM_OLD_SPACE_BASE ?= 0x20000000
 WASM_SLICE_MS ?= 20
 WASM_WORLD ?= ON
-# offline builds: the Pharo 12 image zip, the generated sources (a directory
-# holding generated/64), or the VMMaker image and the Pharo VM that runs it
+WASM_FFI ?= ON
+# offline builds: the Pharo 12 image zip, a directory holding the pinned
+# archives of the libraries (cmake/emscripten/deps/fetch.cmake), the
+# generated sources (a directory holding generated/64), or the VMMaker image
+# and the Pharo VM that runs it
 WASM_IMAGE_ZIP ?=
+WASM_DEPS_DIR ?=
 WASM_GENERATED ?=
 WASM_VMMAKER_IMAGE ?=
 WASM_VMMAKER_VM ?=
@@ -201,7 +206,7 @@ endif
 endif
 
 # What an offline build is given must exist
-$(foreach v,WASM_IMAGE_ZIP WASM_GENERATED WASM_VMMAKER_IMAGE WASM_VMMAKER_VM WASM_HOST_PHARO,\
+$(foreach v,WASM_IMAGE_ZIP WASM_DEPS_DIR WASM_GENERATED WASM_VMMAKER_IMAGE WASM_VMMAKER_VM WASM_HOST_PHARO,\
   $(if $(and $($v),$(filter command line environment,$(origin $v))),\
     $(if $(wildcard $(abspath $($v))),,$(error $v: $(abspath $($v)) does not exist))))
 
@@ -238,6 +243,7 @@ WASM_HOST_PHARO ?= $(if $(WASM_VMMAKER_VM),$(VMMAKER_VM),$(wildcard $(W)/host/bu
 endif
 HOST_PHARO := $(if $(WASM_HOST_PHARO),$(abspath $(WASM_HOST_PHARO)))
 IMAGE_ZIP := $(if $(WASM_IMAGE_ZIP),$(abspath $(WASM_IMAGE_ZIP)))
+DEPS_DIR := $(if $(WASM_DEPS_DIR),$(abspath $(WASM_DEPS_DIR)))
 BUILD_TYPE := $(if $(filter-out 0,$(WASM_DEBUG)),Debug,Release)
 
 WASM_CMAKE_FLAGS = \
@@ -249,7 +255,9 @@ WASM_CMAKE_FLAGS = \
   -DWASM_OLD_SPACE_BASE=$(WASM_OLD_SPACE_BASE) \
   -DWASM_SLICE_MS=$(WASM_SLICE_MS) \
   -DWASM_WORLD=$(WASM_WORLD) \
+  -DWASM_FFI=$(WASM_FFI) \
   "-DWASM_IMAGE_ZIP=$(IMAGE_ZIP)" \
+  "-DWASM_DEPS_DIR=$(DEPS_DIR)" \
   "-DWASM_HOST_PHARO=$(HOST_PHARO)" \
   -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
   "-DGENERATED_SOURCE_DIR=$(GEN)" \
@@ -290,7 +298,9 @@ $(W)/config.make: FORCE | $(W)/.make-wasm
 	  echo "WASM_OLD_SPACE_BASE = $(WASM_OLD_SPACE_BASE)"; \
 	  echo "WASM_SLICE_MS = $(WASM_SLICE_MS)"; \
 	  echo "WASM_WORLD = $(WASM_WORLD)"; \
+	  echo "WASM_FFI = $(WASM_FFI)"; \
 	  echo "WASM_IMAGE_ZIP = $(IMAGE_ZIP)"; \
+	  echo "WASM_DEPS_DIR = $(DEPS_DIR)"; \
 	  echo "WASM_GENERATED = $(if $(WASM_GENERATED),$(GEN))"; \
 	  echo "WASM_HOST_PHARO = $(HOST_PHARO)"; } >$@.tmp
 	@if cmp -s $@.tmp $@; then rm $@.tmp; else mv $@.tmp $@ && echo "make wasm: settings recorded in $@"; fi
@@ -366,13 +376,15 @@ wasm-check: wasm
 # Playwright is no dependency of the build: the specs load PLAYWRIGHT_MODULE,
 # or the playwright package that node finds from tests/wasm/lib, and the goal
 # fails without either.  world.spec.mjs needs the image of the world, which a
-# build without one (WASM_WORLD=OFF, or no host Pharo) skips, as lane 80 does.
+# build without one (WASM_WORLD=OFF, or no host Pharo) skips, as lane 80 does,
+# and ffi.spec.mjs the FFI, which a build without it (WASM_FFI=OFF) skips.
+# web/manifest.json says what the build has.
 wasm-check-browser: wasm
 	@if test -z "$$PLAYWRIGHT_MODULE" && ! (cd $(SRCDIR)/tests/wasm/lib && \
 	    $(NODE) -e 'require.resolve("playwright")') >/dev/null 2>&1; then \
 	  echo "make wasm-check-browser: the browser specs need Playwright: set PLAYWRIGHT_MODULE (and BROWSERS), e.g." >&2; \
 	  echo "  PLAYWRIGHT_MODULE=/path/to/node_modules/playwright BROWSERS=chromium,firefox make wasm-check-browser" >&2; \
-	  echo "(the specs are tests/wasm/page.spec.mjs and tests/wasm/world.spec.mjs)" >&2; \
+	  echo "(the specs are tests/wasm/page.spec.mjs, world.spec.mjs and ffi.spec.mjs)" >&2; \
 	  exit 1; \
 	fi
 	$(NODE) $(SRCDIR)/tests/wasm/page.spec.mjs $(W)/web
@@ -381,6 +393,12 @@ wasm-check-browser: wasm
 	  $(NODE) $(SRCDIR)/tests/wasm/world.spec.mjs $(W)/web; \
 	else \
 	  echo "skip world.spec.mjs: $(W)/web/manifest.json has no world image (WASM_WORLD=OFF, or no host Pharo to prepare it)"; \
+	fi
+	@if grep -q '"ffi": *true' $(W)/web/manifest.json; then \
+	  echo "$(NODE) $(SRCDIR)/tests/wasm/ffi.spec.mjs $(W)/web"; \
+	  $(NODE) $(SRCDIR)/tests/wasm/ffi.spec.mjs $(W)/web; \
+	else \
+	  echo "skip ffi.spec.mjs: $(W)/web/manifest.json has no FFI (WASM_FFI=OFF)"; \
 	fi
 
 wasm-serve: wasm

@@ -13,14 +13,25 @@
 #     and for an empty WASM_BUILDDIR;
 #   - a .st file of smalltalksrc that comes, goes or changes refreshes the
 #     VMMaker image and generates the sources again, and nothing else does;
-#   - an edit of cmake/Emscripten.cache.cmake configures the wasm build again;
+#   - an edit of cmake/Emscripten.cache.cmake configures the wasm build again,
+#     and so does a change of WASM_FFI or WASM_DEPS_DIR, which config.make
+#     records (a WASM_DEPS_DIR that does not exist is refused);
 #   - wasm-check-browser fails without Playwright, and runs world.spec.mjs
-#     only for a build with the image of the world;
+#     only for a build with the image of the world, and ffi.spec.mjs only for
+#     one with the FFI;
 #   - a class of OSWindow-Web that comes, goes or changes prepares the image
 #     of the world again (and one that goes breaks nothing), and nothing
 #     else does; the preparation runs the command line that both Pharo 12
 #     and Pharo 15 take, and leaves no image of an earlier build, nor the
-#     .sources of another stock image, next to the world image.
+#     .sources of another stock image, next to the world image;
+#   - pharo_wasm_dep_fetch (cmake/emscripten/deps/fetch.cmake) takes an
+#     archive from WASM_DEPS_DIR, or downloads it once (from a file:// URL
+#     here), unpacks it once, records its notice, and stops at an archive of
+#     another SHA256 with a message that names the file and both hashes, or
+#     at a missing licence file;
+#   - the patch of cmake/emscripten/deps/libffi.cmake writes both widened
+#     returns into its copy of src/wasm/ffi.c, and refuses an ffi.c that has
+#     the text it replaces zero times or twice.
 #
 # Environment (from make wasm-check): NODE, SRCDIR, TEST_DIR.  Needs GNU
 # make and cmake (from PATH, or MAKE and CMAKE); exits 77 without them.
@@ -148,6 +159,7 @@ echo '"B"' >"$src/smalltalksrc/VMMaker/B.class.st"
 echo 'set(FLAVOUR "StackVM" CACHE STRING "" FORCE)' >"$src/cmake/Emscripten.cache.cmake"
 echo 'console.log("page.spec.mjs " + process.argv[2])' >"$src/tests/wasm/page.spec.mjs"
 echo 'console.log("world.spec.mjs " + process.argv[2])' >"$src/tests/wasm/world.spec.mjs"
+echo 'console.log("ffi.spec.mjs " + process.argv[2])' >"$src/tests/wasm/ffi.spec.mjs"
 mkdir -p "$T/vmmaker"
 : >"$T/vmmaker/VMMaker.image"
 
@@ -235,11 +247,35 @@ calls "emcmake" "configure cmake"
 step="a setting changes"
 wmake "$W/cmake/.configured" WASM_SLICE_MS=10
 calls "emcmake" "configure cmake"
+step="the FFI is turned off"
+wmake "$W/cmake/.configured" WASM_FFI=OFF
+calls "emcmake" "configure cmake"
+grep -qx 'WASM_FFI = OFF' "$W/config.make" || { cat "$W/config.make"; fail "$step: config.make does not record WASM_FFI = OFF"; }
+step="the FFI is on again, by default"
+wmake "$W/cmake/.configured"
+calls "emcmake" "configure cmake"
+grep -qx 'WASM_FFI = ON' "$W/config.make" || { cat "$W/config.make"; fail "$step: config.make does not record WASM_FFI = ON"; }
+step="a WASM_DEPS_DIR that does not exist"
+if HOME=$T/home "$make" -s --no-print-directory -f "$src/GNUmakefile" -C "$src" $knobs \
+    "WASM_DEPS_DIR=$T/no-archives" "$W/cmake/.configured" >"$T/make.out" 2>&1; then
+    cat "$T/make.out"
+    fail "$step: make accepted it"
+fi
+grep -q "WASM_DEPS_DIR: $T/no-archives does not exist" "$T/make.out" || { cat "$T/make.out"; fail "$step: no refusal"; }
+calls
+step="a WASM_DEPS_DIR"
+mkdir -p "$T/archives"
+wmake "$W/cmake/.configured" "WASM_DEPS_DIR=$T/archives"
+calls "emcmake" "configure cmake"
+grep -qx "WASM_DEPS_DIR = $T/archives" "$W/config.make" || { cat "$W/config.make"; fail "$step: config.make does not record it"; }
+step="nothing changed with a WASM_DEPS_DIR"
+wmake "$W/cmake/.configured" "WASM_DEPS_DIR=$T/archives"
+calls
 
 # ---- wasm-check-browser (on a web/ of its own; wasm is taken as built)
 
 mkdir -p "$W/web"
-echo '{ "world": false }' >"$W/web/manifest.json"
+echo '{ "world": false, "ffi": false }' >"$W/web/manifest.json"
 step="wasm-check-browser without Playwright"
 if (cd "$src/tests/wasm/lib" && HOME=$T/home "$NODE" -e 'require.resolve("playwright")') >/dev/null 2>&1; then
     echo "05-build-rules: node finds a playwright package here: the goal without one is not checked"
@@ -251,17 +287,23 @@ elif ! grep -q 'need Playwright' "$T/make.out" || grep -q 'spec.mjs /' "$T/make.
     cat "$T/make.out"
     fail "$step: no message, or a spec ran"
 fi
-step="wasm-check-browser, no image of the world"
+step="wasm-check-browser, no image of the world, no FFI"
 PLAYWRIGHT_MODULE=$T/playwright wmake -o wasm wasm-check-browser
 grep -q "^page.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: page.spec.mjs did not run"; }
 if grep -q "^world.spec.mjs" "$T/make.out" || ! grep -q "^skip world.spec.mjs" "$T/make.out"; then
     cat "$T/make.out"
     fail "$step: world.spec.mjs ran, or no skip was reported"
 fi
-step="wasm-check-browser, with the image of the world"
-echo '{ "world": true }' >"$W/web/manifest.json"
+if grep -q "^ffi.spec.mjs" "$T/make.out" || ! grep -q "^skip ffi.spec.mjs" "$T/make.out"; then
+    cat "$T/make.out"
+    fail "$step: ffi.spec.mjs ran, or no skip was reported"
+fi
+step="wasm-check-browser, with the image of the world and the FFI"
+printf '{\n  "world": true,\n  "ffi": true\n}\n' >"$W/web/manifest.json"
 PLAYWRIGHT_MODULE=$T/playwright wmake -o wasm wasm-check-browser
 grep -q "^world.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: world.spec.mjs did not run"; }
+grep -q "^ffi.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: ffi.spec.mjs did not run"; }
+if grep -q "^skip " "$T/make.out"; then cat "$T/make.out"; fail "$step: a spec was skipped"; fi
 step="wasm-check-browser, playwright found by node"
 mkdir -p "$src/tests/node_modules/playwright"
 echo 'module.exports = {}' >"$src/tests/node_modules/playwright/index.js"
@@ -336,5 +378,111 @@ if grep -q OSWebB "$package"; then fail "$step: OSWebB is still in $package"; fi
 step="webimage.cmake, nothing changed after a class went"
 wbuild
 calls
+
+# ---- pharo_wasm_dep_fetch (fetch.cmake, in script mode)
+
+fe=$T/fetch
+mkdir -p "$fe/lib-1.0" "$fe/archives" "$fe/run"
+echo 'int lib;' >"$fe/lib-1.0/lib.c"
+echo 'The licence of lib' >"$fe/lib-1.0/COPYING"
+(cd "$fe" && "$cmake" -E tar czf lib-1.0.tar.gz lib-1.0) || fail "fetch: cannot make the archive"
+sha=$("$cmake" -E sha256sum "$fe/lib-1.0.tar.gz" | sed 's/ .*//')
+other=0000000000000000000000000000000000000000000000000000000000000000
+# (the script: SHA256, LICENSES and WASM_DEPS_DIR from the environment)
+cat >"$fe/fetch-lib.cmake" <<EOF
+set(WASM_STAGE_DIR "$fe/stage")
+set(WASM_DEPS_DIR "\$ENV{DEPS}")
+include("$SRCDIR/cmake/emscripten/deps/fetch.cmake")
+pharo_wasm_dep_fetch(lib VERSION 1.0 URL "file://$fe/lib-1.0.tar.gz"
+    SHA256 "\$ENV{SHA}" FILE lib-1.0.tar.gz LICENSES \$ENV{LICENSES})
+get_property(notices GLOBAL PROPERTY PHARO_WASM_NOTICES)
+message("source: \${lib_SOURCE_DIR}")
+message("notices: \${notices}")
+EOF
+# fetch WANT-STATUS DEPS SHA LICENSES: runs the script in fe/run, into fe/fetch.out
+fetch() {
+    if (cd "$fe/run" && DEPS=$2 SHA=$3 LICENSES=$4 "$cmake" -P "$fe/fetch-lib.cmake") >"$fe/fetch.out" 2>&1; then
+        status=ok
+    else
+        status=failed
+    fi
+    test $status = "$1" || { cat "$fe/fetch.out"; fail "$step: the fetch $status"; }
+}
+# said TEXT: the message of the fetch says TEXT (CMake folds the lines of
+# its errors)
+said() {
+    tr '\n' ' ' <"$fe/fetch.out" | sed 's/   */ /g' | grep -qF "$1"
+}
+notice="notices: lib|1.0|file://$fe/lib-1.0.tar.gz|$sha|$fe/run/deps/lib/lib-1.0/COPYING"
+
+step="fetch, from WASM_DEPS_DIR"
+cp "$fe/lib-1.0.tar.gz" "$fe/archives/"
+fetch ok "$fe/archives" "$sha" COPYING
+grep -q "^-- Unpacking $fe/archives/lib-1.0.tar.gz" "$fe/fetch.out" || { cat "$fe/fetch.out"; fail "$step: not unpacked from WASM_DEPS_DIR"; }
+if grep -q "Downloading" "$fe/fetch.out" || test -e "$fe/stage/downloads/lib-1.0.tar.gz"; then fail "$step: it downloaded"; fi
+grep -qx "source: $fe/run/deps/lib/lib-1.0" "$fe/fetch.out" || { cat "$fe/fetch.out"; fail "$step: not the source directory"; }
+grep -qxF "$notice" "$fe/fetch.out" || { cat "$fe/fetch.out"; fail "$step: not the notice"; }
+test -f "$fe/run/deps/lib/lib-1.0/lib.c" || fail "$step: lib.c is not unpacked"
+step="fetch, from WASM_DEPS_DIR again"
+fetch ok "$fe/archives" "$sha" COPYING
+if grep -q "Unpacking" "$fe/fetch.out"; then cat "$fe/fetch.out"; fail "$step: unpacked again"; fi
+step="fetch, another SHA256 in WASM_DEPS_DIR"
+fetch failed "$fe/archives" "$other" COPYING
+for w in "$fe/archives/lib-1.0.tar.gz is not lib 1.0" "$sha" "$other" "WASM_DEPS_DIR"; do
+    said "$w" || { cat "$fe/fetch.out"; fail "$step: the message does not name $w"; }
+done
+step="fetch, a missing licence file"
+fetch failed "$fe/archives" "$sha" "COPYING;LICENSE"
+said "has no licence file LICENSE" || { cat "$fe/fetch.out"; fail "$step: no message"; }
+step="fetch, downloaded"
+fetch ok "" "$sha" COPYING
+grep -q "^-- Downloading file://$fe/lib-1.0.tar.gz" "$fe/fetch.out" || { cat "$fe/fetch.out"; fail "$step: not downloaded"; }
+test -f "$fe/stage/downloads/lib-1.0.tar.gz" || fail "$step: not in the downloads"
+if test -e "$fe/stage/downloads/lib-1.0.tar.gz.part"; then fail "$step: the .part is left"; fi
+step="fetch, downloaded already"
+fetch ok "$fe/no-archives" "$sha" COPYING
+if grep -q "Downloading" "$fe/fetch.out"; then cat "$fe/fetch.out"; fail "$step: downloaded again"; fi
+step="fetch, a download of another SHA256"
+rm -rf "$fe/stage/downloads"
+fetch failed "" "$other" COPYING
+for w in "is not lib 1.0" "$sha" "$other" "WASM_DEPS_DIR"; do
+    said "$w" || { cat "$fe/fetch.out"; fail "$step: the message does not name $w"; }
+done
+if test -e "$fe/stage/downloads/lib-1.0.tar.gz" || test -e "$fe/stage/downloads/lib-1.0.tar.gz.part"; then
+    fail "$step: the download is kept"
+fi
+
+# ---- the return patch of libffi.cmake (in script mode)
+
+ff=$T/libffi
+mkdir -p "$ff"
+anchor='  case FFI_TYPE_UINT64:
+  case FFI_TYPE_SINT64:
+    DEREF_U64(rvalue, 0) = result;
+    break;'
+printf 'switch (rtype_id) {\n%s\n  case FFI_TYPE_POINTER:\n}\n' "$anchor" >"$ff/once.c"
+printf 'switch (rtype_id) {\n  case FFI_TYPE_POINTER:\n}\n' >"$ff/none.c"
+printf 'switch (rtype_id) {\n%s\n%s\n}\n' "$anchor" "$anchor" >"$ff/twice.c"
+# widen FFI_C: the patch of FFI_C into ff/out.c, its output into ff/widen.out
+widen() {
+    rm -f "$ff/out.c"
+    "$cmake" -DFFI_C="$ff/$1" -DOUTPUT="$ff/out.c" -P "$SRCDIR/cmake/emscripten/deps/libffi.cmake" >"$ff/widen.out" 2>&1
+}
+step="libffi, the patch"
+widen once.c || { cat "$ff/widen.out"; fail "$step: it failed"; }
+grep -qF "DEREF_U64(rvalue, 0) = typeof result === 'bigint' ? result : BigInt(result >>> 0);" "$ff/out.c" ||
+    { cat "$ff/out.c"; fail "$step: no zero-extended UINT64"; }
+grep -qF "DEREF_U64(rvalue, 0) = typeof result === 'bigint' ? result : BigInt(result | 0);" "$ff/out.c" ||
+    { cat "$ff/out.c"; fail "$step: no sign-extended SINT64"; }
+if grep -qF "DEREF_U64(rvalue, 0) = result;" "$ff/out.c"; then cat "$ff/out.c"; fail "$step: the old return is left"; fi
+test "$(grep -c 'break;' "$ff/out.c")" = 2 || { cat "$ff/out.c"; fail "$step: not two cases"; }
+step="libffi, no text to replace"
+if widen none.c; then fail "$step: it was accepted"; fi
+grep -q "has no return of the 64-bit integers" "$ff/widen.out" || { cat "$ff/widen.out"; fail "$step: no message"; }
+if test -e "$ff/out.c"; then fail "$step: it wrote the copy"; fi
+step="libffi, the text twice"
+if widen twice.c; then fail "$step: it was accepted"; fi
+grep -q "more than once" "$ff/widen.out" || { cat "$ff/widen.out"; fail "$step: no message"; }
+if test -e "$ff/out.c"; then fail "$step: it wrote the copy"; fi
 
 echo "05-build-rules: all checks passed"

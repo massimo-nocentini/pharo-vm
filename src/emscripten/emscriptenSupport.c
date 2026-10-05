@@ -2,6 +2,8 @@
  *
  *  - vmsupport_exports: the module-less primitives of the VM's own support
  *    code, which the builtin tables list next to vm_exports;
+ *  - with the FFI, the guard around libffi's ffi_call, through which the
+ *    interpreter makes every callout;
  *  - the notification of the host when the image has been saved;
  *  - listings of the builtin primitive tables and of what the lookups of
  *    src/common/sqNamedPrims.c answer for them, for tests/wasm/prim-audit.mjs.
@@ -33,7 +35,73 @@ void *vmsupport_exports[][3] = {
 	{(void*)_m, "primitiveInitilizeCallbacks\000\000", (void*)primitiveInitilizeCallbacks},
 	{NULL, NULL, NULL}
 };
-#endif /* !FEATURE_FFI */
+#else /* FEATURE_FFI */
+/* vmsupport_exports is generated from the primitives of src/ffi
+ * (cmake/emscripten/genSupportTable.cmake).
+ */
+#include <ffi.h>
+
+/* libffi 3.8.0 uses these from the JavaScript of its ffi_call and closures
+ * without declaring them (later versions do).
+ */
+EM_JS_DEPS(pharoFFI, "$stackSave,$stackAlloc,$stackRestore,$getWasmTableEntry");
+
+/* Call call(cif, fn, rvalue, avalue), which is ffi_call, from JavaScript, and
+ * answer 0, or 1 when it threw.  libffi's ffi_call is JavaScript: it calls
+ * the function from JavaScript, converting its arguments and its result to
+ * and from the types of the function's own signature.  So when the image's
+ * declaration does not match the function, there is no trap of
+ * call_indirect but a TypeError (a Number where the function takes an int64,
+ * say), and the JavaScript exception would unwind the whole VM.  A TypeError
+ * of the result's conversion is raised once the function has run: its side
+ * effects stand.  A RuntimeError is a trap of the function itself (out of
+ * bounds, unreachable, an indirect call of the wrong type in a callback), and
+ * any other error, such as the exhaustion of the stack, is reported as one.
+ * The exceptions of the runtime go on: longjmp (a WebAssembly.Exception, or
+ * an EmscriptenSjLj with WASM_SJLJ=emscripten), exit() (ExitStatus) and
+ * 'unwind'.  The stack pointer is restored, since ffi_call had moved it.
+ */
+EM_JS_DEPS(pharoFFIGuard, "$ExitStatus");
+EM_JS(int, emscriptenGuardedFFICall, (void *call, void *cif, void *fn, void *rvalue, void *avalue), {
+	var sp = stackSave();
+	try {
+		getWasmTableEntry(Number(call))(cif, fn, rvalue, avalue);
+		return 0;
+	} catch (e) {
+		if ((typeof WebAssembly.Exception != "undefined" && e instanceof WebAssembly.Exception)
+		 || e instanceof ExitStatus || e == "unwind"
+		 || (typeof EmscriptenSjLj != "undefined" && e instanceof EmscriptenSjLj))
+			throw e;
+		stackRestore(sp);
+		var what = (e && e.name ? e.name + ": " : "") + (e && e.message !== undefined ? e.message : e);
+		if (e instanceof TypeError)
+			err("FFI callout failed, its declaration does not match function " + Number(fn) + ": " + what);
+		else
+			err("FFI callout trapped in function " + Number(fn) + ": " + what);
+		return 1;
+	}
+});
+
+/* Every callout of the interpreter (-Dffi_call=emscriptenFFICall on its
+ * translation unit, cmake/Emscripten.cmake).  A callout that threw fails
+ * with PrimErrFFIException, which doPrimitiveSameThreadCallout checks before
+ * it pushes the result.  But an exception that passed through a callback
+ * (sameThreadCallbackEnter, src/ffi/sameThread/sameThread.c, which then did
+ * not restore the depth of callbacks) has unwound the interpreter of that
+ * callback too: the VM cannot go on.
+ */
+void
+emscriptenFFICall(ffi_cif *cif, void (*fn)(void), void *rvalue, void **avalue)
+{
+	int callbackDepth = emscriptenCallbackDepth;
+
+	if (!emscriptenGuardedFFICall((void *)ffi_call, cif, (void *)fn, rvalue, avalue))
+		return;
+	if (emscriptenCallbackDepth != callbackDepth)
+		error("an FFI callout failed inside a callback, which it unwound");
+	primitiveFailFor(PrimErrFFIException);
+}
+#endif /* FEATURE_FFI */
 
 
 /* Tell the host, through Module.onPharoHost(kind, text), about something that

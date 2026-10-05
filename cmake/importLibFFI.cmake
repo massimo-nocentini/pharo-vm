@@ -1,3 +1,11 @@
+# Emscripten builds upstream libffi, which has a WebAssembly port, from its
+# pinned archive in the directory of the libraries
+# (cmake/emscripten/deps/libffi.cmake): no system libffi, nor binaries
+if(EMSCRIPTEN)
+  target_link_libraries(${VM_LIBRARY_NAME} pharo_libffi)
+  return()
+endif()
+
 function(find_system_ffi)
   message(STATUS "Looking for FFI in the system")
   find_package(FFI)

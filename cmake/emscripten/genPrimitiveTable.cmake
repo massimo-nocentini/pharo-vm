@@ -33,7 +33,10 @@
 # MARKERS=ON also requires the Emscripten hooks of the Slang sources in
 # SOURCE, the generated interpreter: without them the VM would still build,
 # but it would never return to the host, and it would place its memory where
-# the native VM does.  Without TABLE and OUTPUT only that check is made.
+# the native VM does; and without the test of a failure right after each
+# ffi_call (doPrimitiveSameThreadCallout), a callout that the guard of
+# src/emscripten/emscriptenSupport.c failed would push a result on top of the
+# failed primitive's stack.  Without TABLE and OUTPUT only that check is made.
 #
 # OUTPUT is rewritten only when its contents change.
 
@@ -61,6 +64,24 @@ if(MARKERS)
     if(found EQUAL -1)
         string(APPEND missing ", the __EMSCRIPTEN__ memory map")
     endif()
+    # Every callout, as the generator writes it:
+    #     ffi_call(_cif, _externalFunction, _returnHolder, _parameters);
+    #     if (GIV(primFailCode)) {
+    #         return 0;
+    #     }
+    # (The generator writes doPrimitiveSameThreadCallout, under #if
+    # FEATURE_FFI, whatever the options it generates with.)
+    set(rest "${source}")
+    string(FIND "${rest}" "\n\tffi_call(" found)
+    while(NOT found EQUAL -1)
+        string(SUBSTRING "${rest}" ${found} -1 rest)
+        if(NOT rest MATCHES "^\n\tffi_call\\([^\n]*\\);\n\tif \\(GIV\\(primFailCode\\)\\) {\n\t\treturn 0;\n\t}\n")
+            string(APPEND missing ", the primFailCode test after ffi_call")
+            break()
+        endif()
+        string(SUBSTRING "${rest}" 1 -1 rest)
+        string(FIND "${rest}" "\n\tffi_call(" found)
+    endwhile()
     if(NOT missing STREQUAL "")
         string(SUBSTRING "${missing}" 2 -1 missing)
         message(FATAL_ERROR "${SOURCE} lacks the Emscripten hooks of the "

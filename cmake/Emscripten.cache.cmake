@@ -16,15 +16,19 @@
 set(FLAVOUR "StackVM" CACHE STRING "The kind of VM to generate. Possible values: StackVM, CoInterpreter" FORCE)
 set(GENERATE_SOURCES OFF CACHE BOOL "If it generates the C sources" FORCE)
 
-# One thread, and no libffi yet
+# One thread, and the same-thread FFI, on upstream libffi
+# (cmake/emscripten/deps/libffi.cmake), unless WASM_FFI is OFF
+# (cmake/emscripten/deps/options.cmake declares WASM_FFI too)
+set(WASM_FFI ON CACHE BOOL "Build the FFI (libffi, the same-thread runner and the library registry)")
 set(PHARO_VM_IN_WORKER_THREAD OFF CACHE BOOL "Run the VM in a thread different that the main" FORCE)
-set(FEATURE_FFI OFF CACHE BOOL "Enable FFI" FORCE)
+set(FEATURE_FFI ${WASM_FFI} CACHE BOOL "Enable FFI" FORCE)
 set(FEATURE_THREADED_FFI OFF CACHE BOOL "Enable Threaded (running in another thread) FFI" FORCE)
 set(FEATURE_JIT_SIMD OFF CACHE BOOL "Use SIMD support in JIT compilation when available" FORCE)
 
 # UUIDPlugin uses the uuid_generate of Emscripten's JavaScript library
 # (crypto.getRandomValues): Pharo 15 makes UUIDs with it only.  There is no
-# OpenSSL, nor libraries for the FFI
+# OpenSSL, and the libraries of the FFI are not the native ones of
+# FEATURE_LIB_*: cmake/emscripten/deps builds them
 set(FEATURE_PLUGIN_UUID ON CACHE BOOL "Build UUID plugin" FORCE)
 set(FEATURE_PLUGIN_SSL OFF CACHE BOOL "Build SqueakSSL plugin" FORCE)
 set(FEATURE_LIB_SDL2 OFF CACHE BOOL "Build SDL2 support" FORCE)

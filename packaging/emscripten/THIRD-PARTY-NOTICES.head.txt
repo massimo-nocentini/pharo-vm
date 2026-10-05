@@ -1,0 +1,16 @@
+Third-party notices of the Pharo VM for WebAssembly
+
+The Pharo VM (https://github.com/pharo-project/pharo-vm) is distributed under
+the MIT License; see the file LICENSE of its repository.  The Pharo image that
+it runs is distributed by https://pharo.org/ under its own licence.
+
+The WebAssembly modules of this build (pharo.wasm and pharo-web.wasm) and
+their JavaScript (pharo.js and pharo-web.js) also contain the software listed
+below.  For each library linked into the VM, this file gives its version, the
+archive it was built from, with the SHA256 of that archive, and the full text
+of the licence files that the library declares.  The runtime of Emscripten
+follows: its JavaScript support code, the C library (musl) and the compiler
+runtime (compiler-rt), which every Emscripten program contains.
+
+The build itself is described in docs/WebAssembly.md of the repository, and
+cmake/emscripten/stage.cmake assembles this file.

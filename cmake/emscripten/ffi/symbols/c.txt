@@ -1,0 +1,180 @@
+# The functions and data of the C library in the FFI registry of the
+# Emscripten VM, the library c (libc.so.6, and its aliases of
+# cmake/emscripten/ffiLibraries.cmake).  cmake/emscripten/ffiRegistry.cmake
+# describes the format: a name per line, '#' starting a comment, and the
+# '# unavailable' sections, whose names are left out.  Every other name must
+# be declared by the headers of ffiLibraries.cmake, or the build stops.
+#
+# What Pharo 12 (build 1599) and Pharo 15 (build 41) bind to it, test
+# packages included, as packaging/emscripten/tools/ffi-symbols.st lists them
+# (the library c in its output), with the host VM:
+#
+#     pharo --headless <image> --no-default-preferences st ffi-symbols.st
+#
+abs
+close
+dlerror
+dlopen
+dlsym
+environ
+fgetc
+free
+getenv
+getpid
+getppid
+grantpt
+llabs
+malloc
+memcpy
+mkstemp
+pclose
+popen
+posix_openpt
+qsort
+read
+setenv
+sprintf
+strcat
+strcpy
+strerror
+strncpy
+system
+time
+tolower
+unlockpt
+unsetenv
+waitpid
+write
+#
+# More, which the images do not bind, for the callouts of tests/wasm/st/
+# ffi.st (strlen, pow, snprintf) and of the image's users: strings and
+# memory, conversions and the character classes, the math library, stdio,
+# time, the identity of the process, errno, random numbers and bsearch.
+#
+__errno_location
+acos
+asin
+atan
+atan2
+atof
+atoi
+atol
+atoll
+bsearch
+calloc
+cbrt
+ceil
+clock
+clock_gettime
+cos
+cosh
+difftime
+div
+exp
+exp2
+fabs
+fclose
+feof
+ferror
+fflush
+fgets
+floor
+fmod
+fopen
+fputc
+fputs
+fread
+fseek
+ftell
+fwrite
+getcwd
+getegid
+geteuid
+getgid
+gettimeofday
+getuid
+gmtime_r
+hypot
+isalnum
+isalpha
+isatty
+isdigit
+islower
+isprint
+ispunct
+isspace
+isupper
+isxdigit
+labs
+ldiv
+localtime_r
+log
+log10
+log2
+memchr
+memcmp
+memmove
+memset
+mktime
+perror
+pow
+printf
+putenv
+puts
+rand
+random
+realloc
+remove
+rename
+rewind
+round
+sin
+sinh
+snprintf
+sqrt
+srand
+srandom
+strcasecmp
+strchr
+strcmp
+strcspn
+strdup
+strftime
+strlen
+strncasecmp
+strncmp
+strndup
+strnlen
+strpbrk
+strrchr
+strspn
+strstr
+strtod
+strtof
+strtok_r
+strtol
+strtoll
+strtoul
+strtoull
+sysconf
+tan
+tanh
+toupper
+trunc
+
+# unavailable: the Windows names of LibC>>pipe:mode: and LibC>>pipeClose:,
+# which bind popen and pclose elsewhere
+_pclose
+_popen
+
+# unavailable: the Windows API of WindowsDynamicLoader, whose library is
+# libdl.so (the c alias dl) on other systems; it is used on Windows only
+GetLastError
+GetProcAddress
+LoadLibrary
+LoadLibraryW
+
+# unavailable: FFICalloutAPITest>>ffiDoubleAbs: and ffiFloatAbs: call them
+# in LibC, which has no such functions: no C library defines them
+DoubleAbsolute
+FloatAbsolute
