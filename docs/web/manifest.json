@@ -1,0 +1,34 @@
+{
+  "build": "fb1f3ff5b-5811b66550a2",
+  "files": [
+    {
+      "gzSize": 7355,
+      "path": "Pharo.changes",
+      "sha256": "6e73c9cb6d7584dfa481c43759025c67e182d9df0dfe510780e7669d3c093cb6",
+      "size": 26601,
+      "url": "image/Pharo.changes.gz"
+    },
+    {
+      "gzSize": 16875055,
+      "path": "Pharo.image",
+      "sha256": "0438c689ee80a57d84abb62e3992d672e06cbfb46ec8a743bd7aa101252cc6b2",
+      "size": 63479832,
+      "url": "image/Pharo.image.gz"
+    },
+    {
+      "gzSize": 7806384,
+      "path": "Pharo15.0-64bit-4e572fe.sources",
+      "sha256": "97a5f02e86041c87c03905e9bd638e9176881e2d3291119ae91d0b08c95b7144",
+      "size": 46066164,
+      "url": "image/Pharo15.0-64bit-4e572fe.sources.gz"
+    }
+  ],
+  "image": "Pharo.image",
+  "memory64": 2,
+  "st": [
+    "st/OSWindow-Web.st",
+    "st/web-bootstrap.st",
+    "st/web-repl.st"
+  ],
+  "world": true
+}
