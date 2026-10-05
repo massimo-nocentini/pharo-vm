@@ -5,8 +5,9 @@
 # are defined.  It defines the targets
 #
 #     wasm-node-stage  - ${WASM_STAGE_DIR}/node: pharo.js, pharo.wasm, the
-#                        launcher pharo (packaging/emscripten/node/launch.sh.in)
-#                        and THIRD-PARTY-NOTICES.txt
+#                        launcher pharo (packaging/emscripten/node/launch.sh.in),
+#                        THIRD-PARTY-NOTICES.txt and the placeholders of the
+#                        libraries of the FFI (below)
 #     wasm-web-stage   - ${WASM_STAGE_DIR}/web, the static site, written by
 #                        packaging/emscripten/tools/stage.mjs: the files of
 #                        packaging/emscripten/web with @BUILD@ replaced by the
@@ -19,11 +20,28 @@
 # fonts the preparation of an image for the world sets up (freetype when the
 # VM has FreeType, PHARO_WASM_HAS_FREETYPE of deps/options.cmake, bitmap
 # otherwise: what webimage.cmake prepares, and web-bootstrap.st in the page),
-# and the version of the package OSWindow-Web, which stage.mjs reads from
-# packaging/emscripten/st/OSWindow-Web/OSWebDriver.class.st.
+# the version of the package OSWindow-Web, which stage.mjs reads from
+# packaging/emscripten/st/OSWindow-Web/OSWebDriver.class.st, and the
+# placeholders of the libraries of the FFI (below).
 #
 # web/ gets the image of the world when webimage.cmake defines its target
 # wasm-web-image, and the stock image otherwise.
+#
+# The placeholders.  The libraries of the FFI are linked into the VMs
+# (cmake/emscripten/ffiLibraries.cmake), but the image looks for some of
+# them as files before it loads them: FFIUnix64LibraryFinder answers a path
+# only when a file exists there (libcairo.so.2 for CairoLibrary).  The FILES
+# of pharo_wasm_ffi_library (cmake/emscripten/ffiRegistry.cmake), which the
+# global property PHARO_WASM_FFI_FILES collects, are therefore written empty
+# into node/, the directory of the node VM (Smalltalk vm directory), and
+# stage.mjs lists them in manifest.libraries (--library-file), for
+# vm-worker.js to write them empty into /pharo, the directory of the VM of
+# the pages.  The VM never reads them: loadModuleHandle reduces the name it
+# is given (libcairo.so.2 to cairo) and answers the library of the registry.
+# The names are kept in ${CMAKE_CURRENT_BINARY_DIR}/wasm/ffi-files.txt, so
+# that a placeholder that a configuration does not stage any more (cairo
+# turned off) is removed from node/: the node VM sees the host's files, and
+# a stale placeholder would make the image take a library for present.
 #
 # THIRD-PARTY-NOTICES.txt is assembled here, at configure time, into
 # ${CMAKE_CURRENT_BINARY_DIR}/wasm, and written only when its text changes.  It
@@ -140,6 +158,54 @@ endif()
 message(STATUS "THIRD-PARTY-NOTICES.txt: ${PHARO_WASM_NOTICE_LIST}, and the runtime of Emscripten")
 
 #
+# The placeholders of the libraries of the FFI
+#
+get_property(PHARO_WASM_FFI_FILE_NAMES GLOBAL PROPERTY PHARO_WASM_FFI_FILES)
+list(REMOVE_DUPLICATES PHARO_WASM_FFI_FILE_NAMES)
+list(SORT PHARO_WASM_FFI_FILE_NAMES)
+foreach(PHARO_WASM_FFI_FILE_NAME IN LISTS PHARO_WASM_FFI_FILE_NAMES)
+    if(NOT PHARO_WASM_FFI_FILE_NAME MATCHES "^[A-Za-z0-9_+-][A-Za-z0-9._+-]*$")
+        message(FATAL_ERROR "FILES of pharo_wasm_ffi_library: '${PHARO_WASM_FFI_FILE_NAME}' is not the name of "
+            "a file of the directory of the VM")
+    endif()
+endforeach()
+set(PHARO_WASM_FFI_FILES_LIST "${CMAKE_CURRENT_BINARY_DIR}/wasm/ffi-files.txt")
+set(PHARO_WASM_FFI_FILES_OLD "")
+if(EXISTS "${PHARO_WASM_FFI_FILES_LIST}")
+    file(STRINGS "${PHARO_WASM_FFI_FILES_LIST}" PHARO_WASM_FFI_FILES_OLD)
+endif()
+foreach(PHARO_WASM_FFI_FILE_NAME IN LISTS PHARO_WASM_FFI_FILES_OLD)
+    if(NOT PHARO_WASM_FFI_FILE_NAME IN_LIST PHARO_WASM_FFI_FILE_NAMES)
+        file(REMOVE "${PHARO_WASM_NODE_DIR}/${PHARO_WASM_FFI_FILE_NAME}")
+    endif()
+endforeach()
+string(REPLACE ";" "\n" PHARO_WASM_FFI_FILES_TEXT "${PHARO_WASM_FFI_FILE_NAMES}")
+if(PHARO_WASM_FFI_FILE_NAMES)
+    string(APPEND PHARO_WASM_FFI_FILES_TEXT "\n")
+endif()
+# (file(CONFIGURE) writes only when the text changes)
+file(CONFIGURE OUTPUT "${PHARO_WASM_FFI_FILES_LIST}" CONTENT "${PHARO_WASM_FFI_FILES_TEXT}")
+# the empty file that each placeholder is a copy of
+set(PHARO_WASM_FFI_EMPTY_FILE "${CMAKE_CURRENT_BINARY_DIR}/wasm/ffi-placeholder")
+file(CONFIGURE OUTPUT "${PHARO_WASM_FFI_EMPTY_FILE}" CONTENT "")
+set(PHARO_WASM_NODE_PLACEHOLDERS "")
+set(PHARO_WASM_NODE_PLACEHOLDER_COMMANDS "")
+set(PHARO_WASM_STAGE_LIBRARIES "")
+foreach(PHARO_WASM_FFI_FILE_NAME IN LISTS PHARO_WASM_FFI_FILE_NAMES)
+    list(APPEND PHARO_WASM_NODE_PLACEHOLDERS "${PHARO_WASM_NODE_DIR}/${PHARO_WASM_FFI_FILE_NAME}")
+    list(APPEND PHARO_WASM_NODE_PLACEHOLDER_COMMANDS
+        COMMAND ${CMAKE_COMMAND} -E copy "${PHARO_WASM_FFI_EMPTY_FILE}"
+                "${PHARO_WASM_NODE_DIR}/${PHARO_WASM_FFI_FILE_NAME}")
+    list(APPEND PHARO_WASM_STAGE_LIBRARIES --library-file "${PHARO_WASM_FFI_FILE_NAME}")
+endforeach()
+if(PHARO_WASM_FFI_FILE_NAMES)
+    string(REPLACE ";" ", " PHARO_WASM_FFI_FILE_LIST "${PHARO_WASM_FFI_FILE_NAMES}")
+else()
+    set(PHARO_WASM_FFI_FILE_LIST "none")
+endif()
+message(STATUS "Placeholders of the FFI libraries: ${PHARO_WASM_FFI_FILE_LIST}")
+
+#
 # node/
 #
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/node/launch.sh.in
@@ -156,18 +222,22 @@ add_custom_command(
            "${PHARO_WASM_NODE_DIR}/${VM_EXECUTABLE_NAME}.wasm"
            "${PHARO_WASM_NODE_DIR}/${VM_EXECUTABLE_NAME}"
            "${PHARO_WASM_NODE_DIR}/THIRD-PARTY-NOTICES.txt"
+           ${PHARO_WASM_NODE_PLACEHOLDERS}
     COMMAND ${CMAKE_COMMAND} -E make_directory "${PHARO_WASM_NODE_DIR}"
     COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:${VM_EXECUTABLE_NAME}>"
             "$<TARGET_FILE_DIR:${VM_EXECUTABLE_NAME}>/${VM_EXECUTABLE_NAME}.wasm"
             "${PHARO_WASM_LAUNCHER}" "${PHARO_WASM_NOTICES_FILE}" "${PHARO_WASM_NODE_DIR}"
+    ${PHARO_WASM_NODE_PLACEHOLDER_COMMANDS}
     DEPENDS ${VM_EXECUTABLE_NAME} "${PHARO_WASM_LAUNCHER}" "${PHARO_WASM_NOTICES_FILE}"
+            "${PHARO_WASM_FFI_FILES_LIST}" "${PHARO_WASM_FFI_EMPTY_FILE}"
     COMMENT "Staging ${PHARO_WASM_NODE_DIR}"
     VERBATIM)
 add_custom_target(wasm-node-stage ALL
     DEPENDS "${PHARO_WASM_NODE_DIR}/${VM_EXECUTABLE_NAME}.js"
             "${PHARO_WASM_NODE_DIR}/${VM_EXECUTABLE_NAME}.wasm"
             "${PHARO_WASM_NODE_DIR}/${VM_EXECUTABLE_NAME}"
-            "${PHARO_WASM_NODE_DIR}/THIRD-PARTY-NOTICES.txt")
+            "${PHARO_WASM_NODE_DIR}/THIRD-PARTY-NOTICES.txt"
+            ${PHARO_WASM_NODE_PLACEHOLDERS})
 
 #
 # web/
@@ -192,6 +262,7 @@ set(PHARO_WASM_STAGE_ARGUMENTS
     --fonts ${PHARO_WASM_STAGE_FONTS}
     --web-package "${PHARO_WASM_ST_SOURCE_DIR}/OSWindow-Web/OSWebDriver.class.st"
     --notices "${PHARO_WASM_NOTICES_FILE}"
+    ${PHARO_WASM_STAGE_LIBRARIES}
     --stock-image "${WASM_STOCK_IMAGE_DIR}"
     --st "${PHARO_WASM_ST_SOURCE_DIR}/web-repl.st")
 if(TARGET wasm-web-image)

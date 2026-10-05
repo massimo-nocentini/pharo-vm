@@ -6,11 +6,14 @@
 // wasm-check-browser skips this spec otherwise).  The Console evaluates
 // uFFI callouts into the C library of the registry (LibC, libc.so.6): a
 // callback (qsort, whose closure the worker compiles as a small WebAssembly
-// module), the environment through setenv, and a declaration that does not
-// match its function (strlen declared double, where it answers a size_t),
-// which must fail as a primitive, say why in the worker's console, and leave
-// the VM running.  With the last check of pw.mjs (no console errors: the
-// worker says why as a warning), 5 checks for each browser.
+// module), the environment through setenv, a declaration whose integer is
+// narrower than the function's (strlen declared int, where it answers a
+// size_t), which the width adapter of the FFI (src/emscripten/ffiAdapt.c)
+// calls as the function is, and a declaration that does not match its
+// function in another way (strlen declared double), which must fail as a
+// primitive, say why in the worker's console, and leave the VM running.
+// With the last check of pw.mjs (no console errors: the worker says why as
+// a warning), 6 checks for each browser.
 
 import { run } from './lib/pw.mjs';
 
@@ -49,6 +52,13 @@ await run(async t => {
   });
   await check('the environment, through setenv and getenv', async () => {
     await evalTo("OSEnvironment current at: 'WASM_FFI_PAGE' put: 'yes'. OSEnvironment current at: 'WASM_FFI_PAGE'", /'yes'/);
+  });
+  await check('strlen declared int works, through the width adapter', async () => {
+    await evalTo("WasmFFIPage compile: 'intStrlen: s ^ self ffiCall: #(int strlen(String s)) library: LibC'", /#intStrlen:/);
+    const out = await evalTo("(WasmFFIPage new intStrlen: 'hello') * 1000 + 7", /5007|Error|Failed/);
+    assert(/5007/.test(out), 'answered 5, so 5007: ' + out);
+    const said = workerLog.filter(l => /FFI callout (failed|trapped)/.test(l));
+    assert(said.length === 0, 'the worker says nothing of it: ' + said.join(' | '));
   });
   await check('a declaration that does not match its function fails, and the VM goes on', async () => {
     await evalTo("WasmFFIPage compile: 'badStrlen: s ^ self ffiCall: #(double strlen(String s)) library: LibC'", /#badStrlen:/);

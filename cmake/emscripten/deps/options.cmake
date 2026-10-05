@@ -14,6 +14,11 @@
 #                              world image is prepared with them
 #                              (cmake/emscripten/webimage.cmake), and the
 #                              manifest says so (stage.cmake)
+#     PHARO_WASM_HAS_CAIRO     cairo, for Athens (Roassal, the Spec
+#                              presenters drawn with Athens), with pixman,
+#                              libpng and zlib, on that FreeType
+#     PHARO_WASM_HAS_CAIRO_PDF the PDF, PostScript and script surfaces of
+#                              cairo
 #
 # Every library is an FFI library, so none is built without the FFI.  One
 # STATUS line gives the result.
@@ -42,6 +47,28 @@ option(WASM_FFI_TEST_LIBRARY "Link the FFI test library (libTestLibrary.so) into
 # The libraries.  FreeType: the fonts of the image (Source Sans Pro and
 # Source Code Pro) in the world, rather than bitmap fonts.
 option(WASM_FREETYPE "Build FreeType, for the fonts of the image (needs WASM_FFI)" ON)
+# cairo: AUTO builds it when FreeType is built (cairo draws its text with
+# the one FreeType of the VM, which the image's fonts use too), ON stops
+# configure without FreeType, OFF leaves it out.  The PDF, PostScript and
+# script surfaces (the image binds cairo_pdf_surface_create, for
+# AthensCairoPDFSurface) cost about 70 KB of gzipped wasm (170 KB raw), and
+# are off by default: cairo's configuration with them is another one
+# (cmake/emscripten/deps/cairo/README).
+set(WASM_CAIRO AUTO CACHE STRING "Build cairo, for Athens and Roassal: AUTO (with FreeType), ON or OFF")
+set_property(CACHE WASM_CAIRO PROPERTY STRINGS AUTO ON OFF)
+option(WASM_CAIRO_PDF "Build the PDF, PostScript and script surfaces of cairo (with cairo)" OFF)
+
+# WASM_CAIRO is AUTO or a boolean (ON, OFF, 1, 0, YES, NO...)
+string(TOUPPER "${WASM_CAIRO}" PHARO_WASM_CAIRO_SETTING)
+if(PHARO_WASM_CAIRO_SETTING STREQUAL "AUTO")
+    # (decided below, from FreeType)
+elseif(PHARO_WASM_CAIRO_SETTING MATCHES "^(ON|YES|Y|TRUE|1)$")
+    set(PHARO_WASM_CAIRO_SETTING ON)
+elseif(PHARO_WASM_CAIRO_SETTING MATCHES "^(OFF|NO|N|FALSE|0)$")
+    set(PHARO_WASM_CAIRO_SETTING OFF)
+else()
+    message(FATAL_ERROR "WASM_CAIRO is AUTO, ON or OFF, not '${WASM_CAIRO}'")
+endif()
 
 if(WASM_FFI)
     set(PHARO_WASM_HAS_FFI ON)
@@ -50,9 +77,39 @@ if(WASM_FFI)
     else()
         set(PHARO_WASM_HAS_FREETYPE OFF)
     endif()
-    message(STATUS "wasm deps: ffi ON, freetype ${PHARO_WASM_HAS_FREETYPE}")
+    if(PHARO_WASM_CAIRO_SETTING STREQUAL "AUTO")
+        set(PHARO_WASM_HAS_CAIRO ${PHARO_WASM_HAS_FREETYPE})
+        if(PHARO_WASM_HAS_CAIRO)
+            set(PHARO_WASM_CAIRO_STATUS "cairo ON (auto)")
+        else()
+            set(PHARO_WASM_CAIRO_STATUS "cairo OFF (auto: no freetype)")
+        endif()
+    elseif(PHARO_WASM_CAIRO_SETTING STREQUAL "ON")
+        if(NOT PHARO_WASM_HAS_FREETYPE)
+            message(FATAL_ERROR "WASM_CAIRO=ON needs FreeType, which WASM_FREETYPE=OFF leaves out: "
+                "cairo draws its text with the FreeType of the VM.  Give WASM_FREETYPE=ON, or "
+                "WASM_CAIRO=AUTO (cairo then follows FreeType) or OFF")
+        endif()
+        set(PHARO_WASM_HAS_CAIRO ON)
+        set(PHARO_WASM_CAIRO_STATUS "cairo ON")
+    else()
+        set(PHARO_WASM_HAS_CAIRO OFF)
+        set(PHARO_WASM_CAIRO_STATUS "cairo OFF")
+    endif()
+    if(PHARO_WASM_HAS_CAIRO AND WASM_CAIRO_PDF)
+        set(PHARO_WASM_HAS_CAIRO_PDF ON)
+        string(APPEND PHARO_WASM_CAIRO_STATUS ", cairo pdf ON")
+    else()
+        set(PHARO_WASM_HAS_CAIRO_PDF OFF)
+        if(WASM_CAIRO_PDF)
+            string(APPEND PHARO_WASM_CAIRO_STATUS ", cairo pdf OFF (no cairo)")
+        endif()
+    endif()
+    message(STATUS "wasm deps: ffi ON, freetype ${PHARO_WASM_HAS_FREETYPE}, ${PHARO_WASM_CAIRO_STATUS}")
 else()
     set(PHARO_WASM_HAS_FFI OFF)
     set(PHARO_WASM_HAS_FREETYPE OFF)
-    message(STATUS "wasm deps: ffi OFF (WASM_FFI=OFF): no library is built, freetype OFF")
+    set(PHARO_WASM_HAS_CAIRO OFF)
+    set(PHARO_WASM_HAS_CAIRO_PDF OFF)
+    message(STATUS "wasm deps: ffi OFF (WASM_FFI=OFF): no library is built, freetype OFF, cairo OFF")
 endif()

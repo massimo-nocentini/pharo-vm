@@ -1,0 +1,35 @@
+# adapted-65.txt - the functions whose declarations the width adapter of the
+# FFI (src/emscripten/ffiAdapt.c) may adapt while lane 65
+# (tests/wasm/lanes/65-cairo.sh) runs tests/wasm/st/athens-parity.st on the
+# image of the world, Pharo 12 or Pharo 15
+#
+# A line is '<function>', or '<function> required': every function that the
+# trace of the adapter names (PHARO_WASM_FFI_TRACE=1) must be one of these
+# lines, and the required ones must be named.  A function that the trace
+# names and that is not here is a declaration of the image that does not
+# match its C function at the width of an integer, a new one: look at it
+# (the trace says both widths), then add it here.  '#' lines and blank lines
+# are comments.  The declarations below were found by comparing the uFFI
+# declarations of the images with the C prototypes, as WebAssembly types.
+
+# void cairo_pattern_set_extend (cairo_pattern_t *, cairo_extend_t), which
+# AthensCairoPatternPaint>>primSetExtend: declares with a ulong for the
+# int of the enum; the repeated gradient of athens-parity.st calls it
+cairo_pattern_set_extend required
+
+# void cairo_scaled_font_extents (...), declared with an int result
+# (CairoScaledFont>>getExtents:)
+cairo_scaled_font_extents
+# results that the image declares void: a cairo_status_t
+# (AthensCairoSurface>>writeToPng:) and an FT_Face (CairoScaledFont>>lock)
+cairo_surface_write_to_png
+cairo_ft_scaled_font_lock_face
+
+# FreeType's FT_Error, an int, which FT2Types declares long
+FT_Get_Kerning
+FT_Load_Char
+FT_Load_Glyph
+FT_Outline_Embolden
+FT_Outline_Get_Bitmap
+FT_Select_Charmap
+FT_Set_Pixel_Sizes

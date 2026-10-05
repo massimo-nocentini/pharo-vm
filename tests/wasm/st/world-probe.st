@@ -6,6 +6,7 @@
  and read the JSON file it writes every 100 ms, probe.json next to the image:
 
 	seq            how many times it was written
+	major          the major version of Pharo
 	renderer, driver   the classes of the world renderer and of its driver
 	world          the extent of the World, [width, height]
 	display        the extent of the renderer's Form, or null
@@ -28,21 +29,43 @@
 	               and a right arrow (U+03BB and U+2192), which the embedded TrueType
 	               fonts of the image have and its bitmap fonts do not: FreeType answers
 	               its glyph indices (FT_Get_Char_Index), a StrikeFont its table
+	scene          what the last scene asked for opened, or null: {name, request, done, error,
+	               absent, windows}, with request the number of the request, done whether
+	               it ran, error what it raised, absent whether the class it opens is not
+	               in this image, and windows the system windows that were opened since
+	               the first scene of the run (since the last close), [{label, bounds,
+	               model, failing, inspectorError, athens}]: failing the classes of their
+	               morphs that failed to draw (errorOnDraw), inspectorError whether an
+	               Inspector shows 'Error while creating the inspector' instead of a
+	               view, athens the morphs that draw with Athens, [{class, surface}],
+	               surface whether it has a cairo surface, which it makes when it draws
 	error          what went wrong, when something did
+
+ A scene is asked for by writing its name into probe-scene.txt next to the image, which
+ the probe reads and deletes, then opens it in the UI process:
+
+	roassal        an Inspector on an RSCanvas of a green box of 60 and a label, whose
+	               first view is the Canvas of Roassal, drawn with Athens and cairo
+	epicea         Code Changes, Epicea's browser, whose graph Hiedra draws with Athens
+	colorPicker    the color picker (SpColorPickerWindow) of the Settings browser,
+	               drawn with Roassal; Pharo 15 does not have it (absent)
+	close          deletes the windows of the scenes
 
  It runs at userBackgroundPriority, below the UI process: a user interrupt stops the
  busy UI process, never this one, which a busy UI starves.  Loaded again, as after a
  snapshot of an image it ran in, it stops the probe of the earlier load."
 
-| file text |
+| file request text |
 file := FileLocator imageDirectory asFileReference / 'probe.json'.
+request := FileLocator imageDirectory asFileReference / 'probe-scene.txt'.
 text := [ :morph | morph contents asString ].
 (Smalltalk globals at: #WorldProbe ifAbsent: [ nil ]) ifNotNil: [ :old | old terminate ].
 Smalltalk globals
 	at: #WorldProbe
 	put: ([
-		| seq rect point labelled drawing glyphs |
+		| seq rect point labelled drawing glyphs scene requests baseline open sceneWindow |
 		seq := 0.
+		requests := 0.
 		rect := [ :r | { r left. r top. r right. r bottom } collect: [ :n | n rounded ] ].
 		point := [ :p | { p x rounded. p y rounded } ].
 		labelled := [ :items |
@@ -57,11 +80,69 @@ Smalltalk globals
 					 ifTrue: [ font realFont ]
 					 ifFalse: [ font ]) ] ].
 		glyphs := String with: (Character value: 16r3BB) with: (Character value: 16r2192).
+		"(a scene, in the UI process: name, and the Dictionary that says how it went)"
+		open := [ :name :result |
+			[
+			name = 'roassal' ifTrue: [
+				| canvas |
+				canvas := RSCanvas new.
+				canvas add: (RSBox new size: 60; color: Color green; yourself).
+				canvas add: (RSLabel text: 'Roassal').
+				RSHorizontalLineLayout on: canvas nodes.
+				canvas inspect ].
+			name = 'epicea' ifTrue: [ (Smalltalk globals at: #EpUnifiedBrowserPresenter) open ].
+			name = 'colorPicker' ifTrue: [
+				(Smalltalk globals at: #SpColorPickerWindow ifAbsent: [ nil ])
+					ifNil: [ result at: 'absent' put: true ]
+					ifNotNil: [ :class | class new open ] ].
+			name = 'close' ifTrue: [
+				(World systemWindows reject: [ :window | baseline includes: window ]) do: [ :window | window delete ].
+				baseline := nil ].
+			(#( 'roassal' 'epicea' 'colorPicker' 'close' ) includes: name) ifFalse: [
+				result at: 'error' put: 'no scene ' , name printString ] ]
+				on: Error
+				do: [ :error | result at: 'error' put: error description ].
+			result at: 'done' put: true ].
+		sceneWindow := [ :window |
+			| morphs |
+			morphs := window allMorphs.
+			Dictionary new
+				at: 'label' put: window label asString;
+				at: 'bounds' put: (rect value: window boundsInWorld);
+				at: 'model' put: window model class name;
+				at: 'failing' put: ((morphs select: [ :morph | morph hasProperty: #errorOnDraw ]) asArray collect: [ :morph | morph class name ]);
+				at: 'inspectorError' put: (morphs anySatisfy: [ :morph |
+						 (morph isKindOf: RubScrolledTextMorph) and: [
+							 morph text asString includesSubstring: 'Error while creating the inspector' ] ]);
+				at: 'athens' put: ((morphs select: [ :morph | morph class name includesSubstring: 'Athens' ]) asArray collect: [ :morph |
+						 Dictionary new
+							 at: 'class' put: morph class name;
+							 at: 'surface' put: ((morph class allInstVarNames includes: 'surface') and: [ (morph instVarNamed: 'surface') notNil ]);
+							 yourself ]);
+				yourself ].
 		[
 		| state |
 		seq := seq + 1.
+		[
+		request exists ifTrue: [
+			| name result |
+			name := request contents trimBoth.
+			request ensureDelete.
+			requests := requests + 1.
+			baseline ifNil: [ baseline := World systemWindows asArray ].
+			result := Dictionary new
+				          at: 'name' put: name;
+				          at: 'request' put: requests;
+				          at: 'done' put: false;
+				          at: 'absent' put: false;
+				          yourself.
+			scene := result.
+			World defer: [ open value: name value: result ] ] ]
+			on: Error
+			do: [ :error | "the next one, then" ].
 		state := Dictionary new.
 		state at: 'seq' put: seq.
+		state at: 'major' put: SystemVersion current major.
 		[
 		| renderer menubar playground area |
 		renderer := World worldState worldRenderer.
@@ -129,7 +210,19 @@ Smalltalk globals
 							 glyphs allSatisfy: [ :character | (font face ffiGetCharIndex: character asInteger) ~= 0 ] ] ]
 					 ifFalse: [
 						 (font respondsTo: #hasGlyphOf:) and: [
-							 glyphs allSatisfy: [ :character | font hasGlyphOf: character ] ] ] ]) ]
+							 glyphs allSatisfy: [ :character | font hasGlyphOf: character ] ] ] ]).
+		state at: 'scene' put: (scene ifNotNil: [
+				 scene copy
+					 at: 'windows' put: ((World systemWindows reject: [ :window | baseline isNil or: [ baseline includes: window ] ]) asArray
+							  collect: [ :window |
+								  [ sceneWindow value: window ]
+									  on: Error
+									  do: [ :error |
+										  Dictionary new
+											  at: 'label' put: window label asString;
+											  at: 'error' put: error description;
+											  yourself ] ]);
+					 yourself ]) ]
 			on: Error
 			do: [ :error | state at: 'error' put: error description ].
 		[

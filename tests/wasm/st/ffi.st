@@ -5,14 +5,21 @@ the registry of src/emscripten) and to the FFI test library (TestLibrary,
 libTestLibrary.so, in the node VM only): scalars, a variadic function,
 structures by value, callbacks, reentrant callbacks, results declared wider
 than the function's (an int answered for a declared int64 or uint64, which
-the return patch of libffi widens, signed or unsigned), declarations that do
-not match the function (a primitive failure on WebAssembly, where the types
-of a call are checked: a double declared for strlen's size_t, and a
-callback declared void where C calls an int (*)(int)), the environment, and
-a bench of 10000 strlen callouts, which must take less than
-WASM_FFI_BENCH_MS milliseconds (default 10000).  Prints a line for each
-check, 'ok <name>' or 'FAIL <name>: ...', the line 'ffi bench: 10000
-callouts in <ms> ms', then 'ffi: <n> checks, <m> failed'.
+the return patch of libffi widens, signed or unsigned), declarations whose
+integers are wider or narrower than the function's, which the width adapter
+of the FFI (src/emscripten/ffiAdapt.c) adapts to the function (strlen
+declared int, abs given an int64, bsearch given ints for its size_t, with a
+callback that makes an adapted callout itself) or calls as a variadic
+function (sprintf declared without fixedArgumentCount:, unless a float is
+among its variadic arguments, which C cannot take: a primitive failure, and
+the adapter says why on stderr), declarations that do not match the function
+in another way (a primitive failure on WebAssembly, where the types of a
+call are checked: a double declared for strlen's size_t, and a callback
+declared void where C calls an int (*)(int)), the environment, and a bench
+of 10000 strlen callouts, which must take less than WASM_FFI_BENCH_MS
+milliseconds (default 10000).  Prints a line for each check, 'ok <name>' or
+'FAIL <name>: ...', the line 'ffi bench: 10000 callouts in <ms> ms', then
+'ffi: <n> checks, <m> failed'.
 
 With WASM_FFI_BUSY set, it runs none of the checks, but a busy loop of 2 s,
 inside a callback (callback) or not (top), then prints 'busy <where>: done',
@@ -41,6 +48,12 @@ env := OSEnvironment current.
    'callInt: c value: v ^ self ffiCall: #(void simple_callback_f_int(void *c, int v)) library: TFTestLibraryUsingSameThreadRunner'
    'idIntAsInt64: v ^ self ffiCall: #(int64 id_int(int v)) library: TFTestLibraryUsingSameThreadRunner'
    'idIntAsUint64: v ^ self ffiCall: #(uint64 id_int(int v)) library: TFTestLibraryUsingSameThreadRunner'
+   'strlenAsInt: s ^ self ffiCall: #(int strlen(String s)) library: WasmFFILibC'
+   'absInt64: x ^ self ffiCall: #(int abs(int64 x)) library: WasmFFILibC'
+   'sprintf: buf format: f with: i ^ self ffiCall: #(int sprintf(ByteArray buf, String f, int i)) library: WasmFFILibC'
+   'sprintfFixed: buf format: f with: i ^ self ffiCall: #(int sprintf(ByteArray buf, String f, int i)) library: WasmFFILibC fixedArgumentCount: 2'
+   'sprintf: buf format: f withFloat: x ^ self ffiCall: #(int sprintf(ByteArray buf, String f, float x)) library: WasmFFILibC'
+   'bsearch: key in: base count: n size: s with: c ^ self ffiCall: #(void* bsearch(void* key, void* base, int n, int s, FFICallback c)) library: WasmFFILibC'
 ) do: [:source | (Smalltalk at: #WasmFFILane) compile: source].
 lib := (Smalltalk at: #WasmFFILane) new.
 "(a loop of 2 s, the same in a callback and outside one)"
@@ -86,6 +99,27 @@ benchLimit := (env at: 'WASM_FFI_BENCH_MS' ifAbsent: ['10000']) asNumber.
 	check value: 'result declared double, function answers size_t' value: #PrimitiveFailed value: [lib strlenAsDouble: 'hello'].
 	check value: 'callback declared void, C calls int (*)(int)' value: #PrimitiveFailed value: [
 		lib callInt: (FFICallback signature: #(void (int a)) block: [:a | got := a]) value: 41].
+	check value: 'strlen declared int (adapted)' value: 5 value: [lib strlenAsInt: 'hello'].
+	check value: 'abs given an int64, of which C takes the low 32 bits (adapted)' value: 42 value: [lib absInt64: (1 bitShift: 32) - 42].
+	check value: 'sprintf without fixedArgumentCount: (variadic), as with it' value: #('n=42' 'n=42') value: [
+		{ #sprintf:format:with:. #sprintfFixed:format:with: } collect: [:selector | | buffer n |
+			buffer := ByteArray new: 32.
+			n := lib perform: selector with: buffer with: 'n=%d' with: 42.
+			(buffer first: n) asString]].
+	check value: 'sprintf given a float among its variadic arguments' value: #PrimitiveFailed value: [
+		lib sprintf: (ByteArray new: 32) format: 'x=%f' withFloat: 1.5].
+	check value: 'an adapted callout in the callback of an adapted bsearch' value: #(4 #(5)) value: [| base key inner found |
+		base := ExternalAddress allocate: 24.
+		key := ExternalAddress allocate: 4.
+		inner := OrderedCollection new.
+		[#(1 2 3 5 7 9) doWithIndex: [:e :i | base signedLongAt: i - 1 * 4 + 1 put: e].
+		key signedLongAt: 1 put: 7.
+		cb := FFICallback signature: #(int (void *a, void *b)) block: [:a :b |
+			inner add: (lib strlenAsInt: 'hello').
+			(a signedLongAt: 1) - (b signedLongAt: 1)].
+		found := lib bsearch: key in: base count: 6 size: 4 with: cb.
+		{found asInteger - base asInteger // 4. inner asSet asArray}]
+			ensure: [base free. key free]].
 	check value: 'callouts after the failures' value: 3 value: [lib strlen: 'abc'].
 	check value: 'environment at:put:' value: 'x' value: [
 		env at: 'WASM_FFI_LANE_SET' put: 'x'.

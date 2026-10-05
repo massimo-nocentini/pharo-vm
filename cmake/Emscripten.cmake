@@ -123,7 +123,9 @@ set(EXTRACTED_SOURCES
 # The libraries of the FFI are linked in, and src/externalPrimitives.c looks
 # their symbols up in their registry (include/pharovm/emscripten/
 # ffiRegistry.h, made by cmake/emscripten/ffiRegistry.cmake from
-# ffiLibraries.cmake).
+# ffiLibraries.cmake).  src/emscripten/ffiAdapt.c adapts the callouts whose
+# declaration differs from the function in width, by the signatures of the
+# registry.
 if(FEATURE_FFI)
     set(PHARO_WASM_FFI_PRIMITIVE_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ffi/functionDefinitionPrimitives.c
@@ -142,7 +144,8 @@ if(FEATURE_FFI)
         DEPENDS ${PHARO_WASM_FFI_PRIMITIVE_SOURCES} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/emscripten/genSupportTable.cmake"
         COMMENT "Generating the table of the FFI support primitives"
         VERBATIM)
-    list(APPEND EXTRACTED_SOURCES "${PHARO_WASM_SUPPORT_TABLE}")
+    list(APPEND EXTRACTED_SOURCES "${PHARO_WASM_SUPPORT_TABLE}"
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/emscripten/ffiAdapt.c)
 endif()
 
 set(VM_FRONTEND_SOURCES

@@ -3,7 +3,8 @@
  *  - vmsupport_exports: the module-less primitives of the VM's own support
  *    code, which the builtin tables list next to vm_exports;
  *  - with the FFI, the guard around libffi's ffi_call, through which the
- *    interpreter makes every callout;
+ *    interpreter makes every callout, adapted (ffiAdapt.c) when its
+ *    declaration differs from the function in width;
  *  - the notification of the host when the image has been saved;
  *  - listings of the builtin primitive tables and of what the lookups of
  *    src/common/sqNamedPrims.c answer for them, for tests/wasm/prim-audit.mjs.
@@ -82,10 +83,23 @@ EM_JS(int, emscriptenGuardedFFICall, (void *call, void *cif, void *fn, void *rva
 	}
 });
 
+/* The guarded ffi_call, which emscriptenAdaptedFFICall calls (ffiAdapt.c) */
+static int
+guardedFFICall(ffi_cif *cif, void (*fn)(void), void *rvalue, void **avalue)
+{
+	return emscriptenGuardedFFICall((void *)ffi_call, cif, (void *)fn, rvalue, avalue);
+}
+
+int emscriptenAdaptedFFICall(ffi_cif *cif, void (*fn)(void), void *rvalue, void **avalue,
+	int (*call)(ffi_cif *cif, void (*fn)(void), void *rvalue, void **avalue));
+
 /* Every callout of the interpreter (-Dffi_call=emscriptenFFICall on its
- * translation unit, cmake/Emscripten.cmake).  A callout that threw fails
- * with PrimErrFFIException, which doPrimitiveSameThreadCallout checks before
- * it pushes the result.  But an exception that passed through a callback
+ * translation unit, cmake/Emscripten.cmake), adapted by
+ * emscriptenAdaptedFFICall to the signature of the function in the registry
+ * when its declaration has other widths.  A callout that threw, or whose
+ * adapted call of a variadic function cannot be prepared, fails with
+ * PrimErrFFIException, which doPrimitiveSameThreadCallout checks before it
+ * pushes the result.  But an exception that passed through a callback
  * (sameThreadCallbackEnter, src/ffi/sameThread/sameThread.c, which then did
  * not restore the depth of callbacks) has unwound the interpreter of that
  * callback too: the VM cannot go on.
@@ -95,7 +109,7 @@ emscriptenFFICall(ffi_cif *cif, void (*fn)(void), void *rvalue, void **avalue)
 {
 	int callbackDepth = emscriptenCallbackDepth;
 
-	if (!emscriptenGuardedFFICall((void *)ffi_call, cif, (void *)fn, rvalue, avalue))
+	if (!emscriptenAdaptedFFICall(cif, fn, rvalue, avalue, guardedFFICall))
 		return;
 	if (emscriptenCallbackDepth != callbackDepth)
 		error("an FFI callout failed inside a callback, which it unwound");

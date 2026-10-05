@@ -26,7 +26,12 @@
 #             row of its table (cmake/wasm/ffi/ffi_<library>.c), or be
 #             exempt in its cmake/emscripten/ffi/symbols/<library>.txt
 #             (a '# unavailable:' section, or a '# unavailable unless
-#             <VARIABLE>:' one whose variable is off in the CMake cache).
+#             <VARIABLE>:' one whose variable is off in the CMake cache,
+#             such as the PDF surface of cairo unless WASM_CAIRO_PDF); an
+#             exempt function must not be a row, the variable of a section
+#             must be one of the cache, and every library with such a list
+#             (c, freetype, cairo, ...) must have functions the image binds
+#             among its rows, which shows that its names were read.
 #
 # The boots, the session and the glyphs must print no line of the guard ('FFI callout
 # failed, its declaration does not match ...' or 'FFI callout trapped in
@@ -113,6 +118,7 @@ clean() {
 # status 1 when functions are missing (missing.txt), and 2 when it failed
 # NAME itself
 covered() {
+    : >unknown.txt
     libraries=$(sed -n 's/^extern const PharoFFILibrary pharoFFILibrary_\([A-Za-z0-9_]*\);$/\1/p' \
 	"$ffi_dir/ffiRegistry-node.c")
     if test -z "$libraries"; then
@@ -145,6 +151,7 @@ covered() {
 		}
 		/^#[ \t]*unavailable unless [A-Za-z0-9_]+:/ {
 		    v = $0; sub(/^#[ \t]*unavailable unless /, "", v); sub(/:.*/, "", v)
+		    if (!(v in on)) print FILENAME ": " v > "unknown.txt"
 		    exempt = !on[v]; next
 		}
 		/^#[ \t]*unavailable:/ { exempt = 1; next }
@@ -152,9 +159,28 @@ covered() {
 		exempt { print library "\t" $1 }' "$list" >>exempt.txt
 	fi
     done
+    if test -s unknown.txt; then
+	fail "$1" "a '# unavailable unless' section names a variable that is not in $cache: $(head -n 3 unknown.txt | tr '\n' ';')"
+	return 2
+    fi
+    # the exempt functions that are rows all the same
+    rows_exempt=$(awk -F '	' 'FILENAME == "table.txt" { row[$1 FS $2] = 1; next } ($1 FS $2) in row { print $1 " " $2 }' \
+	table.txt exempt.txt)
+    if test -n "$rows_exempt"; then
+	fail "$1" "exempt functions that are rows of their table: $(echo "$rows_exempt" | head -n 5 | tr '\n' ';')"
+	return 2
+    fi
+    # the libraries that have a list of their functions
+    listed=
+    for library in $libraries; do
+	if test -f "$SRCDIR/cmake/emscripten/ffi/symbols/$library.txt"; then listed="$listed $library"; fi
+    done
     rm -f missing.txt
-    awk -F '	' -v libraries="$(echo $libraries)" '
-	BEGIN { n = split(libraries, names, " "); for (i = 1; i <= n; i++) registered[names[i]] = 1 }
+    awk -F '	' -v libraries="$(echo $libraries)" -v listed="$listed" '
+	BEGIN {
+	    n = split(libraries, names, " "); for (i = 1; i <= n; i++) registered[names[i]] = 1
+	    split(listed, lists, " ")
+	}
 	FILENAME == "table.txt" { row[$1 FS $2] = 1; next }
 	FILENAME == "exempt.txt" { exempt[$1 FS $2] = 1; next }
 	NF >= 2 {
@@ -176,7 +202,10 @@ covered() {
 	    for (l in other) outside = outside (outside == "" ? "" : ", ") l " " other[l]
 	    print "functions in the registry: " line > "coverage.txt"
 	    print "outside it: " (outside == "" ? "none" : outside) > "coverage.txt"
-	    exit (missing > 0 ? 1 : 0)
+	    unread = ""
+	    for (i in lists) if (!covered[lists[i]]) unread = unread " " lists[i]
+	    if (unread != "") print "libraries none of whose functions the image binds:" unread > "coverage.txt"
+	    exit (missing > 0 ? 1 : unread != "" ? 3 : 0)
 	}' table.txt exempt.txt symbols.txt
 }
 
@@ -252,6 +281,7 @@ for image in stock web; do
 		0,) ok "coverage $image" "$(sed -n 1p coverage.txt); $(sed -n 2p coverage.txt)" ;;
 		2,*) ;;
 		*,missing) fail "coverage $image" "$(grep -c '' missing.txt) functions the image binds are neither in the registry nor exempt: $(head -n 5 missing.txt | tr '\n' ';')" ;;
+		3,) fail "coverage $image" "$(sed -n 3p coverage.txt): ffi-symbols.st did not list them, or their tables lost their rows" ;;
 		*) fail "coverage $image" "the functions could not be compared with the tables" ;;
 	    esac
 	fi

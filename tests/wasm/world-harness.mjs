@@ -6,7 +6,9 @@
 // world: true, so that its image is the prepared world image.  The harness
 // boots it as the world page does: pharo-web.js (the MEMORY64=2 module of the
 // pages) through packaging/emscripten/web/vm-driver.js, the files of the
-// manifest in MEMFS, and display-worker.js of this tree as Module.webDisplay.
+// manifest in MEMFS (with the empty placeholders of manifest.libraries, as
+// vm-worker.js writes them, for the image to find libcairo.so.2), and
+// display-worker.js of this tree as Module.webDisplay.
 // It has no canvas, so the display paints into its memory framebuffer.  The
 // arguments are the world's (vmArgs('world')) plus st tests/wasm/st/world-probe.st
 // (Pharo 15 takes a .st file through the st command only; Pharo 12 takes it so too),
@@ -59,12 +61,14 @@ if (!manifest.world) {
   process.exit(1);
 }
 
-// The files of the world page, in MEMFS: what the worker writes there
+// The files of the world page, in MEMFS: what the worker writes there,
+// the placeholders of the libraries of the FFI first
 function worldFiles() {
-  const files = manifest.files.map(f => {
+  const files = (manifest.libraries || []).map(name => ({ path: '/pharo/' + name, data: new Uint8Array(0) }));
+  for (const f of manifest.files) {
     const data = fs.readFileSync(path.join(webDir, f.url));
-    return { path: '/pharo/' + f.path, data: data[0] === 0x1f && data[1] === 0x8b ? zlib.gunzipSync(data) : data };
-  });
+    files.push({ path: '/pharo/' + f.path, data: data[0] === 0x1f && data[1] === 0x8b ? zlib.gunzipSync(data) : data });
+  }
   for (const p of manifest.st || []) files.push({ path: '/pharo/' + p, data: fs.readFileSync(path.join(webDir, p)) });
   files.push({ path: '/pharo/st/world-probe.st', data: probeSource });
   return files;

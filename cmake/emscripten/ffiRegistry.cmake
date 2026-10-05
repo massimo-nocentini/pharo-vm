@@ -18,7 +18,7 @@
 #         src/externalPrimitives.c does (libc.so.6 is c, libSDL2-2.0.so.0 is
 #         SDL2), or one of ALIASES.  Its table, ${CMAKE_BINARY_DIR}/wasm/ffi/
 #         ffi_<name>.c, is generated at build time by genFFILibrary.cmake,
-#         which prints 'FFI library <name>: <n> symbols':
+#         which prints 'FFI library <name>: <n> symbols, ...':
 #
 #         - the names of SYMBOLS_FILE that it does not exempt: every one must
 #           be declared by HEADERS, or the build stops (and the link stops
@@ -30,7 +30,12 @@
 #         The table includes HEADERS, the library's public headers, so that
 #         each address is taken with the real prototype; a library without
 #         headers that declare its functions (the FFI test library) gives its
-#         SOURCES instead, which the table then includes and compiles.  LINK
+#         SOURCES instead, which the table then includes and compiles.
+#         With HEADERS, each function of the table has the WebAssembly
+#         signature of its declaration there, which ffiSignatures.mjs (run
+#         by node, NODE_JS_EXECUTABLE) reads from the table compiled, and
+#         from clang's AST of it: src/emscripten/ffiAdapt.c adapts the
+#         callouts that declare it with other widths.  LINK
 #         is linked into the VMs with the table: the library's targets
 #         (defined before), whose include directories and compile
 #         definitions reach the table, or its archives.  CFLAGS go to the
@@ -74,6 +79,7 @@
 # PHARO_WASM_FFI_FILES (see FILES).
 
 set(PHARO_WASM_FFI_LIBRARY_GENERATOR "${CMAKE_CURRENT_LIST_DIR}/genFFILibrary.cmake")
+set(PHARO_WASM_FFI_SIGNATURES_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/ffiSignatures.mjs")
 # Where ffiRegistry.h is, as pharovm/emscripten/ffiRegistry.h
 get_filename_component(PHARO_WASM_FFI_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/../../include" ABSOLUTE)
 
@@ -158,6 +164,7 @@ function(pharo_wasm_ffi_library name)
         OUTPUT "${output}"
         COMMAND ${CMAKE_COMMAND} "-DNAME=${name}" "-DOUTPUT=${output}"
                 "-DCC=${CMAKE_C_COMPILER}" "-DNM=${CMAKE_NM}" "-DCFLAGS=${cflags}"
+                "-DNODE=${NODE_JS_EXECUTABLE}" "-DSIGNATURES=${PHARO_WASM_FFI_SIGNATURES_SCRIPT}"
                 "-DWORK=${CMAKE_BINARY_DIR}/wasm/ffi/work-${name}"
                 "-DALIASES=${arg_ALIASES}" "-DHEADERS=${arg_HEADERS}"
                 "-DSOURCES=${arg_SOURCES}" "-DARCHIVES=${arg_ARCHIVES}"
@@ -165,7 +172,8 @@ function(pharo_wasm_ffi_library name)
                 "-DENABLED=${arg_ENABLED}" "-DON_LOAD=${ARG_ON_LOAD}"
                 -P "${PHARO_WASM_FFI_LIBRARY_GENERATOR}"
         COMMAND ${CMAKE_COMMAND} -E touch_nocreate "${output}"
-        DEPENDS ${symbolsFile} ${sources} ${ARG_ARCHIVES} ${depends} "${PHARO_WASM_FFI_LIBRARY_GENERATOR}"
+        DEPENDS ${symbolsFile} ${sources} ${ARG_ARCHIVES} ${depends}
+                "${PHARO_WASM_FFI_LIBRARY_GENERATOR}" "${PHARO_WASM_FFI_SIGNATURES_SCRIPT}"
         COMMENT "Generating the FFI symbol table of ${name}"
         VERBATIM)
     if(ARG_CFLAGS)

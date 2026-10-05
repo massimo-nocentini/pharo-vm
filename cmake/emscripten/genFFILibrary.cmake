@@ -2,6 +2,7 @@
 #
 #     cmake -DNAME=<c> -DOUTPUT=<ffi_c.c> -DCC=<emcc> -DNM=<llvm-nm>
 #           -DCFLAGS=<-m64|-I...> -DWORK=<dir>
+#           -DNODE=<node> -DSIGNATURES=<ffiSignatures.mjs>
 #           [-DALIASES=<m|dl>] [-DHEADERS=<stdlib.h|string.h>]
 #           [-DSOURCES=<a.c|b.c>] [-DARCHIVES=<lib.a|...>] [-DEXCLUDE=<regex>]
 #           [-DSYMBOLS_FILE=<c.txt>] [-DENABLED=<VARIABLE|...>]
@@ -12,8 +13,8 @@
 # '|' between their items).  It writes OUTPUT, a translation unit that
 # defines pharoFFILibrary_<NAME> (include/pharovm/emscripten/ffiRegistry.h):
 # the symbols of the library, sorted by name (strcmp), with their addresses
-# and a NULL signature, its ALIASES and its ON_LOAD function, and prints
-# 'FFI library <NAME>: <n> symbols'.
+# and signatures, its ALIASES and its ON_LOAD function, and prints
+# 'FFI library <NAME>: <n> symbols, ...' with the number of signatures.
 #
 # The symbols are the names SYMBOLS_FILE lists outside its exempt sections
 # (ffiRegistry.cmake describes the file; ENABLED are the variables of its
@@ -29,6 +30,13 @@
 # out; a name of SYMBOLS_FILE so stops the build, naming it.  So the table
 # holds what the headers declare and the library defines, and every name of
 # the list.
+#
+# With HEADERS, every function of the table has its WebAssembly signature,
+# which src/emscripten/ffiAdapt.c reads to adapt the callouts that declare it
+# with other widths: SIGNATURES, run by NODE, reads them from the table
+# compiled without them (-c into WORK) and from clang's AST of it, and the
+# data have none (NULL).  The build stops when it cannot give a function its
+# signature.  The functions of SOURCES, which the table defines, have none.
 
 cmake_minimum_required(VERSION 3.10)
 
@@ -194,10 +202,6 @@ if(NOT result EQUAL 0)
 endif()
 
 list(LENGTH candidates count)
-set(rows "")
-foreach(symbol IN LISTS candidates)
-    string(APPEND rows "\t{\"${symbol}\", (void *)&${symbol}, NULL},\n")
-endforeach()
 set(aliases "")
 foreach(alias IN LISTS ALIASES)
     string(APPEND aliases "\"${alias}\", ")
@@ -209,7 +213,18 @@ if(ON_LOAD)
     set(onLoadDeclaration "\nextern void ${ON_LOAD}(void);\n")
 endif()
 
-file(WRITE "${OUTPUT}.tmp" "${prologue}${onLoadDeclaration}
+# The text of the table, with the signatures signature_<symbol> ("-", or
+# unset, for NULL)
+function(pharo_wasm_ffi_table_text variable)
+    set(rows "")
+    foreach(symbol IN LISTS candidates)
+        set(signature "NULL")
+        if(DEFINED signature_${symbol} AND NOT signature_${symbol} STREQUAL "-")
+            set(signature "\"${signature_${symbol}}\"")
+        endif()
+        string(APPEND rows "\t{\"${symbol}\", (void *)&${symbol}, ${signature}},\n")
+    endforeach()
+    set(${variable} "${prologue}${onLoadDeclaration}
 /* ${count} symbols */
 static const PharoFFISymbol symbols[] = {
 ${rows}\t{NULL, NULL, NULL}
@@ -218,9 +233,70 @@ ${rows}\t{NULL, NULL, NULL}
 static const char *const aliases[] = { ${aliases}NULL };
 
 const PharoFFILibrary pharoFFILibrary_${NAME} = {
-	\"${NAME}\", aliases, symbols, ${count}, ${onLoad}
+\t\"${NAME}\", aliases, symbols, ${count}, ${onLoad}
 };
-")
+" PARENT_SCOPE)
+endfunction()
+
+# The signatures of the functions that the library defines and HEADERS
+# declare: ffiSignatures.mjs reads them from the table compiled without
+# them, as the import (or the definition) of each function the table takes
+# the address of, and the variadic ones from clang's AST of the same table.
+# The functions of SOURCES, which the table defines itself, have none.
+set(summary "without signatures (its SOURCES define them)")
+if(NOT SOURCES)
+    foreach(var NODE SIGNATURES)
+        if(NOT ${var})
+            message(FATAL_ERROR "genFFILibrary.cmake: ${var} is not set")
+        endif()
+    endforeach()
+    pharo_wasm_ffi_table_text(text)
+    set(table "${WORK}/table_${NAME}.c")
+    set(names "${WORK}/names_${NAME}.txt")
+    file(WRITE "${table}" "${text}")
+    string(REPLACE ";" "\n" lines "${candidates}")
+    file(WRITE "${names}" "${lines}\n")
+    execute_process(COMMAND ${CC} ${CFLAGS} -w -c "${table}" -o "${table}.o"
+        RESULT_VARIABLE result ERROR_VARIABLE errors)
+    if(NOT result EQUAL 0)
+        message(FATAL_ERROR "genFFILibrary.cmake: cannot compile the table of ${NAME}:\n${errors}")
+    endif()
+    execute_process(
+        COMMAND ${CC} ${CFLAGS} -w -fsyntax-only -Xclang -ast-dump "${table}"
+        COMMAND "${NODE}" "${SIGNATURES}" "${table}.o" "${names}"
+        OUTPUT_VARIABLE listing RESULTS_VARIABLE results ERROR_VARIABLE errors)
+    foreach(result IN LISTS results)
+        if(NOT result EQUAL 0)
+            message(FATAL_ERROR "genFFILibrary.cmake: cannot read the signatures of ${NAME} (${results}):\n${errors}")
+        endif()
+    endforeach()
+    string(REPLACE "\n" ";" lines "${listing}")
+    set(functions 0)
+    set(variadic 0)
+    foreach(line IN LISTS lines)
+        if(line MATCHES "^([A-Za-z_][A-Za-z0-9_]*) (-|[vijfd][ijfd]*(\\.[0-9]+)?)$")
+            set(signature_${CMAKE_MATCH_1} "${CMAKE_MATCH_2}")
+            if(NOT CMAKE_MATCH_2 STREQUAL "-")
+                math(EXPR functions "${functions} + 1")
+            endif()
+            if(CMAKE_MATCH_3)
+                math(EXPR variadic "${variadic} + 1")
+            endif()
+        elseif(NOT line STREQUAL "")
+            message(FATAL_ERROR "genFFILibrary.cmake: ffiSignatures.mjs answers '${line}' for ${NAME}")
+        endif()
+    endforeach()
+    foreach(symbol IN LISTS candidates)
+        if(NOT DEFINED signature_${symbol})
+            message(FATAL_ERROR "genFFILibrary.cmake: ffiSignatures.mjs answers nothing for ${symbol} of ${NAME}")
+        endif()
+    endforeach()
+    math(EXPR data "${count} - ${functions}")
+    set(summary "${functions} functions with their signatures (${variadic} variadic), ${data} data")
+endif()
+
+pharo_wasm_ffi_table_text(text)
+file(WRITE "${OUTPUT}.tmp" "${text}")
 configure_file("${OUTPUT}.tmp" "${OUTPUT}" COPYONLY)
 file(REMOVE "${OUTPUT}.tmp")
-message(STATUS "FFI library ${NAME}: ${count} symbols")
+message(STATUS "FFI library ${NAME}: ${count} symbols, ${summary}")

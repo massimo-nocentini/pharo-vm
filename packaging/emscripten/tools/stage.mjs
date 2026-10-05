@@ -4,6 +4,7 @@
 //        --web-package <OSWebDriver.class.st>
 //        [--web <dir>] [--memory64 1|2] [--git <sha>] [--ffi 0|1]
 //        [--fonts freetype|bitmap] [--notices <file>] [--st <file>]...
+//        [--library-file <name>]...
 //        [--world-image <dir> [--world-st <file>]...]
 //
 // cmake/emscripten/stage.cmake runs it on every build.  It writes
@@ -22,8 +23,8 @@
 //                              it has one, the stock one otherwise
 //   st/<file>                  the --st files, and with the world image its
 //                              OSWindow-Web.st and the --world-st files
-//   manifest.json              {build, ffi, files, fonts, image, memory64, st,
-//                              webPackage, world}
+//   manifest.json              {build, ffi, files, fonts, image, libraries,
+//                              memory64, st, webPackage, world}
 //
 // The build id is the git sha, a dash and the first 12 hex digits of a
 // SHA256 over everything staged, so it changes whenever a staged file does.
@@ -41,6 +42,12 @@
 //          up, the build's (webimage.cmake) and the page's
 //          (web-bootstrap.st), which the page names in its notice
 //   image  the name of the image to boot, "Pharo.image"
+//   libraries  ["libcairo.so.2", ...], sorted: the --library-file names, the
+//          placeholders of the libraries of the FFI (the FILES of
+//          pharo_wasm_ffi_library, which stage.cmake passes).  The worker
+//          writes each one empty into /pharo, the directory of the VM,
+//          before the boot, for the image to find the library there as a
+//          file (FFIUnix64LibraryFinder); the VM has it built in
 //   st     ["st/<file>", ...]: each file is at that url, and goes to /pharo/st
 //   webPackage  the version of the package OSWindow-Web of this build, an
 //          integer: OSWebDriver class>>packageVersion, read from
@@ -75,11 +82,11 @@ const fail = (message) => {
 };
 
 const parseArguments = (argv) => {
-  const options = { st: [], worldSt: [], memory64: '2', git: '', ffi: '0', fonts: 'bitmap' };
+  const options = { st: [], worldSt: [], libraries: [], memory64: '2', git: '', ffi: '0', fonts: 'bitmap' };
   const single = { '--out': 'out', '--web': 'web', '--module': 'module', '--memory64': 'memory64',
                    '--git': 'git', '--ffi': 'ffi', '--fonts': 'fonts', '--notices': 'notices',
                    '--stock-image': 'stockImage', '--web-package': 'webPackage', '--world-image': 'worldImage' };
-  const many = { '--st': 'st', '--world-st': 'worldSt' };
+  const many = { '--st': 'st', '--world-st': 'worldSt', '--library-file': 'libraries' };
   for (let i = 0; i < argv.length; i++) {
     const name = argv[i];
     if (i + 1 >= argv.length || !(name in single || name in many)) fail(`bad argument ${name}`);
@@ -94,6 +101,10 @@ const parseArguments = (argv) => {
   if (!/^(freetype|bitmap)$/.test(options.fonts)) fail(`--fonts must be freetype or bitmap, not ${options.fonts}`);
   if (!existsSync(options.webPackage)) fail(`--web-package ${options.webPackage} does not exist`);
   if (options.notices && !existsSync(options.notices)) fail(`--notices ${options.notices} does not exist`);
+  // (a name in /pharo, which the worker writes)
+  for (const name of options.libraries)
+    if (!/^[A-Za-z0-9_+-][A-Za-z0-9._+-]*$/.test(name)) fail(`--library-file ${name} is not the name of a file`);
+  options.libraries = [...new Set(options.libraries)].sort();
   return options;
 };
 
@@ -178,6 +189,8 @@ const main = async () => {
   else process.stderr.write(`stage.mjs: warning: no --notices, web/ goes without the ${NOTICES} that the pages link\n`);
   const files = [[IMAGE, image.image], [CHANGES, image.changes], [basename(image.sources), image.sources]];
   for (const [name, source] of files) entries.push([`image/${name}.gz`, source, 'gzip']);
+  for (const name of options.libraries)
+    if (files.some(([file]) => file == name)) fail(`--library-file ${name} is the name of a file of the image`);
   const st = [...options.st];
   if (world) st.push(join(options.worldImage, 'OSWindow-Web.st'), ...options.worldSt);
   for (const file of st) {
@@ -193,8 +206,8 @@ const main = async () => {
   }
   const ffi = options.ffi == '1';
   const webPackage = webPackageOf(options.webPackage);
-  const digest = sha256([`ffi ${ffi}`, `fonts ${options.fonts}`, `memory64 ${options.memory64}`,
-                         `webPackage ${webPackage}`, `world ${world}`,
+  const digest = sha256([`ffi ${ffi}`, `fonts ${options.fonts}`, `libraries ${options.libraries.join(' ')}`,
+                         `memory64 ${options.memory64}`, `webPackage ${webPackage}`, `world ${world}`,
                          ...[...inputs].map(([rel, { sha256 }]) => `${rel} ${sha256}`).sort()].join('\n'));
   const build = (options.git ? `${options.git}-` : '') + digest.slice(0, 12);
 
@@ -250,6 +263,7 @@ const main = async () => {
     files: manifestFiles.sort((a, b) => a.path < b.path ? -1 : 1),
     fonts: options.fonts,
     image: IMAGE,
+    libraries: options.libraries,
     memory64: Number(options.memory64),
     st: entries.filter(([rel]) => rel.startsWith('st/')).map(([rel]) => rel).sort(),
     webPackage,

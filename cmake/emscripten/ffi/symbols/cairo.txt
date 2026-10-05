@@ -1,0 +1,139 @@
+# The functions of cairo in the FFI registry of the Emscripten VM, the
+# library cairo (CairoLibrary, libcairo.so.2, of
+# cmake/emscripten/ffiLibraries.cmake).  cmake/emscripten/ffiRegistry.cmake
+# describes the format: a name per line, '#' starting a comment, and the
+# '# unavailable' sections, whose names are left out.  Every other name must
+# be declared by the headers of ffiLibraries.cmake, or the build stops.
+#
+# What Pharo 12 (build 1599) and Pharo 15 (build 41) bind to it, test
+# packages included, as packaging/emscripten/tools/ffi-symbols.st lists them
+# (the library cairo in its output), with the host VM:
+#
+#     pharo --headless <image> --no-default-preferences st ffi-symbols.st
+#
+# Both images bind the same 122, all in Athens-Cairo.
+#
+cairo_append_path
+cairo_arc
+cairo_arc_negative
+cairo_clip
+cairo_close_path
+cairo_copy_page
+cairo_copy_path
+cairo_create
+cairo_curve_to
+cairo_destroy
+cairo_fill
+cairo_fill_preserve
+cairo_font_face_destroy
+cairo_font_face_status
+cairo_font_options_create
+cairo_font_options_destroy
+cairo_font_options_set_antialias
+cairo_font_options_set_hint_metrics
+cairo_font_options_set_hint_style
+cairo_font_options_set_subpixel_order
+cairo_ft_font_face_create_for_ft_face
+cairo_ft_font_face_set_synthesize
+cairo_ft_scaled_font_lock_face
+cairo_ft_scaled_font_unlock_face
+cairo_get_current_point
+cairo_get_fill_rule
+cairo_get_operator
+cairo_get_scaled_font
+cairo_get_source
+cairo_glyph_free
+cairo_glyph_path
+cairo_identity_matrix
+cairo_image_surface_create
+cairo_image_surface_create_for_data
+cairo_image_surface_create_from_png
+cairo_image_surface_get_data
+cairo_image_surface_get_height
+cairo_image_surface_get_stride
+cairo_image_surface_get_width
+cairo_line_to
+cairo_mask
+cairo_matrix_init
+cairo_matrix_init_identity
+cairo_matrix_init_rotate
+cairo_matrix_init_scale
+cairo_matrix_init_translate
+cairo_matrix_invert
+cairo_matrix_multiply
+cairo_matrix_rotate
+cairo_matrix_scale
+cairo_matrix_transform_point
+cairo_matrix_translate
+cairo_mesh_pattern_begin_patch
+cairo_mesh_pattern_curve_to
+cairo_mesh_pattern_end_patch
+cairo_mesh_pattern_line_to
+cairo_mesh_pattern_move_to
+cairo_mesh_pattern_set_corner_color_rgba
+cairo_move_to
+cairo_new_path
+cairo_paint
+cairo_paint_with_alpha
+cairo_path_destroy
+cairo_pattern_add_color_stop_rgba
+cairo_pattern_create_for_surface
+cairo_pattern_create_linear
+cairo_pattern_create_mesh
+cairo_pattern_create_radial
+cairo_pattern_destroy
+cairo_pattern_set_extend
+cairo_pattern_set_matrix
+cairo_pattern_status
+cairo_rectangle
+cairo_reset_clip
+cairo_restore
+cairo_rotate
+cairo_save
+cairo_scale
+cairo_scaled_font_create
+cairo_scaled_font_destroy
+cairo_scaled_font_extents
+cairo_scaled_font_get_font_matrix
+cairo_scaled_font_get_scale_matrix
+cairo_scaled_font_glyph_extents
+cairo_scaled_font_status
+cairo_scaled_font_text_extents
+cairo_scaled_font_text_to_glyphs
+cairo_select_font_face
+cairo_set_antialias
+cairo_set_dash
+cairo_set_fill_rule
+cairo_set_font_matrix
+cairo_set_font_size
+cairo_set_line_cap
+cairo_set_line_join
+cairo_set_line_width
+cairo_set_matrix
+cairo_set_operator
+cairo_set_scaled_font
+cairo_set_source
+cairo_set_source_rgba
+cairo_show_glyphs
+cairo_show_page
+cairo_show_text
+cairo_status_to_string
+cairo_stroke
+cairo_surface_destroy
+cairo_surface_finish
+cairo_surface_flush
+cairo_surface_mark_dirty
+cairo_surface_set_device_scale
+cairo_surface_show_page
+cairo_surface_status
+cairo_surface_write_to_png
+cairo_svg_surface_create
+cairo_text_extents
+cairo_text_path
+cairo_translate
+cairo_user_to_device
+cairo_version_string
+# unavailable unless WASM_CAIRO_PDF: the PDF surface (AthensCairoPDFSurface) needs cairo's zlib configuration
+cairo_pdf_surface_create
+# unavailable: the Quartz surface of macOS (AthensQuartzSurface)
+cairo_quartz_surface_create

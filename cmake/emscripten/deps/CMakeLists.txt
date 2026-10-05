@@ -9,6 +9,11 @@
 #     libffi.cmake    pharo_libffi, upstream libffi (with the FFI)
 #     freetype.cmake  pharo_freetype, FreeType for the image's fonts
 #                     (PHARO_WASM_HAS_FREETYPE)
+#     cairo.cmake     pharo_cairo, cairo for Athens (PHARO_WASM_HAS_CAIRO),
+#                     on FreeType and on what it includes:
+#       pixman.cmake    pharo_pixman
+#       libpng.cmake    pharo_png
+#       zlib.cmake      pharo_zlib (for libpng, and the PDF surface)
 #
 # The libraries are compiled with flags of their own, not with those of the
 # VM: a directory starts with what its parent set, and CMakeLists.txt and
@@ -46,4 +51,7 @@ if(PHARO_WASM_HAS_FFI)
 endif()
 if(PHARO_WASM_HAS_FREETYPE)
     include(${CMAKE_CURRENT_LIST_DIR}/freetype.cmake)
+endif()
+if(PHARO_WASM_HAS_CAIRO)
+    include(${CMAKE_CURRENT_LIST_DIR}/cairo.cmake)
 endif()

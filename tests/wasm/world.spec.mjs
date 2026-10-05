@@ -18,7 +18,14 @@
 // canvas say that the world was painted, and the probe which fonts draw it:
 // those of manifest.fonts, FreeType (with glyphs for a lambda and an arrow)
 // or bitmap fonts, in the world image and in a stock image prepared by the
-// page.  The spec drives the page with real pointer and keyboard events,
+// page.  With cairo (manifest.json lists libcairo.so.2 in its libraries),
+// the probe opens the windows that draw with Athens on request, when the
+// spec writes their name into /pharo/probe-scene.txt: an Inspector on a
+// Roassal canvas, whose Canvas view must show the canvas's green box, Code
+// Changes (Epicea, whose graph Hiedra draws) and, on Pharo 12, the color
+// picker, each without a morph that failed to draw, an Inspector that says
+// 'Error while creating the inspector', or a debugger.  The spec drives the
+// page with real pointer and keyboard events,
 // and prints the cold first-frame (a first visit: nothing cached, an empty
 // IndexedDB) and keystroke-to-canvas latencies.  An init script keeps the
 // input records that world.js posts to the worker, for the checks of the
@@ -213,6 +220,29 @@ await run(async t => {
     for (const m of p.menus) for (const i of m.items) if (i.label === label) return i;
     return null;
   };
+  // How many pixels of the colour rgb ([r, g, b]) a screenshot has in a
+  // rectangle of the world
+  function pixelsOf(shot, b, rgb) {
+    let n = 0;
+    for (let y = Math.max(0, b[1]); y < Math.min(shot.height, b[3]); y++)
+      for (let x = Math.max(0, b[0]); x < Math.min(shot.width, b[2]); x++) {
+        const i = (y * shot.width + x) * 4;
+        if (shot.data[i] === rgb[0] && shot.data[i + 1] === rgb[1] && shot.data[i + 2] === rgb[2]) n++;
+      }
+    return n;
+  }
+  // What is wrong with the windows that a scene of the probe opened, or ''
+  function sceneWrong(p) {
+    const wrong = [];
+    if (p.scene.error) wrong.push('it raised ' + p.scene.error);
+    if (p.debugger) wrong.push('a debugger opened');
+    for (const w of p.scene.windows) {
+      if (w.error) wrong.push(`${w.label}: the probe raised ${w.error}`);
+      if (w.inspectorError) wrong.push(`${w.label}: 'Error while creating the inspector'`);
+      if (w.failing && w.failing.length) wrong.push(`${w.label}: morphs that failed to draw: ${w.failing.join(' ')}`);
+    }
+    return wrong.join('; ');
+  }
   // A point of the desktop, right of every window
   const desktop = p => {
     const x = p.world[0] - 30, y = Math.round(p.world[1] / 2);
@@ -430,6 +460,54 @@ await run(async t => {
     await page.keyboard.press('Control+a');
     await paste('6 * 7');
     p = await probe('the pasted text', p => p.playground.text === '6 * 7');
+  });
+
+  // The windows that draw with cairo, which the probe opens on request
+  const cairo = (manifest.libraries || []).includes('libcairo.so.2');
+  let requests = 0;
+  // the scene name, once it ran and its windows opened (as opened says)
+  async function scene(name, opened, timeout = 60000) {
+    const n = ++requests;
+    // (the worker answers with an fs-result, which world.js ignores: no
+    // request of its own has that id)
+    await page.evaluate(name => window.__worker.postMessage({ type: 'fs', op: 'writeFile', path: '/pharo/probe-scene.txt',
+                                                               data: name, id: -1 }), name);
+    p = await probe('the scene ' + name, p => p.scene && p.scene.request === n && p.scene.done && opened(p.scene.windows, p.scene), timeout);
+    return p;
+  }
+  // the windows of the scene that draw with Athens, and have drawn
+  const drawn = ws => ws.filter(w => (w.athens || []).some(a => a.surface));
+  if (!cairo) console.log('  # skip the windows that draw with cairo: manifest.json lists no libcairo.so.2 in its libraries');
+  if (cairo) await check('an Inspector on a Roassal canvas shows its Canvas, drawn with cairo', async () => {
+    const t1 = Date.now();
+    p = await scene('roassal', ws => drawn(ws).length > 0);
+    console.log('  # the Inspector drew its Canvas in ' + (Date.now() - t1) + ' ms');
+    const wrong = sceneWrong(p);
+    assert(!wrong, wrong);
+    // the frames of the canvas came by now (the probe runs every 100 ms)
+    await page.waitForTimeout(500);
+    const w = drawn(p.scene.windows)[0], green = pixelsOf(await shoot(), w.bounds, [0, 255, 0]);
+    assert(green >= 400, `the canvas shows the green box of the Roassal canvas in ${w.label} at ${w.bounds}: ${green} green pixels`);
+    console.log(`  # ${green} green pixels of the box in ${w.label}`);
+    if (t.shots) await page.screenshot({ path: t.shot('world-roassal.png') });
+  });
+  if (cairo) await check('Code Changes (Epicea) opens, and its graph draws', async () => {
+    p = await scene('epicea', ws => drawn(ws).length > 0);
+    const wrong = sceneWrong(p);
+    assert(!wrong, wrong);
+  });
+  if (cairo) await check('the color picker of the Settings opens, drawn with Roassal (when the image has it: Pharo 12)', async () => {
+    p = await scene('colorPicker', (ws, s) => s.absent || drawn(ws).length > 0);
+    if (p.scene.absent) {
+      assert(p.major > 12, 'Pharo ' + p.major + ' has no SpColorPickerWindow');
+      console.log('  # Pharo ' + p.major + ' has no SpColorPickerWindow');
+    }
+    const wrong = sceneWrong(p);
+    assert(!wrong, wrong);
+  });
+  if (cairo) await check('the windows of the scenes close', async () => {
+    p = await scene('close', ws => ws.length === 0);
+    assert(!p.scene.error, 'it raised ' + p.scene.error);
   });
 
   await check('a viewport resize resizes the world', async () => {

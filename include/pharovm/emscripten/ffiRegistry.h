@@ -25,8 +25,11 @@ typedef struct {
 	void *address;
 	/* The WebAssembly signature of the function, as its declaration in the
 	 * headers lowers it, for a callout whose declaration differs from it
-	 * in width; NULL when it is not known: for now, the generated tables
-	 * give NULL for every symbol. */
+	 * in width (src/emscripten/ffiAdapt.c): '<result><parameters>' in
+	 * v, i, j, f and d, then '.<fixed arguments>' for a variadic function
+	 * (cmake/emscripten/ffiSignatures.mjs).  NULL when it is not known:
+	 * for data, and for the functions of a library whose table defines
+	 * them (its SOURCES, the FFI test library). */
 	const char *signature;
 } PharoFFISymbol;
 

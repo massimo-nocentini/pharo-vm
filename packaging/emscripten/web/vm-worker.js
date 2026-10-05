@@ -46,10 +46,13 @@
 // are not gzip's 1f 8b: a server that sent it with Content-Encoding: gzip
 // had the browser inflate it.  Everything goes into /pharo, the working
 // directory and the VM's directory (thisProgram is /pharo/pharo), which
-// must be writable.  The VM then boots with PharoVMDriver.vmArgs(init.mode):
-// the REPL of st/web-repl.st, or the world.  progress says how far the
-// loading got: "fetch" (the bytes of the files, inflated), "restore" (the
-// slot), then "boot".
+// must be writable.  So do the placeholders of manifest.libraries, empty
+// files (libcairo.so.2): the image finds such a library only as a file of
+// the VM's directory (FFIUnix64LibraryFinder), and the VM, which has it
+// built in, never reads them.  The VM then boots with
+// PharoVMDriver.vmArgs(init.mode): the REPL of st/web-repl.st, or the
+// world.  progress says how far the loading got: "fetch" (the bytes of the
+// files, inflated), "restore" (the slot), then "boot".
 //
 // Output.  What the VM writes to fd 1 and 2 is decoded as UTF-8 (one
 // streaming decoder per fd), coalesced up to 64 KB, and posted at the end
@@ -587,7 +590,12 @@ async function load(m) {
     Promise.all(wanted.map(f => fetchFile(f, v, n => report(loaded += n)))),
     Promise.all((manifest.st || []).map(p => fetchText(p + v))),
   ]);
-  const files = wanted.map((f, i) => ({ path: DIR + '/' + f.path, data: fetched[i] }));
+  // the placeholders first: a file of the manifest of the same name wins
+  const files = (manifest.libraries || []).map(name => {
+    if (!/^[^/]+$/.test(name)) throw new Error('manifest.json names the library file ' + JSON.stringify(name));
+    return { path: DIR + '/' + name, data: new Uint8Array(0) };
+  });
+  wanted.forEach((f, i) => files.push({ path: DIR + '/' + f.path, data: fetched[i] }));
   (manifest.st || []).forEach((p, i) => files.push({ path: DIR + '/' + p, data: st[i] }));
   if (image) {
     files.push({ path: DIR + '/' + imageName, data: image });

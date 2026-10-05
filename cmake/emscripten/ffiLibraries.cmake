@@ -65,6 +65,25 @@ if(PHARO_WASM_HAS_FREETYPE)
         LINK pharo_freetype)
 endif()
 
+# cairo (CairoLibrary, libcairo.so.2), pharo_cairo of
+# cmake/emscripten/deps/cairo.cmake, with PHARO_WASM_HAS_CAIRO
+# (options.cmake).  The table lists the functions Athens binds, which
+# cairo.h, cairo-ft.h and cairo-svg.h declare, and cairo-pdf.h with the PDF
+# surface (WASM_CAIRO_PDF, the 'unless' section of cairo.txt).  CairoLibrary
+# looks for the file libcairo.so.2 before it loads the library
+# (FFIUnix64LibraryFinder): the staging writes it, empty.
+if(PHARO_WASM_HAS_CAIRO)
+    set(PHARO_WASM_CAIRO_HEADERS cairo.h cairo-ft.h cairo-svg.h)
+    if(PHARO_WASM_HAS_CAIRO_PDF)
+        list(APPEND PHARO_WASM_CAIRO_HEADERS cairo-pdf.h)
+    endif()
+    pharo_wasm_ffi_library(cairo
+        HEADERS ${PHARO_WASM_CAIRO_HEADERS}
+        SYMBOLS_FILE ${CMAKE_CURRENT_LIST_DIR}/ffi/symbols/cairo.txt
+        LINK pharo_cairo
+        FILES libcairo.so.2)
+endif()
+
 # The library of the FFI tests (ffiTestLibrary, libTestLibrary.so to the
 # image), compiled where its table is: it has no header that declares its
 # functions.  It is in the node VM, for lane 58 (tests/wasm/lanes/58-ffi.sh)

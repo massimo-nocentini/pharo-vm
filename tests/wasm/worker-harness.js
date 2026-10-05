@@ -26,7 +26,12 @@
 // an older version keeps it, a slot of before the versions counts as 1, the
 // next world boot prepares such an image once, a current slot boots the
 // world directly, and a preparation that leaves another version ends in an
-// error, not in a loop.  Prints every case and their count, and exits with
+// error, not in a loop.  The placeholders of the libraries of the FFI
+// (manifest.libraries) are empty files of /pharo, where CairoLibrary finds
+// libcairo.so.2; and an image of version 2 (OSWindow-Web without its
+// AthensCairoSurface extension: Athens needs the SurfacePlugin, which the
+// VM lacks) is prepared to version 3 on its world boot, and then draws
+// Roassal.  Prints every case and their count, and exits with
 // status 1 if any fails.  Lane 70 (tests/wasm/lanes/70-worker-harness.sh)
 // runs it.
 
@@ -1037,6 +1042,173 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       W.alive();
       assert(!W.prepared && !W.saved.length, 'not prepared again: ' + JSON.stringify(W.saved));
     } finally { await W.close(); current = S; }
+  });
+
+  // ---- the libraries of the FFI
+  const libraries = manifest.libraries || [];
+  if (!libraries.length) console.log('# skip 24: manifest.libraries is ' + JSON.stringify(manifest.libraries));
+  else await check(`24 the placeholders of the FFI, ${libraries.join(', ')}: empty files of /pharo; ` +
+                    'CairoLibrary finds libcairo.so.2 there', async () => {
+    const L = session({ persist: false });
+    try {
+      current = L;
+      await L.started();
+      L.post({ type: 'fs', id: 2401, op: 'listDir', path: '/pharo' });
+      const d = await L.reply('fs-result', 2401);
+      for (const [i, name] of libraries.entries()) {
+        assert(d.entries.includes(name), name + ' listed: ' + JSON.stringify(d.entries));
+        L.post({ type: 'fs', id: 2410 + i, op: 'readFile', path: '/pharo/' + name });
+        const f = await L.reply('fs-result', 2410 + i);
+        assert(f.type === 'fs-result' && f.data.length === 0, name + ' is empty: ' + JSON.stringify(f).slice(0, 200));
+      }
+      if (libraries.includes('libcairo.so.2')) {
+        L.send('CairoLibrary uniqueInstance libraryName\n');
+        await L.expectOut(val("'/pharo/libcairo.so.2'"));
+        await L.prompt();
+      }
+    } finally { await L.close(); current = S; }
+  });
+
+  // ---- version 2 of OSWindow-Web to 3: the AthensCairoSurface extension
+  const athens = versions && webPackage >= 3 && libraries.includes('libcairo.so.2') && stock;
+  if (!athens) console.log('# skip 25: ' + (!versions ? 'no versions (see 20-23)'
+                                           : webPackage < 3 ? 'manifest.webPackage is ' + webPackage
+                                           : !stock ? 'no stock image in ' + stockDir : 'no libcairo.so.2'));
+  // The methods of AthensCairoSurface in OSWindow-Web, one per line of
+  // <file>: the selector, after 'class ' on the class side; answers how many
+  const EXTENSION = file => '| out | out := OrderedCollection new. { AthensCairoSurface. AthensCairoSurface class } do: ' +
+    '[ :c | (c methods select: [ :m | m protocolName asString asLowercase = \'*oswindow-web\' ]) do: [ :m | ' +
+    'out add: (c isMeta ifTrue: [ \'class \' ] ifFalse: [ \'\' ]) , m selector ] ]. ' +
+    `'${file}' asFileReference writeStreamDo: [ :s | out sorted do: [ :l | s nextPutAll: l; nextPut: Character lf ] ]. ` +
+    'out size\n';
+  // Athens on its own, and a blue Roassal box, whose centre is the centre
+  // of its canvas: the red and yellow of an error morph cannot pass for it
+  const SURFACE = '[ AthensCairoSurface extent: 4 @ 4. #drawn ] on: Error do: [ :e | e messageText ]\n';
+  const ROASSAL = '| c f p | c := RSCanvas new. c add: (RSBox new size: 40; color: Color blue; yourself). ' +
+    'f := (c createMorph extent: 100 @ 100; yourself) imageForm. p := f colorAt: 50 @ 50. ' +
+    '{ p red. p green. p blue } collect: [ :x | (x * 255) rounded ]\n';
+  if (athens) await check('25 an image of version 2, whose Athens needs the SurfacePlugin, is prepared to 3 on the world boot; then Roassal draws', async () => {
+    memory.map.clear();
+    // the site's image in the Console: which methods the extension has
+    const C = session();
+    let extension = null;
+    try {
+      current = C;
+      await C.started();
+      C.send(EXTENSION('/pharo/extension.txt'));
+      await C.expectOut(/(^|> )[1-9][0-9]*\n/m);
+      await C.prompt();
+      C.post({ type: 'fs', id: 2501, op: 'readFile', path: '/pharo/extension.txt' });
+      extension = new TextDecoder().decode((await C.reply('fs-result', 2501)).data);
+      const methods = extension.split('\n').filter(l => l);
+      assert(methods.includes('class registerSurface:') && methods.includes('asForm'), 'the extension: ' + methods);
+      // their stock versions, from the stock image
+      const K = session({ persist: false, upload: stock });
+      const stockFiles = [];
+      try {
+        current = K;
+        await K.started();
+        for (const [i, method] of methods.entries()) {
+          const [cls, selector] = method.startsWith('class ')
+            ? ['AthensCairoSurface class', method.slice(6)] : ['AthensCairoSurface', method];
+          K.send(`| m | m := ${cls} compiledMethodAt: #${selector} ifAbsent: [ nil ]. m ifNotNil: [ ` +
+                 `'/pharo/stock-${i}.st' asFileReference writeStreamDo: [ :s | s nextPutAll: m sourceCode ]. ` +
+                 `'/pharo/stock-${i}.protocol' asFileReference writeStreamDo: [ :s | s nextPutAll: m protocolName asString ] ]. ` +
+                 `m isNil\n`);
+          await K.expectOut(/(^|> )(true|false)\n/m);
+          const absent = /(^|> )true\n/m.test(K.since());
+          await K.prompt();
+          const file = { cls, selector, absent, source: null, protocol: null };
+          if (!absent) {
+            for (const [key, ext] of [['source', 'st'], ['protocol', 'protocol']]) {
+              K.post({ type: 'fs', id: 2510 + 2 * i + (key === 'source' ? 0 : 1), op: 'readFile', path: `/pharo/stock-${i}.${ext}` });
+              file[key] = (await K.reply('fs-result', 2510 + 2 * i + (key === 'source' ? 0 : 1))).data;
+            }
+          }
+          stockFiles.push(file);
+        }
+      } finally { await K.close(); current = C; }
+      assert(stockFiles.some(f => !f.absent), 'the stock image has none of ' + methods);
+      console.log(`#   the extension: ${methods.join(', ')}; the stock image lacks ` +
+                  (stockFiles.filter(f => f.absent).map(f => f.selector).join(', ') || 'none of them'));
+      // the image made what a site of version 2 saved: the stock methods
+      // back in their package, and version 2
+      for (const [i, f] of stockFiles.entries()) {
+        if (f.absent) {
+          C.send(`${f.cls} removeSelector: #${f.selector}. #removed\n`);
+          await C.expectOut(val('#removed'));
+        } else {
+          for (const [key, ext] of [['source', 'st'], ['protocol', 'protocol']]) {
+            C.post({ type: 'fs', id: 2550 + 2 * i + (key === 'source' ? 0 : 1), op: 'writeFile',
+                     path: `/pharo/stock-${i}.${ext}`, data: f[key] });
+            await C.reply('fs-result', 2550 + 2 * i + (key === 'source' ? 0 : 1));
+          }
+          C.send(`${f.cls} compile: '/pharo/stock-${i}.st' asFileReference contents ` +
+                 `classified: '/pharo/stock-${i}.protocol' asFileReference contents. #restored\n`);
+          await C.expectOut(val('#restored'));
+        }
+        await C.prompt();
+      }
+      C.send("OSWebDriver class compile: 'packageVersion ^ 2'; compile: 'packageMarker ^ #OSWindowWebPackage2'. " +
+             'OSWebDriver packageVersion\n');
+      await C.expectOut(val('2'));
+      await C.prompt();
+      C.send(EXTENSION('/pharo/extension-2.txt'));
+      await C.expectOut(val('0'));
+      await C.prompt();
+      C.send(SURFACE);
+      await C.prompt();
+      assert(/(^|> )'Unable to register surface with SurfacePlugin'\n/m.test(C.since()),
+             'Athens of version 2: ' + JSON.stringify(C.since() + C.errSince()).slice(0, 400));
+      C.post({ type: 'save' });
+      await waitFor('saved', () => C.saved.length, 60000);
+      await C.prompt(60000);
+      const m = C.saved[0];
+      assert(!m.error && m.webPackage === 2 && m.prepared === false, 'saved ' + JSON.stringify(m));
+      const meta = memory.map.get('meta');
+      assert(meta.webPackage === 2 && meta.prepared === false, 'meta ' + JSON.stringify(meta));
+    } finally { await C.close(); current = S; }
+    // the world boot prepares it
+    const t = now();
+    const P = session(world, { display: true });
+    try {
+      current = P;
+      await waitFor('prepared', () => P.prepared || P.crash || P.exit !== null, 300000);
+      P.alive();
+      console.log(`#   prepared from version 2 in ${((now() - t) / 1000).toFixed(1)} s`);
+      assert(P.ready.source === 'saved' && P.ready.preparing === true && P.ready.prepared === false &&
+             P.ready.webPackage === 2, 'ready ' + JSON.stringify(P.ready));
+      assert(!P.prepared.error && P.prepared.saved === true && P.prepared.webPackage === webPackage,
+             'prepared ' + JSON.stringify(P.prepared));
+      assert(P.saved.length === 1 && P.saved[0].prepared === true && P.saved[0].webPackage === webPackage,
+             'saved ' + JSON.stringify(P.saved));
+      const meta = memory.map.get('meta');
+      assert(meta.prepared === true && meta.webPackage === webPackage, 'meta ' + JSON.stringify(meta));
+    } finally { await P.close(); current = S; }
+    // the extension is back, and Athens and Roassal draw
+    const R = session();
+    try {
+      current = R;
+      await R.started();
+      assert(R.ready.source === 'saved' && R.ready.webPackage === webPackage && R.ready.prepared === true,
+             'ready ' + JSON.stringify(R.ready));
+      R.send('OSWebDriver packageVersion\n');
+      await R.expectOut(val(String(webPackage)));
+      await R.prompt();
+      R.send(EXTENSION('/pharo/extension-3.txt'));
+      await R.expectOut(/(^|> )[0-9]+\n/m);
+      await R.prompt();
+      R.post({ type: 'fs', id: 2590, op: 'readFile', path: '/pharo/extension-3.txt' });
+      const again = new TextDecoder().decode((await R.reply('fs-result', 2590)).data);
+      assert(again === extension, 'the extension after the preparation: ' + JSON.stringify(again));
+      R.send(SURFACE);
+      await R.prompt();
+      assert(val('#drawn').test(R.since()), 'Athens: ' + JSON.stringify(R.since() + R.errSince()).slice(0, 400));
+      R.send(ROASSAL);
+      await R.prompt(60000);
+      assert(val('#(0 0 255)').test(R.since()),
+             'the centre of the Roassal canvas: ' + JSON.stringify(R.since() + R.errSince()).slice(0, 400));
+    } finally { await R.close(); current = S; }
   });
 
   await S.close();
