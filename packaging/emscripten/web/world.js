@@ -44,10 +44,13 @@
 //   the world goes on, the notice saying how far it got, and the image
 //   replaces the one saved in this browser once it has started.
 // - An image that cannot open the world (it lacks OSWindow-Web: a stock
-//   image, opened here or in the Console) is prepared for it: the worker
-//   (init.prepare) files in st/web-bootstrap.st and saves it, as the
+//   image, opened here or in the Console; or it has an older version of
+//   it, saved by an earlier build of the site) is prepared for it: the
+//   worker (init.prepare) files in st/web-bootstrap.st and saves it, as the
 //   Console's "Prepare for the world" does, and says "prepared"; the page
-//   then boots the world from the image saved in this browser.
+//   then boots the world from the image saved in this browser.  The notice
+//   names the fonts that the preparation set up (ready.fonts, from the
+//   manifest: FreeType, or bitmap fonts).
 // - The display's title, cursor (RGBA, as a CSS cursor), clipboard
 //   (navigator.clipboard.writeText) and focus.  When the browser refuses to
 //   write the clipboard, the system clipboard still has older text, which
@@ -107,6 +110,7 @@
   let kept = false;                     // the worker kept the upload it booted (or failed to)
   let source = null, persisted = false; // where the image came from, and whether one is saved (ready)
   let preparing = false;                // the worker prepares the image for the world (ready.preparing)
+  let fonts = null;                     // the fonts that a preparation sets up (ready.fonts)
   let opening = false;                  // Open unpacks files
   const reqs = new Map();
   let reqId = 0;
@@ -370,7 +374,8 @@
     preparing = false;
     if (!m.error) {
       upload = null;
-      restarted = 'The image is prepared for the world (OSWindow-Web and bitmap fonts), and saved in this browser.';
+      restarted = 'The image is prepared for the world (OSWindow-Web and ' +
+        (fonts === 'freetype' ? 'FreeType' : 'bitmap') + ' fonts), and saved in this browser.';
       spawn();
       return;
     }
@@ -388,13 +393,15 @@
     ready = true;
     source = m.source;
     persisted = m.persisted;
+    fonts = m.fonts;
     if (!m.world) {
       fatal('This build has no world image: build it with WASM_WORLD=ON and a host Pharo (WASM_HOST_PHARO).',
             'Open the Console', 'index.html');
       return;
     }
     if (!m.prepared && !m.preparing) {
-      fatal('This image cannot open the Pharo world: it lacks OSWindow-Web.', 'Open the Console', 'index.html');
+      fatal('This image cannot open the Pharo world: it lacks OSWindow-Web, or has an older version of it.',
+            'Open the Console', 'index.html');
       return;
     }
     const notes = [restarted];

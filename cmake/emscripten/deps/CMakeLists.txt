@@ -7,6 +7,8 @@
 # in the top directory: the targets of this one are global).
 #
 #     libffi.cmake    pharo_libffi, upstream libffi (with the FFI)
+#     freetype.cmake  pharo_freetype, FreeType for the image's fonts
+#                     (PHARO_WASM_HAS_FREETYPE)
 #
 # The libraries are compiled with flags of their own, not with those of the
 # VM: a directory starts with what its parent set, and CMakeLists.txt and
@@ -41,4 +43,7 @@ include(${CMAKE_CURRENT_LIST_DIR}/fetch.cmake)
 
 if(PHARO_WASM_HAS_FFI)
     include(${CMAKE_CURRENT_LIST_DIR}/libffi.cmake)
+endif()
+if(PHARO_WASM_HAS_FREETYPE)
+    include(${CMAKE_CURRENT_LIST_DIR}/freetype.cmake)
 endif()

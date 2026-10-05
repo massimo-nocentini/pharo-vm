@@ -1,0 +1,33 @@
+# The functions of FreeType in the FFI registry of the Emscripten VM, the
+# library freetype (FT2FFILibrary, libfreetype.so.6, of
+# cmake/emscripten/ffiLibraries.cmake).  cmake/emscripten/ffiRegistry.cmake
+# describes the format: a name per line, '#' starting a comment, and the
+# '# unavailable' sections, whose names are left out.  Every other name must
+# be declared by the headers of ffiLibraries.cmake, or the build stops.
+#
+# What Pharo 12 (build 1599) and Pharo 15 (build 41) bind to it, test
+# packages included, as packaging/emscripten/tools/ffi-symbols.st lists them
+# (the library freetype in its output), with the host VM:
+#
+#     pharo --headless <image> --no-default-preferences st ffi-symbols.st
+#
+# Both images bind the same 17.  C code linked with pharo_freetype calls
+# FreeType directly, and needs no name here.
+#
+FT_Done_Face
+FT_Get_Char_Index
+FT_Get_Kerning
+FT_Get_Postscript_Name
+FT_Init_FreeType
+FT_Library_Version
+FT_Load_Char
+FT_Load_Glyph
+FT_New_Face
+FT_New_Memory_Face
+FT_Outline_Embolden
+FT_Outline_Get_Bitmap
+FT_Outline_Transform
+FT_Outline_Translate
+FT_Select_Charmap
+FT_Set_Pixel_Sizes
+FT_Set_Transform

@@ -17,13 +17,15 @@
 // the page: it builds the input records with keymap.js from keyboard events
 // of a US layout, as world.js does, and hands them and the resizes and
 // pastes to PharoDisplay.onMessage, between slices, as vm-worker.js does.
-// It runs the world through its menus, a Playground, print it, the
-// clipboard, a resize, a burst of events, Stop during a busy UI process and
-// a save request, prints every case and a table of timings (first frame,
-// click, keystroke, resize, Stop and save, each until the frame or the
-// probe shows it), and exits with status 1 if any case fails.  What the
-// emscripten runtime said (onDiag, where the display's own exceptions go)
-// must hold no engine error, and goes to stderr.  Lane 80
+// It runs the world through its fonts (those of manifest.fonts: FreeType,
+// with glyphs for a lambda and an arrow, or bitmap fonts), its menus, a
+// Playground, print it, the clipboard, a resize, a burst of events, Stop
+// during a busy UI process and a save request, prints every case and a
+// table of timings (first frame, click, keystroke, resize, Stop and save,
+// each until the frame or the probe shows it), and exits with status 1 if
+// any case fails.  What the emscripten runtime said (onDiag, where the
+// display's own exceptions go) must hold no engine error, and goes to
+// stderr.  Lane 80
 // (tests/wasm/lanes/80-world-harness.sh) runs it.
 
 import fs from 'node:fs';
@@ -376,7 +378,19 @@ const median = a => { const s = a.slice().sort((x, y) => x - y); return s[Math.f
     assert(S.msgs.some(m => m.kind === 'cursor' && m.rgba.byteLength === m.width * m.height * 4), 'a cursor, as RGBA');
   });
 
-  await check('4 a click on Browse in the menubar opens its menu, which the next frames paint', async () => {
+  await check(`4 the fonts of the world: ${manifest.fonts === 'freetype' ? 'FreeType, with glyphs for \u03bb\u2192' : 'bitmap fonts'} (manifest.fonts ${manifest.fonts})`, async () => {
+    // the fonts that the preparation set up, which the probe says draw
+    const freetype = manifest.fonts === 'freetype';
+    assert(p.fonts, 'the probe says no fonts: ' + JSON.stringify(p).slice(0, 300));
+    for (const which of ['default', 'code', 'menu', 'windowTitle', 'menubar']) {
+      const cls = p.fonts[which];
+      assert(freetype ? cls === 'FreeTypeFont' : cls && cls !== 'FreeTypeFont', `the ${which} font is drawn by ${cls}`);
+    }
+    if (freetype) assert(p.fonts.family === 'Source Sans Pro', 'the family of the default font: ' + p.fonts.family);
+    assert(p.glyphs === freetype, `glyphs for \u03bb\u2192: ${p.glyphs}`);
+  });
+
+  await check('5 a click on Browse in the menubar opens its menu, which the next frames paint', async () => {
     const browse = p.menubar.find(i => i.label === 'Browse');
     const t = now();
     await click(...center(browse.bounds));
@@ -391,7 +405,7 @@ const median = a => { const s = a.slice().sort((x, y) => x - y); return s[Math.f
     timing('click -> frame of the menu', painted.t - t);
   });
 
-  await check('5 its Playground item opens a Playground; typing 3 + 4, then Ctrl+P prints 7', async () => {
+  await check('6 its Playground item opens a Playground; typing 3 + 4, then Ctrl+P prints 7', async () => {
     await click(...center(menuItem(p, 'Playground').bounds));
     p = await probe('a Playground', p => p.playground && p.menus.length === 0, 30000);
     await click(...center(p.playground.bounds));
@@ -405,7 +419,7 @@ const median = a => { const s = a.slice().sort((x, y) => x - y); return s[Math.f
     assert(p.playground.text === '3 + 4', 'the Playground keeps its text: ' + JSON.stringify(p.playground.text));
   });
 
-  await check('6 the clipboard: Ctrl+C reaches the page, a paste of the page reaches Ctrl+V', async () => {
+  await check('7 the clipboard: Ctrl+C reaches the page, a paste of the page reaches Ctrl+V', async () => {
     await click(...center(p.playground.bounds));          // closes the popover
     await probe('no popover', p => p.printed.length === 0);
     const before = S.msgs.length;
@@ -433,7 +447,7 @@ const median = a => { const s = a.slice().sort((x, y) => x - y); return s[Math.f
     assert(!p.debugger, 'no debugger');
   });
 
-  await check('7 a resize to 800x600: a frame of 800x600, and the World follows', async () => {
+  await check('8 a resize to 800x600: a frame of 800x600, and the World follows', async () => {
     const t = now();
     page('resize', { width: 800, height: 600 });
     const f = await waitFor('a frame of 800x600', () => S.frames.find(f => f.t > t && f.width === 800 && f.height === 600));
@@ -444,7 +458,7 @@ const median = a => { const s = a.slice().sort((x, y) => x - y); return s[Math.f
     p = await probe('a World of 1024x768 again', p => p.world[0] === WIDTH && p.world[1] === HEIGHT);
   });
 
-  await check('8 a burst of 400 mouse moves: the ring overflows, the moves wait and merge, the last arrives', async () => {
+  await check('9 a burst of 400 mouse moves: the ring overflows, the moves wait and merge, the last arrives', async () => {
     const before = S.display.stats.refused;
     for (let i = 0; i < 400; i++) move(100 + i, 200 + (i % 50));
     assert(S.display.stats.refused > before, 'the ring refused some');
@@ -453,7 +467,7 @@ const median = a => { const s = a.slice().sort((x, y) => x - y); return s[Math.f
     assert(S.display.backlog === 0, 'nothing left waiting');
   });
 
-  await check('9 typing 56 more keys, and Ctrl+P prints what they say', async () => {
+  await check('10 typing 56 more keys, and Ctrl+P prints what they say', async () => {
     await click(...center(p.playground.bounds));          // closes the popover
     p = await probe('no popover', p => p.printed.length === 0);
     ctrl('a');
@@ -464,7 +478,7 @@ const median = a => { const s = a.slice().sort((x, y) => x - y); return s[Math.f
     p = await probe('a number printed', p => p.printed.some(s => /^\d+$/.test(s)));
   });
 
-  await check('10 Stop (vm_interrupt) during a busy loop of the UI process opens a debugger', async () => {
+  await check('11 Stop (vm_interrupt) during a busy loop of the UI process opens a debugger', async () => {
     // pasted: Rubric pairs the brackets typed
     const loop = '[ true ] whileTrue';
     await click(...center(p.playground.bounds));
@@ -486,7 +500,7 @@ const median = a => { const s = a.slice().sort((x, y) => x - y); return s[Math.f
     await waitFor('the VM idle again', () => S.states.length && S.states[S.states.length - 1].st !== BUSY, 10000);
   });
 
-  await check('11 a save request snapshots the image: HOST_IMAGE_SAVED, and the world goes on', async () => {
+  await check('12 a save request snapshots the image: HOST_IMAGE_SAVED, and the world goes on', async () => {
     const t = now(), before = S.host.length;
     record(SAVE);
     const saved = await waitFor('HOST_IMAGE_SAVED', () => S.host.slice(before).find(h => h.kind === HOST_IMAGE_SAVED), 120000);
@@ -503,13 +517,13 @@ const median = a => { const s = a.slice().sort((x, y) => x - y); return s[Math.f
     p = await probe('the world menu closed by Escape', p => p.menus.length === 0);
   });
 
-  await check('12 the keystroke-to-present median is under 100 ms', async () => {
+  await check('13 the keystroke-to-present median is under 100 ms', async () => {
     const k = timings['keystroke -> present'] || [];
     assert(k.length >= 60, k.length + ' keystrokes');
     assert(median(k) < 100, 'median ' + median(k).toFixed(1) + ' ms');
   });
 
-  await check('13 nothing on the image\'s stderr but the stack of the process Stop interrupted', async () => {
+  await check('14 nothing on the image\'s stderr but the stack of the process Stop interrupted', async () => {
     const before = S.err.slice(0, S.errAtStop), stop = S.err.slice(S.errAtStop, S.errAfterStop);
     const after = S.err.slice(S.errAfterStop);
     assert(S.errAtStop !== undefined && !before, 'before Stop: ' + JSON.stringify(before.slice(0, 800)));
@@ -518,7 +532,7 @@ const median = a => { const s = a.slice().sort((x, y) => x - y); return s[Math.f
     assert(!S.exit && !S.crash, 'the VM runs');
   });
 
-  await check('14 the runtime reported no engine error, nor an exception of the display', async () => {
+  await check('15 the runtime reported no engine error, nor an exception of the display', async () => {
     const bad = S.diag.split('\n').filter(line => ENGINE_ERRORS.test(line));
     assert(!bad.length, bad.slice(0, 5).join(' | '));
   });

@@ -20,6 +20,14 @@
 	               of those falls on the popover of print it)
 	printed        the texts of the popovers of print it (Ctrl+P)
 	debugger       whether a debugger window is open
+	fonts          the fonts that draw: the class of the font that draws (its realFont)
+	               for the standard fonts default, code, menu and windowTitle, and for
+	               the first item of the menubar (menubar, or null), and the family of
+	               the default font (family)
+	glyphs         whether the font that draws the default font has glyphs for a lambda
+	               and a right arrow (U+03BB and U+2192), which the embedded TrueType
+	               fonts of the image have and its bitmap fonts do not: FreeType answers
+	               its glyph indices (FT_Get_Char_Index), a StrikeFont its table
 	error          what went wrong, when something did
 
  It runs at userBackgroundPriority, below the UI process: a user interrupt stops the
@@ -33,7 +41,7 @@ text := [ :morph | morph contents asString ].
 Smalltalk globals
 	at: #WorldProbe
 	put: ([
-		| seq rect point labelled |
+		| seq rect point labelled drawing glyphs |
 		seq := 0.
 		rect := [ :r | { r left. r top. r right. r bottom } collect: [ :n | n rounded ] ].
 		point := [ :p | { p x rounded. p y rounded } ].
@@ -43,6 +51,12 @@ Smalltalk globals
 					at: 'label' put: (text value: item);
 					at: 'bounds' put: (rect value: item boundsInWorld);
 					yourself ]) asArray ].
+		drawing := [ :font |
+			font ifNotNil: [
+				((font respondsTo: #realFont)
+					 ifTrue: [ font realFont ]
+					 ifFalse: [ font ]) ] ].
+		glyphs := String with: (Character value: 16r3BB) with: (Character value: 16r2192).
 		[
 		| state |
 		seq := seq + 1.
@@ -96,7 +110,26 @@ Smalltalk globals
 				 collect: [ :morph | morph text asString ]).
 		state at: 'debugger' put: (World systemWindows anySatisfy: [ :window |
 				 (window model respondsTo: #presenter) and: [
-					 window model presenter isKindOf: StDebugger ] ]) ]
+					 window model presenter isKindOf: StDebugger ] ]).
+		state at: 'fonts' put: (Dictionary new
+				 at: 'default' put: (drawing value: StandardFonts defaultFont) class name;
+				 at: 'code' put: (drawing value: StandardFonts codeFont) class name;
+				 at: 'menu' put: (drawing value: StandardFonts menuFont) class name;
+				 at: 'windowTitle' put: (drawing value: StandardFonts windowTitleFont) class name;
+				 at: 'menubar' put: (menubar ifNotNil: [
+						  (menubar allMorphs
+							   detect: [ :morph | morph isKindOf: MenuItemMorph ]
+							   ifNone: [ nil ]) ifNotNil: [ :item | (drawing value: item font) class name ] ]);
+				 at: 'family' put: StandardFonts defaultFont familyName;
+				 yourself).
+		state at: 'glyphs' put: ((drawing value: StandardFonts defaultFont) in: [ :font |
+				 (font isKindOf: FreeTypeFont)
+					 ifTrue: [
+						 font face isValid and: [
+							 glyphs allSatisfy: [ :character | (font face ffiGetCharIndex: character asInteger) ~= 0 ] ] ]
+					 ifFalse: [
+						 (font respondsTo: #hasGlyphOf:) and: [
+							 glyphs allSatisfy: [ :character | font hasGlyphOf: character ] ] ] ]) ]
 			on: Error
 			do: [ :error | state at: 'error' put: error description ].
 		[

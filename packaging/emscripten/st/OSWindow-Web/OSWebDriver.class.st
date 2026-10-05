@@ -5,6 +5,8 @@ I am suitable only when the page provides a display (primitiveWebDisplayIsAvaila
 
 My class-side #startUp: is registered with the SessionManager. The stock image saves OSSDL2Driver as the driver class, so I install myself before the world opens whenever the page provides a display.
 
+My class side also sets an image up for the web VMs (#setUpImage), when this package is loaded at build time and when the page files it in, and numbers this package (#packageVersion): the page sets up again, once, an image saved with an older version.
+
 The page queues its input as records of 8 integers:
 	type, timestamp, x, y, button | keySym | width, modifiers | (buttons << 8), scanCode | codePoint | dx | height, repeat | dy
 Types: 1 mouse move, 2 button press, 3 button release, 4 wheel, 5 key down, 6 key up, 7 text input (one code point), 8 resize, 9 focus (button field 1 in, 0 out), 10 close, 11 save request.
@@ -31,6 +33,20 @@ Class {
 	#package : 'OSWindow-Web'
 }
 
+{ #category : 'image setup' }
+OSWebDriver class >> hasFreeType [
+	"Whether the VM finds FreeType, by the name the image gives it on Linux (FT2FFILibrary>>#unixLibraryName), which the web VMs register their own FreeType under. A web VM built without FreeType or without the FFI, or with FreeType hidden (PHARO_WASM_FFI_HIDE=freetype), fails the lookup"
+
+	^ [
+	  (ExternalAddress
+		   loadSymbol: 'FT_Init_FreeType'
+		   module: 'libfreetype.so.6')
+		  ifNil: [ false ]
+		  ifNotNil: [ :address | address isNull not ] ]
+		  on: Error
+		  do: [ :error | error return: false ]
+]
+
 { #category : 'class initialization' }
 OSWebDriver class >> initialize [
 	"Take part in the session startup (see #startUp:), before the world opens: Pharo 12 opens it at the end of the startup list (ErrorHandlerSessionHandler), but Pharo 15 at the default priority of the System category (UIManager class>>#startUp:), so take a priority before it, that of FileLocator. Loading the package again does not register me twice: a registration replaces the one of the same name. (Pharo 15 refuses to unregister a class that is not registered)"
@@ -50,12 +66,75 @@ OSWebDriver class >> isSupported [
 	^ self primIsAvailable
 ]
 
+{ #category : 'versions' }
+OSWebDriver class >> packageMarker [
+	"A symbol of its own for each #packageVersion, which the image keeps as a literal of this method: the worker of the page finds the version of an image in its bytes without booting it. It is the name of the package and the version"
+
+	^ #OSWindowWebPackage2
+]
+
+{ #category : 'versions' }
+OSWebDriver class >> packageVersion [
+	"The version of this package: web-bootstrap.st files the package in again over an older one, and the page sets an image of an older version up again (see #setUpImage). Version 1 had neither this method nor #setUpImage, and bitmap fonts; 2 keeps the FreeType fonts of the stock image when the VM has FreeType. Change #packageMarker with it. packaging/emscripten/tools/stage.mjs reads both from this file, for the manifest of the page"
+
+	^ 2
+]
+
 { #category : 'primitives' }
 OSWebDriver class >> primIsAvailable [
 	"Answer whether the page provides a display. Only the world page does"
 
 	<primitive: #primitiveWebDisplayIsAvailable module: #WebDisplayPlugin>
 	^ false
+]
+
+{ #category : 'image setup' }
+OSWebDriver class >> setUpBitmapFonts [
+	"The bitmap fonts of the image, for a VM without FreeType"
+
+	FreeTypeSystemSettings loadFt2Library: false.
+	StandardFonts setSmallBitmapFonts
+]
+
+{ #category : 'image setup' }
+OSWebDriver class >> setUpFonts [
+	"FreeType fonts when the VM that runs the image has FreeType, else bitmap fonts. prepare-web-image.st runs me at build time on a native VM, whose FreeType does not matter: the build tells in PHARO_WEB_FONTS, freetype or bitmap, which fonts its web VM can draw (cmake/emscripten/webimage.cmake). Without that variable, as in the page, ask the VM (#hasFreeType)"
+
+	| fonts |
+	fonts := OSEnvironment current at: 'PHARO_WEB_FONTS' ifAbsent: [ '' ].
+	fonts ifEmpty: [
+		fonts := self hasFreeType
+			         ifTrue: [ 'freetype' ]
+			         ifFalse: [ 'bitmap' ] ].
+	fonts = 'freetype' ifTrue: [ ^ self setUpFreeTypeFonts ].
+	fonts = 'bitmap' ifTrue: [ ^ self setUpBitmapFonts ].
+	self error: 'PHARO_WEB_FONTS is ' , fonts printString , ', neither freetype nor bitmap'
+]
+
+{ #category : 'image setup' }
+OSWebDriver class >> setUpFreeTypeFonts [
+	"The fonts of the stock Pharo 12 and Pharo 15 images, which they embed, drawn by FreeType. An image of version 1 of this package has bitmap fonts instead, which turning FreeType on again does not change: so set each standard font, as the stock images have it"
+
+	| sans code |
+	FreeTypeSystemSettings loadFt2Library: true.
+	sans := 'Source Sans Pro'.
+	code := 'Source Code Pro'.
+	StandardFonts
+		defaultFont: (LogicalFont familyName: sans pointSize: 10);
+		codeFont: (LogicalFont familyName: code pointSize: 10);
+		listFont: (LogicalFont familyName: sans pointSize: 10);
+		menuFont: (LogicalFont familyName: sans pointSize: 10);
+		buttonFont: (LogicalFont familyName: sans pointSize: 10);
+		windowTitleFont: (LogicalFont familyName: sans pointSize: 11);
+		balloonFont: (LogicalFont familyName: sans pointSize: 9);
+		haloFont: (LogicalFont familyName: sans pointSize: 9)
+]
+
+{ #category : 'image setup' }
+OSWebDriver class >> setUpImage [
+	"Set the image up for the web VMs: prepare-web-image.st calls me at build time, and web-bootstrap.st in the page. Both call nothing else of the kind, so that a new version of this package changes only me"
+
+	self setUpFonts
 ]
 
 { #category : 'system startup' }

@@ -15,14 +15,18 @@
 // The probe writes /pharo/probe.json, which the spec reads through the
 // page's PharoWorld.readFile, so it knows where the menus and windows are,
 // what the Playground says and whether a debugger opened; the pixels of the
-// canvas say that the world was painted.  The spec drives the page with real
-// pointer and keyboard events, and prints the first-frame and
-// keystroke-to-canvas latencies.  An init script keeps the input records
-// that world.js posts to the worker, for the checks of the wheel, the focus
-// and the buttons, and the states of the status pill, the overlay and the
-// notice.  Exits with status 1 if any check fails, the page logs an error,
-// or a worker warns of an engine error or an exception of the display (what
-// the emscripten runtime says goes to the console as warnings).
+// canvas say that the world was painted, and the probe which fonts draw it:
+// those of manifest.fonts, FreeType (with glyphs for a lambda and an arrow)
+// or bitmap fonts, in the world image and in a stock image prepared by the
+// page.  The spec drives the page with real pointer and keyboard events,
+// and prints the cold first-frame (a first visit: nothing cached, an empty
+// IndexedDB) and keystroke-to-canvas latencies.  An init script keeps the
+// input records that world.js posts to the worker, for the checks of the
+// wheel, the focus and the buttons, and the states of the status pill, the
+// overlay and the notice.  Exits with status 1 if any check fails, the page
+// logs an error, or a worker warns of an engine error or an exception of the
+// display (what the emscripten runtime says goes to the console as
+// warnings).
 //
 // Open is checked with the stock image of the build (WASM_DIR/image/stock),
 // zipped by tests/wasm/lib/zip.mjs in a directory as files.pharo.org does,
@@ -78,6 +82,22 @@ function zipStock(webDir) {
   fs.writeFileSync(stockZip.path, imageZip(stock, { base: 'Pharo12.0-SNAPSHOT-64bit-world', folder: 'world', sourcesTail: SOURCES_TAIL }));
   return stockZip;
 }
+
+// What the probe says of the fonts that draw the world, against those of
+// the build (manifest.fonts): '' when they are those, else what differs
+function wrongFonts(p, fonts) {
+  const freetype = fonts === 'freetype', wrong = [];
+  if (!p.fonts) return 'the probe says no fonts';
+  for (const which of ['default', 'code', 'menu', 'windowTitle', 'menubar']) {
+    const cls = p.fonts[which];
+    if (freetype ? cls !== 'FreeTypeFont' : !cls || cls === 'FreeTypeFont') wrong.push(which + ' ' + cls);
+  }
+  if (freetype && p.fonts.family !== 'Source Sans Pro') wrong.push('family ' + p.fonts.family);
+  if (p.glyphs !== freetype) wrong.push('glyphs for \u03bb\u2192 ' + p.glyphs);
+  return wrong.length ? `not the ${fonts} fonts of the build: ${wrong.join(', ')}` : '';
+}
+// The fonts that a preparation sets up, as world.js names them
+const fontsNamed = fonts => fonts === 'freetype' ? 'FreeType' : 'bitmap';
 
 const median = a => { const s = a.slice().sort((x, y) => x - y); return s.length ? s[Math.floor((s.length - 1) / 2)] : NaN; };
 const center = b => [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
@@ -257,7 +277,8 @@ await run(async t => {
   await check('the world paints within 60 s', async () => {
     await page.waitForFunction(() => window.PharoWorld.stats.frames > 0, null, { timeout: 60000 });
     const s = await stats();
-    console.log(`  # first frame ${s.firstFrameAt.toFixed(0)} ms after the navigation (${Date.now() - t0} ms here)`);
+    console.log(`  # cold first frame ${s.firstFrameAt.toFixed(0)} ms after the navigation (${Date.now() - t0} ms here; ` +
+                `nothing cached, an empty IndexedDB, ${manifest.fonts} fonts)`);
     await waitState('running');
     assert(await page.isHidden('#overlay'), 'the loading card is gone');
     assert(/^Pharo - /.test(await page.title()), 'the title of the image: ' + await page.title());
@@ -279,6 +300,13 @@ await run(async t => {
     assert(p.driver === 'OSWebDriver', 'driver ' + p.driver);
     const bitmap = await page.$eval('#world', c => [c.width, c.height]);
     assert(bitmap[0] === p.world[0] && bitmap[1] === p.world[1], 'the canvas bitmap ' + bitmap);
+  });
+
+  await check(`the world draws its text with the fonts of the build: ${manifest.fonts === 'freetype' ? 'FreeType, which has glyphs for \u03bb\u2192' : 'bitmap fonts'}`, async () => {
+    assert(manifest.fonts === 'freetype' || manifest.fonts === 'bitmap', 'manifest.fonts ' + manifest.fonts);
+    p = await probe('the fonts of the world', p => p.fonts);
+    const wrong = wrongFonts(p, manifest.fonts);
+    assert(!wrong, wrong);
   });
 
   await check('a right click on the desktop opens the world menu; Escape closes it', async () => {
@@ -575,11 +603,13 @@ await run(async t => {
     assert(l.notices.some(s => /^Unpacking stock12\.zip… [1-9]\d?%$/.test(s)), 'the progress ' + JSON.stringify(l.notices.slice(0, 4)));
     assert(l.states.includes('preparing') && l.overlays.some(s => /^Preparing the image for the world/.test(s)),
            'Preparing shown: ' + JSON.stringify(l.states) + ' ' + JSON.stringify(l.overlays));
-    assert(/^The image is prepared for the world \(OSWindow-Web and bitmap fonts\), and saved in this browser\./.test(
-      await page.textContent('#notice-text')), 'the notice ' + await page.textContent('#notice-text'));
+    const prepared = `The image is prepared for the world (OSWindow-Web and ${fontsNamed(manifest.fonts)} fonts), and saved in this browser.`;
+    assert((await page.textContent('#notice-text')).startsWith(prepared), 'the notice ' + await page.textContent('#notice-text'));
     const served = t.requests.slice(n);
     assert(!served.includes(imageUrl) && !served.includes(sourcesUrl), 'fetched ' + served.join(' '));
     p = await probe('the world of the prepared image', p => p.driver === 'OSWebDriver' && p.menubar.length);
+    const wrong = wrongFonts(p, manifest.fonts);
+    assert(!wrong, 'the page prepared ' + wrong);
     const size = await page.evaluate(f => window.PharoWorld.readFile(f).then(d => d.length), '/pharo/' + siteSources.path);
     assert(size === z.ownSize, 'its own .sources: ' + size);
   });

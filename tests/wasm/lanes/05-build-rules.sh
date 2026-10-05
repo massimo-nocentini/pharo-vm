@@ -14,8 +14,8 @@
 #   - a .st file of smalltalksrc that comes, goes or changes refreshes the
 #     VMMaker image and generates the sources again, and nothing else does;
 #   - an edit of cmake/Emscripten.cache.cmake configures the wasm build again,
-#     and so does a change of WASM_FFI or WASM_DEPS_DIR, which config.make
-#     records (a WASM_DEPS_DIR that does not exist is refused);
+#     and so does a change of WASM_FFI, WASM_FREETYPE or WASM_DEPS_DIR, which
+#     config.make records (a WASM_DEPS_DIR that does not exist is refused);
 #   - wasm-check-browser fails without Playwright, and runs world.spec.mjs
 #     only for a build with the image of the world, and ffi.spec.mjs only for
 #     one with the FFI;
@@ -24,6 +24,9 @@
 #     else does; the preparation runs the command line that both Pharo 12
 #     and Pharo 15 take, and leaves no image of an earlier build, nor the
 #     .sources of another stock image, next to the world image;
+#   - the fonts of the world image follow PHARO_WASM_HAS_FREETYPE, freetype
+#     or bitmap, in PHARO_WEB_FONTS: other fonts prepare the image again, and
+#     a configuration with the same ones does not;
 #   - pharo_wasm_dep_fetch (cmake/emscripten/deps/fetch.cmake) takes an
 #     archive from WASM_DEPS_DIR, or downloads it once (from a file:// URL
 #     here), unpacks it once, records its notice, and stops at an archive of
@@ -123,7 +126,8 @@ EOF
 # (the host Pharo of webimage.cmake: --headless IMAGE --no-default-preferences
 # st --save --quit prepare-web-image.st, the command line of both Pharo 12 and
 # Pharo 15, with the directories in PHARO_WEB_ST_DIR and PHARO_WEB_IMAGE_DIR,
-# where the stock .sources must be already; it logs anything else)
+# where the stock .sources must be already, and the fonts in PHARO_WEB_FONTS,
+# which go into the image; it logs anything else)
 cat >"$T/bin/host-pharo" <<'EOF'
 #!/bin/sh
 case $#:$1:$2:$3:$4:$5:$6:$7 in
@@ -136,13 +140,19 @@ if test -z "$PHARO_WEB_ST_DIR" || test -z "$PHARO_WEB_IMAGE_DIR"; then
     echo "prepare without PHARO_WEB_ST_DIR or PHARO_WEB_IMAGE_DIR" >>"$RULES_LOG"
     exit 1
 fi
+case $PHARO_WEB_FONTS in
+freetype|bitmap) ;;
+*)
+    echo "prepare with PHARO_WEB_FONTS=$PHARO_WEB_FONTS" >>"$RULES_LOG"
+    exit 1 ;;
+esac
 if ! test -f "$PHARO_WEB_IMAGE_DIR/Pharo.sources"; then
     echo "prepare before the stock .sources is in PHARO_WEB_IMAGE_DIR" >>"$RULES_LOG"
     exit 1
 fi
 mkdir -p "$PHARO_WEB_IMAGE_DIR"
 cat "$PHARO_WEB_ST_DIR"/OSWindow-Web/*.st >"$PHARO_WEB_IMAGE_DIR/OSWindow-Web.st"
-: >"$PHARO_WEB_IMAGE_DIR/Pharo-web.image"
+echo "$PHARO_WEB_FONTS" >"$PHARO_WEB_IMAGE_DIR/Pharo-web.image"
 : >"$PHARO_WEB_IMAGE_DIR/Pharo-web.changes"
 echo "prepare" >>"$RULES_LOG"
 EOF
@@ -255,6 +265,14 @@ step="the FFI is on again, by default"
 wmake "$W/cmake/.configured"
 calls "emcmake" "configure cmake"
 grep -qx 'WASM_FFI = ON' "$W/config.make" || { cat "$W/config.make"; fail "$step: config.make does not record WASM_FFI = ON"; }
+step="FreeType is turned off"
+wmake "$W/cmake/.configured" WASM_FREETYPE=OFF
+calls "emcmake" "configure cmake"
+grep -qx 'WASM_FREETYPE = OFF' "$W/config.make" || { cat "$W/config.make"; fail "$step: config.make does not record WASM_FREETYPE = OFF"; }
+step="FreeType is on again, by default"
+wmake "$W/cmake/.configured"
+calls "emcmake" "configure cmake"
+grep -qx 'WASM_FREETYPE = ON' "$W/config.make" || { cat "$W/config.make"; fail "$step: config.make does not record WASM_FREETYPE = ON"; }
 step="a WASM_DEPS_DIR that does not exist"
 if HOME=$T/home "$make" -s --no-print-directory -f "$src/GNUmakefile" -C "$src" $knobs \
     "WASM_DEPS_DIR=$T/no-archives" "$W/cmake/.configured" >"$T/make.out" 2>&1; then
@@ -330,10 +348,27 @@ set(WASM_HOST_PHARO "$T/bin/host-pharo")
 set(WASM_STAGE_DIR "\${CMAKE_CURRENT_BINARY_DIR}")
 set(WASM_STOCK_IMAGE_DIR "\${CMAKE_CURRENT_SOURCE_DIR}/stock")
 set(WASM_STOCK_IMAGE_DEPENDS "\${WASM_STOCK_IMAGE_DIR}/Pharo.image")
+# (as cmake/emscripten/deps/options.cmake computes it, from a cache variable of
+# the test: ON by default, as there)
+set(FONTS_FREETYPE ON CACHE BOOL "")
+set(PHARO_WASM_HAS_FREETYPE \${FONTS_FREETYPE})
 include(cmake/emscripten/webimage.cmake)
 EOF
 wb=$T/webimage-build
 package=$wb/image/web/OSWindow-Web.st
+fonts=$wb/wasm/webimage-fonts.txt
+
+# wconfigure ARG...: configures the tree of webimage.cmake with ARG...
+wconfigure() {
+    "$cmake" -S "$wi" -B "$wb" "$@" >"$T/configure.out" 2>&1 || "$cmake" -H"$wi" -B"$wb" "$@" >"$T/configure.out" 2>&1 ||
+        { cat "$T/configure.out"; fail "$step: configure failed"; }
+}
+# prepared_with FONTS: the world image was prepared with FONTS, which
+# webimage-fonts.txt says
+prepared_with() {
+    test "$(cat "$wb/image/web/Pharo-web.image")" = "$1" || fail "$step: the image is not prepared with $1 fonts"
+    test "$(cat "$fonts")" = "$1" || fail "$step: $fonts does not say $1"
+}
 
 # wbuild: builds the tree of webimage.cmake
 wbuild() {
@@ -351,6 +386,7 @@ for f in Pharo12-web.image Pharo12-web.changes Other.sources; do : >"$wb/image/w
 wbuild
 calls "prepare"
 grep -q OSWebB "$package" || fail "$step: no OSWebB in $package"
+prepared_with freetype
 for f in Pharo12-web.image Pharo12-web.changes Other.sources; do
     if test -e "$wb/image/web/$f"; then fail "$step: $f is still in $wb/image/web"; fi
 done
@@ -377,6 +413,30 @@ calls "prepare"
 if grep -q OSWebB "$package"; then fail "$step: OSWebB is still in $package"; fi
 step="webimage.cmake, nothing changed after a class went"
 wbuild
+calls
+step="webimage.cmake, configured again with the same fonts"
+wconfigure -DFONTS_FREETYPE=ON
+wbuild
+calls
+prepared_with freetype
+step="webimage.cmake, no FreeType"
+wconfigure -DFONTS_FREETYPE=OFF
+wbuild
+calls "prepare"
+prepared_with bitmap
+step="webimage.cmake, configured again without FreeType"
+wconfigure -DFONTS_FREETYPE=OFF
+wbuild
+calls
+step="webimage.cmake, FreeType again"
+wconfigure -DFONTS_FREETYPE=ON
+wbuild
+calls "prepare"
+prepared_with freetype
+step="webimage.cmake, a fonts file that says something else"
+echo 'outline' >"$fonts"
+if "$cmake" --build "$wb" >"$T/build.out" 2>&1; then cat "$T/build.out"; fail "$step: the build accepted it"; fi
+grep -q "says 'outline', neither freetype nor bitmap" "$T/build.out" || { cat "$T/build.out"; fail "$step: no message"; }
 calls
 
 # ---- pharo_wasm_dep_fetch (fetch.cmake, in script mode)

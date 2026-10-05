@@ -78,6 +78,7 @@ WASM_OLD_SPACE_BASE ?= 0x20000000
 WASM_SLICE_MS ?= 20
 WASM_WORLD ?= ON
 WASM_FFI ?= ON
+WASM_FREETYPE ?= ON
 # offline builds: the Pharo 12 image zip, a directory holding the pinned
 # archives of the libraries (cmake/emscripten/deps/fetch.cmake), the
 # generated sources (a directory holding generated/64), or the VMMaker image
@@ -256,6 +257,7 @@ WASM_CMAKE_FLAGS = \
   -DWASM_SLICE_MS=$(WASM_SLICE_MS) \
   -DWASM_WORLD=$(WASM_WORLD) \
   -DWASM_FFI=$(WASM_FFI) \
+  -DWASM_FREETYPE=$(WASM_FREETYPE) \
   "-DWASM_IMAGE_ZIP=$(IMAGE_ZIP)" \
   "-DWASM_DEPS_DIR=$(DEPS_DIR)" \
   "-DWASM_HOST_PHARO=$(HOST_PHARO)" \
@@ -299,6 +301,7 @@ $(W)/config.make: FORCE | $(W)/.make-wasm
 	  echo "WASM_SLICE_MS = $(WASM_SLICE_MS)"; \
 	  echo "WASM_WORLD = $(WASM_WORLD)"; \
 	  echo "WASM_FFI = $(WASM_FFI)"; \
+	  echo "WASM_FREETYPE = $(WASM_FREETYPE)"; \
 	  echo "WASM_IMAGE_ZIP = $(IMAGE_ZIP)"; \
 	  echo "WASM_DEPS_DIR = $(DEPS_DIR)"; \
 	  echo "WASM_GENERATED = $(if $(WASM_GENERATED),$(GEN))"; \

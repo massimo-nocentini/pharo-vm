@@ -1,8 +1,9 @@
 // stage.mjs - writes web/, the static site of the Pharo VM for WebAssembly
 //
 //   node stage.mjs --out <web dir> --module <pharo-web.js> --stock-image <dir>
+//        --web-package <OSWebDriver.class.st>
 //        [--web <dir>] [--memory64 1|2] [--git <sha>] [--ffi 0|1]
-//        [--notices <file>] [--st <file>]...
+//        [--fonts freetype|bitmap] [--notices <file>] [--st <file>]...
 //        [--world-image <dir> [--world-st <file>]...]
 //
 // cmake/emscripten/stage.cmake runs it on every build.  It writes
@@ -21,7 +22,8 @@
 //                              it has one, the stock one otherwise
 //   st/<file>                  the --st files, and with the world image its
 //                              OSWindow-Web.st and the --world-st files
-//   manifest.json              {build, ffi, files, image, memory64, st, world}
+//   manifest.json              {build, ffi, files, fonts, image, memory64, st,
+//                              webPackage, world}
 //
 // The build id is the git sha, a dash and the first 12 hex digits of a
 // SHA256 over everything staged, so it changes whenever a staged file does.
@@ -34,8 +36,19 @@
 //          name under /pharo, url the gzipped file relative to web/ (the
 //          worker adds ?v=<build>), size and sha256 those of the file, and
 //          gzSize the size of the download
+//   fonts  "freetype" or "bitmap" (--fonts, from PHARO_WASM_HAS_FREETYPE):
+//          the fonts that the preparation of an image for the world sets
+//          up, the build's (webimage.cmake) and the page's
+//          (web-bootstrap.st), which the page names in its notice
 //   image  the name of the image to boot, "Pharo.image"
 //   st     ["st/<file>", ...]: each file is at that url, and goes to /pharo/st
+//   webPackage  the version of the package OSWindow-Web of this build, an
+//          integer: OSWebDriver class>>packageVersion, read from
+//          --web-package, the source of the class.  The worker prepares
+//          again an image whose version is older (it finds it in the image
+//          as the symbol of OSWebDriver class>>packageMarker, which must be
+//          #OSWindowWebPackage<version>).  The source is the single place
+//          where the version is written
 //   world  true when the image is the image of the world
 //
 // Only files whose contents change are rewritten, and a file is gzipped
@@ -62,10 +75,10 @@ const fail = (message) => {
 };
 
 const parseArguments = (argv) => {
-  const options = { st: [], worldSt: [], memory64: '2', git: '', ffi: '0' };
+  const options = { st: [], worldSt: [], memory64: '2', git: '', ffi: '0', fonts: 'bitmap' };
   const single = { '--out': 'out', '--web': 'web', '--module': 'module', '--memory64': 'memory64',
-                   '--git': 'git', '--ffi': 'ffi', '--notices': 'notices', '--stock-image': 'stockImage',
-                   '--world-image': 'worldImage' };
+                   '--git': 'git', '--ffi': 'ffi', '--fonts': 'fonts', '--notices': 'notices',
+                   '--stock-image': 'stockImage', '--web-package': 'webPackage', '--world-image': 'worldImage' };
   const many = { '--st': 'st', '--world-st': 'worldSt' };
   for (let i = 0; i < argv.length; i++) {
     const name = argv[i];
@@ -74,10 +87,12 @@ const parseArguments = (argv) => {
     if (name in single) options[single[name]] = value;
     else options[many[name]].push(value);
   }
-  for (const required of ['out', 'module', 'stockImage'])
+  for (const required of ['out', 'module', 'stockImage', 'webPackage'])
     if (!options[required]) fail(`--${required.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase())} is missing`);
   if (!/^[12]$/.test(options.memory64)) fail(`--memory64 must be 1 or 2, not ${options.memory64}`);
   if (!/^[01]$/.test(options.ffi)) fail(`--ffi must be 0 or 1, not ${options.ffi}`);
+  if (!/^(freetype|bitmap)$/.test(options.fonts)) fail(`--fonts must be freetype or bitmap, not ${options.fonts}`);
+  if (!existsSync(options.webPackage)) fail(`--web-package ${options.webPackage} does not exist`);
   if (options.notices && !existsSync(options.notices)) fail(`--notices ${options.notices} does not exist`);
   return options;
 };
@@ -106,6 +121,32 @@ const imageFiles = (dir) => {
   if (!names.includes(changes) || sources.length != 1)
     fail(`${dir} lacks the .changes of ${images[0]} or has not exactly one .sources`);
   return { image: join(dir, images[0]), changes: join(dir, changes), sources: join(dir, sources[0]) };
+};
+
+// The version of OSWindow-Web, from the Tonel source of OSWebDriver: the
+// integer that OSWebDriver class>>packageVersion answers, checked against
+// the symbol of OSWebDriver class>>packageMarker.  Each method is
+// 'OSWebDriver class >> <selector> [' up to the line ']', and answers a
+// literal, after its comment
+const webPackageOf = (file) => {
+  const source = readFileSync(file, 'utf8').replace(/\r\n?/g, '\n');
+  const answer = (selector) => {
+    const start = source.indexOf(`\nOSWebDriver class >> ${selector} [\n`);
+    if (start < 0) fail(`${file} has no method OSWebDriver class>>${selector}`);
+    const end = source.indexOf('\n]', start + 1);
+    // (comments are between double quotes, which a comment doubles)
+    const body = source.slice(source.indexOf('[\n', start) + 2, end < 0 ? undefined : end).replace(/"(?:[^"]|"")*"/g, ' ');
+    const m = /^\s*\^\s*(\S+?)\s*\.?\s*$/.exec(body);
+    if (!m) fail(`OSWebDriver class>>${selector} of ${file} answers no literal: ${body.trim().slice(0, 80)}`);
+    return m[1];
+  };
+  const version = answer('packageVersion'), marker = answer('packageMarker');
+  if (!/^[1-9][0-9]*$/.test(version))
+    fail(`OSWebDriver class>>packageVersion of ${file} answers ${version}, not a positive integer`);
+  if (marker != `#OSWindowWebPackage${version}`)
+    fail(`OSWebDriver class>>packageMarker of ${file} answers ${marker}, not #OSWindowWebPackage${version} ` +
+         `(it must change with packageVersion)`);
+  return Number(version);
 };
 
 const sortKeys = (value) => {
@@ -151,7 +192,9 @@ const main = async () => {
     inputs.set(rel, { data, sha256: sha256(data) });
   }
   const ffi = options.ffi == '1';
-  const digest = sha256([`ffi ${ffi}`, `memory64 ${options.memory64}`, `world ${world}`,
+  const webPackage = webPackageOf(options.webPackage);
+  const digest = sha256([`ffi ${ffi}`, `fonts ${options.fonts}`, `memory64 ${options.memory64}`,
+                         `webPackage ${webPackage}`, `world ${world}`,
                          ...[...inputs].map(([rel, { sha256 }]) => `${rel} ${sha256}`).sort()].join('\n'));
   const build = (options.git ? `${options.git}-` : '') + digest.slice(0, 12);
 
@@ -205,9 +248,11 @@ const main = async () => {
     build,
     ffi,
     files: manifestFiles.sort((a, b) => a.path < b.path ? -1 : 1),
+    fonts: options.fonts,
     image: IMAGE,
     memory64: Number(options.memory64),
     st: entries.filter(([rel]) => rel.startsWith('st/')).map(([rel]) => rel).sort(),
+    webPackage,
     world,
   });
   write('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2) + '\n', 'utf8'));

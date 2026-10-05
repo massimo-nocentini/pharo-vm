@@ -17,7 +17,14 @@
  next to the image, and the VM exits with 0 when every check passed.  The save
  request check saves the image with this script running in it: take a new copy
  for every run, as lane 80 (tests/wasm/lanes/80-world-harness.sh) does with the
- prepared image of build-wasm/image/web when it has a host Pharo."
+ prepared image of build-wasm/image/web when it has a host Pharo.
+
+ The fonts check wants the fonts that the build prepared: PHARO_WEB_FONTS when it is
+ set (freetype or bitmap, as for prepare-web-image.st), else the fonts of the manifest
+ of the build, WASM_DIR/web/manifest.json (make wasm-check sets WASM_DIR), else
+ whichever the image has.  FreeType fonts are those of the stock Pharo 12 and Pharo 15
+ images, each standard font a LogicalFont of the family and size below, drawn by a
+ FreeTypeFont (the host VM has FreeType); bitmap fonts are drawn by a StrikeFont."
 
 OSWebDriver isSuitable ifFalse: [
 	OSWebDriver class
@@ -133,8 +140,43 @@ OSWebDriver isSuitable ifFalse: [
 						 frameStats value first > 0 and: [ frameStats value last > 0 ] ] ] ] ])
 			or: [ { renderer. renderer driver. renderer osWindowRenderer } ] ].
 	driver := renderer driver.
-	check value: 'bitmap fonts' value: [
-		FreeTypeSystemSettings loadFt2Library not and: [ StandardFonts defaultFont realFont isKindOf: StrikeFont ] ].
+	check value: 'fonts' value: [
+		| wanted told stock wrong |
+		told := OSEnvironment current at: 'PHARO_WEB_FONTS' ifAbsent: [ '' ].
+		told ifEmpty: [
+			told := [
+			        ((OSEnvironment current at: 'WASM_DIR' ifAbsent: [ nil ]) ifNotNil: [ :dir |
+				         (STONJSON fromString: (dir asFileReference / 'web' / 'manifest.json') contents)
+					         at: 'fonts'
+					         ifAbsent: [ nil ] ]) ifNil: [ '' ] ]
+				        on: Error
+				        do: [ :error | '' ] ].
+		wanted := told ifEmpty: [
+			          FreeTypeSystemSettings loadFt2Library
+				          ifTrue: [ 'freetype' ]
+				          ifFalse: [ 'bitmap' ] ].
+		say value: '# fonts: ' , wanted , (told
+				 ifEmpty: [ ', as the image has them (neither PHARO_WEB_FONTS nor WASM_DIR tell)' ]
+				 ifNotEmpty: [ '' ]).
+		wanted = 'freetype'
+			ifTrue: [
+				"The standard fonts of the stock images, Pharo 12 and Pharo 15 alike"
+				stock := #( #( #defaultFont 'Source Sans Pro' 10 ) #( #listFont 'Source Sans Pro' 10 )
+				            #( #menuFont 'Source Sans Pro' 10 ) #( #buttonFont 'Source Sans Pro' 10 )
+				            #( #windowTitleFont 'Source Sans Pro' 11 ) #( #balloonFont 'Source Sans Pro' 9 )
+				            #( #haloFont 'Source Sans Pro' 9 ) #( #codeFont 'Source Code Pro' 10 ) ).
+				wrong := (stock collect: [ :spec |
+					          | font |
+					          font := StandardFonts perform: spec first.
+					          ((font isKindOf: LogicalFont) and: [
+						           font familyName = spec second and: [
+							           font pointSize = spec third and: [ font realFont isKindOf: FreeTypeFont ] ] ])
+						          ifTrue: [ nil ]
+						          ifFalse: [ spec first -> font printString ] ]) reject: [ :each | each isNil ].
+				(FreeTypeSystemSettings loadFt2Library and: [ wrong isEmpty ]) or: [
+					{ FreeTypeSystemSettings loadFt2Library } , wrong asArray ] ]
+			ifFalse: [
+				FreeTypeSystemSettings loadFt2Library not and: [ StandardFonts defaultFont realFont isKindOf: StrikeFont ] ] ].
 	check value: 'title' value: [
 		renderer window backendWindow title = Smalltalk imageFile fullName or: [
 			renderer window backendWindow title ] ].

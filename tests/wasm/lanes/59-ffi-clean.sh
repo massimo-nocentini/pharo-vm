@@ -9,6 +9,11 @@
 #             the C library (the environment, getpid, strerror, a qsort
 #             with a callback), which saves the image, then the same again
 #             on the saved image, after the reload;
+#   glyphs    then, on that image, saved in this VM, tests/wasm/st/ft-parity.st
+#             draws a line of text with the default font of the image,
+#             which must draw pixels, without an error, and with FreeType
+#             (a FreeTypeFont) when the registry of the node VM has the
+#             library freetype (lane 64 checks the pixels themselves);
 #   control   the negative control, on that image: one callout declared
 #             double for strlen, which must fail as a primitive with
 #             exactly one line of the guard of the callouts on stderr,
@@ -23,7 +28,7 @@
 #             (a '# unavailable:' section, or a '# unavailable unless
 #             <VARIABLE>:' one whose variable is off in the CMake cache).
 #
-# The boots and the session must print no line of the guard ('FFI callout
+# The boots, the session and the glyphs must print no line of the guard ('FFI callout
 # failed, its declaration does not match ...' or 'FFI callout trapped in
 # ...'), and no unhandled error or debugger: their stderr must be empty and
 # they must write no PharoDebug.log, which is what a boot of either image
@@ -55,6 +60,14 @@ echo "59-ffi-clean: $WASM_DIR/node/pharo"
 
 session=$SRCDIR/tests/wasm/st/ffi-session.st
 symbols=$SRCDIR/packaging/emscripten/tools/ffi-symbols.st
+parity=$SRCDIR/tests/wasm/st/ft-parity.st
+# the class of the font that must draw the glyphs: FreeType's when the VM
+# has it, any other otherwise
+if grep -q '^extern const PharoFFILibrary pharoFFILibrary_freetype;$' "$ffi_dir/ffiRegistry-node.c"; then
+    glyph_font=FreeTypeFont
+else
+    glyph_font=
+fi
 
 # The lines of the guard of the callouts.  vm() keeps them in guard.err,
 # out of the stderr the checks see (the message of what threw may name an
@@ -183,6 +196,30 @@ for image in stock web; do
     if test "$check_failed" -eq 0; then
 	run "reload $image" vm st --quit "$session" &&
 	    clean "reload $image" 'ffi-session reload: 7 checks, 0 failed'
+    fi
+    if test "$check_failed" -eq 0; then
+	run "glyphs $image" vm st --quit "$parity" && {
+	    class=$(sed -n 's/^realFont class: //p' smoke.out)
+	    nonwhite=$(sed -n 's/^nonwhite: //p' smoke.out)
+	    errors=$(sed -n 's/^errors: //p' smoke.out)
+	    if test "$status" -ne 0; then
+		fail "glyphs $image" "exit status $status"
+	    elif test -s guard.err; then
+		fail "glyphs $image" "$(grep -c '' guard.err) failed callouts: $(head -n 1 guard.err)"
+	    elif test -s smoke.err; then
+		fail "glyphs $image" "stderr is not empty: $(head -n 1 smoke.err | cut -c 1-200)"
+	    elif test -s PharoDebug.log; then
+		fail "glyphs $image" "it wrote PharoDebug.log: $(grep -m 1 . PharoDebug.log | cut -c 1-200)"
+	    elif test "x$errors" != xnone; then
+		fail "glyphs $image" "the drawing raised $errors"
+	    elif test -n "$glyph_font" && test "x$class" != "x$glyph_font"; then
+		fail "glyphs $image" "drawn with '$class', not a $glyph_font"
+	    elif ! is_number "$nonwhite" || test "$nonwhite" -eq 0; then
+		fail "glyphs $image" "nothing drawn (nonwhite '$nonwhite')"
+	    else
+		ok "glyphs $image" "$class, $nonwhite pixels"
+	    fi
+	}
     fi
     if test "$check_failed" -eq 0; then
 	run "control $image" control && {

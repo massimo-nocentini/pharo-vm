@@ -2,13 +2,15 @@
  cmake/emscripten/webimage.cmake runs it at build time with a native Pharo VM, on a copy
  of the stock image:
 
-	PHARO_WEB_ST_DIR=<st dir> PHARO_WEB_IMAGE_DIR=<out dir> \
+	PHARO_WEB_ST_DIR=<st dir> PHARO_WEB_IMAGE_DIR=<out dir> PHARO_WEB_FONTS=<fonts> \
 	pharo --headless <copy>.image --no-default-preferences st --save --quit prepare-web-image.st
 
- The directories come in the environment: the st command of Pharo 15 takes nothing but
- its file.  It loads the OSWindow-Web package (Tonel) from <st dir>, switches to the
- bitmap fonts, because the web VM has no FFI and therefore no FreeType, and lets the
- session pick OSWebDriver whenever the page provides a display.  <out dir> receives
+ The settings come in the environment: the st command of Pharo 15 takes nothing but its
+ file.  It loads the OSWindow-Web package (Tonel) from <st dir>, sets the image up for
+ the web VM (OSWebDriver class>>#setUpImage), with its fonts: freetype keeps the
+ FreeType fonts of the stock image, bitmap switches to the bitmap fonts, for a web VM
+ built without FreeType.  It also lets the session pick OSWebDriver whenever the page
+ provides a display.  <out dir> receives
  Pharo-web.image, Pharo-web.changes and OSWindow-Web.st, the package filed out for
  web-bootstrap.st.  The --save of st saves the image once more after this script, so
  the image starts in the browser with nothing of the preparation left to run."
@@ -22,6 +24,11 @@ outDir := (environment
 	at: 'PHARO_WEB_IMAGE_DIR'
 	ifAbsent: [ self error: 'prepare-web-image: PHARO_WEB_IMAGE_DIR is not set' ]) asFileReference.
 outDir ensureCreateDirectory.
+"The fonts of the web VM, which the FreeType of this VM tells nothing about (see
+ OSWebDriver class>>#setUpFonts)"
+environment
+	at: 'PHARO_WEB_FONTS'
+	ifAbsent: [ self error: 'prepare-web-image: PHARO_WEB_FONTS is not set' ].
 
 "Install the snapshot rather than load the version: a version is named with a UUID,
  which Pharo 15 makes only with the UUIDPlugin of a VM 10.3.9 or later"
@@ -39,8 +46,7 @@ undeclared ifNotEmpty: [
 		flush.
 	Smalltalk exitFailure ].
 
-FreeTypeSystemSettings loadFt2Library: false.
-StandardFonts setSmallBitmapFonts.
+(Smalltalk at: #OSWebDriver) setUpImage.
 
 "The stock image saved OSSDL2Driver.  Let every session choose again: the startUp:
  hook of OSWebDriver takes over in the page, and native VMs keep SDL.  Loading ran the

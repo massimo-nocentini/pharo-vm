@@ -1,0 +1,25 @@
+# ft-p15.txt - what tests/wasm/st/ft-parity.st prints on a Pharo 15 image, with
+# the FreeType of the WebAssembly VMs (cmake/emscripten/deps/freetype.cmake)
+#
+# Lane 64 (tests/wasm/lanes/64-freetype.sh) runs ft-parity.st in the node VM
+# on the stock image and on the image of the world, and each line below
+# must be a line of what it prints; '#' lines and blank lines are comments.
+# These lines are the reference: a native Pharo VM (HOST_PHARO) is compared
+# with them only as an advice, since its FreeType is another version.  The
+# Linux host VM 10.3.1, with FreeType 2.12.1, draws the same bits.
+#
+# bits is the SHA256 of the 300x40 Form of depth 32 that ft-parity.st draws
+# 'Hello Pharo AV Wa' into, in black on white, with the default font of the
+# image, Source Sans Pro 10, which the stock images embed.  When FreeType or
+# the image's fonts change on purpose, run ft-parity.st as lane 64 does,
+# look at the ft.png it writes next to the image, and update these lines.
+major: 15
+backend: TFFIBackend
+loadFt2Library: true
+realFont: FreeTypeFont('Source Sans Pro' 'Regular' 10)
+realFont class: FreeTypeFont
+version: 2.14.3
+glyphs: true
+nonwhite: 688
+bits: 4e6d35e80edd490299fed7fc021e829f6b2dd6b5a234382ac88a83d7a1f5986c
+errors: none

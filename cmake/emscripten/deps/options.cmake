@@ -7,8 +7,13 @@
 # variables of the top directory, which the deps directory, the registry of
 # the FFI (cmake/emscripten/ffiLibraries.cmake) and the staging read:
 #
-#     PHARO_WASM_HAS_FFI   the FFI: libffi, the same-thread runner of src/ffi
-#                          and the registry of the libraries it calls
+#     PHARO_WASM_HAS_FFI       the FFI: libffi, the same-thread runner of
+#                              src/ffi and the registry of the libraries it
+#                              calls
+#     PHARO_WASM_HAS_FREETYPE  FreeType, for the fonts of the image: the
+#                              world image is prepared with them
+#                              (cmake/emscripten/webimage.cmake), and the
+#                              manifest says so (stage.cmake)
 #
 # Every library is an FFI library, so none is built without the FFI.  One
 # STATUS line gives the result.
@@ -34,10 +39,20 @@ set(WASM_DEPS_DIR "" CACHE PATH "A directory holding the pinned archives of the 
 option(WASM_FFI_LIBC_ALL "List every function of the C library for the FFI, not only those the images call" OFF)
 option(WASM_FFI_TEST_LIBRARY "Link the FFI test library (libTestLibrary.so) into pharo-web too" OFF)
 
+# The libraries.  FreeType: the fonts of the image (Source Sans Pro and
+# Source Code Pro) in the world, rather than bitmap fonts.
+option(WASM_FREETYPE "Build FreeType, for the fonts of the image (needs WASM_FFI)" ON)
+
 if(WASM_FFI)
     set(PHARO_WASM_HAS_FFI ON)
-    message(STATUS "wasm deps: ffi ON")
+    if(WASM_FREETYPE)
+        set(PHARO_WASM_HAS_FREETYPE ON)
+    else()
+        set(PHARO_WASM_HAS_FREETYPE OFF)
+    endif()
+    message(STATUS "wasm deps: ffi ON, freetype ${PHARO_WASM_HAS_FREETYPE}")
 else()
     set(PHARO_WASM_HAS_FFI OFF)
-    message(STATUS "wasm deps: ffi OFF (WASM_FFI=OFF): no library is built")
+    set(PHARO_WASM_HAS_FREETYPE OFF)
+    message(STATUS "wasm deps: ffi OFF (WASM_FFI=OFF): no library is built, freetype OFF")
 endif()

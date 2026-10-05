@@ -13,7 +13,7 @@
 //   lets the REPL go on (it used to wait for that evaluation for good);
 // - a Warning that nothing handles is reported, and the evaluation goes on;
 // - a syntax error says where it is, and which variable is not declared;
-// - the REPL writes PHARO_WEB_WORLD_FILE, whether the image has OSWebDriver,
+// - the REPL writes PHARO_WEB_WORLD_FILE, the version of OSWindow-Web in the image,
 //   when it starts and before the image is saved.
 //
 // Prints every case and their count, and exits with status 1 if any fails.
@@ -205,14 +205,14 @@ function assert(c, msg) { if (!c) throw new Error('assertion failed: ' + msg); }
     }
   });
 
-  await check('4 PHARO_WEB_WORLD_FILE: whether the image has OSWebDriver, at the start and when saved', async () => {
-    assert(worldFile() === 'false', 'at the start: ' + JSON.stringify(worldFile()));
+  await check('4 PHARO_WEB_WORLD_FILE: the version of OSWindow-Web in the image (0 without, 1 without packageVersion), at the start and when saved', async () => {
+    assert(worldFile() === '0', 'at the start: ' + JSON.stringify(worldFile()));
     // defined and saved in one evaluation: the file is written before the save
     S.send("(Object << #OSWebDriver package: 'RegressWorld') install. Smalltalk snapshot: true andQuit: false. " +
            "(FileSystem workingDirectory / '.pharo-web-world') contents\n");
     await S.prompt(60000);
-    assert(/'true'\nst> $/.test(S.since()), 'output ' + JSON.stringify(S.since()));
-    assert(worldFile() === 'true', 'after the save: ' + JSON.stringify(worldFile()));
+    assert(/'1'\nst> $/.test(S.since()), 'output ' + JSON.stringify(S.since()));
+    assert(worldFile() === '1', 'after the save: ' + JSON.stringify(worldFile()));
     // without the variable, nothing is written
     const N = await session({});
     try {

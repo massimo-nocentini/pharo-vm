@@ -24,8 +24,8 @@
  registered with the WebHostPlugin: the evaluation that runs is terminated.
 
  The page offers to open the world when the image has OSWindow-Web: its worker names
- a file in PHARO_WEB_WORLD_FILE, where WebRepl writes whether the image has OSWebDriver
- when it starts and before the image is saved.
+ a file in PHARO_WEB_WORLD_FILE, where WebRepl writes the version of the package in the
+ image (0 without it) when it starts and before the image is saved.
 
  The page's stdin is a terminal that never blocks a read.  The script runs natively too,
  e.g. pharo --headless <image> st web-repl.st < input, but there is no Stop there.
@@ -251,16 +251,23 @@ loop: generation
 
 !WebRepl class methodsFor: 'private'!
 noteWorld
-	"Write whether the image has OSWindow-Web, true or false, to the file that the page's worker
-	 names in PHARO_WEB_WORLD_FILE, if it names one.  The worker reads it once the REPL prompted, or
-	 the image saved itself, and else looks for the name of the class in the bytes of the image"
+	"Write the version of OSWindow-Web in the image to the file that the page's worker names in
+	 PHARO_WEB_WORLD_FILE, if it names one: 0 without the package, 1 for a package without
+	 OSWebDriver class>>#packageVersion, else that version.  The worker reads it once the REPL
+	 prompted, or the image saved itself, and else looks for the version in the bytes of the image
+	 (OSWebDriver class>>#packageMarker)"
 
-	[	| file |
+	[	| file version |
 		file := (OSEnvironment current at: 'PHARO_WEB_WORLD_FILE' ifAbsent: [ ^ self ])
 			asFileReference.
+		version := (Smalltalk hasClassNamed: #OSWebDriver)
+			ifFalse: [ 0 ]
+			ifTrue: [
+				((Smalltalk at: #OSWebDriver) class canUnderstand: #packageVersion)
+					ifTrue: [ (Smalltalk at: #OSWebDriver) packageVersion ]
+					ifFalse: [ 1 ] ].
 		file ensureDelete.
-		file writeStreamDo: [ :stream |
-			stream nextPutAll: (Smalltalk hasClassNamed: #OSWebDriver) printString ] ]
+		file writeStreamDo: [ :stream | stream nextPutAll: version printString ] ]
 		on: Error
 		do: [ :error | error return ]! !
 

@@ -15,6 +15,13 @@
 #                        image/, the st files in st/ and manifest.json.  It
 #                        always runs, and rewrites only what changed.
 #
+# The manifest says, besides, whether the VM has the FFI (FEATURE_FFI), which
+# fonts the preparation of an image for the world sets up (freetype when the
+# VM has FreeType, PHARO_WASM_HAS_FREETYPE of deps/options.cmake, bitmap
+# otherwise: what webimage.cmake prepares, and web-bootstrap.st in the page),
+# and the version of the package OSWindow-Web, which stage.mjs reads from
+# packaging/emscripten/st/OSWindow-Web/OSWebDriver.class.st.
+#
 # web/ gets the image of the world when webimage.cmake defines its target
 # wasm-web-image, and the stock image otherwise.
 #
@@ -170,6 +177,11 @@ if(FEATURE_FFI)
 else()
     set(PHARO_WASM_STAGE_FFI 0)
 endif()
+if(PHARO_WASM_HAS_FREETYPE)
+    set(PHARO_WASM_STAGE_FONTS freetype)
+else()
+    set(PHARO_WASM_STAGE_FONTS bitmap)
+endif()
 set(PHARO_WASM_STAGE_ARGUMENTS
     --out "${PHARO_WASM_WEB_DIR}"
     --web "${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/web"
@@ -177,6 +189,8 @@ set(PHARO_WASM_STAGE_ARGUMENTS
     --memory64 ${WASM_WEB_MEMORY64}
     --git "${PharoVM_VERSION_GIT_SHA}"
     --ffi ${PHARO_WASM_STAGE_FFI}
+    --fonts ${PHARO_WASM_STAGE_FONTS}
+    --web-package "${PHARO_WASM_ST_SOURCE_DIR}/OSWindow-Web/OSWebDriver.class.st"
     --notices "${PHARO_WASM_NOTICES_FILE}"
     --stock-image "${WASM_STOCK_IMAGE_DIR}"
     --st "${PHARO_WASM_ST_SOURCE_DIR}/web-repl.st")

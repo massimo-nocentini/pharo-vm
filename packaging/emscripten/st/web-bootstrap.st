@@ -3,7 +3,7 @@
  OSWindow-Web.st, the package filed out by prepare-web-image.st, in /pharo/st.
 
  A stock image cannot open the world page yet: its world starts through
- OSSDL2Driver, which needs the FFI.  So run this script in the Console page, for
+ OSSDL2Driver, which needs SDL2.  So run this script in the Console page, for
  instance with
 
 	CodeImporter evaluateFileNamed: '/pharo/st/web-bootstrap.st'
@@ -13,21 +13,41 @@
  elsewhere), it also restarts the world renderer on OSWebDriver.
 
  It files in st/OSWindow-Web.st of the image directory, unless the package is
- already there: 'st OSWindow-Web.st web-bootstrap.st' files it in first.  It does
- not save the image."
+ already there in the version of that file or a later one: 'st OSWindow-Web.st
+ web-bootstrap.st' files it in first.  So an image saved with an older version of the
+ package gets the new one.  Then it sets the image up for the web VM
+ (OSWebDriver class>>#setUpImage): FreeType fonts when the VM has FreeType, else
+ bitmap fonts.  It does not save the image."
 
-| package driver renderer |
-(Smalltalk hasClassNamed: #OSWebDriver) ifFalse: [
-	package := FileLocator imageDirectory / 'st' / 'OSWindow-Web.st'.
+| package imageVersion fileVersion driver renderer |
+package := FileLocator imageDirectory / 'st' / 'OSWindow-Web.st'.
+"The version of the package in the image, before and after the file-in: 0 without it, 1
+ before OSWebDriver class>>#packageVersion"
+imageVersion := [
+	(Smalltalk hasClassNamed: #OSWebDriver)
+		ifFalse: [ 0 ]
+		ifTrue: [
+			((Smalltalk at: #OSWebDriver) class canUnderstand: #packageVersion)
+				ifTrue: [ (Smalltalk at: #OSWebDriver) packageVersion ]
+				ifFalse: [ 1 ] ] ].
+"The version of the file, from the symbol of OSWebDriver class>>#packageMarker in its
+ source: 0 without the file, or without the marker"
+fileVersion := 0.
+package exists ifTrue: [
+	(package contents allRegexMatches: 'OSWindowWebPackage[0-9]+') do: [ :marker |
+		fileVersion := fileVersion max: (marker allButFirst: 'OSWindowWebPackage' size) asNumber ] ].
+(imageVersion value = 0 or: [ imageVersion value < fileVersion ]) ifTrue: [
 	package exists ifFalse: [ self error: 'web-bootstrap.st: no ' , package fullName ].
 	"(the code importer of Pharo 15 fails on an empty file, with a MessageNotUnderstood)"
 	package size > 0 ifTrue: [ CodeImporter evaluateFileNamed: package fullName ].
 	(Smalltalk hasClassNamed: #OSWebDriver) ifFalse: [
-		self error: 'web-bootstrap.st: ' , package fullName , ' defines no OSWebDriver' ] ].
+		self error: 'web-bootstrap.st: ' , package fullName , ' defines no OSWebDriver' ].
+	imageVersion value < fileVersion ifTrue: [
+		self error: 'web-bootstrap.st: ' , package fullName , ' left OSWebDriver at version '
+			, imageVersion value printString , ', not ' , fileVersion printString ] ].
 driver := Smalltalk at: #OSWebDriver.
 
-FreeTypeSystemSettings loadFt2Library: false.
-StandardFonts setSmallBitmapFonts.
+driver setUpImage.
 
 "The startUp: hook of OSWebDriver, registered by the package, picks it in the next
  sessions.  In this one, restart a world that runs on another driver; the restart

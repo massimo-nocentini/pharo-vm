@@ -51,6 +51,20 @@ pharo_wasm_ffi_library(c
     SYMBOLS_FILE ${CMAKE_CURRENT_LIST_DIR}/ffi/symbols/c.txt
     ${PHARO_WASM_LIBC_ARCHIVES})
 
+# FreeType (FT2FFILibrary, libfreetype.so.6), pharo_freetype of
+# cmake/emscripten/deps/freetype.cmake, with PHARO_WASM_HAS_FREETYPE
+# (options.cmake).  The table lists the functions the images bind; the
+# headers declare them (freetype.h and ftoutln.h), with the bitmap,
+# multiple-master and synthesis APIs of FreeType next to them.
+if(PHARO_WASM_HAS_FREETYPE)
+    pharo_wasm_ffi_library(freetype
+        HEADERS
+            ft2build.h freetype/freetype.h freetype/ftoutln.h
+            freetype/ftbitmap.h freetype/ftmm.h freetype/ftsynth.h
+        SYMBOLS_FILE ${CMAKE_CURRENT_LIST_DIR}/ffi/symbols/freetype.txt
+        LINK pharo_freetype)
+endif()
+
 # The library of the FFI tests (ffiTestLibrary, libTestLibrary.so to the
 # image), compiled where its table is: it has no header that declares its
 # functions.  It is in the node VM, for lane 58 (tests/wasm/lanes/58-ffi.sh)

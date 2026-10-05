@@ -21,9 +21,14 @@
 // protocol, Stop, the output credit, the downloads and the persistence, it
 // checks what Open gives the worker: an image with a .sources of its own,
 // which the slot keeps with it, and the preparation for the world of an
-// image without OSWindow-Web (init.prepare).  Prints every case and their
-// count, and exits with status 1 if any fails.  Lane 70
-// (tests/wasm/lanes/70-worker-harness.sh) runs it.
+// image without OSWindow-Web (init.prepare).  It also checks the versions
+// of OSWindow-Web (manifest.webPackage): an image saved in the Console with
+// an older version keeps it, a slot of before the versions counts as 1, the
+// next world boot prepares such an image once, a current slot boots the
+// world directly, and a preparation that leaves another version ends in an
+// error, not in a loop.  Prints every case and their count, and exits with
+// status 1 if any fails.  Lane 70 (tests/wasm/lanes/70-worker-harness.sh)
+// runs it.
 
 'use strict';
 const { Worker, MessageChannel } = require('worker_threads');
@@ -43,6 +48,8 @@ const PharoStorage = require(path.join(webDir, 'vm-storage.js'));
 const ENGINE_ERRORS = /RuntimeError|RangeError|Aborted|unreachable|signature_mismatch|unsupported syscall/;
 const WAITING = 1, BUSY = 2;
 const sizeOf = name => manifest.files.find(f => f.path === name).size;
+// The version of OSWindow-Web of the site, as vm-worker.js takes it
+const webPackage = Number.isInteger(manifest.webPackage) && manifest.webPackage || 1;
 const sha256 = data => crypto.createHash('sha256').update(data).digest('hex');
 
 // What a page has in IndexedDB.  storeFails makes its writes fail, as a full
@@ -303,7 +310,8 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     assert(p[p.length - 1].phase === 'boot', 'boot comes last');
     const r = S.ready;
     assert(r.image === '/pharo/' + imageName && r.source === 'download' && r.persisted === false &&
-           r.world === !!manifest.world && r.prepared === !!manifest.world && !r.storageError,
+           r.world === !!manifest.world && r.prepared === !!manifest.world && !r.storageError &&
+           r.webPackage === (manifest.world ? webPackage : 0) && r.fonts === (manifest.fonts || null),
            'ready ' + JSON.stringify(r));
     assert(S.out === 'st> ', 'output ' + JSON.stringify(S.out));
     for (const f of manifest.files) assert(fetched(S, f.path), f.path + ' fetched');
@@ -484,10 +492,11 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     assert(S.since() === 'a SnapshotOperation\nst> ', 'output ' + JSON.stringify(S.since()));
     await waitFor('saved', () => S.saved.length, 30000);
     const m = S.saved[0];
-    assert(!m.error && m.bytes > 1e7 && m.prepared === !!manifest.world, 'saved ' + JSON.stringify(m));
+    assert(!m.error && m.bytes > 1e7 && m.prepared === !!manifest.world &&
+           m.webPackage === (manifest.world ? webPackage : 0), 'saved ' + JSON.stringify(m));
     const meta = memory.map.get('meta');
-    assert(meta && meta.image === 'Pharo.image' && meta.imageSize === m.bytes && meta.build === manifest.build,
-           'meta ' + JSON.stringify(meta));
+    assert(meta && meta.image === 'Pharo.image' && meta.imageSize === m.bytes && meta.build === manifest.build &&
+           meta.webPackage === m.webPackage && meta.prepared === m.prepared, 'meta ' + JSON.stringify(meta));
     saved = new Uint8Array(await memory.map.get('Pharo.image').arrayBuffer());
     assert(saved.length === m.bytes, 'the stored image');
     const R = session();
@@ -552,8 +561,9 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     try {
       await waitFor('ready', () => U.ready || U.crash || U.error, 60000);
       U.alive();
-      assert(U.ready.source === 'upload' && U.ready.persisted === false && U.ready.prepared === !!manifest.world,
-             'ready ' + JSON.stringify(U.ready));
+      // (before the REPL runs, the version is the one in the bytes of the image)
+      assert(U.ready.source === 'upload' && U.ready.persisted === false && U.ready.prepared === !!manifest.world &&
+             U.ready.webPackage === (manifest.world ? webPackage : 0), 'ready ' + JSON.stringify(U.ready));
       assert(!memory.map.size, 'nothing stored before the first prompt');
       await U.prompt(60000);
       await waitFor('saved {upload}', () => U.saved.length, 30000);
@@ -787,6 +797,11 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     e = null;
     try { await st.load(); } catch (x) { e = x; }
     assert(e && /\.sources of the saved image is missing/.test(e.message), 'a missing .sources: ' + e);
+    // the version of OSWindow-Web of a slot, and of the slots of before the versions
+    const versions = [{ webPackage: 3, prepared: true }, { webPackage: 1, prepared: false }, { webPackage: 0 },
+                      { prepared: true }, { prepared: false }, {}, null, { webPackage: 'x', prepared: true }]
+      .map(PharoStorage.webPackage);
+    assert(JSON.stringify(versions) === '[3,1,0,1,0,null,null,1]', 'webPackage ' + JSON.stringify(versions));
   });
 
   await check('18 an upload with a .sources of its own: in /pharo, not fetched; the slot keeps it; a save does not write it again', async () => {
@@ -871,10 +886,13 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       P.alive();
       assert(!P.prepared.error && P.prepared.saved === true, 'prepared ' + JSON.stringify(P.prepared));
       console.log(`#   prepared in ${((now() - t) / 1000).toFixed(1)} s`);
-      const saves = P.saved.map(m => [!!m.upload, m.prepared, !!m.error]);
-      assert(JSON.stringify(saves) === '[[true,false,false],[false,true,false]]', 'saved ' + JSON.stringify(P.saved));
+      const saves = P.saved.map(m => [!!m.upload, m.prepared, m.webPackage, !!m.error]);
+      assert(JSON.stringify(saves) === JSON.stringify([[true, false, 0, false], [false, true, webPackage, false]]),
+             'saved ' + JSON.stringify(P.saved));
       assert(P.msgs.indexOf(P.prepared) > P.msgs.indexOf(P.saved[1]), 'prepared after saved');
-      assert(memory.map.get('meta').prepared === true, 'the slot is prepared');
+      assert(P.prepared.webPackage === webPackage, 'prepared ' + JSON.stringify(P.prepared));
+      const meta = memory.map.get('meta');
+      assert(meta.prepared === true && meta.webPackage === webPackage, 'the slot is prepared: ' + JSON.stringify(meta));
     } finally { await P.close(); current = S; }
     const W = session(world, { display: true });
     try {
@@ -883,6 +901,142 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
              'ready ' + JSON.stringify(W.ready));
       assert(W.msgs.some(m => m.type === 'display' && m.kind === 'created'), 'a display');
     } finally { await W.close(); }
+  });
+
+  // ---- the versions of OSWindow-Web (manifest.webPackage)
+  const versions = manifest.world && webPackage >= 2;
+  if (!versions) console.log('# skip 20-23: ' + (manifest.world ? 'manifest.webPackage is ' + manifest.webPackage
+                                                                : 'no world image'));
+  const world = { mode: 'world', prepare: true, display: { canvas: 'stub' } };
+  // the image of the site, made what an earlier site saved: OSWindow-Web
+  // without the versions, and bitmap fonts
+  const OLDER = 'OSWebDriver class removeSelector: #packageVersion; removeSelector: #packageMarker. ' +
+                'FreeTypeSystemSettings loadFt2Library: false. StandardFonts setSmallBitmapFonts. #older\n';
+  const FONT = '| f | f := StandardFonts defaultFont. ((f respondsTo: #realFont) ifTrue: [ f realFont ] ' +
+               'ifFalse: [ f ]) class name\n';
+  // the class of the default font that a preparation gives
+  const fontClass = manifest.fonts === 'freetype' ? '#FreeTypeFont' : '#StrikeFont';
+  // a slot of version 1, the one of case 20
+  let older = null;
+
+  if (versions) await check('20 a Console save of an image with an older OSWindow-Web keeps its version (1): not prepared', async () => {
+    memory.map.clear();
+    const C = session();
+    try {
+      current = C;
+      await C.started();
+      assert(C.ready.webPackage === webPackage && C.ready.prepared === true, 'ready ' + JSON.stringify(C.ready));
+      C.send(OLDER);
+      await C.expectOut(val('#older'));
+      await C.prompt();
+      C.post({ type: 'save' });
+      await waitFor('saved', () => C.saved.length, 60000);
+      await C.prompt(60000);
+      const m = C.saved[0];
+      assert(!m.error && m.webPackage === 1 && m.prepared === false, 'saved ' + JSON.stringify(m));
+      const meta = memory.map.get('meta');
+      assert(meta.webPackage === 1 && meta.prepared === false, 'meta ' + JSON.stringify(meta));
+      older = new Map(memory.map);
+    } finally { await C.close(); current = S; }
+    // the Console boots it as it is, and does not prepare it
+    const R = session();
+    try {
+      current = R;
+      await R.started();
+      assert(R.ready.source === 'saved' && R.ready.webPackage === 1 && R.ready.prepared === false &&
+             R.ready.preparing === false, 'ready ' + JSON.stringify(R.ready));
+      R.send('OSWebDriver class canUnderstand: #packageVersion\n');
+      await R.expectOut(val('false'));
+      await R.prompt();
+      R.send(FONT);
+      await R.expectOut(val('#StrikeFont'));
+      await R.prompt();
+    } finally { await R.close(); current = S; }
+  });
+
+  if (versions) await check('21 a preparation that leaves another version: prepared {error, webPackage}, once, and the REPL goes on', async () => {
+    assert(older, 'no slot of version 1');
+    memory.map.clear();
+    for (const [k, v] of older) memory.map.set(k, v);
+    // a web-bootstrap.st that leaves the package as it is
+    const F = session(world, { display: true, override: { '/st/web-bootstrap.st': "'harness: left as it is' size" } });
+    try {
+      current = F;
+      await waitFor('prepared', () => F.prepared || F.crash || F.exit !== null, 120000);
+      F.alive();
+      assert(F.ready.source === 'saved' && F.ready.preparing === true && F.ready.prepared === false &&
+             F.ready.webPackage === 1, 'ready ' + JSON.stringify(F.ready));
+      const p = F.prepared;
+      assert(p.saved === true && p.webPackage === 1 &&
+             p.error === 'web-bootstrap.st left version 1 of OSWindow-Web in the image, but this site has version ' +
+                         webPackage, 'prepared ' + JSON.stringify(p));
+      // no loop: it is said once, nothing is typed again, and the VM waits
+      await sleep(2000);
+      F.alive();
+      assert(F.msgs.filter(m => m.type === 'prepared').length === 1, 'prepared once');
+      assert(F.saved.length === 1 && F.saved[0].webPackage === 1 && !F.saved[0].prepared, 'saved ' + JSON.stringify(F.saved));
+      assert(!F.msgs.some(m => m.type === 'display'), 'no display');
+      assert(F.states[F.states.length - 1] === WAITING, 'the REPL waits: ' + F.states.slice(-3));
+      const meta = memory.map.get('meta');
+      assert(meta.webPackage === 1 && meta.prepared === false, 'meta ' + JSON.stringify(meta));
+      F.send('3 + 4\n');
+      await F.expectOut(val('7'));
+    } finally { await F.close(); current = S; }
+  });
+
+  if (versions) await check('22 a slot of before the versions (prepared, no webPackage) is prepared once on the world boot, with its fonts', async () => {
+    assert(older, 'no slot of version 1');
+    memory.map.clear();
+    for (const [k, v] of older) memory.map.set(k, v);
+    // the meta that the site wrote before the versions
+    const meta = Object.assign({}, memory.map.get('meta'), { prepared: true });
+    delete meta.webPackage;
+    memory.map.set('meta', meta);
+    const t = now();
+    const P = session(world, { display: true });
+    try {
+      current = P;
+      await waitFor('prepared', () => P.prepared || P.crash || P.exit !== null, 300000);
+      P.alive();
+      console.log(`#   prepared again in ${((now() - t) / 1000).toFixed(1)} s`);
+      assert(P.ready.source === 'saved' && P.ready.preparing === true && P.ready.prepared === false &&
+             P.ready.webPackage === 1 && P.ready.fonts === (manifest.fonts || null), 'ready ' + JSON.stringify(P.ready));
+      assert(!P.prepared.error && P.prepared.saved === true && P.prepared.webPackage === webPackage,
+             'prepared ' + JSON.stringify(P.prepared));
+      assert(P.saved.length === 1 && P.saved[0].prepared === true && P.saved[0].webPackage === webPackage,
+             'saved ' + JSON.stringify(P.saved));
+      const now2 = memory.map.get('meta');
+      assert(now2.prepared === true && now2.webPackage === webPackage, 'meta ' + JSON.stringify(now2));
+    } finally { await P.close(); current = S; }
+    // the image has the package of the site, and the fonts of the preparation
+    const R = session();
+    try {
+      current = R;
+      await R.started();
+      assert(R.ready.source === 'saved' && R.ready.webPackage === webPackage && R.ready.prepared === true,
+             'ready ' + JSON.stringify(R.ready));
+      R.send('OSWebDriver packageVersion\n');
+      await R.expectOut(val(String(webPackage)));
+      await R.prompt();
+      R.send(FONT);
+      await R.expectOut(val(fontClass));
+      await R.prompt();
+    } finally { await R.close(); current = S; }
+  });
+
+  if (versions) await check('23 a current slot opens the world directly', async () => {
+    const W = session(world, { display: true });
+    try {
+      current = W;
+      await waitFor('ready', () => W.ready || W.crash, 60000);
+      W.alive();
+      assert(W.ready.source === 'saved' && W.ready.prepared === true && W.ready.preparing === false &&
+             W.ready.webPackage === webPackage, 'ready ' + JSON.stringify(W.ready));
+      assert(W.msgs.some(m => m.type === 'display' && m.kind === 'created'), 'a display');
+      await sleep(1000);
+      W.alive();
+      assert(!W.prepared && !W.saved.length, 'not prepared again: ' + JSON.stringify(W.saved));
+    } finally { await W.close(); current = S; }
   });
 
   await S.close();

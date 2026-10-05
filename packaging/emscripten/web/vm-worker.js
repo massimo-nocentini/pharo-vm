@@ -11,11 +11,13 @@
 //                    resetStorage {id}, flush, display {...}
 //   worker -> page   progress {phase, loaded, total},
 //                    ready {image, source, persisted, savedAt, world,
-//                           prepared, preparing, sources, storageError},
+//                           prepared, webPackage, preparing, sources,
+//                           storageError, fonts},
 //                    output {fd, text}, state {state, waiting}, tick,
 //                    interrupted {registered}, edited {edited},
-//                    storing, saved {bytes, prepared, error, upload},
-//                    prepared {error, saved},
+//                    storing, saved {bytes, prepared, webPackage, error,
+//                                    upload},
+//                    prepared {error, saved, webPackage},
 //                    superseded, reset {id, error}, exit {code},
 //                    crash {message, stack, stacks}, fs-result {id, ...},
 //                    file {id, name, data, count}, error {id, message},
@@ -61,9 +63,19 @@
 // comes after the slice that saved it), the worker reads it and its .changes
 // from /pharo, says "storing", stores them as the new slot, with the
 // .sources of the image when it has its own, and says "saved".
-// The slot says whether its image can open the world (prepared): in the
-// Console the REPL tells, in the file WORLD_FILE (st/web-repl.st), else the
-// name of the class of OSWindow-Web must be in the bytes of the image.  An
+// The slot says which version of OSWindow-Web its image has (webPackage, 0
+// without the package), and so whether it can open the world (prepared):
+// the version must be at least manifest.webPackage, the one of this site
+// (stage.mjs reads it from OSWebDriver class>>packageVersion; a manifest
+// without it asks for 1, any OSWindow-Web).  In the Console the REPL tells,
+// in the file WORLD_FILE (st/web-repl.st); else the bytes of the image do:
+// without the name of the class of OSWindow-Web, 0; else the highest version
+// that ends a Symbol #OSWindowWebPackage<version> in them (OSWebDriver class
+// >>packageMarker), or 1 when none does (the package before the versions).
+// The version is measured from the image, never taken from the manifest; a
+// slot saved before there were versions counts as 1 when it was prepared
+// (PharoStorage.webPackage).  An image saved in the Console with an older
+// version keeps it, and is prepared again on its next world boot.  An
 // upload becomes the slot only once it has booted: when the REPL first waits for
 // input (the world: first sleeps), with "saved {upload: true}"; one that
 // crashes or quits before leaves the slot as it was.  ready.persisted says
@@ -85,18 +97,22 @@
 // was changed that the slot does not have.
 //
 // Preparation.  The world page sends init.prepare: an image that cannot
-// open the world (not prepared) is then prepared for it, as the Console's
-// "Prepare for the world" does it.  The worker boots it as the Console
-// would, with the REPL and without a display, and says ready {preparing:
-// true}.  Once the REPL waits for input (an upload is then kept, as in the
-// Console), the worker types PREPARE, which files in st/web-bootstrap.st
-// (OSWindow-Web) and saves, in one evaluation that an error stops before
-// the save.  "prepared" ends it: without error once the image saved, which
-// the REPL says can open the world, is stored as the slot, which the page
-// then boots in a world worker of its own; else error says why, with
-// saved: true when the image saved itself (Download gives it) but could not
-// be stored or still cannot open the world, and saved: false when the
-// evaluation failed (error is then what it wrote on stderr).
+// open the world (not prepared: it lacks OSWindow-Web, or has an older
+// version of it) is then prepared for it, as the Console's "Prepare for the
+// world" does it.  The worker boots it as the Console would, with the REPL
+// and without a display, and says ready {preparing: true}.  Once the REPL
+// waits for input (an upload is then kept, as in the Console), the worker
+// types PREPARE, which files in st/web-bootstrap.st (OSWindow-Web, and the
+// fonts) and saves, in one evaluation that an error stops before the save.
+// "prepared" ends it: without error once the image saved, with the version
+// of OSWindow-Web of the manifest exactly, as the REPL says, is stored as
+// the slot, which the page then boots in a world worker of its own; else
+// error says why, with saved: true when the image saved itself (Download
+// gives it) but could not be stored or has another version (webPackage,
+// stored as it is: the worker does not prepare it again by itself), and
+// saved: false when the evaluation failed (error is then what it wrote on
+// stderr).  ready.fonts is manifest.fonts, the fonts that a preparation sets
+// up: 'freetype' or 'bitmap' (null for a manifest without it).
 //
 // M2.  With init.display the worker loads display-worker.js, whose
 // PharoDisplay.create(init.display, post) is the webDisplay of the VM.  It
@@ -127,7 +143,11 @@ const DIR = '/pharo';
 const SAVE = 'Smalltalk snapshot: true andQuit: false';
 // The class of the OSWindow-Web package that a world image has
 const WORLD_CLASS = 'OSWebDriver';
-// Where the REPL says whether its image has it (PHARO_WEB_WORLD_FILE)
+// What OSWebDriver class>>packageMarker answers, a Symbol of the image,
+// before the version of the package
+const PACKAGE_MARKER = 'OSWindowWebPackage';
+// Where the REPL says which version of it its image has, 0 without it
+// (PHARO_WEB_WORLD_FILE)
 const WORLD_FILE = DIR + '/.pharo-web-world';
 // What prepares an image for the world, in one evaluation of the REPL
 const PREPARE = "CodeImporter evaluateFileNamed: '" + DIR + "/st/web-bootstrap.st'. " + SAVE;
@@ -141,7 +161,7 @@ let owned = null, syncTimer = 0, syncedKey = '', syncedAt = 0, settleTimer = 0;
 // the .changes when the VM first waited for input or its image was stored
 // (null before), and whether it differs now ("edited")
 let editedBase = null, edited = false;
-// {image, changes, prepared}: the upload that this VM booted, not stored yet
+// {image, changes}: the upload that this VM booted, not stored yet
 let upload = null;
 // {name, data (a Blob)}: the .sources of the image when it is its own, kept
 // in the slot with it
@@ -256,33 +276,58 @@ function storedChanges(key) {
   noteEdited();
 }
 
-// Whether an image has the OSWindow-Web package: the name of its class is
-// a ByteSymbol of the image, so its bytes are in the file
-function hasBytes(data, text) {
+// Each place where the ASCII text is in data, from the first: f gets the
+// offset after it, and answers whether to go on
+function eachEnd(data, text, f) {
   const t = new TextEncoder().encode(text), last = data.length - t.length;
   for (let i = data.indexOf(t[0]); i >= 0 && i <= last; i = data.indexOf(t[0], i + 1)) {
     let k = 1;
     while (k < t.length && data[i + k] === t[k]) k++;
-    if (k === t.length) return true;
+    if (k === t.length && !f(i + k)) return;
   }
-  return false;
 }
-// What the REPL wrote in WORLD_FILE, true or false, or null
+// Whether an image has the OSWindow-Web package: the name of its class is
+// a ByteSymbol of the image, so its bytes are in the file
+function hasBytes(data, text) {
+  let found = false;
+  eachEnd(data, text, () => { found = true; return false; });
+  return found;
+}
+// The highest version that follows PACKAGE_MARKER in the bytes of the
+// image, or 0 (a Symbol is its bytes, then zeros up to its last word)
+function markerOf(data) {
+  let best = 0;
+  eachEnd(data, PACKAGE_MARKER, end => {
+    let v = 0, k = end;
+    while (k < data.length && k - end < 6 && data[k] >= 0x30 && data[k] <= 0x39) v = v * 10 + data[k++] - 0x30;
+    best = Math.max(best, v);
+    return true;
+  });
+  return best;
+}
+// The version of OSWindow-Web that the world of this site needs
+const wantedPackage = () => (manifest && Number.isInteger(manifest.webPackage) && manifest.webPackage) || 1;
+// What the REPL wrote in WORLD_FILE: the version of OSWindow-Web of its
+// image, 0 without it, or null
 function worldSaid() {
   if (!drv || mode !== 'console') return null;
   try {
     const said = new TextDecoder().decode(drv.FS.readFile(WORLD_FILE)).trim();
-    return said === 'true' ? true : said === 'false' ? false : null;
+    // (true and false: what web-repl.st wrote before the versions)
+    return /^\d+$/.test(said) ? Number(said) : said === 'true' ? 1 : said === 'false' ? 0 : null;
   } catch (e) { return null; }
 }
-// Whether the image can open the world: what the REPL said, once it runs,
-// else whether the name of the class is in its bytes, which a string or a
-// symbol of that name kept by an image without the package fakes
-function isPrepared(image) {
-  if (!manifest || !manifest.world) return false;
+// The version of OSWindow-Web of the image: what the REPL said, once it
+// runs, else what its bytes say, which a string or a symbol of those names
+// kept by an image without the package fakes
+function webPackageOf(image) {
   const said = worldSaid();
-  return said === null ? hasBytes(image, WORLD_CLASS) : said;
+  if (said !== null) return said;
+  if (!hasBytes(image, WORLD_CLASS)) return 0;
+  return Math.max(1, markerOf(image));
 }
+// Whether an image with that version of OSWindow-Web can open the world
+const canOpen = version => !!(manifest && manifest.world) && version >= wantedPackage();
 
 function startSync() {
   if (!syncTimer) syncTimer = setInterval(() => syncChanges(false), SYNC_MS);
@@ -332,16 +377,16 @@ function remember(path) {
 // whether it can open the world.
 function keepUpload() {
   const { image, changes } = upload;
-  const prepared = isPrepared(image);
+  const webPackage = webPackageOf(image), prepared = canOpen(webPackage);
   upload = null;
   post({ type: 'storing' });
   enqueue(async () => {
     try {
-      owned = await store.save(image, changes, { build: manifest.build, prepared }, ownSources, null);
+      owned = await store.save(image, changes, { build: manifest.build, prepared, webPackage }, ownSources, null);
       startSync();
-      post({ type: 'saved', bytes: image.length, prepared, upload: true });
+      post({ type: 'saved', bytes: image.length, prepared, webPackage, upload: true });
     } catch (e) {
-      post({ type: 'saved', bytes: image.length, prepared, upload: true, error: storageFailure(e) });
+      post({ type: 'saved', bytes: image.length, prepared, webPackage, upload: true, error: storageFailure(e) });
     }
   });
 }
@@ -360,27 +405,27 @@ function imageSaved(path) {
   remember(path);
   const key = syncedKey;
   upload = null;                        // this save is the slot now
-  const prepared = isPrepared(image);
+  const webPackage = webPackageOf(image), prepared = canOpen(webPackage);
   const prepare = preparing === 2;
   if (prepare) prepareSaved = true;
   if (!store) {
     const error = storageError || 'this page does not keep images; use Download to keep a copy';
-    post({ type: 'saved', bytes: image.length, prepared, error });
-    if (prepare) prepareEnd(error);
+    post({ type: 'saved', bytes: image.length, prepared, webPackage, error });
+    if (prepare) prepareEnd(error, webPackage);
     return;
   }
   post({ type: 'storing' });
   enqueue(async () => {
     try {
       // (a .sources that the slot of this VM has stays as stored)
-      owned = await store.save(image, changes, { build: manifest.build, prepared }, ownSources, owned);
+      owned = await store.save(image, changes, { build: manifest.build, prepared, webPackage }, ownSources, owned);
       startSync();
-      post({ type: 'saved', bytes: image.length, prepared });
+      post({ type: 'saved', bytes: image.length, prepared, webPackage });
       storedChanges(key);
-      if (prepare) prepareEnd(prepared ? null : 'the image still cannot open the world after web-bootstrap.st');
+      if (prepare) prepareEnd(prepareMismatch(webPackage), webPackage);
     } catch (e) {
-      post({ type: 'saved', bytes: image.length, prepared, error: storageFailure(e) });
-      if (prepare) prepareEnd(storageFailure(e));
+      post({ type: 'saved', bytes: image.length, prepared, webPackage, error: storageFailure(e) });
+      if (prepare) prepareEnd(storageFailure(e), webPackage);
     }
   });
 }
@@ -400,10 +445,20 @@ function prepareStep() {
            error: prepareErr.trim() || 'web-bootstrap.st did not save the image' });
   }
 }
-// The image that PREPARE saved is stored (error null), or not
-function prepareEnd(error) {
+// What is wrong with the version of OSWindow-Web of the image that PREPARE
+// saved, or null: it must be the one of the manifest, exactly
+function prepareMismatch(version) {
+  const wanted = wantedPackage();
+  if (version === wanted && canOpen(version)) return null;
+  if (!version) return 'the image still cannot open the world after web-bootstrap.st';
+  return 'web-bootstrap.st left version ' + version + ' of OSWindow-Web in the image, but this site has version ' +
+    wanted;
+}
+// The image that PREPARE saved, with that version of OSWindow-Web, is
+// stored (error null), or not
+function prepareEnd(error, webPackage) {
   preparing = 3;
-  post(error ? { type: 'prepared', saved: true, error } : { type: 'prepared', saved: true });
+  post(error ? { type: 'prepared', saved: true, webPackage, error } : { type: 'prepared', saved: true, webPackage });
 }
 
 // ---- loading
@@ -481,7 +536,10 @@ async function load(m) {
   const v = '?v=' + encodeURIComponent(manifest.build);
   const imageName = manifest.image, changesName = changesOf(imageName);
   const siteSources = manifest.files.find(f => /\.sources$/.test(f.path)) || null;
-  let image = null, changes = null, source = 'download', savedAt = null, prepared = !!manifest.world;
+  let image = null, changes = null, source = 'download', savedAt = null;
+  // the image of the site has the version of the manifest: stage.mjs reads
+  // it from the package that prepared that image
+  let webPackage = manifest.world ? wantedPackage() : 0;
   let sources = null;                   // {name, data}: the .sources that came with the image
   if (m.upload) {
     image = await read(m.upload.image);
@@ -492,7 +550,7 @@ async function load(m) {
       sources = { name, data: m.upload.sources.data };
     }
     source = 'upload';
-    prepared = isPrepared(image);
+    webPackage = webPackageOf(image);
   } else if (store) {
     try {
       let report = null;
@@ -503,7 +561,8 @@ async function load(m) {
         sources = saved.sources;
         source = 'saved';
         savedAt = saved.meta.savedAt;
-        prepared = saved.meta.prepared === undefined ? isPrepared(image) : !!saved.meta.prepared;
+        const kept = PharoStorage.webPackage(saved.meta);
+        webPackage = kept === null ? webPackageOf(image) : kept;
         owned = saved.meta;
       }
     } catch (e) {
@@ -537,7 +596,7 @@ async function load(m) {
   if (sourcesData) files.push({ path: DIR + '/' + sources.name, data: sourcesData });
   // An upload becomes the slot once it has booted (keepUpload): a broken
   // one must not replace the image saved in this browser
-  if (m.upload && store) upload = { image, changes, prepared };
+  if (m.upload && store) upload = { image, changes };
   // Whether an image is saved in this browser: the slot booted, or the one
   // that an upload replaces once it has booted, or one that could not be
   // read (which resetStorage deletes)
@@ -545,7 +604,7 @@ async function load(m) {
   if (!stored && store) {
     try { stored = !!(await store.meta()); } catch (e) { /* none that can be used */ }
   }
-  return { files, source, savedAt, prepared, stored,
+  return { files, source, savedAt, webPackage, prepared: canOpen(webPackage), stored,
            sources: sourcesData ? sources.name : siteSources ? siteSources.path : null };
 }
 
@@ -557,8 +616,9 @@ async function boot(m) {
   manifest = await fetchManifest(m.manifestUrl || 'manifest.json' + q);
   if (m.build && m.build !== manifest.build)
     console.warn('vm-worker: the page is of build ' + m.build + ', the files of build ' + manifest.build);
-  const { files, source, savedAt, prepared, stored, sources } = await load(m);
-  // an image that cannot open the world is prepared for it, in the REPL
+  const { files, source, savedAt, webPackage, prepared, stored, sources } = await load(m);
+  // an image that cannot open the world is prepared for it, in the REPL: one
+  // without OSWindow-Web, or with an older version of it
   if (m.prepare && mode === 'world' && manifest.world && !prepared) {
     preparing = 1;
     mode = 'console';
@@ -607,8 +667,8 @@ async function boot(m) {
   if (display && display.handle) display.handle({ kind: 'attach' }, drv);
   remember(image);
   if (owned) startSync();
-  post({ type: 'ready', image, source, persisted: stored, savedAt, world: !!manifest.world, prepared,
-         preparing: !!preparing, sources, storageError });
+  post({ type: 'ready', image, source, persisted: stored, savedAt, world: !!manifest.world, prepared, webPackage,
+         preparing: !!preparing, sources, storageError, fonts: manifest.fonts || null });
   drv.begin();
 }
 
