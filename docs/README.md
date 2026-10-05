@@ -1,7 +1,7 @@
 # Pharo 15 on WebAssembly
 
 The Pharo VM built for WebAssembly, from branch `pharo-12-wasm` at commit
-`fb1f3ff5b` of pharo-vm, with a Pharo 15 image: Pharo15.0-SNAPSHOT, build 41
+`2a85a1e5b` of pharo-vm, with a Pharo 15 image: Pharo15.0-SNAPSHOT, build 41
 (`4e572fed79`, from https://files.pharo.org/image/150/latest-64.zip as of
 1 October 2026), prepared for the world page.  `docs/WebAssembly.md` in the
 repository says how it is made and how it works.
