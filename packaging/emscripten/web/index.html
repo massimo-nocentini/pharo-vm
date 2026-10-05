@@ -150,14 +150,11 @@ button, input, textarea { font: inherit; color: inherit; }
   color: inherit;
   text-decoration: none;
 }
-.brand svg { width: 34px; height: 34px; flex: none; }
-.brand .tower { fill: var(--accent); }
-.brand .lamp { fill: var(--accent-strong); }
-.brand .band { fill: var(--surface); }
-.brand .beam { fill: var(--beacon); }
 .brand div { min-width: 0; }
-.brand h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -.01em; line-height: 1.2; }
-.brand p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* the logo of pharo.org (pharo-logo.png, 942x312), which says Pharo */
+.brand h1 { margin: 0; line-height: 0; }
+.brand h1 img { display: block; height: 32px; width: auto; }
+.brand p { margin: 3px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .top .grow { flex: 1; }
 
 .pill {
@@ -381,14 +378,8 @@ code { font-family: var(--mono); font-size: .92em; }
 <div class="app">
   <header class="top">
     <a class="brand" href="https://pharo.org/" title="pharo.org">
-      <svg viewBox="0 0 32 32" aria-hidden="true">
-        <path class="beam" d="M10 7l8-4v4z"/>
-        <path class="tower" d="M12 30l1.6-17h4.8L20 30z"/>
-        <path class="lamp" d="M12.6 9h6.8v4h-6.8z"/>
-        <path class="band" d="M13 20h6l.3 3h-6.6z"/>
-      </svg>
       <div>
-        <h1>Pharo</h1>
+        <h1><img src="pharo-logo.png?v=@BUILD@" alt="Pharo" width="97" height="32"></h1>
         <p>The Pharo VM, compiled to WebAssembly, running in your browser</p>
       </div>
     </a>
