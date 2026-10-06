@@ -52,7 +52,7 @@
   --shadow: 0 1px 2px rgb(15 30 50 / .06), 0 4px 16px rgb(15 30 50 / .06);
   --scrim: rgb(15 30 50 / .32);
   --radius: 10px;
-  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Cascadia Code", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
+  --mono: ui-monospace, "Noto Sans Mono", "Noto Mono", monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
   color-scheme: light;
 }
@@ -528,7 +528,6 @@ details > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; margin
 }
 .nb-cell.is-selected { background: color-mix(in srgb, var(--surface-2) 45%, transparent); }
 .nb-cell.is-selected::before { background: var(--accent); }
-.nb-cell:focus-visible { box-shadow: 0 0 0 2px var(--focus); }
 .nb-cell[data-status="running"]::before, .nb-cell[data-status="waiting"]::before { background: var(--busy); animation: pulse 1.2s ease-in-out infinite; }
 .nb-cell[data-status="waiting"]::before { background: var(--wait); animation: none; }
 .nb-cell[data-status="error"]::before { background: var(--bad); }
@@ -568,10 +567,9 @@ details > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; margin
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--term-bg);
-  transition: border-color .12s, box-shadow .12s;
+  transition: border-color .12s;
 }
 .nb-cell.is-selected .nb-editor { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
-.nb-editor:focus-within { border-color: var(--focus) !important; box-shadow: 0 0 0 1px var(--focus); }
 .nb-src, .nb-hl {
   display: block;
   width: 100%;
