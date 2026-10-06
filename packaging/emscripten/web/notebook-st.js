@@ -486,8 +486,8 @@
          '- The notebook has a Pharo of its own, started from the image of the **Console** tab as it was last saved: ' +
          'what you do here does not change that image. **Restart** starts the notebook\'s Pharo afresh.\n' +
          '- Press **Esc** for command mode, then **?** for every shortcut.\n' +
-         '- The notebook is saved in this browser as you type. **More → Export** keeps a copy as `.st` or as `.json` ' +
-         '(with outputs).\n' +
+         '- The notebook is saved in this browser as you type. **More → Export** keeps a copy as `.st`, as `.json` ' +
+         '(with outputs) or as a `.html` page to read or print, that opens without this site.\n' +
          '- **More → Upload files** (or dropping files here) copies them into `/pharo`; then ' +
          '`\'file.st\' asFileReference fileIn`.'),
       code('3 + 4'),
