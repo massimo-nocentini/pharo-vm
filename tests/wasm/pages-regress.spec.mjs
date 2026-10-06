@@ -14,7 +14,9 @@
 // page is hidden (no animation frames), the .changes stored soon after an
 // evaluation, the questions before the page goes, Reset after a failed boot,
 // two sites of one origin, a database connection that the browser closed,
-// and a browser without DecompressionStream.  The world, when WEB_DIR has
+// and a browser without DecompressionStream.  Its Notebook tab: a cell of 5
+// MB of output while the page is hidden, and the autosaves of two sites of
+// one origin.  The world, when WEB_DIR has
 // it: its progress bar and live region, F6 and Tab, a refused clipboard
 // write, and a world that does not open.  The checks that make a page fail
 // on purpose do so in contexts of their own, whose errors are not counted.
@@ -132,6 +134,7 @@ await run(async t => {
   });
 
   await check('Console: the key that ends a composition evaluates nothing; Escape in one clears nothing', async () => {
+    const before = await term(page);
     await page.fill('#line', "'abc");
     const key = init => page.$eval('#line', (e, init) => {
       const k = new KeyboardEvent('keydown', Object.assign({ bubbles: true, cancelable: true }, init));
@@ -143,7 +146,10 @@ await run(async t => {
     assert(!(await key({ key: 'Escape', keyCode: 229, isComposing: true })), 'Escape in a composition');
     assert(!(await key({ key: 'ArrowUp', keyCode: 229, isComposing: true })), 'ArrowUp in a composition');
     assert(await page.inputValue('#line') === "'abc", 'the line ' + JSON.stringify(await page.inputValue('#line')));
-    assert(await state(page) === 'waiting', 'nothing was evaluated');
+    // (the image is busy on its own for a slice or two soon after its
+    // first prompt, so the state is waited for, and the terminal compared)
+    await page.waitForFunction(() => document.getElementById('status').dataset.state === 'waiting', null, { timeout: 5000 });
+    assert(await term(page) === before, 'nothing was evaluated: ' + JSON.stringify((await term(page)).slice(before.length)));
     await page.fill('#line', '');
     await evalIn(page, '3 + 4', /\n7\nst> $/);
   });
@@ -279,6 +285,86 @@ await run(async t => {
       assert(await meta(b) === null, 'the root has no slot');
       await a.close();
       await b.close();
+    } finally { await context.close(); }
+  });
+
+  // ---- the Notebook tab of the Console page
+
+  const nbState = (p, re, timeout = 90000) =>
+    p.waitForFunction(([s, f]) => new RegExp(s, f).test(document.getElementById('nb-status').dataset.state),
+                      [re.source, re.flags], { timeout, polling: 100 });
+  // the source of the last code cell of p, as typed
+  const setLast = (p, v) => p.evaluate(v => {
+    const ta = [...document.querySelectorAll('#nb-cells > li[data-type="code"] .nb-src')].pop();
+    ta.value = v;
+    ta.dispatchEvent(new Event('input'));
+  }, v);
+
+  await check('Notebook: more than 1 MiB of output while the page is hidden: acked as it comes, the cell ends', async () => {
+    const context = await fresh();
+    try {
+      const p = await context.newPage();
+      t.watch(p);
+      await p.goto(base + 'index.html');
+      await started(p);
+      await p.click('#tab-notebook');
+      await nbState(p, /^ready$/);
+      await p.click('#nb-end-code');
+      const i = await p.$$eval('#nb-cells > li', l => l.length - 1);
+      const src = p.locator('#nb-cells > li').nth(i).locator('.nb-src');
+      await src.fill('1 to: 50000 do: [ :k | Transcript show: (k printPaddedWith: $0 to: 8) , (String new: 91 withAll: $x); cr ]. #done');
+      await p.evaluate(() => window.__hide());
+      const t0 = Date.now();
+      try {
+        await src.press('Control+Enter');
+        // (no frames come to the waits of Playwright either: polled)
+        await p.waitForFunction(i => document.querySelectorAll('#nb-cells > li')[i].dataset.status === 'ok', i,
+                                { timeout: 120000, polling: 100 });
+      } finally { await p.evaluate(() => window.__show()); }
+      console.log('  # 5 MB in a hidden page in ' + (Date.now() - t0) + ' ms');
+      await p.waitForFunction(i => {
+        const li = document.querySelectorAll('#nb-cells > li')[i];
+        return /00050000x{91}\s*$/.test([...li.querySelectorAll('.nb-stream')].map(e => e.textContent).join('')) &&
+          [...li.querySelectorAll('.nb-value')].some(e => e.textContent === '#done');
+      }, i, { timeout: 30000 });
+      await p.close();
+    } finally { await context.close(); }
+  });
+
+  await check('Notebook: two sites of one origin, /a/ and /a/sub/, keep an autosave each', async () => {
+    const context = await fresh();
+    try {
+      await context.route(u => new URL(u).pathname.startsWith('/a/'), async r => {
+        const u = new URL(r.request().url());
+        u.pathname = u.pathname.slice(u.pathname.startsWith('/a/sub/') ? '/a/sub'.length : '/a'.length);
+        await r.fulfill({ response: await r.fetch({ url: u.href }) });
+      });
+      const sites = { '/a/': null, '/a/sub/': null };
+      for (const dir of Object.keys(sites)) {
+        const p = sites[dir] = await context.newPage();
+        t.watch(p);
+        await p.goto(base.replace(/\/$/, '') + dir + 'index.html');
+        await started(p);
+        await p.click('#tab-notebook');
+        await p.waitForFunction(() => document.querySelector('#nb-cells > li[data-type="code"]'));
+      }
+      const saved = (p, dir, re) => p.waitForFunction(([k, s]) => new RegExp(s).test(localStorage.getItem(k) || ''),
+                                                      ['pharo-wasm.notebook:' + dir, re.source], { timeout: 5000 });
+      for (const [dir, text] of [['/a/', "'site a'"], ['/a/sub/', "'site sub'"], ['/a/', "'site a again'"]]) {
+        await setLast(sites[dir], text);
+        await saved(sites[dir], dir, new RegExp(text));
+      }
+      await sites['/a/'].waitForTimeout(1500);
+      const keys = await sites['/a/'].evaluate(() => Object.keys(localStorage).filter(k => /notebook/.test(k)).sort());
+      assert(JSON.stringify(keys) === '["pharo-wasm.notebook:/a/","pharo-wasm.notebook:/a/sub/"]', 'keys ' + JSON.stringify(keys));
+      const a = await sites['/a/'].evaluate(() => localStorage.getItem('pharo-wasm.notebook:/a/'));
+      const sub = await sites['/a/sub/'].evaluate(() => localStorage.getItem('pharo-wasm.notebook:/a/sub/'));
+      assert(/'site a again'/.test(a) && !/'site sub'/.test(a) && /'site sub'/.test(sub) && !/'site a/.test(sub), 'the autosaves mixed');
+      for (const [dir, p] of Object.entries(sites)) {
+        const n = await p.evaluate(() => [document.getElementById('nb-notice').hidden, document.getElementById('nb-notice-text').textContent]);
+        assert(n[0] || !/another tab/.test(n[1]), dir + ' asks: ' + n[1]);
+        await p.close();
+      }
     } finally { await context.close(); }
   });
 

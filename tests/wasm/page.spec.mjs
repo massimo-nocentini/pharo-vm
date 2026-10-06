@@ -28,6 +28,12 @@
 // also by the world page; a ?gitProxy= of the URL is ignored; without
 // localStorage it holds for the session.  A clone through the proxy is
 // git.spec.mjs's.
+//
+// The Console is the first of two tabs, Console and Notebook (whose checks
+// are notebook.spec.mjs's): while the Notebook shows, Esc, Ctrl+C and
+// Ctrl+L do nothing to the Console, and a drop on the page neither shows the
+// Console's #drop nor opens an image.  No page may violate the
+// Content-Security-Policy of index.html.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -57,6 +63,12 @@ function specZips(webDir) {
   return zips;
 }
 const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// The violations of the Content-Security-Policy, which an init script of
+// each context reports through __cspViolation
+const CSP_INIT = () => document.addEventListener('securitypolicyviolation', e => {
+  if (window.__cspViolation) window.__cspViolation(e.violatedDirective + ' ' + (e.blockedURI || '') + ' at ' + location.href);
+});
 
 await run(async t => {
   const { page, check, assert, manifest } = t;
@@ -138,6 +150,9 @@ await run(async t => {
   }));
   listen(page);
   t.context.on('page', listen);
+  const csp = [];
+  await t.context.exposeFunction('__cspViolation', s => { csp.push(s); });
+  await t.context.addInitScript(CSP_INIT);
   // the notice, with its buttons, once it says what re matches
   const noticeSays = (p, re, timeout = 90000) =>
     p.waitForFunction(src => !document.getElementById('notice').hidden &&
@@ -198,10 +213,29 @@ await run(async t => {
     console.log('  # prompt after ' + (Date.now() - t0) + ' ms');
   });
 
+  await check('the Console is the first of two tabs, under the page\'s Content-Security-Policy', async () => {
+    const tabs = await page.$$eval('[role="tab"]', l => l.map(e => [e.id, e.textContent.trim(), e.getAttribute('aria-selected')]));
+    assert(JSON.stringify(tabs) === '[["tab-console","Console","true"],["tab-notebook","Notebook","false"]]', 'tabs ' + JSON.stringify(tabs));
+    assert(await page.isVisible('#panel-console') && await page.isHidden('#panel-notebook'), 'the Console panel shows');
+    assert(await page.$eval('#console', e => e.closest('#panel-console') !== null), 'the Console is in its panel');
+    const meta = await page.$eval('meta[http-equiv="Content-Security-Policy"]', e => e.getAttribute('content'));
+    assert(/default-src 'self'/.test(meta) && /script-src 'self' 'wasm-unsafe-eval'/.test(meta) && /object-src 'none'/.test(meta) &&
+           /form-action 'none'/.test(meta), 'the policy: ' + meta);
+    const vm = await page.$$eval('script[src]', l => l.map(e => e.getAttribute('src').replace(/\?.*/, '')));
+    assert(JSON.stringify(vm) === JSON.stringify(['open-image.js', 'page.js', 'notebook-lib.js', 'notebook-st.js', 'nb-kernel.js', 'notebook.js']),
+           'the scripts: ' + vm);
+  });
+
   await check('3+4 and Enter gives 7; Transcript output', async () => {
     await evalTo('3+4', /\n7\nst> $/);
     assert(/^st> 3\+4\n7\n/.test(await term()), 'input echoed after the prompt');
     await evalTo("Transcript show: 'hello'; cr. #shown", /hello\n#shown\nst> $/);
+    // the form of the line submits nowhere (its form-action is 'none')
+    await mark();
+    await page.fill('#line', '5 * 5');
+    await page.click('#send');
+    await waitSince(/\n25\nst> $/);
+    assert(page.url() === t.base + 'index.html', 'the page went to ' + page.url());
   });
 
   await check('multi-line input with Shift+Enter', async () => {
@@ -306,6 +340,52 @@ await run(async t => {
       const text = await p.$eval('#term', e => e.textContent);
       assert(!/VM restarted/.test(text) && /(^|\n)st> $/.test(text), 'term ' + JSON.stringify(text));
     } finally { await p.close(); }
+  });
+
+  await check('while the Notebook tab shows, Esc, Ctrl+C, Ctrl+L and a drop do nothing to the Console', async () => {
+    // a context of its own: the tab shown is kept in its localStorage
+    const context = await t.browser.newContext();
+    try {
+      await context.exposeFunction('__cspViolation', s => { csp.push(s); });
+      await context.addInitScript(CSP_INIT);
+      const p = await context.newPage();
+      t.watch(p);
+      listen(p);
+      await p.goto(t.base + 'index.html');
+      await p.waitForFunction(() => document.getElementById('status').dataset.state === 'waiting' &&
+                              /(^|\n)st> $/.test(document.getElementById('term').textContent), null, { timeout: 90000 });
+      const shown = sel => p.evaluate(sel => {
+        const e = document.querySelector(sel);
+        return !!e && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
+      }, sel);
+      const st = () => p.$eval('#status', e => e.dataset.state);
+      await p.fill('#line', '[true] whileTrue');
+      await p.press('#line', 'Enter');
+      await p.waitForFunction(() => document.getElementById('status').dataset.state === 'busy');
+      await p.click('#tab-notebook');
+      assert(!(await shown('#status')) && !(await shown('#panel-console')) && await shown('#panel-notebook'), 'the Notebook shows');
+      const text = await p.$eval('#term', e => e.textContent);
+      await p.focus('#tab-notebook');
+      for (const key of ['Escape', 'Control+c', 'Control+l']) await p.keyboard.press(key);
+      await p.waitForTimeout(1000);
+      assert(await st() === 'busy', 'the Console was stopped: ' + await st());
+      assert(await p.$eval('#term', e => e.textContent) === text, 'the terminal changed');
+      // a drop of a zip on the page: no #drop, no Open
+      const z = specZips(t.webDir);
+      const d = await dropFiles(p, [z.noImage]);
+      assert(!d.shown && d.hidden, 'the drop ' + JSON.stringify(d));
+      await p.waitForTimeout(1000);
+      assert(!/no-image\.zip/.test(await p.textContent('#notice-text')), 'opened: ' + await p.textContent('#notice-text'));
+      // back on the Console, Esc stops it
+      await p.click('#tab-console');
+      assert(await shown('#status') && await shown('#panel-console'), 'the Console shows');
+      await p.focus('#line');
+      await p.keyboard.press('Escape');
+      await p.waitForFunction(at => /Interrupted\.\n/.test(document.getElementById('term').textContent.slice(at)), text.length,
+                              { timeout: 5000 });
+      await p.waitForFunction(() => document.getElementById('status').dataset.state === 'waiting', null, { timeout: 5000 });
+      await p.close();
+    } finally { await context.close(); }
   });
 
   await check('two tabs: once one saves, the other says so and stores no .changes over it', async () => {
@@ -941,6 +1021,10 @@ await run(async t => {
     assert(/served over HTTP/.test(await f.textContent('#notice-text')), 'notice: ' + await f.textContent('#notice-text'));
     assert(await f.isDisabled('#line'), 'input disabled');
     await f.close();
+  });
+
+  await check('no Content-Security-Policy violation, on any page', async () => {
+    assert(!csp.length, csp.slice(0, 5).join(' | '));
   });
 
   await check('no worker warned of an engine error or of a callback that threw', async () => {

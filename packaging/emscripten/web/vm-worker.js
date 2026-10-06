@@ -1,6 +1,7 @@
 // vm-worker.js - run the Pharo VM for WebAssembly in a Web Worker
 //
-// The page owns one worker per VM: page.js (the Console) and, in M2,
+// The page owns one worker per VM: page.js (the Console), notebook.js (the
+// notebook kernel of the Console page, through nb-kernel.js) and, in M2,
 // world.js (the world), and sdl.js (the world through SDL2, sdl.html).
 // Messages:
 //
@@ -14,8 +15,9 @@
 //   worker -> page   progress {phase, loaded, total},
 //                    ready {image, source, persisted, savedAt, world,
 //                           prepared, webPackage, preparing, sources,
-//                           storageError, fonts, git, gitHttp, sdl2},
-//                    output {fd, text}, state {state, waiting}, tick,
+//                           storageError, fonts, git, gitHttp, sdl2, mode},
+//                    output {fd, text}, output {fd: 3, bytes},
+//                    state {state, waiting}, tick,
 //                    interrupted {registered}, edited {edited},
 //                    storing, saved {bytes, prepared, webPackage, error,
 //                                    upload},
@@ -53,7 +55,8 @@
 // the VM's directory (FFIUnix64LibraryFinder), and the VM, which has it
 // built in, never reads them.  The VM then boots with
 // PharoVMDriver.vmArgs(init.mode): the REPL of st/web-repl.st, or the
-// world ('world' and 'sdl').  progress says how far the loading got:
+// world ('world' and 'sdl'), or the notebook kernel of st/web-notebook.st
+// ('notebook', below).  progress says how far the loading got:
 // "fetch" (the bytes of the files, inflated), "restore" (the slot), then
 // "boot".
 //
@@ -61,9 +64,13 @@
 // streaming decoder per fd), coalesced up to 64 KB, and posted at the end
 // of every slice.  It is credit based: the page acks the characters it
 // rendered, and the VM is paused (between slices) while more than 1 MiB are
-// unacknowledged, until fewer than 512 KiB are.  "state" comes when the
-// state changes or after the page sent something; while the VM is BUSY and
-// nothing else was posted for a second, "tick" says that it is alive.
+// unacknowledged, until fewer than 512 KiB are.  The notebook kernel's
+// events (fd 3) stay bytes: output {fd: 3, bytes}, a Uint8Array that is
+// transferred, coalesced with the fd 3 writes next to it, and posted in the
+// order of the writes to fd 1 and 2; its acks count bytes, against the
+// same credit.  "state" comes when the state changes or after the page sent
+// something; while the VM is BUSY and nothing else was posted for a second,
+// "tick" says that it is alive.
 //
 // Persistence.  When the VM has written an image (HOST_IMAGE_SAVED, which
 // comes after the slice that saved it), the worker reads it and its .changes
@@ -155,6 +162,18 @@
 // firstPresentMs} (PharoSDLShim stats()), what the VM and SDL's presents
 // cost so far.  Without the sdl2 of the manifest, the boot fails.
 //
+// Notebook.  init.mode 'notebook' boots the notebook kernel: the VM files
+// in st/web-notebook.st (vmArgs('notebook')) with the device of its events
+// (PharoVMDriver's events), which the worker posts as fd 3 output.  The
+// requests are JSON lines that the page types with "input"; Stop is
+// "interrupt", as in the Console.  With init.persist it boots the slot of
+// the Console when there is one, else the image of the manifest, but only
+// reads it: it never stores an image or the .changes, and posts no
+// storing, saved, edited, superseded or prepared.  The VM's saves
+// (HOST_IMAGE_SAVED), save, init.upload and init.prepare are ignored, and
+// resetStorage answers reset {id, error: 'not in notebook mode'}.  ready
+// says mode: 'notebook' (the other modes' ready has no mode).
+//
 // The worker URL's ?v= query (the build id) is passed on to every script.
 
 'use strict';
@@ -206,6 +225,7 @@ let ownSources = null;
 let preparing = 0, prepareErr = '', prepareSaved = false;
 let imagePath = DIR + '/Pharo.image', changesPath = DIR + '/Pharo.changes';
 let storing = Promise.resolve();        // the storage work, in order
+// the output not posted yet: {fd, text}, or {fd: 3, chunks} (Uint8Arrays)
 let out = [], outLen = 0, unacked = 0;
 let lastState = null, stateDirty = true, lastPostAt = 0;
 const decoders = { 1: new TextDecoder(), 2: new TextDecoder() };
@@ -220,6 +240,12 @@ const changesOf = path => path.replace(/\.image$/, '') + '.changes';
 const bytes = data => data instanceof Uint8Array ? data : new Uint8Array(data || 0);
 // and those of a Blob too, read
 const read = async data => data instanceof Blob ? new Uint8Array(await data.arrayBuffer()) : bytes(data);
+const concat = chunks => {
+  const all = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+  let at = 0;
+  for (const c of chunks) { all.set(c, at); at += c.length; }
+  return all;
+};
 const errorText = e => String((e && (e.message || e.name || e.code)) || e);
 // The proxy of git's requests that the page gave, or '' (the page checked it)
 const gitProxyOf = p => typeof p === 'string' && /^https?:\/\//i.test(p) ? p : '';
@@ -227,6 +253,13 @@ const gitProxyOf = p => typeof p === 'string' && /^https?:\/\//i.test(p) ? p : '
 // ---- output
 
 function addOut(fd, bytes) {
+  if (fd === 3) {
+    const last = out[out.length - 1];
+    if (last && last.fd === 3) last.chunks.push(bytes); else out.push({ fd, chunks: [bytes] });
+    outLen += bytes.length;
+    if (outLen > COALESCE) flushOut();
+    return;
+  }
   const text = decoders[fd].decode(bytes, { stream: true });
   if (!text) return;
   if (preparing === 2 && fd === 2 && prepareErr.length < 4096) prepareErr += text;
@@ -237,7 +270,14 @@ function addOut(fd, bytes) {
 }
 
 function flushOut() {
-  for (const { fd, text } of out) {
+  for (const { fd, text, chunks } of out) {
+    if (chunks) {
+      // every chunk is a buffer of its own (vm-driver.js), which goes as it is
+      const data = chunks.length === 1 ? chunks[0] : concat(chunks);
+      unacked += data.length;
+      post({ type: 'output', fd, bytes: data }, [data.buffer]);
+      continue;
+    }
     unacked += text.length;
     post({ type: 'output', fd, text });
   }
@@ -570,6 +610,8 @@ function progress(phase, total) {
 
 // The files of /pharo and where the image came from
 async function load(m) {
+  // the notebook kernel takes no upload, and only reads the slot
+  const notebook = mode === 'notebook', up = notebook ? null : m.upload;
   const v = '?v=' + encodeURIComponent(manifest.build);
   const imageName = manifest.image, changesName = changesOf(imageName);
   const siteSources = manifest.files.find(f => /\.sources$/.test(f.path)) || null;
@@ -578,13 +620,13 @@ async function load(m) {
   // it from the package that prepared that image
   let webPackage = manifest.world ? wantedPackage() : 0;
   let sources = null;                   // {name, data}: the .sources that came with the image
-  if (m.upload) {
-    image = await read(m.upload.image);
-    changes = await read(m.upload.changes);
-    if (m.upload.sources) {
-      const name = String(m.upload.sources.name || '');
+  if (up) {
+    image = await read(up.image);
+    changes = await read(up.changes);
+    if (up.sources) {
+      const name = String(up.sources.name || '');
       if (!/^[^/]+\.sources$/.test(name)) throw new Error('the .sources of the upload is named ' + JSON.stringify(name));
-      sources = { name, data: m.upload.sources.data };
+      sources = { name, data: up.sources.data };
     }
     source = 'upload';
     webPackage = webPackageOf(image);
@@ -600,7 +642,7 @@ async function load(m) {
         savedAt = saved.meta.savedAt;
         const kept = PharoStorage.webPackage(saved.meta);
         webPackage = kept === null ? webPackageOf(image) : kept;
-        owned = saved.meta;
+        if (!notebook) owned = saved.meta;
       }
     } catch (e) {
       storageError = e && e.unavailable
@@ -638,7 +680,7 @@ async function load(m) {
   if (sourcesData) files.push({ path: DIR + '/' + sources.name, data: sourcesData });
   // An upload becomes the slot once it has booted (keepUpload): a broken
   // one must not replace the image saved in this browser
-  if (m.upload && store) upload = { image, changes };
+  if (up && store) upload = { image, changes };
   // Whether an image is saved in this browser: the slot booted, or the one
   // that an upload replaces once it has booted, or one that could not be
   // read (which resetStorage deletes)
@@ -689,6 +731,7 @@ async function boot(m) {
   if (m.sliceMs > 0) env.PHARO_WASM_SLICE_MS = String(m.sliceMs);
   const options = {
     args: PharoVMDriver.vmArgs(mode, image),
+    events: mode === 'notebook',
     files,
     cwd: DIR,
     thisProgram: DIR + '/pharo',
@@ -700,7 +743,7 @@ async function boot(m) {
     canRun: () => unacked < HIGH,
     onOutput: addOut,
     onState,
-    onHost: (kind, text) => { if (kind === HOST_IMAGE_SAVED) imageSaved(text); },
+    onHost: (kind, text) => { if (kind === HOST_IMAGE_SAVED && mode !== 'notebook') imageSaved(text); },
     onExit: code => {
       flushOut();
       stopSync();
@@ -722,9 +765,11 @@ async function boot(m) {
   if (sdl) sdl.attach(drv);
   remember(image);
   if (owned) startSync();
-  post({ type: 'ready', image, source, persisted: stored, savedAt, world: !!manifest.world, prepared, webPackage,
-         preparing: !!preparing, sources, storageError, fonts: manifest.fonts || null, git: !!manifest.git,
-         gitHttp: !!(manifest.git && manifest.gitHttp), sdl2: !!manifest.sdl2 });
+  const ready = { type: 'ready', image, source, persisted: stored, savedAt, world: !!manifest.world, prepared,
+                  webPackage, preparing: !!preparing, sources, storageError, fonts: manifest.fonts || null,
+                  git: !!manifest.git, gitHttp: !!(manifest.git && manifest.gitHttp), sdl2: !!manifest.sdl2 };
+  if (mode === 'notebook') ready.mode = mode;
+  post(ready);
   drv.begin();
 }
 
@@ -792,6 +837,10 @@ function handle(m) {
     });
     break;
   case 'resetStorage':
+    if (mode === 'notebook') {
+      post({ type: 'reset', id: m.id, error: 'not in notebook mode' });
+      break;
+    }
     upload = null;                      // nor the upload
     enqueue(async () => {
       stopSync();
@@ -837,7 +886,7 @@ onmessage = ({ data: m }) => {
     return;
   }
   if (mode) return;                     // one VM per worker
-  mode = m.mode === 'world' || m.mode === 'sdl' ? m.mode : 'console';
+  mode = m.mode === 'world' || m.mode === 'sdl' || m.mode === 'notebook' ? m.mode : 'console';
   boot(m).catch(e => {
     flushOut();
     post({ type: 'crash', message: 'the VM could not be loaded: ' + errorText(e), stack: String((e && e.stack) || '') });

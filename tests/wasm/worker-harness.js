@@ -5,12 +5,13 @@
 // WEB_DIR is a built web directory (build-wasm/web), served over HTTP by
 // packaging/emscripten/tools/serve.mjs as by `make wasm-serve'.  Each session
 // runs WEB_DIR/vm-worker.js, unmodified, in a worker_threads Worker with a
-// 1 MB stack (about what browsers give workers), behind a small shim for the
-// Web Worker globals it uses: self, location, importScripts (the files of
-// WEB_DIR, through vm.runInThisContext), postMessage and onmessage, fetch
-// (of the server, relative to the worker's URL), and a fair MessageChannel.
-// node has the rest (DecompressionStream, Blob, TextDecoder).  The storage
-// of vm-storage.js is an in-memory store of this process (PharoStorage
+// 1 MB stack (about what browsers give workers), behind the small shim of
+// tests/wasm/lib/worker-shim.js for the Web Worker globals it uses: self,
+// location, importScripts (the files of WEB_DIR, through
+// vm.runInThisContext), postMessage and onmessage, fetch (of the server,
+// relative to the worker's URL), and a fair MessageChannel.  node has the
+// rest (DecompressionStream, Blob, TextDecoder).  The storage of
+// vm-storage.js is an in-memory store of this process (PharoStorage
 // .memory), which outlives the workers as IndexedDB outlives a page: the
 // shim makes it PharoStorage.backend.
 //
@@ -37,19 +38,21 @@
 // remotes (remoteTypeSelector #httpsUrl), which the smart-HTTP transport of
 // libgit2 clones (case 26, on every build: the setting is the image's, with
 // or without libgit2).
+// The notebook mode (W-NB1..4, init.mode 'notebook'): the kernel of
+// st/web-notebook.st, its events (output {fd: 3, bytes}), a request posted
+// before ready, Stop, the credit of the events, and a worker that boots the
+// slot without ever storing anything.
 // Prints every case and their count, and exits with
 // status 1 if any fails.  Lane 70 (tests/wasm/lanes/70-worker-harness.sh)
 // runs it.
 
 'use strict';
-const { Worker, MessageChannel } = require('worker_threads');
 const crypto = require('crypto');
 const fs = require('fs');
-const http = require('http');
 const os = require('os');
 const path = require('path');
-const { pathToFileURL } = require('url');
 const zlib = require('zlib');
+const WorkerShim = require('./lib/worker-shim.js');
 
 const webDir = path.resolve(process.argv[2] || 'build-wasm/web');
 const srcDir = path.join(__dirname, '..', '..');
@@ -87,99 +90,9 @@ var PharoDisplay = {
 };
 `);
 
-// (In a block: vm-worker.js shares the global scope of this script.)
-const prelude = `
-  'use strict';
-  {
-  const { parentPort, workerData } = require('worker_threads');
-  const fs = require('fs'), path = require('path'), vm = require('vm');
-  const { dir, url, overrides, storePort } = workerData;
-  globalThis.self = globalThis;
-  self.location = new URL(url);
-  globalThis.require = require;               // emscripten's node support
-  delete globalThis.module;                   // eval workers define these:
-  delete globalThis.exports;                  // UMD would pick CommonJS
-  globalThis.__dirname = dir;
-  globalThis.onmessage = null;
-  const nodeFetch = globalThis.fetch;
-  globalThis.fetch = (u, o) => nodeFetch(new URL(u, self.location.href), o);
-  // PharoStorage.backend: the store of the harness, through a port
-  const calls = new Map();
-  let lastCall = 0;
-  storePort.on('message', ({ n, value, error }) => {
-    const c = calls.get(n);
-    calls.delete(n);
-    if (error) c.reject(Object.assign(new Error(error.message), error)); else c.resolve(value);
-  });
-  const call = (op, args) => new Promise((resolve, reject) => {
-    calls.set(++lastCall, { resolve, reject });
-    storePort.postMessage({ n: lastCall, op, args });
-  });
-  const store = { get: key => call('get', [key]), write: (e, guard) => call('write', [e, guard]),
-                  clear: () => call('clear', []) };
-  globalThis.importScripts = (...files) => files.forEach(p => {
-    const name = p.split('?')[0], file = overrides[name] || path.join(dir, name);
-    vm.runInThisContext(fs.readFileSync(file, 'utf8'), { filename: file });
-    if (name === 'vm-storage.js') PharoStorage.backend = store;
-  });
-  globalThis.postMessage = (m, transfer) => parentPort.postMessage(m, transfer);
-  // Node's MessagePort drains up to 1000 queued messages per wakeup, and
-  // the worker's pump re-posts one per slice: a busy VM would starve the
-  // parentPort (no Stop for a long time).  Browsers queue both as ordinary
-  // tasks and interleave them, so give the worker a fair zero-delay
-  // channel built on setImmediate, which lets the poll phase run.
-  globalThis.MessageChannel = class {
-    constructor() {
-      const port1 = { onmessage: null };
-      this.port1 = port1;
-      this.port2 = { postMessage: d => setImmediate(() => port1.onmessage && port1.onmessage({ data: d })) };
-    }
-  };
-  parentPort.on('message', d => onmessage({ data: d }));
-  importScripts('vm-worker.js');
-  }
-`;
-
-// ---- the server: WEB_DIR under /s<session>/, each with its own log and mode
-
-const servers = new Map();              // session number -> {log, encodeGzip, override}
-let base = null, serveHandler = null;
-function startServer() {
-  return import(pathToFileURL(path.join(srcDir, 'packaging', 'emscripten', 'tools', 'serve.mjs'))).then(serve => {
-    serveHandler = serve.handler(webDir);
-    const server = http.createServer((req, res) => {
-      const m = /^\/s(\d+)(\/.*)$/.exec(req.url);
-      const s = m && servers.get(Number(m[1]));
-      if (!s) { res.writeHead(404); res.end(); return; }
-      const rel = m[2].replace(/\?.*/, '');
-      s.log.push(rel);
-      // other contents for this file
-      if (s.override && rel in s.override) {
-        res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
-        res.end(s.override[rel]);
-        return;
-      }
-      // as a server that sends .gz files with Content-Encoding: gzip, which
-      // the client inflates on the way
-      if (s.encodeGzip && rel.endsWith('.gz')) {
-        res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Encoding': 'gzip' });
-        fs.createReadStream(path.join(webDir, rel)).pipe(res);
-        return;
-      }
-      req.url = m[2];
-      serveHandler(req, res);
-    });
-    return new Promise(r => server.listen(0, '127.0.0.1', () => {
-      base = 'http://127.0.0.1:' + server.address().port + '/';
-      server.unref();
-      r();
-    }));
-  });
-}
-
 // ---- sessions
 
-let failures = 0, passes = 0, sessionCount = 0;
+let failures = 0, passes = 0;
 const now = () => performance.now();
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 function assert(c, msg) { if (!c) throw new Error('assertion failed: ' + msg); }
@@ -196,32 +109,16 @@ async function waitFor(what, pred, ms = 30000) {
 
 let current = null;
 const sessions = [];
+let shim = null;
 
 // One worker.  `autoAck' acks every output message, as the page does after
 // rendering it.
 function session(init = {}, { autoAck = true, encodeGzip = false, display = false, override = null } = {}) {
-  const n = ++sessionCount;
-  const s = { n, msgs: [], out: '', err: '', states: [], progress: [], ready: null, exit: null, crash: null,
-              saved: [], prepared: null, superseded: 0, files: [], ticks: 0, error: null, diag: '', log: [],
-              markAt: 0, errAt: 0, stateAt: 0, msgAt: 0, acked: 0 };
-  servers.set(n, { log: s.log, encodeGzip, override });
-  const store = new MessageChannel();
-  store.port1.on('message', async ({ n: id, op, args }) => {
-    try {
-      if (storeUnavailable) throw storeUnavailable;
-      if (op === 'write' && storeFails) throw storeFails;
-      store.port1.postMessage({ n: id, value: await memory[op](...args) });
-    } catch (e) {
-      store.port1.postMessage({ n: id, error: { name: e.name, message: e.message, unavailable: e.unavailable } });
-    }
-  });
-  s.w = new Worker(prelude, {
-    eval: true, stdout: true, stderr: true,
-    workerData: { dir: webDir, url: base + 's' + n + '/vm-worker.js?v=' + encodeURIComponent(manifest.build),
-                  overrides: display ? { 'display-worker.js': displayStub } : {}, storePort: store.port2 },
-    transferList: [store.port2],
-    resourceLimits: { stackSizeMb: 1 },
-  });
+  const site = shim.site({ encodeGzip, override });
+  const s = { n: site.n, msgs: [], out: '', err: '', states: [], progress: [], ready: null, exit: null, crash: null,
+              saved: [], prepared: null, superseded: 0, files: [], ticks: 0, error: null, diag: '', log: site.log,
+              markAt: 0, errAt: 0, stateAt: 0, msgAt: 0, acked: 0, ev: [], evBytes: 0 };
+  s.w = shim.worker(site, { overrides: display ? { 'display-worker.js': displayStub } : {} });
   // what the worker prints (console.warn of the emscripten runtime)
   s.w.stdout.on('data', d => { s.diag += d; });
   s.w.stderr.on('data', d => { s.diag += d; });
@@ -238,6 +135,13 @@ function session(init = {}, { autoAck = true, encodeGzip = false, display = fals
       s.ready = m;
       break;
     case 'output':
+      // the events of the notebook kernel are bytes, acked as such
+      if (m.fd === 3) {
+        s.ev.push(m.bytes);
+        s.evBytes += m.bytes.length;
+        if (autoAck) { s.acked += m.bytes.length; s.w.postMessage({ type: 'ack', chars: m.bytes.length }); }
+        break;
+      }
       s.out += m.text;
       if (m.fd === 2) s.err += m.text;
       if (autoAck) { s.acked += m.text.length; s.w.postMessage({ type: 'ack', chars: m.text.length }); }
@@ -301,12 +205,40 @@ const val = v => new RegExp('(^|> )' + v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') 
 const fetched = (s, name) => s.log.includes('/' + manifest.files.find(f => f.path === name).url);
 const imageName = manifest.image, changesName = imageName.replace(/\.image$/, '.changes');
 const sourcesName = manifest.files.find(f => f.path.endsWith('.sources')).path;
+// The events of a notebook worker so far, parsed: JSON lines, each one
+// with "bytes": N followed by N bytes and a newline (its attachment); a
+// line that does not parse fails the case
+function events(s) {
+  const all = Buffer.concat(s.ev), out = [];
+  let at = 0;
+  for (;;) {
+    const lf = all.indexOf(10, at);
+    if (lf < 0) return out;
+    const ev = JSON.parse(all.subarray(at, lf).toString('utf8'));
+    at = lf + 1;
+    if (Number.isInteger(ev.bytes)) {
+      if (all.length < at + ev.bytes + 1) return out;
+      ev.attachment = all.subarray(at, at + ev.bytes);
+      assert(all[at + ev.bytes] === 10, 'a newline after the attachment of ' + JSON.stringify(ev));
+      at += ev.bytes + 1;
+    }
+    out.push(ev);
+  }
+}
+// A request of the notebook kernel, as nb-kernel.js sends it
+const request = (rid, code) =>
+  ({ type: 'input', text: JSON.stringify({ op: 'run', rid, name: 'In[' + rid + ']', code }) + '\n' });
 // a file of the manifest, inflated
 const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, manifest.files.find(f => f.path === name).url)));
 
 (async () => {
   const t0 = now();
-  await startServer();
+  // storeFails makes the writes of the store fail, storeUnavailable all of
+  // its operations
+  shim = await WorkerShim.start(webDir, { memory, guard: op => {
+    if (storeUnavailable) throw storeUnavailable;
+    if (op === 'write' && storeFails) throw storeFails;
+  } });
   let S;
 
   await check('1 progress, then ready before the first state; the first prompt', async () => {
@@ -548,6 +480,151 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       const changes = new TextDecoder().decode(new Uint8Array(await memory.map.get('Pharo.changes').arrayBuffer()));
       assert(['harnessProbeA', 'harnessProbeB', 'harnessProbeC'].every(p => changes.includes(p)), 'the methods are in it');
     } finally { await R.close(); current = S; }
+  });
+
+  // ---- the notebook kernel (st/web-notebook.st; nb-kernel.js is its client)
+  const nb = (init = {}, opts) => session(Object.assign({ mode: 'notebook' }, init), opts);
+  const doneOf = (s, rid, ms) => waitFor('done ' + rid, () => {
+    s.alive();
+    return events(s).find(e => e.ev === 'done' && e.rid === rid);
+  }, ms || 60000);
+
+  let N = null;
+  await check('W-NB1 a request posted before ready is served after hello; ready < hello < WAITING; nothing on fds 1 and 2', async () => {
+    N = nb();
+    current = N;
+    N.post(request(1, '6 * 7'));
+    assert(!N.ready, 'posted before ready');
+    const done = await doneOf(N, 1);
+    assert(done.status === 'ok' && JSON.stringify(done.values) === '["42"]', 'done ' + JSON.stringify(done));
+    const r = N.ready;
+    assert(r.mode === 'notebook' && r.source === (memory.map.has('meta') ? 'saved' : 'download') &&
+           typeof r.gitHttp === 'boolean', 'ready ' + JSON.stringify(r));
+    // the kernel says hello before it first waits for a request
+    const iReady = N.msgs.indexOf(r);
+    const iHello = N.msgs.findIndex(m => m.type === 'output' && m.fd === 3);
+    const iWaiting = N.msgs.findIndex(m => m.type === 'state' && m.state === WAITING);
+    assert(iReady >= 0 && iReady < iHello && iHello < iWaiting, `ready ${iReady} < hello ${iHello} < WAITING ${iWaiting}`);
+    const hello = events(N)[0];
+    assert(hello.ev === 'hello' && hello.proto === 1 && /^1[25]\.\d+$/.test(hello.version), 'hello ' + JSON.stringify(hello));
+    assert(events(N).map(e => e.ev).join() === 'hello,start,done', 'events ' + events(N).map(e => e.ev));
+    await waitFor('WAITING', () => N.states[N.states.length - 1] === WAITING);
+    assert(!N.msgs.some(m => m.type === 'output' && m.fd !== 3), 'no output on fds 1 and 2: ' + JSON.stringify(N.out));
+    console.log(`#   hello after ${N.msgs.filter(m => m.type === 'state').length} states, ${N.evBytes} bytes of events`);
+  });
+
+  if (N && N.ready) await check('W-NB2 interrupt stops an endless loop: interrupted {registered}, done interrupted; the next request answers', async () => {
+    current = N;
+    N.post(request(2, '[ true ] whileTrue'));
+    await waitFor('start 2', () => { N.alive(); return events(N).find(e => e.ev === 'start' && e.rid === 2); });
+    await sleep(500);
+    N.mark();
+    const t = now();
+    N.post({ type: 'interrupt' });
+    const done = await doneOf(N, 2, 5000);
+    const reply = N.msgs.find(m => m.type === 'interrupted');
+    assert(reply && reply.registered === true, 'interrupted ' + JSON.stringify(reply));
+    assert(done.status === 'interrupted', 'done ' + JSON.stringify(done));
+    console.log(`#   stopped in ${(now() - t).toFixed(0)} ms`);
+    N.post(request(3, '3 + 4'));
+    const next = await doneOf(N, 3);
+    assert(next.status === 'ok' && JSON.stringify(next.values) === '["7"]', 'done ' + JSON.stringify(next));
+    assert(!N.msgs.some(m => m.type === 'output' && m.fd !== 3), 'no output on fds 1 and 2: ' + JSON.stringify(N.out));
+  });
+  if (N) await N.close();
+  current = S;
+
+  await check('W-NB3 the events pause above 1 MiB of unacked bytes and resume below 512 KiB; an event of 300 KB and an attachment across messages are reassembled', async () => {
+    const B = nb({ persist: false }, { autoAck: false });
+    try {
+      current = B;
+      await waitFor('hello', () => { B.alive(); return B.ev.length; }, 60000);
+      B.post({ type: 'ack', chars: B.evBytes });
+      let acked = B.evBytes;
+      // 80 displays of 50000 characters: 4 MB of events
+      B.post(request(1, '1 to: 80 do: [ :i | Notebook show: (Notebook text: (String new: 50000 withAll: $x)) ]. 1'));
+      const settle = async () => {      // until the events stop growing
+        let n = -1;
+        for (let k = 0; k < 100 && n !== B.evBytes; k++) { n = B.evBytes; await sleep(300); }
+        return n;
+      };
+      const stalled = await settle() - acked;
+      B.alive();
+      assert(!events(B).some(e => e.ev === 'done'), 'stalled before the end');
+      // (the worker pauses the VM between slices, and a slice may write
+      // many events of 50 KB)
+      assert(stalled >= (1 << 20) && stalled < 3 << 20, 'stalled above 1 MiB unacked, within a slice of it (' + stalled + ' bytes)');
+      // 600 KiB still unacked: still paused
+      B.post({ type: 'ack', chars: stalled - 600 * 1024 });
+      acked += stalled - 600 * 1024;
+      const at = B.evBytes;
+      await sleep(600);
+      assert(B.evBytes === at, 'still paused above 512 KiB');
+      B.post({ type: 'ack', chars: 200 * 1024 });
+      await waitFor('more events', () => B.evBytes > at, 5000);
+      console.log(`#   stalled at ${stalled} unacked bytes`);
+      const timer = setInterval(() => B.post({ type: 'ack', chars: 1 << 30 }), 20);
+      try {
+        const done = await doneOf(B, 1, 120000);
+        assert(done.status === 'ok', 'done ' + JSON.stringify(done));
+        const shown = events(B).filter(e => e.ev === 'display');
+        assert(shown.length === 80 && shown.every(e => e.rid === 1 && e.data === 'x'.repeat(50000)),
+               shown.length + ' displays of 50000 x');
+        // an event of 300 KB, and an attachment of 360000 bytes, which the
+        // worker posts in more than one message (it coalesces up to 64 KB)
+        B.post(request(2, 'Notebook text: (String new: 300000 withAll: $y)'));
+        const big = await doneOf(B, 2, 60000);
+        assert(big.status === 'ok' && big.values === null, 'done ' + JSON.stringify(big));
+        const d = events(B).filter(e => e.ev === 'display' && e.rid === 2);
+        assert(d.length === 1 && d[0].data === 'y'.repeat(300000), 'the display of 300000 y');
+        const from = B.ev.length;
+        B.post(request(3, '(Form extent: 300 @ 300 depth: 32) fillColor: Color red; yourself'));
+        const form = await doneOf(B, 3, 60000);
+        assert(form.status === 'ok' && form.values === null, 'done ' + JSON.stringify(form));
+        const f = events(B).filter(e => e.ev === 'display' && e.rid === 3);
+        assert(f.length === 1 && f[0].mime === 'image/x-pharo-bgra' && f[0].width === 300 && f[0].height === 300 &&
+               f[0].attachment.length === 360000, 'the display of the Form: ' + JSON.stringify(f.map(e => e.bytes)));
+        const px = f[0].attachment;
+        let red = true;
+        for (let i = 0; i < px.length; i += 4) red = red && px[i] === 0 && px[i + 1] === 0 && px[i + 2] === 255 && px[i + 3] === 255;
+        assert(red, 'every pixel red, B G R A = 0 0 255 255: ' + Array.from(px.subarray(0, 8)));
+        const messages = B.ev.length - from;
+        assert(messages >= 2, 'the attachment came in ' + messages + ' message(s)');
+        console.log(`#   the attachment of 360000 bytes in ${messages} messages`);
+      } finally { clearInterval(timer); }
+    } finally { await B.close(); current = S; }
+  });
+
+  await check('W-NB4 the notebook worker stores nothing: save, upload, prepare and a snapshot are ignored, resetStorage is refused', async () => {
+    const before = new Map(memory.map), meta = JSON.stringify(memory.map.get('meta') || null);
+    const gz = fs.readFileSync(path.join(webDir, manifest.files.find(f => f.path === imageName).url));
+    // an upload that would not boot, which the kernel does not take
+    const X = nb({ upload: { image: zlib.gunzipSync(gz).subarray(0, 1 << 20), changes: new Uint8Array(0) }, prepare: true });
+    try {
+      current = X;
+      X.post(request(1, '3 + 4'));
+      assert((await doneOf(X, 1)).status === 'ok', 'the first cell');
+      assert(X.ready.source !== 'upload' && !X.ready.preparing, 'ready ' + JSON.stringify(X.ready));
+      X.post({ type: 'save' });
+      X.post({ type: 'resetStorage', id: 91 });
+      const r = await X.reply('reset', 91);
+      assert(r.type === 'reset' && r.error === 'not in notebook mode', 'reset ' + JSON.stringify(r));
+      X.post(request(2, 'Smalltalk snapshot: true andQuit: false. 5'));
+      const done = await doneOf(X, 2, 60000);
+      assert(done.status === 'ok' && JSON.stringify(done.values) === '["5"]', 'done ' + JSON.stringify(done));
+      X.post({ type: 'flush' });
+      // longer than SETTLE_MS and SYNC_MS of the worker
+      await sleep(6000);
+      X.alive();
+      const kinds = X.msgs.map(m => m.type);
+      for (const k of ['storing', 'saved', 'edited', 'superseded', 'prepared'])
+        assert(!kinds.includes(k), k + ' posted');
+      assert(memory.map.size === before.size && [...before].every(([k, v]) => memory.map.get(k) === v) &&
+             JSON.stringify(memory.map.get('meta') || null) === meta, 'the store changed: ' + [...memory.map.keys()]);
+      assert(!X.msgs.some(m => m.type === 'output' && m.fd !== 3), 'no output on fds 1 and 2: ' + JSON.stringify(X.out));
+      X.post(request(3, '6 * 7'));
+      assert(JSON.stringify((await doneOf(X, 3)).values) === '["42"]', 'the kernel goes on');
+    } finally { await X.close(); current = S; }
   });
 
   await check('11 a store that refuses: saved {error} says Download, and the REPL goes on', async () => {

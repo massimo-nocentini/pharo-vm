@@ -15,8 +15,12 @@
 #                        and sdl-shim.js, which only a build with SDL2
 #                        stages), pharo-web.js and pharo-web.wasm,
 #                        THIRD-PARTY-NOTICES.txt, the image (gzipped) in
-#                        image/, the st files in st/ and manifest.json.  It
-#                        always runs, and rewrites only what changed.
+#                        image/, the st files in st/ (web-repl.st, the
+#                        Console's REPL, and web-notebook.st, the notebook
+#                        kernel, which starts only in a VM that has
+#                        NOTEBOOK_EVENTS, so that every mode can have it)
+#                        and manifest.json.  It always runs, and rewrites
+#                        only what changed.
 #
 # The manifest says, besides, whether the VM has the FFI (FEATURE_FFI), which
 # fonts the preparation of an image for the world sets up (freetype when the
@@ -290,7 +294,8 @@ set(PHARO_WASM_STAGE_ARGUMENTS
     --notices "${PHARO_WASM_NOTICES_FILE}"
     ${PHARO_WASM_STAGE_LIBRARIES}
     --stock-image "${WASM_STOCK_IMAGE_DIR}"
-    --st "${PHARO_WASM_ST_SOURCE_DIR}/web-repl.st")
+    --st "${PHARO_WASM_ST_SOURCE_DIR}/web-repl.st"
+    --st "${PHARO_WASM_ST_SOURCE_DIR}/web-notebook.st")
 if(TARGET wasm-web-image)
     list(APPEND PHARO_WASM_STAGE_ARGUMENTS
         --world-image "${WASM_WEB_IMAGE_DIR}"
