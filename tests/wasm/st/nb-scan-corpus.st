@@ -1,6 +1,7 @@
 "nb-scan-corpus.st - the tokens that Pharo's scanner finds in the methods of the image,
-the reference of the Smalltalk scanner of the notebook (packaging/emscripten/web/
-notebook-st.js, checked by tests/wasm/notebook-lib.test.mjs)
+the reference of the Smalltalk scanner and highlighter of the notebook (scan and
+highlight of packaging/emscripten/web/notebook-st.js, checked by
+tests/wasm/notebook-lib.test.mjs)
 
 	pharo --headless Pharo.image --no-default-preferences st --no-source --quit nb-scan-corpus.st
 

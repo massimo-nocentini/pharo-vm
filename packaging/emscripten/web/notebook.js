@@ -10,8 +10,8 @@
 //   worker's URL, the git proxy, the theme, the tabs and the pharo:* events);
 //   notebook-lib.js (NotebookLib) the Markdown renderer, the markup sanitizer
 //   and the .json format; notebook-st.js (NotebookSt) what is Smalltalk: the
-//   bracket balance, the .st format, quote straightening and the example;
-//   nb-kernel.js (PharoNotebookKernel) the kernel client.
+//   bracket balance, the highlighter, the .st format, quote straightening
+//   and the example; nb-kernel.js (PharoNotebookKernel) the kernel client.
 // - The kernel starts on the first visit to the tab (or the first run).  It
 //   boots the image saved in this browser, read-only, else the site's, and
 //   never saves; when the Console's image changes, a notice offers Restart.
@@ -23,6 +23,9 @@
 // - Rich outputs (HTML, SVG, Markdown) are rebuilt from an allowlist by
 //   notebook-lib.js; no untrusted string ever reaches innerHTML.  Images come
 //   as PNG, made by nb-kernel.js from the pixels of the kernel's Forms.
+// - Code cells are colored by NotebookSt's highlighter, in an overlay behind
+//   each editor, painted as cells come into view; so is the Smalltalk code
+//   of the Markdown cells' fences.
 // - Cells have no stdin: a cell that waits for input says so, with Stop.
 // - The notebook is saved to localStorage (debounced), under a key of the
 //   site's directory (pharo-wasm.notebook:<dir>), outputs capped at 64 KB per
@@ -580,7 +583,7 @@
       case 'text/plain': div.appendChild(h('pre', { text: data })); break;
       case 'text/html': div.appendChild(L.sanitizeMarkup(data, 'html', prefix)); break;
       case 'image/svg+xml': div.appendChild(L.sanitizeMarkup(data, 'svg', prefix)); break;
-      case 'text/markdown': div.appendChild(L.renderMarkdown(data, document, prefix)); break;
+      case 'text/markdown': div.appendChild(L.renderMarkdown(data, document, prefix, { fence: S.FENCE, highlight: S.highlight })); break;
       case 'image/png': case 'image/jpeg': case 'image/gif': case 'image/webp': {
         const b64 = data.replace(/\s+/g, '');
         if (!/^[A-Za-z0-9+/]*={0,2}$/.test(b64)) throw new Error('the image data is not base64');
@@ -661,8 +664,8 @@
     const src = h('textarea', { class: 'nb-src', rows: '1', spellcheck: 'false', autocapitalize: 'off', autocomplete: 'off',
                                 autocorrect: 'off', wrap: 'soft' });
     src.value = cell.source;
-    // the line of an error, marked behind the editor (the overlay mirrors its text)
-    const hl = h('div', { class: 'nb-hl', 'aria-hidden': 'true' });
+    // the colored text and the line of an error, behind the editor (paint)
+    const hl = h('pre', { class: 'nb-hl', 'aria-hidden': 'true', inert: true });
     const bal = h('span', { class: 'nb-bal', 'aria-hidden': 'true', hidden: true });
     const editor = h('div', { class: 'nb-editor' }, hl, src, bal);
     const md = h('div', { class: 'nb-md' });
@@ -676,8 +679,10 @@
     const tools = h('div', { class: 'nb-tools', role: 'toolbar' }, up, down, kind, del);
     // the tools come before the editor, which keeps Tab for indenting
     li.append(h('div', { class: 'nb-gutter' }, run, count), tools, body);
-    const v = { li, run, count, src, hl, bal, editor, md, out, showOut, body, tools, up, down, kind, del, wait: null };
+    const v = { li, run, count, src, hl, bal, editor, md, out, showOut, body, tools, up, down, kind, del, wait: null,
+                near: false, dirty: false, mark: 0, keys: null, mdSyn: false };
     views.set(cell.id, v);
+    if (nearby) nearby.observe(li);
 
     run.addEventListener('click', () => { select(cell.id); runOne(cell, cell.type === 'markdown' ? 'cell' : null); });
     up.addEventListener('click', () => moveCell(cell, -1, 'button'));
@@ -686,9 +691,14 @@
     del.addEventListener('click', () => deleteCell(cell));
     showOut.addEventListener('click', () => toggleOutput(cell));
     src.addEventListener('input', () => onEdit(cell));
+    // while an IME composes, the editor shows its own text: the browser
+    // draws the composition in the text's color, over the overlay
+    src.addEventListener('compositionstart', () => editor.classList.add('ime'));
+    src.addEventListener('compositionend', () => { editor.classList.remove('ime'); paint(cell, true); });
     md.addEventListener('dblclick', () => editCell(cell));
     for (const o of cell.outputs) { const el = renderOutput(cell, o); els.set(o, el); out.appendChild(el); }
     if (cell.type === 'markdown') renderMd(cell);
+    paint(cell);
     chrome(cell);
     return li;
   }
@@ -703,10 +713,13 @@
     const v = views.get(cell.id);
     if (!v) return;
     releaseMdIds(cell);
-    const frag = L.renderMarkdown(cell.source, document, 'nb-h-', { ids: mdIds });
+    // the Smalltalk fences are colored by paint, when the cell comes near
+    const frag = L.renderMarkdown(cell.source, document, 'nb-h-', { ids: mdIds, fence: S.FENCE });
     mdIdsOf.set(cell.id, Array.from(frag.querySelectorAll('[id]'), el => el.id));
     v.md.replaceChildren(frag);
     v.md.classList.toggle('empty', !cell.source.trim());
+    v.mdSyn = !!v.md.querySelector('pre > code');
+    if (v.mdSyn) paint(cell);
   }
 
   const STATUS_WORDS = {
@@ -786,7 +799,8 @@
     const v = views.get(cell.id);
     cell.source = v.src.value;
     autosize(v);
-    clearHighlight(cell);
+    v.mark = 0;
+    paint(cell, true);
     updateBalance(cell);
     chrome(cell);
     scheduleSave();
@@ -801,19 +815,82 @@
     v.bal.hidden = !t;
   }
 
-  // a highlighted line behind the editor (the overlay mirrors its text)
+  // The overlay behind the editor mirrors its text: in colored spans for
+  // a code cell (class syn: the editor's own text is transparent), and
+  // with the line of an error in a <mark>, whose spans keep their colors.
+  // It is inert, so that find in page does not see its text a second
+  // time.  Cells are painted when they come near the visible part of the
+  // notebook, so that a big one loads without building the spans (or
+  // coloring the fences of a text cell) out of sight; a source of more
+  // than SYN_MAX characters is left plain, and a text cell's source is
+  // never colored.  A code cell's overlay has a block per line, and an
+  // edit replaces those of the lines that changed only (v.keys: one per
+  // line shown): a big cell is not laid out anew.
+  const SYN_MAX = 32 * 1024;
+  const nearby = typeof IntersectionObserver === 'function' ? new IntersectionObserver(es => {
+    for (const e of es) {
+      const v = views.get(e.target.dataset.id);
+      if (!v || v.li !== e.target) continue;
+      v.near = e.isIntersecting;
+      if (v.near && v.dirty) paint(byId(e.target.dataset.id));
+    }
+  }, { root: panel, rootMargin: '1000px 0px' }) : null;
+  function lineNode(line, marked) {
+    const div = document.createElement('div'), to = marked ? div.appendChild(document.createElement('mark')) : div;
+    for (const [k, s] of line) {
+      if (!k) { to.appendChild(document.createTextNode(s)); continue; }
+      const e = to.appendChild(document.createElement('span'));
+      e.className = 'syn-' + k;
+      e.textContent = s;
+    }
+    if (marked && !line.length) to.textContent = ' ';
+    return div;
+  }
+  function paint(cell, now) {
+    const v = cell && views.get(cell.id);
+    if (!v) return;
+    if (nearby && !v.near && !now) { v.dirty = true; return; }
+    v.dirty = false;
+    if (v.mdSyn) { v.mdSyn = false; L.colorCode(v.md, S.highlight); }
+    // the editor's text: its line breaks are \n whatever the source had
+    const text = v.src.value, syn = cell.type === 'code' && text.length <= SYN_MAX;
+    v.editor.classList.toggle('syn', syn);
+    if (syn) {
+      const lines = L.highlightLines(text, S.highlight);
+      if (v.mark > lines.length) v.mark = 0;
+      const keys = lines.map((l, k) => (k + 1 === v.mark ? '!' : '') + l.map(p => p[0] + '\u0001' + p[1]).join('\u0002'));
+      const old = v.keys || [];
+      if (!v.keys) v.hl.textContent = '';
+      let p = 0, q = 0;
+      while (p < old.length && p < keys.length && old[p] === keys[p]) p++;
+      while (q < old.length - p && q < keys.length - p && old[old.length - 1 - q] === keys[keys.length - 1 - q]) q++;
+      // siblings, not childNodes[k]: removing through that index is quadratic in Firefox
+      let node = v.hl.childNodes[p] || null;
+      for (let k = p; k < old.length - q; k++) { const next = node.nextSibling; node.remove(); node = next; }
+      const frag = document.createDocumentFragment();
+      for (let k = p; k < keys.length - q; k++) frag.appendChild(lineNode(lines[k], k + 1 === v.mark));
+      v.hl.insertBefore(frag, node);
+      v.keys = keys;
+      return;
+    }
+    v.keys = null;
+    const lines = v.mark ? text.split('\n') : [];
+    if (v.mark > lines.length) v.mark = 0;
+    if (!v.mark) { if (v.hl.firstChild) v.hl.textContent = ''; return; }
+    const before = lines.slice(0, v.mark - 1).join('\n') + (v.mark > 1 ? '\n' : '');
+    const after = (v.mark < lines.length ? '\n' : '') + lines.slice(v.mark).join('\n');
+    v.hl.replaceChildren(document.createTextNode(before), h('mark', { text: lines[v.mark - 1] || ' ' }), document.createTextNode(after));
+  }
+  // the line of an error, marked
   function highlightLine(cell, line) {
     const v = views.get(cell.id);
-    if (!v) return;
-    const lines = cell.source.split('\n');
-    if (line < 1 || line > lines.length) return;
-    const before = lines.slice(0, line - 1).join('\n') + (line > 1 ? '\n' : '');
-    const after = (line < lines.length ? '\n' : '') + lines.slice(line).join('\n');
-    v.hl.replaceChildren(document.createTextNode(before), h('mark', { text: lines[line - 1] || ' ' }), document.createTextNode(after));
+    if (!v || line < 1 || line > cell.source.split('\n').length) return;
+    v.mark = line;
+    paint(cell, true);
   }
   function clearHighlight(cell) {
     const v = views.get(cell.id);
-    if (v && v.hl.firstChild) v.hl.textContent = '';
+    if (v && v.mark) { v.mark = 0; paint(cell); }
   }
   function selectLine(cell, line) {
     const v = views.get(cell.id);
@@ -836,6 +913,7 @@
     const next = nb.cells[at + 1];
     cellsEl.insertBefore(li, next ? views.get(next.id).li : null);
     autosize(views.get(cell.id));
+    paint(cell, true);
     if (!quiet) { chromeAll(); scheduleSave(); }
     return cell;
   }
@@ -850,8 +928,10 @@
                                            status: cell.status === 'running' || cell.status === 'waiting' || cell.status === 'queued' ? 'idle' : cell.status });
     trash.push({ cell: snap, index: i });
     if (trash.length > TRASH_MAX) trash.shift();
-    const hadFocus = panel.contains(document.activeElement) && views.get(cell.id).li.contains(document.activeElement);
-    views.get(cell.id).li.remove();
+    const v = views.get(cell.id);
+    const hadFocus = panel.contains(document.activeElement) && v.li.contains(document.activeElement);
+    if (nearby) nearby.unobserve(v.li);
+    v.li.remove();
     views.delete(cell.id);
     releaseMdIds(cell);
     nb.cells.splice(i, 1);
@@ -875,6 +955,7 @@
     const next = nb.cells[at + 1];
     cellsEl.insertBefore(li, next ? views.get(next.id).li : null);
     autosize(views.get(cell.id));
+    paint(cell, true);
     updateBalance(cell);
     chromeAll();
     select(cell.id, { focus: 'cell' });
@@ -918,9 +999,11 @@
     cell.stale = false;
     cell.ranSource = null;
     cell.editing = type === 'markdown' && !cell.source.trim();
+    if (nearby) nearby.unobserve(v.li);
     const li = makeView(cell);
     v.li.replaceWith(li);
     autosize(views.get(cell.id));
+    paint(cell, true);
     updateBalance(cell);
     chromeAll();
     select(cell.id, { focus: hadFocus ? 'cell' : null });
@@ -995,7 +1078,7 @@
       if (s !== cell.source) {
         cell.source = s;
         const v = views.get(cell.id);
-        if (v) { const a = v.src.selectionStart; v.src.value = s; v.src.setSelectionRange(a, a); }
+        if (v) { const a = v.src.selectionStart; v.src.value = s; v.src.setSelectionRange(a, a); paint(cell); }
       }
     }
     return cell.source;
@@ -1704,6 +1787,7 @@
     mdIdsOf.clear();
     for (const v of views.values()) v.li.remove();
     views.clear();
+    if (nearby) nearby.disconnect();
     dirty.clear();
     nb.title = doc.title || 'Untitled';
     nb.created = doc.created || null;

@@ -7,6 +7,7 @@
 //   NotebookSt.scan(text, f)       -> {depth, stray, mismatch, open, ...}
 //   NotebookSt.balance(text)       -> {depth, stray, mismatch, open, ok}
 //   NotebookSt.balanceText(text)   -> '' or the hint of a cell, '1 unclosed ['
+//   NotebookSt.highlight(text)     -> [[kind, text]], the colors of a cell
 //   NotebookSt.toSt(nb)            -> the .st text of {title, cells}
 //   NotebookSt.fromSt(text)        -> {title, cells, warnings}
 //   NotebookSt.straightenQuotes(s) -> s with the quotes of a touch keyboard straight
@@ -22,6 +23,10 @@
 // close in code; in a literal array #( ... ) only ( and ) count, [ ] { }
 // being symbols there, and in a byte array #[ ... ] only ] closes.  It runs
 // in linear time, on any text.
+//
+// highlight reads the same way, and also the numbers, names and keywords as
+// the scanner does, so that every token of the scanner has one color (the
+// kinds are below highlight).  It runs in linear time too, on any text.
 //
 // The .st format is the chunk format that a fileIn reads ('x.st'
 // asFileReference fileIn, or pharo Pharo.image st x.st): a chunk ends at a
@@ -58,8 +63,9 @@
   'use strict';
 
   const LETTER = /[\p{L}_]/u, WORD = /[\p{L}\p{N}_]/u;
-  // the characters of binary selectors (! too: a cell is no chunk)
-  const BINARY = /[-+*/\\~<>=@%|&?,!]/;
+  // the characters of binary selectors, as the scanner's classification
+  // table has them (! too: a cell is no chunk)
+  const BINARY = /[-+*/\\~<>=@%|&?,!\u00b1\u00b7\u00d7\u00f7]/;
   const LANGUAGE = 'Smalltalk';
   const FENCE = /^(|smalltalk|st|pharo)$/i;
 
@@ -160,6 +166,177 @@
       return one ? s.depth + ' unclosed ' + OPENER[s.pending[0]] : s.depth + ' unclosed brackets';
     }
     return '';
+  }
+
+  // ---- highlighting
+
+  const SPACE = /\s/;
+  // LETTER, WORD, SPACE and an upper-case letter, ASCII first
+  const ascii = c => !(c > '\u007f');
+  const isLetter = c => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c === '_' || (!ascii(c) && LETTER.test(c));
+  const isWord = c => isLetter(c) || (c >= '0' && c <= '9') || (!ascii(c) && WORD.test(c));
+  const capital = c => (c >= 'A' && c <= 'Z') || (!ascii(c) && /\p{Lu}/u.test(c));
+  const separator = c => c === ' ' || c === '\n' || c === '\t' || c === '\r' || c === '\f' || (!ascii(c) && SPACE.test(c));
+  const PSEUDO = new Set(['self', 'super', 'thisContext']);
+  const CONSTANT = new Set(['nil', 'true', 'false']);
+  // the < of a pragma: <primitive: 60>, <script>
+  const PRAGMA = /<[\p{L}_][\p{L}\p{N}_]*(?::(?!=)|>)/uy;
+
+  // The value of a digit (0-9, then a-z or A-Z), Infinity when it is none
+  function digit(c) {
+    const x = c === undefined ? -1 : c.charCodeAt(0) | 0x20;
+    return c >= '0' && c <= '9' ? +c : x >= 0x61 && x <= 0x7a ? x - 0x61 + 10 : Infinity;
+  }
+  // The end of the digits of RADIX from j, a _ between two of them (as in
+  // Pharo 15: Pharo 12 reads 1_000 as 1 and _000), or j when there is none
+  function digits(t, j, radix) {
+    if (digit(t[j]) >= radix) return j;
+    for (j++; ; j++) {
+      if (t[j] === '_' && digit(t[j + 1]) < radix) j++;
+      else if (digit(t[j]) >= radix) return j;
+    }
+  }
+  // The end of the number that begins with the digit at i, as the scanner
+  // reads it (NumberParser): 16r1F, 16r-1F, 2r1e10, 1.5e-3, 1.5s2, 3s; 1e,
+  // 1.e5 and 3sqrt are a number and a name
+  function numberEnd(t, i) {
+    let j = digits(t, i, 10), radix = 10;
+    if (t[j] === 'r') {
+      const r = parseInt(t.slice(i, j).replace(/_/g, ''), 10), k = t[j + 1] === '-' ? j + 2 : j + 1;
+      if (r >= 2 && digits(t, k, r) > k) { radix = r; j = digits(t, k, r); }
+    }
+    if (t[j] === '.' && digit(t[j + 1]) < radix) j = digits(t, j + 1, radix);
+    const c = t[j];
+    if (c === 'e' || c === 'd' || c === 'q') {
+      const k = t[j + 1] === '-' ? j + 2 : j + 1, e = digits(t, k, 10);
+      if (e > k) return e;
+    }
+    if (c === 's') {
+      const e = digits(t, j + 1, 10);
+      if (e > j + 1 || !LETTER.test(t[j + 1] || '')) return e > j + 1 ? e : j + 1;
+    }
+    return j;
+  }
+  const isDigit = c => c >= '0' && c <= '9';
+
+  // [kind, text] pieces whose texts add up to the Smalltalk source, in
+  // linear time; unterminated strings and comments run to the end.  Kinds:
+  // '' (spaces, names, binary selectors, block parameters), comment,
+  // string, char ($x), number (with its sign where a value starts, so that
+  // 3-2 is not 3 and -2), quote (a symbol, a literal or byte array, its
+  // brackets and its bare words), constant (nil true false), special (self
+  // super thisContext ^ :=), keyword (at: and at:put:), paren (( ) [ ] { }
+  // . ; | and the < > of a pragma), global (a capitalized name).  Strings,
+  // comments, characters and brackets are found as scan() finds them.
+  function highlight(text) {
+    const t = String(text), n = t.length, kinds = [], ends = [];
+    const stack = [];                  // ( [ { in code, L a literal array, B a byte array
+    let i = 0, operand = false, pragma = false;   // operand: a value just ended, so a - is binary
+    const put = (k, j) => {            // the piece of kind k up to j, or more of the last one
+      if (kinds.length && kinds[kinds.length - 1] === k) ends[ends.length - 1] = j;
+      else { kinds.push(k); ends.push(j); }
+      i = j;
+    };
+    // the end of the string or comment that opens at from
+    const quoted = (q, from) => {
+      for (let j = from + 1; ;) {
+        j = t.indexOf(q, j);
+        if (j < 0) return n;
+        if (t[j + 1] === q) { j += 2; continue; }
+        return j + 1;
+      }
+    };
+    // the end of the name at j, or of the keywords there (at:put:), with
+    // their colons
+    const keywords = j => {
+      while (j < n && isWord(t[j])) j++;
+      if (t[j] !== ':' || t[j + 1] === '=') return j;
+      for (j++; isLetter(t[j] || '');) {
+        let k = j + 1;
+        while (k < n && isWord(t[k])) k++;
+        if (t[k] !== ':' || t[k + 1] === '=') break;
+        j = k + 1;
+      }
+      return j;
+    };
+    while (i < n) {
+      const c = t[i], d = t[i + 1], top = stack[stack.length - 1];
+      if (separator(c)) { let j = i + 1; while (j < n && separator(t[j])) j++; put('', j); continue; }
+      if (c === '"') { put('comment', quoted('"', i)); continue; }
+      const was = operand;
+      operand = true;                  // unless what follows says otherwise
+      if (c === '\'') { put('string', quoted('\'', i)); continue; }
+      if (c === '$') {                 // the next code point, whatever it is
+        const x = t.charCodeAt(i + 1);
+        put('char', Math.min(n, x >= 0xd800 && x < 0xdc00 ? i + 3 : i + 2));
+        continue;
+      }
+      if (c === '#') {
+        let j = i + 1;
+        while (t[j] === '#') j++;      // ##foo, ##( as #(
+        if (t[j] === '(' || t[j] === '[') { stack.push(t[j] === '(' ? 'L' : 'B'); put('quote', j + 1); operand = false; continue; }
+        if (t[j] === '\'') { put('quote', quoted('\'', j)); continue; }
+        if (isLetter(t[j] || '')) { while (j < n && (isWord(t[j]) || t[j] === ':')) j++; put('quote', j); continue; }
+        if (BINARY.test(t[j] || '')) { while (j < n && BINARY.test(t[j])) j++; put('quote', j); continue; }
+        put('', j); operand = false;   // a # alone, an error
+        continue;
+      }
+      if (isDigit(c) || (c === '-' && isDigit(d) && (!was || top === 'L' || top === 'B'))) {
+        put('number', numberEnd(t, c === '-' ? i + 1 : i));
+        continue;
+      }
+      if (top === 'B') {               // only numbers and the ]
+        if (c === ']') { stack.pop(); put('quote', i + 1); } else { put('', i + 1); operand = false; }
+        continue;
+      }
+      if (top === 'L') {               // all is data: [ ] { } ^ ; . := are symbols
+        if (c === '(') { stack.push('L'); put('quote', i + 1); operand = false; continue; }
+        if (c === ')') { stack.pop(); put('quote', i + 1); continue; }
+        let j = i + 1;
+        if (isLetter(c)) {
+          j = keywords(i);
+          put(t[j - 1] !== ':' && CONSTANT.has(t.slice(i, j)) ? 'constant' : 'quote', j);
+          continue;
+        }
+        if (BINARY.test(c)) while (j < n && BINARY.test(t[j])) j++;
+        else if (c === ':' && d === '=') j++;
+        put('quote', j); operand = false;
+        continue;
+      }
+      if (c === '(' || c === '[' || c === '{') { stack.push(c); put('paren', i + 1); operand = false; continue; }
+      if (c === ')' || c === ']' || c === '}') { stack.pop(); put('paren', i + 1); continue; }
+      if (isLetter(c)) {
+        let j = i + 1;
+        while (j < n && isWord(t[j])) j++;
+        if (t[j] === ':' && t[j + 1] !== '=') { put('keyword', keywords(i)); operand = false; continue; }
+        const w = t.slice(i, j);
+        put(PSEUDO.has(w) ? 'special' : CONSTANT.has(w) ? 'constant' : capital(w[0]) ? 'global' : '', j);
+        continue;
+      }
+      operand = false;
+      if (c === ':' && d === '=') { put('special', i + 2); continue; }
+      if (c === '^') { put('special', i + 1); continue; }
+      if (c === '.' || c === ';' || c === '|') { put('paren', i + 1); continue; }
+      if (!stack.length && (pragma ? c === '>' : c === '<' && (PRAGMA.lastIndex = i, PRAGMA.test(t)))) {
+        pragma = !pragma;
+        put('paren', i + 1);
+        continue;
+      }
+      if (c === ':' && isLetter(d || '')) {      // a block parameter
+        let j = i + 2;
+        while (j < n && isWord(t[j])) j++;
+        put('', j); operand = true;
+        continue;
+      }
+      if (BINARY.test(c)) {
+        let j = i + 1;
+        while (j < n && BINARY.test(t[j]) && t[j] !== '|') j++;
+        put('', j);
+        continue;
+      }
+      put('', i + 1);                  // a lone : and anything else
+    }
+    return kinds.map((k, x) => [k, t.slice(x ? ends[x - 1] : 0, ends[x])]);
   }
 
   // ---- quotes
@@ -370,5 +547,5 @@
     ] };
   }
 
-  return { scan, balance, balanceText, toSt, fromSt, straightenQuotes, example, FENCE, LANGUAGE };
+  return { scan, balance, balanceText, highlight, toSt, fromSt, straightenQuotes, example, FENCE, LANGUAGE };
 });

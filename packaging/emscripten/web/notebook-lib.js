@@ -2,7 +2,8 @@
 //
 // UMD: the global NotebookLib in the page, a CommonJS module in node
 // (tests/wasm/notebook-lib.test.mjs).  No dependencies; the DOM is only
-// touched through the document passed in (renderMarkdown, sanitizeMarkup).
+// touched through the document passed in (renderMarkdown, sanitizeMarkup,
+// highlightDom) or the nodes (colorCode).
 // It knows nothing of Smalltalk, which is notebook-st.js (NotebookSt): it is
 // the part of CHICKEN's notebook-lib.js (emscripten/web) that does not
 // depend on the language, with the same names and shapes.
@@ -17,6 +18,13 @@
 //   newId() -> string                     slug(text) -> string
 //   safeHref(url), safeImageSrc(url) -> the URL to use, or null
 //   LIMITS                                what Import accepts
+//   highlightLines(text, highlight) -> [[[kind, text]]], line by line
+//   highlightDom(doc, pieces) -> DocumentFragment
+//   colorCode(root, highlight, budget?) -> the budget left
+//   HIGHLIGHT_MAX                         the code colorCode colors at most
+//
+// highlight is the language's own (NotebookSt.highlight): text -> the
+// [kind, text] pieces whose texts add up to it.
 //
 // Untrusted markup (the kernel's text/html and image/svg+xml displays, and
 // imported notebooks) is parsed inertly (DOMParser) and rebuilt element by
@@ -340,7 +348,7 @@
       /^ {0,3}([-*+]|1[.)])[ \t]+\S/.test(l);
   }
 
-  function blocks(doc, lines, out, prefix, ids, depth, next) {
+  function blocks(doc, lines, out, prefix, ids, depth, next, fence) {
     let i = 0;
     const n = lines.length;
     while (i < n) {
@@ -359,6 +367,8 @@
         const pre = doc.createElement('pre'), code = doc.createElement('code');
         if (m[3]) code.setAttribute('data-lang', m[3].slice(0, 32));
         code.textContent = body.join('\n');
+        // the language of the notebook (opts.fence), for colorCode()
+        if (fence && fence.test(m[3])) code.setAttribute('data-syn', '');
         pre.appendChild(code);
         out.appendChild(pre);
         continue;
@@ -392,7 +402,7 @@
           i++;
         }
         const bq = doc.createElement('blockquote');
-        if (depth < 16) blocks(doc, body, bq, prefix, ids, depth + 1, next);
+        if (depth < 16) blocks(doc, body, bq, prefix, ids, depth + 1, next, fence);
         out.appendChild(bq);
         continue;
       }
@@ -427,7 +437,7 @@
           if (depth < 16) {
             if (tight && !body.slice(1).some(x => startsBlock(x) || RE_LIST.test(x) || /^ {4}/.test(x))) inline(doc, body.join('\n'), li);
             else {
-              blocks(doc, body, li, prefix, ids, depth + 1, next);
+              blocks(doc, body, li, prefix, ids, depth + 1, next, fence);
               // tight lists: unwrap single paragraphs
               if (tight && li.firstChild && li.firstChild.nodeName === 'P') {
                 const p = li.firstChild;
@@ -511,18 +521,77 @@
     }
   }
 
-  // opts: {ids}, or ids alone.  ids: a Set of the heading ids taken (by
-  // other cells), to which the new ones are added.
+  // opts: {ids, fence, highlight}, or ids alone.  ids: a Set of the heading
+  // ids taken (by other cells), to which the new ones are added.  fence: a
+  // RegExp of the languages of the code blocks to color ('' when a fence
+  // names none: NotebookSt.FENCE), which get a data-syn attribute; with
+  // highlight they are colored at once (colorCode), else they are left for
+  // colorCode, as a text cell's are until it comes into view.
   function renderMarkdown(src, doc, idPrefix, opts) {
     const o = opts instanceof Set ? { ids: opts } : opts || {};
     const frag = doc.createDocumentFragment();
     const prefix = idPrefix || '';
     const lines = String(src == null ? '' : src).replace(/\r\n?/g, '\n').split('\n');
-    blocks(doc, lines, frag, prefix, o.ids instanceof Set ? o.ids : new Set(), 0, new Map());
+    const fence = o.fence instanceof RegExp ? o.fence : null;
+    blocks(doc, lines, frag, prefix, o.ids instanceof Set ? o.ids : new Set(), 0, new Map(), fence);
     // "#slug" links go to the headings, whose ids carry the prefix
     for (const a of frag.querySelectorAll('a[href^="#"]'))
       a.setAttribute('href', '#' + prefix + a.getAttribute('href').slice(1));
+    if (fence && typeof o.highlight === 'function') colorCode(frag, o.highlight);
     return frag;
+  }
+
+  // ---- syntax highlighting
+
+  // the code that colorCode() colors per call, by default; the rest is left
+  // plain (the editor has its own limit per cell)
+  const HIGHLIGHT_MAX = 32 * 1024;
+
+  // The pieces of highlight(text) line by line, without the line breaks:
+  // a line per \n, and pieces that end at the line breaks (a comment of
+  // three lines is a piece on each).  pieces in place of text are taken as
+  // they are
+  function highlightLines(text, highlight) {
+    const lines = [[]];
+    for (const [k, s] of Array.isArray(text) ? text : highlight(String(text))) {
+      const parts = s.split('\n');
+      for (let j = 0; j < parts.length; j++) {
+        if (j) lines.push([]);
+        if (parts[j]) lines[lines.length - 1].push([k, parts[j]]);
+      }
+    }
+    return lines;
+  }
+
+  // The pieces as DOM: a span of class syn-KIND for each piece of a kind,
+  // a text node for the plain ones; createElement and textContent only
+  function highlightDom(doc, pieces) {
+    const frag = doc.createDocumentFragment();
+    for (const [k, s] of pieces) {
+      if (!k) { frag.appendChild(doc.createTextNode(s)); continue; }
+      const e = doc.createElement('span');
+      e.className = 'syn-' + k;
+      e.textContent = s;
+      frag.appendChild(e);
+    }
+    return frag;
+  }
+
+  // Colors the code blocks that renderMarkdown marked (code[data-syn]) under
+  // root, with highlight, each at most once, up to BUDGET characters in all
+  // (HIGHLIGHT_MAX by default): a block larger than what is left stays
+  // plain.  Answers the budget left
+  function colorCode(root, highlight, budget) {
+    let left = budget === undefined ? HIGHLIGHT_MAX : budget;
+    const doc = root.ownerDocument || root;
+    for (const code of root.querySelectorAll('code[data-syn]')) {
+      code.removeAttribute('data-syn');
+      const text = code.textContent;
+      if (text.length > left) continue;
+      left -= text.length;
+      code.replaceChildren(highlightDom(doc, highlight(text)));
+    }
+    return left;
   }
 
   // ---- markup sanitizer
@@ -1455,5 +1524,6 @@
   }
 
   return { renderMarkdown, sanitizeMarkup, tidyHtml, rebuildHtml, toJson, fromJson, cleanOutput, cleanError, limitOutputs,
-           newId, safeHref, safeImageSrc, slug, LIMITS, MAX_NEST, MAX_WORK };
+           highlightLines, highlightDom, colorCode, newId, safeHref, safeImageSrc, slug, LIMITS, MAX_NEST, MAX_WORK,
+           HIGHLIGHT_MAX };
 });

@@ -6,7 +6,10 @@
 // their hints, a fuzz of 20000 inputs and their time on adversarial inputs
 // (linear: 500000 characters of " ' $ # and digits, 250000 of #( and [),
 // toSt and fromSt (round trips, a file without markers, method sections),
-// straightenQuotes and the example notebook.  The FrameReader and the PNG of
+// straightenQuotes and the example notebook; highlight: each kind, what is
+// unterminated, a fuzz of 20000 inputs against scan, its time on the same
+// adversarial inputs and more, and highlightLines, highlightDom and
+// colorCode of NotebookLib on a stand-in document.  The FrameReader and the PNG of
 // PharoNotebookKernel (nb-kernel.js): a split at every byte, an LF inside an
 // attachment, the resync after a missing LF, the headers it rejects; the
 // PNG inflated, its CRCs, the un-premultiplied pixels.  NotebookLib
@@ -21,7 +24,8 @@
 // .changes and .sources, tests/wasm/st/nb-scan-corpus.st dumps the tokens
 // that the image's scanner finds in 5000 of its methods, and scan must agree
 // with them: every method balanced, its brackets and its comments where the
-// scanner has them.  Otherwise that check says why it is skipped.
+// scanner has them; and highlight: every token of the scanner of one color,
+// that of its kind.  Otherwise those checks say why they are skipped.
 // Prints every check and their count, and exits with status 1 if any fails.
 // Lane 61 (tests/wasm/lanes/61-notebook-harness.sh) runs it.
 
@@ -237,6 +241,176 @@ await check('the example: 13 cells, its fences and labels', () => {
   for (const f of ['', 'smalltalk', 'ST', 'Pharo']) assert(St.FENCE.test(f), 'fence ' + J(f));
   for (const f of ['scheme', 'js', 'smalltalk2']) assert(!St.FENCE.test(f), 'not a fence ' + J(f));
   eq(St.LANGUAGE, 'Smalltalk', 'LANGUAGE');
+});
+
+// ---- the highlighter
+
+// highlight's pieces, a plain one as its text alone
+const hl = s => St.highlight(s).map(([k, t]) => (k ? [k, t] : t));
+
+await check('highlight: each kind, as the scanner of the image reads it', () => {
+  for (const [s, want] of [
+    ['"a ""b"" c" 1', [['comment', '"a ""b"" c"'], ' ', ['number', '1']]],
+    ["'it''s' size", [['string', "'it''s'"], ' size']],
+    ["$' $  $\u{1D11E}x", [['char', "$'"], ' ', ['char', '$ '], ' ', ['char', '$\u{1D11E}'], 'x']],
+    ['16r1F 16r-1F 36rZZ 2r1010e2 1e10 1.5e-3 1.5s2 3s 1_000',
+     [['number', '16r1F'], ' ', ['number', '16r-1F'], ' ', ['number', '36rZZ'], ' ', ['number', '2r1010e2'], ' ',
+      ['number', '1e10'], ' ', ['number', '1.5e-3'], ' ', ['number', '1.5s2'], ' ', ['number', '3s'], ' ', ['number', '1_000']]],
+    // a - is a sign where a value starts only; a+-1 is +- and 1, as the scanner reads it
+    ['3-2. x := -1. 3 - -2. a+-1',
+     [['number', '3'], '-', ['number', '2'], ['paren', '.'], ' x ', ['special', ':='], ' ', ['number', '-1'], ['paren', '.'], ' ',
+      ['number', '3'], ' - ', ['number', '-2'], ['paren', '.'], ' a+-', ['number', '1']]],
+    // a number, then a name: no exponent without digits, no scale before a letter, digits of the radix only
+    ['1e 2 i .5 3sqrt 1.e5 10r1abc 2e3s',
+     [['number', '1'], 'e ', ['number', '2'], ' i ', ['paren', '.'], ['number', '5'], ' ', ['number', '3'], 'sqrt ', ['number', '1'],
+      ['paren', '.'], 'e5 ', ['number', '10r1'], 'abc ', ['number', '2e3'], 's']],
+    ["#foo #at:put: #+ #'with space' ##foo",
+     [['quote', '#foo'], ' ', ['quote', '#at:put:'], ' ', ['quote', '#+'], ' ', ['quote', "#'with space'"], ' ', ['quote', '##foo']]],
+    // in a literal array all is data, but strings, characters, numbers and constants
+    ["#(a b: c:d: #e $f 'g' 1 -2 nil truex (h) [ ] { } ^ ; . := |) #[1 2 255]",
+     [['quote', '#(a'], ' ', ['quote', 'b:'], ' ', ['quote', 'c:d:'], ' ', ['quote', '#e'], ' ', ['char', '$f'], ' ', ['string', "'g'"], ' ',
+      ['number', '1'], ' ', ['number', '-2'], ' ', ['constant', 'nil'], ' ', ['quote', 'truex'], ' ', ['quote', '(h)'], ' ', ['quote', '['], ' ',
+      ['quote', ']'], ' ', ['quote', '{'], ' ', ['quote', '}'], ' ', ['quote', '^'], ' ', ['quote', ';'], ' ', ['quote', '.'], ' ',
+      ['quote', ':='], ' ', ['quote', '|)'], ' ', ['quote', '#['], ['number', '1'], ' ', ['number', '2'], ' ', ['number', '255'], ['quote', ']']]],
+    ['nil true false self super thisContext',
+     [['constant', 'nil'], ' ', ['constant', 'true'], ' ', ['constant', 'false'], ' ', ['special', 'self'], ' ', ['special', 'super'], ' ',
+      ['special', 'thisContext']]],
+    ['^ x := y', [['special', '^'], ' x ', ['special', ':='], ' y']],
+    ['x at: 1 put: 2', ['x ', ['keyword', 'at:'], ' ', ['number', '1'], ' ', ['keyword', 'put:'], ' ', ['number', '2']]],
+    ['#(1) inject: 0 into: [:a :b | a + b]',
+     [['quote', '#('], ['number', '1'], ['quote', ')'], ' ', ['keyword', 'inject:'], ' ', ['number', '0'], ' ', ['keyword', 'into:'], ' ',
+      ['paren', '['], ':a :b ', ['paren', '|'], ' a + b', ['paren', ']']]],
+    ['| t | t := { 1. 2 }; yourself',
+     [['paren', '|'], ' t ', ['paren', '|'], ' t ', ['special', ':='], ' ', ['paren', '{'], ' ', ['number', '1'], ['paren', '.'], ' ',
+      ['number', '2'], ' ', ['paren', '};'], ' yourself']],
+    // the < > of a pragma, not of a comparison (a <b> c looks like one)
+    ['<primitive: 60> <script> a < b. a <b> c',
+     [['paren', '<'], ['keyword', 'primitive:'], ' ', ['number', '60'], ['paren', '>'], ' ', ['paren', '<'], 'script', ['paren', '>'],
+      ' a < b', ['paren', '.'], ' a ', ['paren', '<'], 'b', ['paren', '>'], ' c']],
+    ['Smalltalk at: #Foo put: OrderedCollection new',
+     [['global', 'Smalltalk'], ' ', ['keyword', 'at:'], ' ', ['quote', '#Foo'], ' ', ['keyword', 'put:'], ' ', ['global', 'OrderedCollection'],
+      ' new']],
+    ['x::y', [['keyword', 'x:'], ':y']], ['a :x', ['a :x']], ['#[1 ( ]', [['quote', '#['], ['number', '1'], ' ( ', ['quote', ']']]],
+    ['a ± b #×', ['a ± b ', ['quote', '#×']]],
+    ['été := École', ['été ', ['special', ':='], ' ', ['global', 'École']]],
+  ]) eq(hl(s), want, J(s));
+});
+
+await check('highlight: what is unterminated runs to the end; empty and odd text', () => {
+  for (const [s, want] of [
+    ["'abc", [['string', "'abc"]]], ['"abc', [['comment', '"abc']]], ['$', [['char', '$']]], ['#', ['#']], ['', []],
+    ['#(1 2', [['quote', '#('], ['number', '1'], ' ', ['number', '2']]], ["#'a", [['quote', "#'a"]]], ['16r', [['number', '16'], 'r']],
+    ['x := \'a\n"b', ['x ', ['special', ':='], ' ', ['string', '\'a\n"b']]], ['\u0000`→', ['\u0000`→']],
+    ['$\uD834', [['char', '$\uD834']]], [') ] }', [['paren', ')'], ' ', ['paren', ']'], ' ', ['paren', '}']]],
+    ['40rZZ 516r^', [['number', '40rZZ'], ' ', ['number', '516'], 'r', ['special', '^']]],
+  ]) eq(hl(s), want, J(s));
+});
+
+// The pieces of highlight(s) checked against scan(s): they add up to s,
+// no piece is empty and no two of a kind follow each other, the brackets
+// of scan are colored and are parens or quotes, and the comments end where
+// scan ends them
+function againstScan(s) {
+  const pieces = St.highlight(s), kind = [];
+  eq(pieces.map(p => p[1]).join(''), s, 'the pieces of ' + J(s));
+  pieces.forEach(([k, t], j) => {
+    assert(t.length && (!j || pieces[j - 1][0] !== k), 'the pieces of ' + J(s) + ': ' + J(pieces));
+    for (let x = 0; x < t.length; x++) kind.push(k);
+  });
+  const ends = [];
+  St.scan(s, (k, i) => {
+    if (k === 'open' || k === 'close') assert(kind[i] === 'paren' || kind[i] === 'quote', 'the bracket at ' + i + ' of ' + J(s));
+    if (k === 'comment') ends.push(i);
+  });
+  let at = 0;
+  const got = [];
+  for (const [k, t] of pieces) {
+    at += t.length;
+    if (k === 'comment') got.push(closed(t) ? at - 1 : at);
+  }
+  eq(got, ends, 'the comments of ' + J(s));
+}
+// whether a comment ends with its closing "
+function closed(t) {
+  let k = 1;
+  for (;;) {
+    const j = t.indexOf('"', k);
+    if (j < 0) return false;
+    if (t[j + 1] === '"') { k = j + 2; continue; }
+    return j === t.length - 1;
+  }
+}
+
+await check('highlight: a fuzz of 20000 inputs against scan', () => {
+  const rnd = mulberry(62);
+  const alphabet = '()[]{}\'"$#:+-=^|<>.;_ \n\tab1rAe5s!é±‘';
+  const atoms = ['#(', '#[', '16r', '1.5', 'e-', ':=', 'at:', 'Foo', 'self', 'nil', '<a:', '<b>', '##', "#'", '$\u{1D11E}', '""', "''"];
+  for (let k = 0; k < 20000; k++) {
+    let s = '';
+    if (k < 5000) s = balanced(rnd);
+    else for (let n = Math.floor(rnd() * 40); n > 0; n--)
+      s += rnd() < 0.2 ? atoms[Math.floor(rnd() * atoms.length)] : alphabet[Math.floor(rnd() * alphabet.length)];
+    againstScan(s);
+  }
+});
+
+await check('highlight is linear: 500000 characters of " \' $ # and digits, 250000 of #( and [, and of names, numbers, keywords', () => {
+  const inputs = [['"', 500000], ["'", 500000], ['$', 500000], ['#', 500000], ['7', 500000], ['#(', 250000], ['[', 250000],
+                  ['-1', 250000], ['a:', 250000], ['a', 500000], ['+', 500000], ['#a:', 160000], ['16r', 160000], ["#'", 250000],
+                  [':', 500000], [' \n', 250000], ['+-1', 160000], ['<a', 250000], ['<a:', 160000], ['1.', 250000], ['9r', 250000]];
+  const times = [];
+  for (const [unit, n] of inputs) {
+    const big = unit.repeat(n), half = unit.repeat(n >> 1);
+    const t = best(() => St.highlight(big)), h = best(() => St.highlight(half));
+    times.push(`${J(unit)} ${t.toFixed(0)} ms`);
+    assert(t < 1500, `${J(unit)} x ${n}: ${t.toFixed(0)} ms`);
+    assert(t < 4 * h + 20, `${J(unit)} x ${n}: ${t.toFixed(0)} ms, half of it ${h.toFixed(0)} ms`);
+  }
+  console.log('#   ' + times.join(', '));
+});
+
+// A stand-in for the document of the page: elements, text nodes and
+// fragments with what highlightDom and colorCode use of them
+function standIn() {
+  const node = (props) => Object.assign({ children: [], appendChild(c) { this.children.push(c); return c; },
+                                          get textContent() { return this.text !== undefined ? this.text : this.children.map(c => c.textContent).join(''); },
+                                          set textContent(s) { this.children = []; this.text = s; } }, props);
+  const doc = {
+    createDocumentFragment: () => node({ kind: '#fragment' }),
+    createTextNode: s => ({ kind: '#text', textContent: s }),
+    createElement: tag => node({ kind: tag, className: '' }),
+  };
+  return doc;
+}
+const shown = n => (n.kind === '#text' ? n.textContent : n.kind === 'span' ? [n.className, n.textContent] : n.children.map(shown));
+
+await check('highlightLines, highlightDom and colorCode: lines, spans of class syn-KIND, code blocks within a budget', () => {
+  eq(Lib.highlightLines('a "b\nc" .\n\n', St.highlight),
+     [[['', 'a '], ['comment', '"b']], [['comment', 'c"'], ['', ' '], ['paren', '.']], [], []], 'the lines');
+  eq(Lib.highlightLines([['string', "'x\ny'"]]), [[['string', "'x"]], [['string', "y'"]]], 'pieces as they are');
+  eq(Lib.highlightLines('', St.highlight), [[]], 'no text');
+  const doc = standIn();
+  eq(shown(Lib.highlightDom(doc, St.highlight("x := 'a'.\n^ x"))),
+     ['x ', ['syn-special', ':='], ' ', ['syn-string', "'a'"], ['syn-paren', '.'], '\n', ['syn-special', '^'], ' x'], 'highlightDom');
+  // what colorCode does with the code blocks that renderMarkdown marked
+  const block = text => {
+    const code = doc.createElement('code');
+    code.text = text;
+    code.attrs = new Set(['data-syn']);
+    code.removeAttribute = a => code.attrs.delete(a);
+    code.replaceChildren = f => { code.text = undefined; code.children = f.children; };
+    return code;
+  };
+  const blocks = [block('1 + 2'), block('x'.repeat(Lib.HIGHLIGHT_MAX)), block('#foo')];
+  const root = { ownerDocument: doc, querySelectorAll: sel => (eq(sel, 'code[data-syn]', 'the selector'), blocks.filter(b => b.attrs.has('data-syn'))) };
+  eq(Lib.HIGHLIGHT_MAX, 32 * 1024, 'HIGHLIGHT_MAX');
+  eq(Lib.colorCode(root, St.highlight), Lib.HIGHLIGHT_MAX - 9, 'the budget left');
+  eq(blocks.map(b => [b.attrs.size, shown(b)]),
+     [[0, [['syn-number', '1'], ' + ', ['syn-number', '2']]], [0, []], [0, [['syn-quote', '#foo']]]], 'the blocks colored, the large one plain');
+  eq(blocks[1].textContent.length, Lib.HIGHLIGHT_MAX, 'the large one kept');
+  const again = [block('1')];
+  eq(Lib.colorCode({ ownerDocument: doc, querySelectorAll: () => again }, St.highlight, 0), 0, 'a budget of 0');
+  eq(shown(again[0]), [], 'nothing colored');
 });
 
 // ---- the frames of /dev/nbevents
@@ -593,70 +767,134 @@ await check('tidyHtml is linear: 4 MB of <, of comments, of unclosed tags, attri
 
 // ---- the scanner of the image
 
-async function corpus() {
+// The methods that tests/wasm/st/nb-scan-corpus.st writes, [name, source,
+// tokens], each source with the index of its UTF-16 units of a scanner's
+// position (1-based, in code points); or null, with the line that says why
+function dumpCorpus() {
   const host = process.env.HOST_PHARO;
-  if (!host || !fs.existsSync(host)) { console.log('# skip the corpus of the image: no HOST_PHARO'); return; }
-  if (!imageDir) { console.log('# skip the corpus of the image: no IMAGE_DIR'); return; }
-  await check('scan agrees with the scanner of the image on 5000 methods: balanced, brackets and comments where it has them', () => {
-    const dir = fs.mkdtempSync(path.join(process.env.TEST_DIR || os.tmpdir(), 'nb-corpus-'));
-    try {
-      const names = fs.readdirSync(imageDir);
-      const image = names.find(n => n.endsWith('.image')), sources = names.find(n => n.endsWith('.sources'));
-      fs.copyFileSync(path.join(imageDir, image), path.join(dir, 'Pharo.image'));
-      fs.copyFileSync(path.join(imageDir, image.replace(/\.image$/, '.changes')), path.join(dir, 'Pharo.changes'));
-      fs.symlinkSync(path.join(imageDir, sources), path.join(dir, sources));
-      const out = path.join(dir, 'corpus.jsonl');
-      const t0 = now();
-      const r = childProcess.spawnSync(host, ['--headless', path.join(dir, 'Pharo.image'), '--no-default-preferences', 'st',
-                                              '--no-source', '--quit', path.join(here, 'st', 'nb-scan-corpus.st')],
-                                       { cwd: dir, env: Object.assign({}, process.env, { NB_SCAN_OUT: out }),
-                                         encoding: 'utf8', timeout: 300000 });
-      const said = (r.stderr || '').split('\n').filter(l => /^nb-scan-corpus:/.test(l));
-      assert(fs.existsSync(out), 'no corpus: status ' + r.status + ' ' + (r.stderr || '').slice(-400));
-      const lines = fs.readFileSync(out, 'utf8').split('\n').filter(l => l.startsWith('['));
-      assert(lines.length >= 4000, lines.length + ' methods');
-      let unbalanced = [], brackets = [], comments = [];
-      for (const l of lines) {
-        const [name, source, tokens] = JSON.parse(l);
-        // the code points of the source (the scanner's positions, 1-based)
-        // as the indices of its UTF-16 units
-        const at = [];
-        for (let i = 0; i < source.length; i++) {
-          at.push(i);
-          const c = source.charCodeAt(i);
-          if (c >= 0xd800 && c < 0xdc00 && i + 1 < source.length) i++;
-        }
-        const u = p => at[p - 1];
-        if (!St.balance(source).ok) unbalanced.push(name);
-        // the brackets of the scanner, those of literal arrays as Pharo's
-        // parser reads them (only ( and ) there) and of byte arrays (only ])
-        const stack = [], want = [], gotB = [], wantC = [], gotC = [];
-        for (const [kind, start, stop, value] of tokens) {
-          if (kind === 'comment') { wantC.push(u(stop)); continue; }
-          if (kind === 'litarray') { stack.push(source[u(stop)] === '(' ? 'L' : 'B'); want.push(['open', u(stop)]); continue; }
-          if (kind !== 'special' || !'()[]{}'.includes(value)) continue;
-          const top = stack[stack.length - 1];
-          if (top === 'B') { if (value === ']') { stack.pop(); want.push(['close', u(start)]); } continue; }
-          if (top === 'L') {
-            if (value === '(') { stack.push('L'); want.push(['open', u(start)]); }
-            else if (value === ')') { stack.pop(); want.push(['close', u(start)]); }
-            continue;
-          }
-          if ('([{'.includes(value)) { stack.push(value); want.push(['open', u(start)]); }
-          else { stack.pop(); want.push(['close', u(start)]); }
-        }
-        St.scan(source, (kind, i) => {
-          if (kind === 'open' || kind === 'close') gotB.push([kind, i]);
-          if (kind === 'comment') gotC.push(i);
-        });
-        if (J(gotB) !== J(want)) brackets.push(name);
-        if (J(gotC) !== J(wantC)) comments.push(name);
+  if (!host || !fs.existsSync(host)) { console.log('# skip the corpus of the image: no HOST_PHARO'); return null; }
+  if (!imageDir) { console.log('# skip the corpus of the image: no IMAGE_DIR'); return null; }
+  const dir = fs.mkdtempSync(path.join(process.env.TEST_DIR || os.tmpdir(), 'nb-corpus-'));
+  try {
+    const names = fs.readdirSync(imageDir);
+    const image = names.find(n => n.endsWith('.image')), sources = names.find(n => n.endsWith('.sources'));
+    fs.copyFileSync(path.join(imageDir, image), path.join(dir, 'Pharo.image'));
+    fs.copyFileSync(path.join(imageDir, image.replace(/\.image$/, '.changes')), path.join(dir, 'Pharo.changes'));
+    fs.symlinkSync(path.join(imageDir, sources), path.join(dir, sources));
+    const out = path.join(dir, 'corpus.jsonl');
+    const t0 = now();
+    const r = childProcess.spawnSync(host, ['--headless', path.join(dir, 'Pharo.image'), '--no-default-preferences', 'st',
+                                            '--no-source', '--quit', path.join(here, 'st', 'nb-scan-corpus.st')],
+                                     { cwd: dir, env: Object.assign({}, process.env, { NB_SCAN_OUT: out }),
+                                       encoding: 'utf8', timeout: 300000 });
+    const said = (r.stderr || '').split('\n').filter(l => /^nb-scan-corpus:/.test(l));
+    if (!fs.existsSync(out)) throw new Error('no corpus: status ' + r.status + ' ' + (r.stderr || '').slice(-400));
+    const methods = fs.readFileSync(out, 'utf8').split('\n').filter(l => l.startsWith('[')).map(l => {
+      const [name, source, tokens] = JSON.parse(l);
+      const at = [];
+      for (let i = 0; i < source.length; i++) {
+        at.push(i);
+        const c = source.charCodeAt(i);
+        if (c >= 0xd800 && c < 0xdc00 && i + 1 < source.length) i++;
       }
-      console.log(`#   ${lines.length} methods in ${((now() - t0) / 1000).toFixed(1)} s; ${said.join(' ')}`);
-      eq(unbalanced.slice(0, 5), [], unbalanced.length + ' unbalanced methods');
-      eq(brackets.slice(0, 5), [], brackets.length + ' methods with other brackets');
-      eq(comments.slice(0, 5), [], comments.length + ' methods with other comments');
-    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+      return { name, source, tokens, at };
+    });
+    console.log(`#   ${methods.length} methods in ${((now() - t0) / 1000).toFixed(1)} s; ${said.join(' ')}`);
+    return methods;
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+
+// What highlight colors a token of the scanner, in the literal or byte
+// array CTX ('L', 'B') or in code: the kinds it may have
+const PSEUDO = new Set(['self', 'super', 'thisContext']);
+function kindsOf(kind, text, value, ctx) {
+  switch (kind) {
+  case 'comment': case 'string': case 'char': case 'number': return [kind];
+  case 'symbol': case 'litarray': return ['quote'];
+  case 'literal': return ['constant'];          // nil, true and false
+  case 'special':
+    return ctx === 'L' ? ['quote'] : ctx === 'B' ? [value === ']' ? 'quote' : ''] :
+           value === '^' ? ['special'] : value === ':' ? [''] : ['paren'];
+  case 'keyword': return [ctx === 'L' ? 'quote' : ctx === 'B' ? '' : 'keyword'];
+  case 'ident':
+    return [ctx === 'L' ? 'quote' : ctx === 'B' ? '' : PSEUDO.has(text) ? 'special' : /^\p{Lu}/u.test(text) ? 'global' : ''];
+  case 'binary':                                  // < and > are those of a pragma or not
+    return ctx === 'L' ? ['quote'] : ctx === 'B' ? [''] : /^\|+$/.test(text) ? ['paren'] :
+           text === '<' || text === '>' ? ['', 'paren'] : [''];
+  case 'assign': return [ctx === 'L' ? 'quote' : 'special'];
+  default: return ['a ' + kind];
+  }
+}
+
+async function corpus() {
+  // (no check when there is no host VM or image: dumpCorpus says it skips)
+  let methods = null, error = null;
+  try { methods = dumpCorpus(); } catch (e) { error = e; }
+  if (!methods && !error) return;
+  await check('the corpus of the image: tests/wasm/st/nb-scan-corpus.st dumps the tokens of its methods (5000, or NB_SCAN_METHODS)', () => {
+    if (error) throw error;
+    assert(methods.length >= 4000, methods.length + ' methods');
+  });
+  if (!methods) return;
+  await check('scan agrees with the scanner of the image: every method balanced, brackets and comments where it has them', () => {
+    let unbalanced = [], brackets = [], comments = [];
+    for (const { name, source, tokens, at } of methods) {
+      const u = p => at[p - 1];
+      if (!St.balance(source).ok) unbalanced.push(name);
+      // the brackets of the scanner, those of literal arrays as Pharo's
+      // parser reads them (only ( and ) there) and of byte arrays (only ])
+      const stack = [], want = [], gotB = [], wantC = [], gotC = [];
+      for (const [kind, start, stop, value] of tokens) {
+        if (kind === 'comment') { wantC.push(u(stop)); continue; }
+        if (kind === 'litarray') { stack.push(source[u(stop)] === '(' ? 'L' : 'B'); want.push(['open', u(stop)]); continue; }
+        if (kind !== 'special' || !'()[]{}'.includes(value)) continue;
+        const top = stack[stack.length - 1];
+        if (top === 'B') { if (value === ']') { stack.pop(); want.push(['close', u(start)]); } continue; }
+        if (top === 'L') {
+          if (value === '(') { stack.push('L'); want.push(['open', u(start)]); }
+          else if (value === ')') { stack.pop(); want.push(['close', u(start)]); }
+          continue;
+        }
+        if ('([{'.includes(value)) { stack.push(value); want.push(['open', u(start)]); }
+        else { stack.pop(); want.push(['close', u(start)]); }
+      }
+      St.scan(source, (kind, i) => {
+        if (kind === 'open' || kind === 'close') gotB.push([kind, i]);
+        if (kind === 'comment') gotC.push(i);
+      });
+      if (J(gotB) !== J(want)) brackets.push(name);
+      if (J(gotC) !== J(wantC)) comments.push(name);
+    }
+    eq(unbalanced.slice(0, 5), [], unbalanced.length + ' unbalanced methods');
+    eq(brackets.slice(0, 5), [], brackets.length + ' methods with other brackets');
+    eq(comments.slice(0, 5), [], comments.length + ' methods with other comments');
+  });
+  await check('highlight agrees with the scanner of the image: every token of one color, that of its kind', () => {
+    const bad = [];
+    let tokens = 0, ms = 0;
+    for (const { name, source, tokens: toks, at } of methods) {
+      const t0 = now(), pieces = St.highlight(source);
+      ms += now() - t0;
+      if (pieces.map(p => p[1]).join('') !== source) { bad.push(name + ': the pieces do not add up'); continue; }
+      const color = [];
+      for (const [k, t] of pieces) for (let j = 0; j < t.length; j++) color.push(k);
+      const stack = [];                         // the literal (L) and byte (B) arrays open
+      for (const [kind, start, stop, value] of toks) {
+        const to = stop < at.length ? at[stop] : source.length, text = source.slice(at[start - 1], to);
+        const ctx = stack[stack.length - 1], want = kindsOf(kind, text, value, ctx);
+        // the sign of a number is the scanner's where the parser makes a
+        // binary - of it (3-2), so it is not compared
+        const from = at[start - 1] + (kind === 'number' && text[0] === '-' ? 1 : 0);
+        for (let j = from; j < to; j++)
+          if (!want.includes(color[j])) { bad.push(`${name}: ${kind} ${J(text)} is ${J(color[j])}, not ${want.join(' or ')}`); break; }
+        if (kind === 'litarray') stack.push(text[text.length - 1] === '(' ? 'L' : 'B');
+        else if (kind === 'special' && ctx === 'L' && value === '(') stack.push('L');
+        else if (kind === 'special' && (ctx === 'L' ? value === ')' : ctx === 'B' && value === ']')) stack.pop();
+      }
+      tokens += toks.length;
+    }
+    console.log(`#   ${tokens} tokens of ${methods.length} methods highlighted in ${ms.toFixed(0)} ms`);
+    eq(bad.slice(0, 5), [], bad.length + ' tokens of other colors');
   });
 }
 await corpus();

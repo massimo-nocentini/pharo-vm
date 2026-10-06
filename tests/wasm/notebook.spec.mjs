@@ -20,6 +20,12 @@
 //     Stop watchdog (a primitive that never yields, after a Delay, and a
 //     valueUnpreemptively loop that the watcher cannot reach), output that
 //     streams while a cell runs, a syntax error that runs nothing;
+//   - the coloring of the code cells: every kind of token, an overlay that
+//     is inert and lines up with the editor, an IME, the repaint of the
+//     lines that changed only, a cell of 32 KB, text cells left plain, the
+//     Smalltalk fences of Markdown colored lazily within their budget, the
+//     contrast of every color, and the highlighter itself (a fuzz against
+//     the bracket scanner, linear time);
 //   - the caps of the outputs, the sanitizer of html:, svg: and markdown:,
 //     of Markdown cells and of imported notebooks, the bounds of <use> and
 //     of filters, Markdown in linear time;
@@ -56,6 +62,9 @@ const LONG_PRIMITIVE = "(String new: 1000000 withAll: $a) findString: (String ne
 const NB_DONE = /^(ok|error|interrupted|cancelled)$/;
 // a Smalltalk string literal of s
 const st = s => "'" + s.replace(/'/g, "''") + "'";
+// the kinds of the highlighter and their colors (index.html's --syn-*)
+const SYN_KINDS = ['comment', 'string', 'char', 'number', 'quote', 'constant', 'special', 'keyword', 'paren', 'global'];
+const synVar = k => '--syn-' + (k === 'char' ? 'string' : k);
 
 // The init script of every context: the violations of the CSP, and the
 // workers with what the page tells them of their mode and of the git proxy
@@ -434,6 +443,17 @@ await run(async t => {
     assert(!(await page.$(`#nb-cells > li:nth-child(${i + 1}) .nb-stream`)), 'no output');
     const mark = await page.$eval(`#nb-cells > li:nth-child(${i + 1})`, e => (e.querySelector('.nb-hl mark') || {}).textContent);
     assert(mark === '#(1 2', 'the line marked: ' + JSON.stringify(mark));
+    // the marked line keeps its spans and their colors
+    const hl = await page.$eval(`#nb-cells > li:nth-child(${i + 1})`, e => {
+      const o = e.querySelector('.nb-hl'), m = o.querySelector('mark'), root = getComputedStyle(document.documentElement);
+      const rgb = v => { const x = v.trim(); return 'rgb(' + [1, 3, 5].map(k => parseInt(x.slice(k, k + 2), 16)).join(', ') + ')'; };
+      return { text: [...o.children].map(d => d.textContent).join('\n'), src: e.querySelector('.nb-src').value,
+               spans: [...m.querySelectorAll('span')].map(s => [s.className, getComputedStyle(s).color,
+                                                                rgb(root.getPropertyValue('--' + s.className.replace('char', 'string')))]) };
+    });
+    assert(hl.text === hl.src && hl.spans.length >= 3 && hl.spans.every(([, c, want]) => c === want) &&
+           hl.spans.some(([k]) => k === 'syn-quote') && hl.spans.some(([k]) => k === 'syn-number'),
+           'the marked line ' + JSON.stringify(hl));
     const p = await nb.eval('<primitive: 1> 3');
     assert(await nb.status(p) === 'error' && /pragmas are not allowed/.test(await nb.out(p)), 'a pragma: ' + await nb.out(p));
   });
@@ -616,6 +636,304 @@ await run(async t => {
     assert(slow.tds === 6000, 'short table rows: ' + slow.tds + ' cells');
     assert(JSON.stringify(slow.ragged) === JSON.stringify(['1/1 /2', '1/1 2/1 3/1']), 'ragged rows ' + JSON.stringify(slow.ragged));
     assert(JSON.stringify(slow.code) === JSON.stringify(['a``b', 'c`d']), 'code spans ' + JSON.stringify(slow.code));
+  });
+
+  // ---- the coloring of the code cells
+
+  // the overlay of cell i: its text, its spans, and its box against the editor's
+  const paintOf = i => page.$eval(`#nb-cells > li:nth-child(${i + 1})`, e => {
+    const hl = e.querySelector('.nb-hl'), src = e.querySelector('.nb-src'), cs = getComputedStyle(src);
+    const a = hl.getBoundingClientRect(), b = src.getBoundingClientRect();
+    return { syn: e.querySelector('.nb-editor').classList.contains('syn'), src: src.value, tag: hl.tagName,
+             text: hl.firstElementChild ? [...hl.children].map(d => d.textContent).join('\n') : hl.textContent,
+             kinds: [...hl.querySelectorAll('span')].map(s => s.className + ':' + s.textContent),
+             color: cs.color, caret: cs.caretColor, hlColor: getComputedStyle(hl).color, hidden: hl.getAttribute('aria-hidden'),
+             inert: hl.inert, box: [a.left - b.left, a.top - b.top, a.width - b.width, a.height - b.height].map(x => Math.abs(x) < 1),
+             heights: [a.height, b.height] };
+  });
+  const CLEAR = /rgba\(0, 0, 0, 0\)|transparent/;
+
+  await check('code cells are colored, every kind of token; the overlay is inert and lines up with the editor', async () => {
+    const src = '"a comment" | t | t := #(1 $a foo #bar: nil) , #[1 2].\n' +
+                'Transcript show: \'it\'\'s\'; cr.\n' +
+                '[ :x | x > 16r1F ifTrue: [ ^ self ] ] value: 2r1010e2 + 1.5s2 - 3.\n' +
+                '#at:put: numArgs + #+ size + #\'with space\' size. super yourself. thisContext. true & false';
+    const i = await nb.add(src);
+    let r = await paintOf(i);
+    assert(r.syn && r.text === r.src && r.tag === 'PRE' && r.hidden === 'true' && r.inert, 'the overlay mirrors the source ' + JSON.stringify(r));
+    for (const k of ['syn-comment:"a comment"', 'syn-string:\'it\'\'s\'', 'syn-char:$a', 'syn-number:16r1F', 'syn-number:2r1010e2',
+                     'syn-number:1.5s2', 'syn-quote:#(', 'syn-quote:#[', 'syn-quote:#at:put:', 'syn-quote:#+', 'syn-quote:#\'with space\'', 'syn-quote:foo',
+                     'syn-constant:nil', 'syn-constant:true', 'syn-special::=', 'syn-special:^', 'syn-special:self',
+                     'syn-special:super', 'syn-special:thisContext', 'syn-keyword:show:', 'syn-keyword:ifTrue:',
+                     'syn-global:Transcript'])
+      assert(r.kinds.includes(k), k + ' in ' + r.kinds.join(' '));
+    for (const k of ['paren:.', 'paren:;', 'paren:|', 'paren:[', 'paren:]'])
+      assert(r.kinds.some(x => x.startsWith('syn-' + k)), k + ' in ' + r.kinds.join(' '));
+    // a block parameter and a temporary stay plain
+    assert(!r.kinds.some(x => /:(?::x|x|t)$/.test(x)), 'plain names ' + r.kinds.join(' '));
+    // every kind in its own color, which is the token's
+    const colors = await page.$eval(`#nb-cells > li:nth-child(${i + 1}) .nb-hl`, (hl, kinds) => {
+      const root = getComputedStyle(document.documentElement), out = {};
+      for (const k of kinds) {
+        const e = hl.querySelector('.syn-' + k);
+        const v = root.getPropertyValue('--syn-' + (k === 'char' ? 'string' : k)).trim();
+        out[k] = [e && getComputedStyle(e).color, 'rgb(' + [1, 3, 5].map(j => parseInt(v.slice(j, j + 2), 16)).join(', ') + ')'];
+      }
+      return out;
+    }, SYN_KINDS);
+    for (const k of SYN_KINDS) assert(colors[k][0] === colors[k][1], k + ' colored ' + JSON.stringify(colors[k]));
+    assert(new Set(SYN_KINDS.filter(k => k !== 'char').map(k => colors[k][0])).size === SYN_KINDS.length - 1,
+           'a color per kind ' + JSON.stringify(colors));
+    assert(CLEAR.test(r.color) && !CLEAR.test(r.caret) && !CLEAR.test(r.hlColor),
+           'the editor shows the caret, the overlay the text ' + JSON.stringify(r));
+    assert(r.box.every(x => x), 'overlay and editor in the same box ' + JSON.stringify(r.box));
+    // lines up where lines wrap, at tabs and at empty lines, at 320 px too
+    // (the same height: the same lines; the same text in the same font)
+    const wrapped = '\tx := \'' + 'word '.repeat(60) + '\'.\n\n\t\t"' + 'long comment '.repeat(30) + '"\n' +
+                    'y := #(' + 'sym '.repeat(50) + ').\n';
+    await nb.src(i).fill(wrapped);
+    for (const width of [1280, 320]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.waitForTimeout(150);
+      r = await paintOf(i);
+      assert(r.syn && r.text === r.src && r.box.every(x => x) && Math.abs(r.heights[0] - r.heights[1]) < 1,
+             'aligned at ' + width + ' px ' + JSON.stringify([r.box, r.heights]));
+      const fonts = await page.$eval(`#nb-cells > li:nth-child(${i + 1})`, e => [e.querySelector('.nb-hl'), e.querySelector('.nb-src')]
+        .map(x => { const c = getComputedStyle(x); return [c.fontFamily, c.fontSize, c.lineHeight, c.tabSize, c.paddingLeft, c.paddingTop,
+                                                          c.whiteSpace, c.overflowWrap, c.letterSpacing].join('|'); }));
+      assert(fonts[0] === fonts[1], 'the same font and box ' + JSON.stringify(fonts));
+    }
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await nb.src(i).fill(src);
+    // find in page sees the text once (the overlay is inert)
+    const found = await page.evaluate(() => {
+      const hits = [];
+      getSelection().removeAllRanges();
+      for (let k = 0; k < 3 && window.find('16r1F ifTrue', false, false, true); k++)
+        hits.push(!!(getSelection().anchorNode && getSelection().anchorNode.parentElement &&
+                     getSelection().anchorNode.parentElement.closest('.nb-hl')));
+      getSelection().removeAllRanges();
+      return hits;
+    });
+    assert(!found.includes(true), 'find skips the overlay ' + JSON.stringify(found));
+    // an IME composes in the editor's own (visible) text
+    const ime = async type => {
+      await nb.src(i).dispatchEvent(type);
+      return nb.src(i).evaluate(e => [getComputedStyle(e).color, getComputedStyle(e.parentNode.querySelector('.nb-hl')).visibility]);
+    };
+    const [during, after] = [await ime('compositionstart'), await ime('compositionend')];
+    assert(!CLEAR.test(during[0]) && during[1] === 'hidden' && CLEAR.test(after[0]) && after[1] === 'visible',
+           'composition ' + JSON.stringify([during, after]));
+  });
+
+  await check('typing repaints the lines that changed only; a text cell is never colored; m and y switch', async () => {
+    const i = await nb.add('a := 1.\nb := \'s\'.\nc := 3');
+    // a mark on each line's block: those that typing does not touch stay
+    const tag = () => page.$eval(`#nb-cells > li:nth-child(${i + 1}) .nb-hl`, hl => [...hl.children].forEach((d, k) => { d.__k = k; }));
+    const tags = () => page.$eval(`#nb-cells > li:nth-child(${i + 1}) .nb-hl`, hl => [...hl.children].map(d => d.__k === undefined ? null : d.__k));
+    await tag();
+    await nb.src(i).press('Control+End');
+    await nb.src(i).pressSequentially(' + 4 "open');
+    let r = await paintOf(i);
+    assert(r.text === r.src && r.kinds[r.kinds.length - 1] === 'syn-comment:"open', 'repainted on input ' + JSON.stringify(r.kinds));
+    assert(JSON.stringify(await tags()) === '[0,1,null]', 'only the last line was repainted ' + JSON.stringify(await tags()));
+    // a quote typed at the start makes a string of the rest, taken back it is as it was
+    const before = r;
+    await tag();
+    await nb.src(i).press('Control+Home');
+    await nb.src(i).press('\'');
+    r = await paintOf(i);
+    assert(r.text === r.src && r.kinds[0] === 'syn-string:\'a := 1.', 'a quote typed ' + JSON.stringify(r.kinds));
+    await nb.src(i).press('Backspace');
+    r = await paintOf(i);
+    assert(r.text === before.src && JSON.stringify(r.kinds) === JSON.stringify(before.kinds), 'and taken back ' + JSON.stringify(r.kinds));
+    // a text cell is plain; back to code it is colored again
+    await nb.src(i).press('Escape');
+    await page.keyboard.press('m');
+    r = await paintOf(i);
+    assert(!r.syn && !r.kinds.length && !r.text, 'a text cell is not colored ' + JSON.stringify(r));
+    await page.keyboard.press('y');
+    r = await paintOf(i);
+    assert(r.syn && r.text === r.src && r.kinds.length, 'code again ' + JSON.stringify(r));
+    // a new text cell, in edit mode
+    await page.click('#nb-end-text');
+    const t = (await nb.cells()) - 1;
+    await nb.src(t).fill('x := #(1 2). "c" \'s\'');
+    r = await paintOf(t);
+    assert(!r.syn && !r.kinds.length && !r.text && !CLEAR.test(r.color), 'a new text cell ' + JSON.stringify(r));
+    await nb.src(t).press('Shift+Enter');
+  });
+
+  await check('a cell of 32 KB is colored and repainted fast; a larger one stays plain', async () => {
+    const line = 'x := y at: 1 put: #sym. "c" \'s\' $a.';   // 36 characters a line
+    const big = Array.from({ length: Math.floor(32 * 1024 / (line.length + 1)) }, (_, k) => line).join('\n');
+    const i = await nb.add();
+    let ms = await nb.src(i).evaluate((e, big) => {
+      const t = performance.now();
+      e.value = big;
+      e.dispatchEvent(new Event('input'));
+      return performance.now() - t;
+    }, big);
+    let r = await paintOf(i);
+    assert(r.syn && r.text === r.src && r.src.length <= 32 * 1024 && r.kinds.length > 5000, 'colored: ' + r.src.length + ' characters');
+    // an edit in the middle: one line repainted, in a few milliseconds
+    const edits = await nb.src(i).evaluate(e => {
+      const hl = e.parentNode.querySelector('.nb-hl'), first = hl.firstChild, last = hl.lastChild, times = [];
+      for (let k = 0; k < 20; k++) {
+        const at = e.value.indexOf('\n', e.value.length >> 1);
+        const t = performance.now();
+        if (k % 2) e.setRangeText('', at - 1, at, 'end'); else e.setRangeText('1', at, at, 'end');
+        e.dispatchEvent(new Event('input'));
+        times.push(performance.now() - t);
+      }
+      return { times, same: hl.firstChild === first && hl.lastChild === last, lines: hl.children.length,
+               want: e.value.split('\n').length };
+    });
+    const worst = Math.max(...edits.times), avg = edits.times.reduce((a, b) => a + b, 0) / edits.times.length;
+    console.log('# ' + t.name + ': a 32 KB cell painted in ' + Math.round(ms) + ' ms, an edit repainted in ' + avg.toFixed(1) +
+                ' ms on average, ' + worst.toFixed(1) + ' ms at most');
+    assert(edits.same && edits.lines === edits.want, 'only the line edited was replaced ' + JSON.stringify(edits));
+    assert(ms < 1000 && worst < 250, 'slow: ' + Math.round(ms) + ' ms to paint, ' + worst.toFixed(1) + ' ms an edit');
+    // a character more: plain, the editor's own text shown
+    await nb.src(i).evaluate(e => { e.value += '\n'.repeat(32 * 1024 - e.value.length + 1); e.dispatchEvent(new Event('input')); });
+    r = await paintOf(i);
+    assert(!r.syn && !r.kinds.length && !r.text && !CLEAR.test(r.color) && r.src.length === 32 * 1024 + 1, 'plain: ' + JSON.stringify(
+      { syn: r.syn, kinds: r.kinds.length, text: r.text.length, color: r.color, src: r.src.length }));
+    // the marked line of an error shows in a plain cell too
+    await nb.src(i).fill('1 +');
+    await nb.src(i).evaluate(e => { e.value = '1 +' + ' '.repeat(32 * 1024); e.dispatchEvent(new Event('input')); });
+    await nb.run(i);
+    await nb.wait(i);
+    r = await paintOf(i);
+    const mark = await page.$eval(`#nb-cells > li:nth-child(${i + 1}) .nb-hl mark`, m => [m.textContent.slice(0, 3), getComputedStyle(m).color]);
+    assert(!r.syn && mark[0] === '1 +' && CLEAR.test(mark[1]), 'a plain cell marked ' + JSON.stringify(mark));
+    await nb.src(i).fill('');
+  });
+
+  await check('the highlighter: its pieces add up to the source, its brackets are the scanner\'s, in linear time', async () => {
+    const r = await page.evaluate(() => {
+      const S = window.NotebookSt, L = window.NotebookLib, bad = [];
+      let seed = 7;
+      const rnd = n => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) % n;
+      const A = ['(', ')', '[', ']', '{', '}', '#(', '#[', '"', '\'', '$', '#', ':', ':=', '^', '.', ';', '|', '<', '>', '-', '1',
+                 '16r', 'e', 's', '_', 'a', 'B', 'nil', 'self', 'at:', ' ', '\n', '\t', 'é', '𝄞', '!', '\r'];
+      const inputs = ['', '"', '\'', '$', '#', '#(', '#[', '$𝄞', '"a\'b"\'c"d\'', '#(#( ] } $) ) )', '#[1 ( ] 2', '\'\'\'\''];
+      for (let k = 0; k < 20000; k++) { let s = ''; for (let m = rnd(24); m > 0; m--) s += A[rnd(A.length)]; inputs.push(s); }
+      for (const s of inputs) {
+        const p = S.highlight(s);
+        if (p.map(x => x[1]).join('') !== s) { bad.push('texts of ' + JSON.stringify(s)); continue; }
+        if (p.some(x => !x[1] || (x[0] && !/^(comment|string|char|number|quote|constant|special|keyword|paren|global)$/.test(x[0]))))
+          bad.push('pieces of ' + JSON.stringify(s) + ': ' + JSON.stringify(p));
+        // the brackets that count for the scanner are parens, or quote
+        // in a literal array (#( ) #[ ]); a paren is one of them
+        const want = new Set(), kind = [];
+        S.scan(s, (k, i) => { if (k === 'open' || k === 'close') want.add(i); });
+        for (const [k, t] of p) for (let j = 0; j < t.length; j++) kind.push(k);
+        for (const i of want) if (kind[i] !== 'paren' && kind[i] !== 'quote') bad.push('bracket ' + i + ' of ' + JSON.stringify(s) + ': ' + kind[i]);
+        for (let i = 0; i < s.length; i++)
+          if (kind[i] === 'paren' && '()[]{}'.includes(s[i]) && !want.has(i)) bad.push('paren ' + i + ' of ' + JSON.stringify(s));
+        // and a line of the overlay is a line of the source
+        const lines = L.highlightLines(s, S.highlight);
+        if (lines.map(l => l.map(x => x[1]).join('')).join('\n') !== s) bad.push('lines of ' + JSON.stringify(s));
+        if (bad.length > 10) break;
+      }
+      // linear time on 500 K of each
+      const slow = [], times = {};
+      for (const [k, s] of Object.entries({
+        code: 'x := Transcript show: #(1 $a #b) printString; cr. "c" ^ self at: 16r1F put: \'s\'.\n'.repeat(6500),
+        comments: '"'.repeat(500000), strings: '\''.repeat(500000), chars: '$'.repeat(500000), hashes: '#'.repeat(500000),
+        digits: '1'.repeat(500000), radix: '16r'.repeat(170000), arrays: '#('.repeat(250000), blocks: '['.repeat(500000),
+        keywords: 'a:'.repeat(250000), minus: '-1'.repeat(250000),
+      })) {
+        const t = performance.now();
+        S.highlight(s);
+        const ms = performance.now() - t;
+        times[k] = Math.round(ms);
+        if (ms > 1000) slow.push(k + ': ' + Math.round(ms) + ' ms');
+      }
+      // as DOM: spans for the kinds, text for the rest
+      const d = L.highlightDom(document, S.highlight('x := \'a\'.\n^ x'));
+      const dom = { text: d.textContent, kids: [...d.childNodes].map(e => e.className || '#text') };
+      const lines = JSON.stringify(L.highlightLines('a "b\nc" .\n\n', S.highlight));
+      return { bad, slow, times, dom, lines, n: inputs.length };
+    });
+    console.log('# ' + t.name + ': the highlighter on 500 K (ms) ' + JSON.stringify(r.times));
+    assert(!r.bad.length, r.bad.join('\n'));
+    assert(!r.slow.length, 'slow: ' + r.slow.join('; '));
+    assert(r.dom.text === 'x := \'a\'.\n^ x' && r.dom.kids.join() === '#text,syn-special,#text,syn-string,syn-paren,#text,syn-special,#text',
+           'highlightDom ' + JSON.stringify(r.dom));
+    assert(r.lines === '[[["","a "],["comment","\\"b"]],[["comment","c\\""],[""," "],["paren","."]],[],[]]', 'highlightLines ' + r.lines);
+  });
+
+  await check('the Smalltalk fences of Markdown are colored, lazily and within 32 KB; other languages stay plain', async () => {
+    const fences = ['```\n3 + 4\n```', '```st\n#(1) "c"\n```', '```Smalltalk\nself foo: nil\n```', '```pharo\n^ $a\n```',
+                    '```python\nif a: "s"\n```', '```js\nlet x = \'s\'\n```', '~~~\nTranscript cr\n~~~'];
+    await page.click('#nb-end-text');
+    const i = (await nb.cells()) - 1;
+    await nb.src(i).fill(fences.join('\n\n'));
+    await nb.src(i).press('Shift+Enter');
+    const codes = sel => page.$$eval(sel, l => l.map(c => c.querySelectorAll('span').length + ':' + c.textContent));
+    const want = ['2:3 + 4', '4:#(1) "c"', '3:self foo: nil', '2:^ $a', '0:if a: "s"', "0:let x = 's'", '1:Transcript cr'];
+    let got = await codes(`#nb-cells > li:nth-child(${i + 1}) .nb-md pre code`);
+    assert(JSON.stringify(got) === JSON.stringify(want), 'fences ' + JSON.stringify(got));
+    // the source of a text cell is not colored while it is edited
+    await nb.cell(i).locator('.nb-md').dblclick();
+    const r = await paintOf(i);
+    assert(!r.syn && !r.kinds.length && !CLEAR.test(r.color), 'its source is plain ' + JSON.stringify(r));
+    await nb.src(i).press('Shift+Enter');
+    // a markdown: display of the kernel, at once
+    const o = await nb.eval(`Notebook markdown: ${st(fences.join('\n\n'))}`);
+    got = await codes(`#nb-cells > li:nth-child(${o + 1}) .nb-out pre code`);
+    assert(JSON.stringify(got) === JSON.stringify(want), 'a display\'s fences ' + JSON.stringify(got));
+    // what renderMarkdown marks, colorCode colors: at most 32 KB of code in all
+    const capped = await page.evaluate(() => {
+      const L = window.NotebookLib, S = window.NotebookSt;
+      const big = '```\n' + 'a := 1.\n'.repeat(2500) + '```\n\n```st\n' + 'b := 2.\n'.repeat(2500) + '```';
+      const div = document.createElement('div');
+      div.appendChild(L.renderMarkdown(big, document, 't-', { fence: S.FENCE }));
+      const before = [...div.querySelectorAll('pre code')].map(c => c.childElementCount > 0);
+      L.colorCode(div, S.highlight);
+      return [before, [...div.querySelectorAll('pre code')].map(c => c.childElementCount > 0)];
+    });
+    assert(JSON.stringify(capped) === '[[false,false],[true,false]]', 'the budget ' + JSON.stringify(capped));
+  });
+
+  // index.html's colors, as read and composed here: the editor's background,
+  // the tint of the selection over it, and the tint of an error's line
+  await check('every --syn color is 4.5:1 or more on the editor, under the selection and on an error\'s line, light and dark', async () => {
+    const r = await page.evaluate(kinds => {
+      const el = document.documentElement, was = el.dataset.theme, out = {};
+      const hex = s => [1, 3, 5].map(i => parseInt(s.trim().slice(i, i + 2), 16));
+      const lin = c => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+      const lum = c => { const [r, g, b] = c.map(lin); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+      const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+      const over = (top, a, bot) => top.map((c, i) => c * a + bot[i] * (1 - a));
+      for (const theme of ['light', 'dark']) {
+        el.dataset.theme = theme;
+        const cs = getComputedStyle(el), v = n => hex(cs.getPropertyValue(n));
+        const bg = v('--term-bg'), grounds = { editor: bg, selection: over(v('--focus'), .18, bg), error: over(v('--term-err'), .18, bg) };
+        out[theme] = {};
+        for (const k of kinds.concat(['term-fg'])) {
+          const name = k === 'term-fg' ? '--term-fg' : '--syn-' + (k === 'char' ? 'string' : k);
+          if (!/^#[0-9a-f]{6}$/i.test(cs.getPropertyValue(name).trim())) { out[theme][k] = 'no token ' + name; continue; }
+          out[theme][k] = Object.fromEntries(Object.entries(grounds).map(([g, c]) => [g, +ratio(v(name), c).toFixed(2)]));
+        }
+      }
+      if (was) el.dataset.theme = was; else delete el.dataset.theme;
+      return out;
+    }, SYN_KINDS);
+    for (const theme of ['light', 'dark']) {
+      const low = Object.entries(r[theme]).filter(([, g]) => typeof g !== 'object' || Object.values(g).some(x => x < 4.5));
+      console.log('# ' + t.name + ': contrast, ' + theme + ' (editor/selection/error line) ' +
+                  Object.entries(r[theme]).map(([k, g]) => k + ' ' + Object.values(g).join('/')).join(', '));
+      assert(!low.length, theme + ': ' + JSON.stringify(low));
+    }
+    // the selection is that tint: the editor's ::selection of a colored cell
+    const sel = await page.evaluate(() => {
+      const e = document.querySelector('#nb-cells .nb-editor.syn .nb-src');
+      return e ? getComputedStyle(e, '::selection').backgroundColor : null;
+    });
+    assert(sel && !CLEAR.test(sel), 'the selection is tinted: ' + sel);
   });
 
   // ten uses of a group of ten uses of ...: 10^5 elements from 1.2 KB
@@ -1087,6 +1405,38 @@ await run(async t => {
       assert(await nb.cells() === n, name + ': the notebook is kept');
     }
     await page.click('#nb-notice-close');
+  });
+
+  // a lone \r is a line break in the editor, so it is one in the overlay;
+  // the fences of text cells are colored, and code cells painted, when they
+  // come near the visible part of the notebook
+  await check('imported sources are colored as the editor shows them, when they come into view', async () => {
+    // the notebook as it was, imported again at the end
+    await page.keyboard.press('Control+s');
+    const was = await page.evaluate(k => localStorage.getItem(k), NB_KEY), n = await nb.cells();
+    const cells = [{ type: 'code', source: 'a := 1.\r"c" b := 2.\r\nc := 3' }, { type: 'markdown', source: '```\nself foo\n```' }]
+      .concat(Array.from({ length: 300 }, (_, k) => ({ type: 'code', source: k + ' + 1' })),
+              [{ type: 'markdown', source: '```st\nnil isNil\n```' }]);
+    const buf = Buffer.from(JSON.stringify({ format: 'pharo-notebook', version: 1, meta: { title: 'cr' }, cells }));
+    await accepting(() => page.setInputFiles('#nb-file', { name: 'cr.json', mimeType: 'application/json', buffer: buf }));
+    await page.waitForFunction(() => document.querySelectorAll('#nb-cells > li').length === 303, null, { timeout: 20000 });
+    await page.$eval('#panel-notebook', e => { e.scrollTop = 0; });
+    await page.waitForFunction(() => document.querySelector('#nb-cells > li:nth-child(2) .nb-md .syn-special'), null, { timeout: 5000 });
+    const r = await page.evaluate(() => {
+      const li = document.querySelectorAll('#nb-cells > li'), hl = li[0].querySelector('.nb-hl');
+      return { src: li[0].querySelector('.nb-src').value, lines: [...hl.children].map(d => d.textContent),
+               comments: [...hl.querySelectorAll('.syn-comment')].map(e => e.textContent),
+               far: li[302].querySelectorAll('.nb-md span').length, farCode: li[300].querySelectorAll('.nb-hl span').length,
+               painted: document.querySelectorAll('#nb-cells .nb-editor.syn').length };
+    });
+    assert(r.src === 'a := 1.\n"c" b := 2.\nc := 3' && r.lines.join('|') === 'a := 1.|"c" b := 2.|c := 3' && r.comments.join() === '"c"',
+           'line breaks ' + JSON.stringify(r));
+    assert(r.far === 0 && r.farCode === 0 && r.painted > 0 && r.painted < 300, 'cells out of sight are not colored yet: ' + JSON.stringify(r));
+    await nb.cell(302).scrollIntoViewIfNeeded();
+    await page.waitForFunction(() => document.querySelector('#nb-cells > li:nth-child(303) .nb-md .syn-constant') &&
+                               document.querySelector('#nb-cells > li:nth-child(301) .nb-editor.syn .syn-number'), null, { timeout: 5000 });
+    await accepting(() => page.setInputFiles('#nb-file', { name: 'was.json', mimeType: 'application/json', buffer: Buffer.from(was) }));
+    await page.waitForFunction(n => document.querySelectorAll('#nb-cells > li').length === n, n, { timeout: 20000 });
   });
 
   // The other tab saved, this one autosaved over it before the choice was
