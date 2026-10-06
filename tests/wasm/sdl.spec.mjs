@@ -31,12 +31,16 @@
 //   - a stock image opened on the page (a zip of WASM_DIR/image/stock, as
 //     files.pharo.org has them) opens its world through OSSDL2Driver too,
 //     unprepared;
+//   - the git proxy that the Console's Settings keep (pharo-wasm.gitProxy,
+//     set from another page of the site) goes to the running VM when it
+//     changes, '' when it is not one that the Console takes, and to the
+//     worker of a Restart in its init;
 //   - the negative control: world.html on the same build still runs the
 //     world on OSWebDriver; and its idle cost is measured the same way,
 //     on a load without the probe.
 //
 // With the last check of pw.mjs (no console errors, no failed requests,
-// and no exception in a page or a worker), 8 checks for each browser.
+// and no exception in a page or a worker), 9 checks for each browser.
 // Exits with status 1 if any check fails, the page logs an error, or a
 // worker warns of an engine error.
 
@@ -127,11 +131,14 @@ await run(async t => {
   // vm-worker.js passes on what the runtime says (onDiag) as warnings
   const diag = [];
   page.on('worker', w => w.on('console', m => { if (ENGINE_ERRORS.test(m.text())) diag.push(m.text()); }));
-  // the worker of the page, for the costs that the patch measures
+  // the worker of the page, for the costs that the patch measures; and the
+  // git proxy that the page gives it
   await page.addInitScript(() => {
     const post = Worker.prototype.postMessage;
+    window.__gitPosts = [];
     Worker.prototype.postMessage = function (m, transfer) {
       window.__worker = this;
+      if (m && (m.type === 'init' || m.type === 'gitProxy')) window.__gitPosts.push({ type: m.type, gitProxy: m.gitProxy });
       return post.call(this, m, transfer);
     };
     window.__costs = () => new Promise((resolve, reject) => {
@@ -344,6 +351,44 @@ await run(async t => {
     assert(p.driver === 'OSSDL2Driver', 'driver ' + p.driver);
     const c = colours(await shoot());
     assert(c.count > 64 && c.top < 0.9, `a non-uniform canvas: ${c.count} colours, the commonest ${(100 * c.top).toFixed(1)}%`);
+  });
+
+  await check('the git proxy of the Console goes to the VM when it changes, and to the worker of a Restart', async () => {
+    const PROXY = 'http://127.0.0.1:9/';
+    const gitPosts = () => page.evaluate(() => window.__gitPosts.splice(0));
+    const posted = (type, value) => page.waitForFunction(([type, value]) =>
+      window.__gitPosts.some(m => m.type === type && m.gitProxy === value), [type, value], { timeout: 10000 });
+    // another page of the site sets it, as the Console's Settings do: a
+    // storage event here
+    const other = await t.context.newPage();
+    const set = async v => {
+      await gitPosts();
+      await other.evaluate(v => localStorage.setItem('pharo-wasm.gitProxy', v), v);
+    };
+    try {
+      await other.goto(t.base + 'THIRD-PARTY-NOTICES.txt');
+      await set(PROXY);
+      await posted('gitProxy', PROXY);
+      // one with credentials, which the Console does not take: none
+      await set('http://u:p@127.0.0.1:9/');
+      await posted('gitProxy', '');
+      await set(PROXY);
+      await posted('gitProxy', PROXY);
+      await gitPosts();
+      const starts = (await sdlStats()).starts;
+      const dialogs = await accepting(async () => {
+        await page.click('#restart');
+        await page.waitForFunction(n => window.PharoSDL.stats.starts > n && window.PharoSDL.stats.paintedAt > 0, starts,
+                                   { timeout: 120000 });
+      });
+      assert(dialogs.length === 1, 'asked ' + dialogs);
+      const inits = (await gitPosts()).filter(m => m.type === 'init');
+      assert(inits.length === 1 && inits[0].gitProxy === PROXY, 'the init of the restart: ' + JSON.stringify(inits));
+      await waitState('running');
+    } finally {
+      await other.evaluate(() => localStorage.removeItem('pharo-wasm.gitProxy')).catch(() => {});
+      await other.close();
+    }
   });
 
   await check('world.html on the same build runs OSWebDriver', async () => {

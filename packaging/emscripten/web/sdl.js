@@ -41,6 +41,10 @@
 //   copy and paste stay within the image), resizing, HiDPI (a canvas pixel
 //   is a CSS pixel), input methods, focus and Stop (the image registers
 //   nothing for it with the VM: Alt+. or Cmd+. interrupts it).
+// - The CORS proxy of git's HTTP requests is the one that the Console's
+//   Settings keep in this browser (pharo-wasm.gitProxy), as on the world
+//   page (world.js): given in init.gitProxy, and to the running VM when the
+//   Console changes it (a storage event).  Never taken from the URL.
 //
 // window.PharoSDL tells tests and the curious how it goes: stats (the
 // workers started, when this one started and painted first, the sizes of
@@ -69,6 +73,23 @@
     const theme = localStorage.getItem('pharo-wasm.theme');
     if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
   } catch (e) { /* no storage: follow the system */ }
+
+  // The proxy of git's HTTP requests that the Console keeps (page.js), or
+  // '': an http: or https: URL without credentials or fragment, as the
+  // Console checks it
+  const GIT_PROXY_KEY = 'pharo-wasm.gitProxy';
+  function gitProxy() {
+    let s = null;
+    try { s = localStorage.getItem(GIT_PROXY_KEY); } catch (e) { /* no storage: no proxy */ }
+    if (!s) return '';
+    try {
+      const u = new URL(s);
+      return /^https?:$/.test(u.protocol) && !u.username && !u.password && s.indexOf('#') < 0 ? s : '';
+    } catch (e) { return ''; }
+  }
+  addEventListener('storage', e => {
+    if (worker && (e.key === GIT_PROXY_KEY || e.key === null)) worker.postMessage({ type: 'gitProxy', gitProxy: gitProxy() });
+  });
 
   let worker = null, gen = 0, ready = false, alive = false, painted = false, state = null;
   let idleAt = 0, lastMsgAt = 0, startTimer = 0, loadedText = 'Loading';
@@ -269,6 +290,7 @@
       persist: false,
       upload: upload || undefined,
       canvas: offscreen,
+      gitProxy: gitProxy(),
     }, [offscreen]);
     updateControls();
   }

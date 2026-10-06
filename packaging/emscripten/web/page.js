@@ -42,10 +42,10 @@
 //   (ready.gitHttp), holds the CORS proxy of git's requests: a URL prefix
 //   that the requests of Iceberg's https:// remotes go to, followed by the
 //   host and the path of the repository (src/emscripten/gitSupport.c).  It
-//   is kept in localStorage (pharo-wasm.gitProxy, which world.js reads too)
-//   and goes to the worker in init.gitProxy, and to a running VM at once
-//   ("gitProxy"), also when another tab changes it; the worker makes it
-//   Module.gitHttpProxy.  It is set only in the dialog, never from the URL:
+//   is kept in localStorage (pharo-wasm.gitProxy, which world.js and sdl.js
+//   read too) and goes to the worker in init.gitProxy, and to a running VM
+//   at once ("gitProxy"), also when another tab changes it; the worker makes
+//   it Module.gitHttpProxy.  It is set only in the dialog, never from the URL:
 //   a link must not send someone's git traffic, code and credentials, to a
 //   proxy of its choosing.  The dialog and a note at the start name the
 //   origin that the requests go to.
@@ -132,7 +132,8 @@
   // The proxy of git's HTTP requests, as typed: {value: ''} for none, else
   // {value, origin} for an http: or https: URL without credentials or
   // fragment (a bare origin gets its /, which the host of the repository
-  // follows), else {error}.  world.js checks what it reads in the same way.
+  // follows), else {error}.  world.js and sdl.js check what they read in
+  // the same way.
   function parseGitProxy(text) {
     const s = String(text || '').trim();
     if (!s) return { value: '' };

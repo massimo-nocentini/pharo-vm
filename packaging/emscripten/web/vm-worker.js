@@ -135,8 +135,8 @@
 //
 // Git.  init.gitProxy, and later "gitProxy", is the CORS proxy of git's
 // HTTP requests, which the user typed into the Console's Settings (page.js
-// keeps it, world.js reads it): an http: or https: URL prefix, or '' for
-// none.  The worker makes it Module.gitHttpProxy, which the smart-HTTP
+// keeps it, world.js and sdl.js read it): an http: or https: URL prefix, or
+// '' for none.  The worker makes it Module.gitHttpProxy, which the smart-HTTP
 // transport of libgit2 (src/emscripten/gitSupport.c) reads at each request,
 // so a change holds from the next one.  It goes nowhere else: not into the
 // environment of the image, nor to any server but the proxy itself.
