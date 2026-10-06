@@ -86,7 +86,7 @@ It needs no special headers (no COOP or COEP, since nothing uses SharedArrayBuff
 - `build-wasm/downloads/` and `build-wasm/tests-run/`: the downloaded image zip and archives of the libraries, and the scratch directory of `make wasm-check`.
 - `build-wasm/config.make`, `build-wasm/config-host.make` and `build-wasm/.make-wasm`: the recorded settings, and the mark of a directory that `make wasm` builds in.
 
-`docs/web/` and `docs/node/` of this repository are such a site and node VM, published for GitHub Pages (`docs/README.md` says how to use them): a build of commit 2a85a1e5b with the Pharo 15 image, made before the FFI, FreeType, cairo, libgit2, SDL2 and the Notebook, so its pages have none of them.
+`docs/web/` and `docs/node/` of this repository are such a site and node VM, published for GitHub Pages (`docs/README.md` says how to use them): a build of commit 61f5d0ef5 with the Pharo 15 image, `WASM_LIBGIT2=ON` and `WASM_SDL2=ON`, so it has the FFI, FreeType, cairo, libgit2, SDL2 (`sdl.html`) and the Notebook.
 They are updated by copying `web/` and `node/` of a new build there.
 
 The node VM takes the usual arguments of the VM, for example on a copy of the stock image:

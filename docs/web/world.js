@@ -44,10 +44,13 @@
 //   the world goes on, the notice saying how far it got, and the image
 //   replaces the one saved in this browser once it has started.
 // - An image that cannot open the world (it lacks OSWindow-Web: a stock
-//   image, opened here or in the Console) is prepared for it: the worker
-//   (init.prepare) files in st/web-bootstrap.st and saves it, as the
+//   image, opened here or in the Console; or it has an older version of
+//   it, saved by an earlier build of the site) is prepared for it: the
+//   worker (init.prepare) files in st/web-bootstrap.st and saves it, as the
 //   Console's "Prepare for the world" does, and says "prepared"; the page
-//   then boots the world from the image saved in this browser.
+//   then boots the world from the image saved in this browser.  The notice
+//   names the fonts that the preparation set up (ready.fonts, from the
+//   manifest: FreeType, or bitmap fonts).
 // - The display's title, cursor (RGBA, as a CSS cursor), clipboard
 //   (navigator.clipboard.writeText) and focus.  When the browser refuses to
 //   write the clipboard, the system clipboard still has older text, which
@@ -59,6 +62,11 @@
 //   points to the Console, which can run it, or reset it.
 // - The status pill is no live region: the one next to it says how the VM
 //   goes (loading, starting, running, ended), not how far the loading got.
+// - The CORS proxy of git's HTTP requests is the one that the Console's
+//   Settings keep in this browser (pharo-wasm.gitProxy, see page.js), read
+//   at each start of a worker and given in init.gitProxy, and given to the
+//   running VM when the Console changes it (a storage event).  Like the
+//   Console, the page never takes it from its URL.
 //
 // window.PharoWorld tells tests and the curious how it goes: stats (the
 // workers started, the frames of this one, when they came and the size of
@@ -96,6 +104,23 @@
     if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
   } catch (e) { /* no storage: follow the system */ }
 
+  // The proxy of git's HTTP requests that the Console keeps (page.js), or
+  // '': an http: or https: URL without credentials or fragment, as the
+  // Console checks it
+  const GIT_PROXY_KEY = 'pharo-wasm.gitProxy';
+  function gitProxy() {
+    let s = null;
+    try { s = localStorage.getItem(GIT_PROXY_KEY); } catch (e) { /* no storage: no proxy */ }
+    if (!s) return '';
+    try {
+      const u = new URL(s);
+      return /^https?:$/.test(u.protocol) && !u.username && !u.password && s.indexOf('#') < 0 ? s : '';
+    } catch (e) { return ''; }
+  }
+  addEventListener('storage', e => {
+    if (worker && (e.key === GIT_PROXY_KEY || e.key === null)) worker.postMessage({ type: 'gitProxy', gitProxy: gitProxy() });
+  });
+
   // ---- status, overlay and notice
 
   let worker = null, gen = 0, ready = false, alive = false, framed = false, state = null;
@@ -107,6 +132,7 @@
   let kept = false;                     // the worker kept the upload it booted (or failed to)
   let source = null, persisted = false; // where the image came from, and whether one is saved (ready)
   let preparing = false;                // the worker prepares the image for the world (ready.preparing)
+  let fonts = null;                     // the fonts that a preparation sets up (ready.fonts)
   let opening = false;                  // Open unpacks files
   const reqs = new Map();
   let reqId = 0;
@@ -326,6 +352,7 @@
       upload: upload || undefined,
       prepare: true,
       display: { canvas: offscreen, width, height },
+      gitProxy: gitProxy(),
     }, [offscreen]);
     // queued by the worker until it is ready, so before the image boots,
     // which then opens the world at the size of the canvas
@@ -370,7 +397,8 @@
     preparing = false;
     if (!m.error) {
       upload = null;
-      restarted = 'The image is prepared for the world (OSWindow-Web and bitmap fonts), and saved in this browser.';
+      restarted = 'The image is prepared for the world (OSWindow-Web and ' +
+        (fonts === 'freetype' ? 'FreeType' : 'bitmap') + ' fonts), and saved in this browser.';
       spawn();
       return;
     }
@@ -388,13 +416,15 @@
     ready = true;
     source = m.source;
     persisted = m.persisted;
+    fonts = m.fonts;
     if (!m.world) {
       fatal('This build has no world image: build it with WASM_WORLD=ON and a host Pharo (WASM_HOST_PHARO).',
             'Open the Console', 'index.html');
       return;
     }
     if (!m.prepared && !m.preparing) {
-      fatal('This image cannot open the Pharo world: it lacks OSWindow-Web.', 'Open the Console', 'index.html');
+      fatal('This image cannot open the Pharo world: it lacks OSWindow-Web, or has an older version of it.',
+            'Open the Console', 'index.html');
       return;
     }
     const notes = [restarted];

@@ -28,7 +28,9 @@
 //   thisProgram  argv[0] (default '/pharo/pharo': the VM's directory is /pharo)
 //   env          {name: value} added to the environment of the VM
 //   sliceMs      the time slice in ms (default PHARO_WASM_SLICE_MS of the build)
-//   config       more properties of the emscripten Module (M2: webDisplay)
+//   config       more properties of the emscripten Module (M2: webDisplay;
+//                sdl.html: canvas)
+//   events       true: the device /dev/nbevents of the notebook kernel (below)
 //   wasmModule   a precompiled WebAssembly.Module (optional)
 //   locateFile   emscripten's locateFile hook (optional)
 //   schedule(f)  run f soon, as a macrotask, so that JS events get a turn
@@ -37,8 +39,9 @@
 //   cancel(h)    forget a later() (default clearTimeout)
 //   canRun()     optional backpressure: false stops running BUSY slices until
 //                resumeOutput() is called
-//   onOutput(fd, bytes)  what the VM writes to fd 1 or 2, every write as it
-//                comes, as a Uint8Array of its own; called inside the slice
+//   onOutput(fd, bytes)  what the VM writes to fd 1 or 2, or 3 for the
+//                writes to /dev/nbevents, every write as it comes, as a
+//                Uint8Array of its own; called inside the slice
 //   onState(st)  after every slice: BUSY, SLEEPING or WAITING
 //   onHost(kind, text)   a notification of the VM, after the slice that made
 //                it: HOST_IMAGE_SAVED with the path of the image
@@ -60,6 +63,17 @@
 // to fd 1 and fd 2 reaches onOutput at once, without line buffering, so a
 // prompt shows.
 //
+// With events, the character device /dev/nbevents is the notebook kernel's
+// (st/web-notebook.st): it writes its events there, JSON lines and the
+// attachments that follow some of them, and what it writes reaches
+// onOutput(3, bytes) in the order of every write to fd 1 and 2.  A read
+// answers 0, and the device opens once in the life of the VM (the kernel's
+// stream): any later open fails with EBUSY, so a cell cannot open a stream
+// of its own on it.  The environment of the VM gets NOTEBOOK_EVENTS
+// /dev/nbevents, which is what starts the kernel when the file is filed in;
+// without events only env could set it (the environment of the web VM is
+// its defaults and env, never the host's).
+//
 // The VM exits with exit(), whose ExitStatus unwinds out of _vm_resume()
 // (emscripten 6.0.10 has no Module.quit to override): onExit(status), also
 // during the first slice, e.g. when the image cannot be loaded.  Any other
@@ -76,7 +90,9 @@
   const RUNNING = 0, WAITING = 1, BUSY = 2, EXITED = 3, SLEEPING = 4;
   // The kinds of Module.onPharoHost (src/emscripten/emscriptenSupport.c)
   const HOST_IMAGE_SAVED = 1;
-  const POLLIN = 1, POLLRDNORM = 64, EAGAIN = 6;
+  const POLLIN = 1, POLLRDNORM = 64, EAGAIN = 6, EBUSY = 10;
+  // the device of the notebook kernel's events (options.events)
+  const EVENTS = '/dev/nbevents';
   // the longest the driver leaves a sleeping VM alone
   const MAX_SLEEP_MS = 1000;
 
@@ -84,11 +100,16 @@
 
   // The arguments of the VM for the modes of the pages: 'console', the REPL
   // of web-repl.st (filed in at every boot, so without logging its source
-  // to the .changes again each time), and 'world', the Morphic world.
+  // to the .changes again each time), 'notebook', the notebook kernel of
+  // web-notebook.st (filed in the same way; it needs events), 'world', the
+  // Morphic world, and 'sdl', the same world, which the image then opens
+  // through its OSSDL2Driver (sdl.html), the VM having no display for its
+  // OSWebDriver.
   function vmArgs(mode, image) {
     image = image || '/pharo/Pharo.image';
-    if (mode === 'world') return ['--headless', image, '--no-default-preferences', '--interactive'];
-    return ['--headless', image, '--no-default-preferences', 'st', '--no-source', '/pharo/st/web-repl.st'];
+    if (mode === 'world' || mode === 'sdl') return ['--headless', image, '--no-default-preferences', '--interactive'];
+    const st = mode === 'notebook' ? 'web-notebook.st' : 'web-repl.st';
+    return ['--headless', image, '--no-default-preferences', 'st', '--no-source', '/pharo/st/' + st];
   }
 
   async function start(createModule, o) {
@@ -102,6 +123,7 @@
     let capture = null;                 // collects what _vm_dump_stacks() prints
     const input = [];                   // the chunks fed and not read yet
     let inputOffset = 0, inputEnd = false, inputRefused = false, stdinNode = null;
+    let eventsOpened = false;           // /dev/nbevents opens once
 
     function readStdin(stream, buffer, offset, length) {
       if (!input.length) {
@@ -236,6 +258,24 @@
         stdin.stream_ops = Object.assign({}, stdin.stream_ops, { read: readStdin, poll: pollStdin });
         Object.assign(FS.getStream(1).stream_ops, { write: writer(1) });
         Object.assign(FS.getStream(2).stream_ops, { write: writer(2) });
+        if (o.events) {
+          // a major of its own: those from 64 on are FS.createDevice's,
+          // which FS.init took for stdout and stderr
+          const major = FS.createDevice.major || 64;
+          FS.createDevice.major = major + 1;
+          const dev = FS.makedev(major, 0);
+          FS.registerDevice(dev, {
+            open(stream) {
+              if (!eventsOpened) { eventsOpened = true; return; }
+              FS.closeStream(stream.fd);
+              throw new FS.ErrnoError(EBUSY);
+            },
+            read: () => 0,
+            write: writer(3),
+          });
+          FS.mkdev(EVENTS, dev);
+          mod.ENV.NOTEBOOK_EVENTS = EVENTS;
+        }
       }],
     });
     if (o.locateFile) opts.locateFile = o.locateFile;

@@ -38,8 +38,29 @@
 // - The status pill is no live region: the one next to it says how the VM
 //   goes (loading, starting, ready, ended), not how far the loading got, nor
 //   the state of every evaluation, which the terminal, a log, tells.
-// - History and the theme live in localStorage when available; everything
-//   works without it.
+// - Settings, shown when the VM has the smart-HTTP transport of libgit2
+//   (ready.gitHttp), holds the CORS proxy of git's requests: a URL prefix
+//   that the requests of Iceberg's https:// remotes go to, followed by the
+//   host and the path of the repository (src/emscripten/gitSupport.c).  It
+//   is kept in localStorage (pharo-wasm.gitProxy, which world.js and sdl.js
+//   read too) and goes to the worker in init.gitProxy, and to a running VM
+//   at once ("gitProxy"), also when another tab changes it; the worker makes
+//   it Module.gitHttpProxy.  It is set only in the dialog, never from the URL:
+//   a link must not send someone's git traffic, code and credentials, to a
+//   proxy of its choosing.  The dialog and a note at the start name the
+//   origin that the requests go to.
+// - History, the theme and the proxy live in localStorage when available;
+//   everything works without it (the proxy then only for this session).
+// - The Notebook tab (notebook.js) runs a second VM, in a worker of its own
+//   (vm-worker.js in its notebook mode), which boots the saved image without
+//   ever storing one.  window.PharoPage gives it what the page shares: the
+//   storage, the compiled .wasm, the proxy, Settings and the theme; the page
+//   sends it "pharo:tab", "pharo:settings", "pharo:theme" and
+//   "pharo:image-changed" (the saved image was saved, reset, replaced by
+//   another tab, or is an opened one now) as CustomEvents on window.  The
+//   tab shown is kept (pharo-wasm.tab, as the theme for every site); the
+//   Console's keys (Esc, Ctrl+C, Ctrl+L) and the drops that open an image
+//   act only while its tab shows.
 
 (function () {
   'use strict';
@@ -58,19 +79,34 @@
   const Q = BUILD && BUILD.indexOf('@') < 0 ? '?v=' + encodeURIComponent(BUILD) : '';
   const $ = id => document.getElementById(id);
   const term = $('term'), line = $('line'), statusPill = $('status'), statusText = $('status-text');
+  const consoleVisible = () => !$('panel-console').hidden;     // its tab shows
 
   // ---- storage (may be unavailable: private mode, blocked site data)
 
+  const PREFIX = 'pharo-wasm.';
   const store = {
+    prefix: PREFIX,                     // of the keys in localStorage (and in storage events)
     get(k, d) {
-      try { const v = localStorage.getItem('pharo-wasm.' + k); return v === null ? d : v; }
+      try { const v = localStorage.getItem(PREFIX + k); return v === null ? d : v; }
       catch (e) { return d; }
     },
+    // (whether it could)
     set(k, v) {
-      try { localStorage.setItem('pharo-wasm.' + k, v); } catch (e) { /* ignore */ }
+      try { localStorage.setItem(PREFIX + k, v); return true; } catch (e) { return false; }
+    },
+    remove(k) {
+      try { localStorage.removeItem(PREFIX + k); return true; } catch (e) { return false; }
     },
   };
   const touch = matchMedia('(pointer: coarse)').matches;
+  // The key of name for this site alone: the sites of an origin are its
+  // directories, as for the saved image (vm-storage.js), so that the
+  // notebooks of /stable/ and /preview/ do not overwrite each other
+  function siteKey(name) {
+    let dir = '/';
+    try { dir = new URL('.', location.href).pathname; } catch (e) { /* no URL: the root */ }
+    return name + ':' + dir;
+  }
 
   const THEMES = { auto: 'System', light: 'Light', dark: 'Dark' };
   let theme = store.get('theme', 'auto');
@@ -83,6 +119,33 @@
     $('theme').title = 'Theme: ' + (theme === 'auto' ? 'follow the system' : THEMES[theme].toLowerCase());
   }
   applyTheme();
+  // System, Light, Dark, and round again (the theme button, and the
+  // notebook's menu)
+  function cycleTheme() {
+    theme = theme === 'auto' ? 'light' : theme === 'light' ? 'dark' : 'auto';
+    store.set('theme', theme);
+    applyTheme();
+    dispatchEvent(new CustomEvent('pharo:theme', { detail: { theme } }));
+    return theme;
+  }
+
+  // The proxy of git's HTTP requests, as typed: {value: ''} for none, else
+  // {value, origin} for an http: or https: URL without credentials or
+  // fragment (a bare origin gets its /, which the host of the repository
+  // follows), else {error}.  world.js and sdl.js check what they read in
+  // the same way.
+  function parseGitProxy(text) {
+    const s = String(text || '').trim();
+    if (!s) return { value: '' };
+    let u;
+    try { u = new URL(s); } catch (e) { return { error: 'This is not a URL.' }; }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return { error: 'The proxy must be an http:// or https:// URL.' };
+    if (u.username || u.password) return { error: 'Give the URL of the proxy without a user name or password.' };
+    if (u.hash || s.indexOf('#') >= 0) return { error: 'The URL of the proxy cannot have a #fragment.' };
+    return { value: u.pathname === '/' && !u.search ? u.origin + '/' : s, origin: u.origin };
+  }
+  // the stored one, '' when none or not a valid one
+  let gitProxy = parseGitProxy(store.get('gitProxy', '')).value || '';
 
   // ---- terminal output
 
@@ -266,6 +329,7 @@
   let upload = null;                    // {name, image, changes, sources} to boot until the worker keeps it
   let opening = false;                  // Open unpacks files
   let source = null;                    // where the image of the worker came from (ready)
+  let gitHttp = false;                  // the VM has libgit2's smart-HTTP transport (ready)
   const reqs = new Map();
   let reqId = 0;
 
@@ -304,6 +368,9 @@
     $('open').disabled = !!unavailable || opening;
     $('restart').disabled = !!unavailable;
     $('world').hidden = !(world && prepared);
+    $('settings').hidden = !gitHttp;
+    const nbSettings = document.querySelector('#nb-menu [data-act="settings"]');
+    if (nbSettings) nbSettings.hidden = !gitHttp;
   }
 
   // The notice under the terminal: text, a button doing action, if any, and
@@ -331,7 +398,7 @@
 
   // ---- the VM's worker
 
-  let wasmP = null;
+  let wasmP = null, noMemory64 = false;
   function compileWasm(url) {
     return (async () => {
       if (WebAssembly.compileStreaming) {
@@ -353,7 +420,24 @@
     } catch (e) { return false; }
   }
 
+  // pharo-web.wasm, compiled once for every worker of the page: the
+  // Console's, and the notebook's (PharoPage.wasmModule).  A failure is
+  // forgotten, and the next call fetches it again; in a browser without
+  // memory64 it is that of a build that needs it (WASM_WEB_MEMORY64=1),
+  // and no VM can run here (PharoPage.unavailable).
+  function wasmModule() {
+    if (!wasmP) {
+      const p = wasmP = compileWasm('pharo-web.wasm' + Q);
+      p.catch(() => {
+        if (wasmP === p) wasmP = null;
+        if (!hasMemory64()) noMemory64 = true;
+      });
+    }
+    return wasmP;
+  }
+
   const HTTP_HINT = 'This page must be served over HTTP, for example with "make wasm-serve".';
+  const NO_MEMORY64 = 'This browser has no 64-bit WebAssembly memory (memory64), which this build needs.';
 
   function kill() {
     gen++;
@@ -390,13 +474,10 @@
     updateStatus();
     let mod;
     try {
-      mod = await (wasmP || (wasmP = compileWasm('pharo-web.wasm' + Q)));
+      mod = await wasmModule();
     } catch (e) {
-      wasmP = null;
-      if (g === gen) {
-        fatal('Could not load pharo-web.wasm: ' + ((e && e.message) || e) + '\n' +
-              (hasMemory64() ? HTTP_HINT : 'This browser has no 64-bit WebAssembly memory (memory64), which this build needs.'));
-      }
+      if (g === gen)
+        fatal('Could not load pharo-web.wasm: ' + ((e && e.message) || e) + '\n' + (hasMemory64() ? HTTP_HINT : NO_MEMORY64));
       return;
     }
     if (g !== gen) return;
@@ -420,6 +501,7 @@
       mode: 'console',
       persist: true,
       upload: upload || undefined,
+      gitProxy,
     });
   }
 
@@ -456,10 +538,12 @@
       note('Started the opened image, ' + (upload ? upload.name : m.image) +
            (upload && !upload.sources && m.sources ? ', with the .sources of this site, ' + m.sources : '') + '.');
     if (m.storageError) note('Note: ' + m.storageError + '.');
+    gitHttp = !!m.gitHttp;
+    if (gitHttp && gitProxy) note('Git requests go through the proxy at ' + parseGitProxy(gitProxy).origin + ' (Settings).');
     if (world && !prepared)
       showNotice('This image cannot open the Pharo world yet.', 'Prepare for the world', prepareWorld);
     updateControls();
-    if (!touch && document.activeElement !== line) line.focus();
+    if (!touch && document.activeElement !== line && consoleVisible()) line.focus();
     updateStatus();
   }
 
@@ -519,6 +603,7 @@
           showNotice('This image cannot open the Pharo world yet.', 'Prepare for the world', prepareWorld);
         else if ($('notice').hidden)    // e.g. not over the offer to prepare it for the world
           showNotice('The opened image is now kept in this browser.', null, null, 6000);
+        imageChanged(m.upload ? 'opened' : 'saved');
         if (then && !m.upload) then();
       }
       updateControls();
@@ -527,6 +612,7 @@
     case 'superseded':
       showNotice('Another tab has replaced the image saved in this browser. Save to keep this session instead.',
                  'Save', save);
+      imageChanged('superseded');
       break;
     case 'exit':
       if (eofSent && m.code === 0) ended('exited', 'Exited (0)', 'The session ended.');
@@ -552,6 +638,12 @@
       break;
     }
     }
+  }
+
+  // The image saved in this browser, which the notebook boots, is another
+  // one now
+  function imageChanged(reason) {
+    dispatchEvent(new CustomEvent('pharo:image-changed', { detail: { reason } }));
   }
 
   function request(msg) {
@@ -677,9 +769,19 @@
     spawn();
   }
   const chooseFile = () => $('open-file').click();
-  PharoOpen.drops(window, {
-    enabled: () => !$('open').disabled,
-    show: on => { $('drop').hidden = !on; },
+  // The drops of the Console's tab.  Its handlers go on the capture phase
+  // of window, ahead of the notebook's on its panel (which upload what is
+  // dropped there, and may stop it): they see every drag, so that it is
+  // counted out as it was counted in, but they show the overlay and open
+  // only while the Console shows.  Over the notebook's panel, whether a
+  // drop is taken (dragover) is the notebook's.
+  const overNotebook = e => !consoleVisible() && $('panel-notebook').contains(e.target);
+  PharoOpen.drops({
+    addEventListener: (type, f) =>
+      addEventListener(type, type === 'dragover' ? e => { if (!overNotebook(e)) f(e); } : f, true),
+  }, {
+    enabled: () => consoleVisible() && !$('open').disabled,
+    show: on => { $('drop').hidden = !(on && consoleVisible()); },
     open: openFiles,
   });
 
@@ -690,6 +792,7 @@
     catch (e) { note('Reset failed: ' + e.message); return; }
     upload = null;
     persisted = false;
+    imageChanged('reset');
     render();
     note('Deleted the image saved in this browser.');
     restart();
@@ -724,6 +827,62 @@
     e.preventDefault();
     e.returnValue = '';                 // older browsers ask for it
   });
+
+  // ---- Settings: the proxy of git's HTTP requests
+
+  const dialog = $('settings-dialog'), proxyInput = $('git-proxy'), proxyState = $('git-proxy-state');
+  // what the dialog says of the text in the field
+  function showProxyState() {
+    const p = parseGitProxy(proxyInput.value);
+    proxyInput.setAttribute('aria-invalid', p.error ? 'true' : 'false');
+    proxyState.dataset.kind = p.error ? 'bad' : p.value ? 'proxy' : 'none';
+    proxyState.textContent = p.error ||
+      (p.value ? 'Git requests go to ' + p.origin + '.' : 'No proxy: git requests go to the repository itself.');
+    return p;
+  }
+  function openSettings() {
+    if (dialog.open) return;
+    proxyInput.value = gitProxy;
+    showProxyState();
+    dialog.showModal();
+    proxyInput.focus();
+    proxyInput.select();
+  }
+  // Keep the proxy, and give it to the running VM: its next request goes there
+  function saveSettings() {
+    const p = showProxyState();
+    if (p.error) { proxyInput.focus(); return; }
+    dialog.close();
+    if (p.value === gitProxy) return;
+    gitProxy = p.value;
+    const kept = gitProxy ? store.set('gitProxy', gitProxy) : store.remove('gitProxy');
+    if (worker) worker.postMessage({ type: 'gitProxy', gitProxy });
+    settingsChanged();
+    note(gitProxy ? 'Git requests now go through the proxy at ' + p.origin + '.'
+                  : 'Git requests now go to the repositories themselves, without a proxy.');
+    if (!kept) showNotice('This browser cannot keep the setting: it holds for this session only.', null, null, 8000);
+  }
+  $('settings').addEventListener('click', openSettings);
+  proxyInput.addEventListener('input', showProxyState);
+  $('settings-form').addEventListener('submit', e => { e.preventDefault(); saveSettings(); });
+  $('git-proxy-clear').addEventListener('click', () => { proxyInput.value = ''; showProxyState(); proxyInput.focus(); });
+  $('settings-cancel').addEventListener('click', () => dialog.close());
+  dialog.addEventListener('close', () => refocus());
+  // a click on the backdrop, outside the form, cancels
+  dialog.addEventListener('click', e => { if (e.target === dialog) dialog.close(); });
+  // the Settings of another tab of the Console
+  addEventListener('storage', e => {
+    if (e.key !== 'pharo-wasm.gitProxy' && e.key !== null) return;
+    const now = parseGitProxy(store.get('gitProxy', '')).value || '';
+    if (now === gitProxy) return;
+    gitProxy = now;
+    if (worker) worker.postMessage({ type: 'gitProxy', gitProxy });
+    settingsChanged();
+  });
+  // (the notebook's VM gets it too)
+  function settingsChanged() {
+    dispatchEvent(new CustomEvent('pharo:settings', { detail: { gitProxy } }));
+  }
 
   // ---- input and history
 
@@ -796,6 +955,8 @@
 
   document.addEventListener('keydown', e => {
     if (composing(e)) return;           // Escape cancels the composition
+    if (dialog.open) return;            // its keys: Escape closes it
+    if (!consoleVisible()) return;      // the notebook's (notebook.js)
     const k = e.key.toLowerCase();
     if (e.key === 'Escape') { e.preventDefault(); stop(); }
     else if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && k === 'c') {
@@ -816,7 +977,7 @@
     if ((!sel || sel.isCollapsed) && !line.disabled) line.focus({ preventScroll: true });
   });
 
-  const refocus = () => { if (!touch && !line.disabled) line.focus(); };
+  const refocus = () => { if (!touch && !line.disabled && consoleVisible()) line.focus(); };
   $('entry').addEventListener('submit', e => { e.preventDefault(); submit(); line.focus(); });
   $('stop').addEventListener('click', () => { stop(); refocus(); });
   $('restart').addEventListener('click', restart);
@@ -830,11 +991,7 @@
   });
   $('reset').addEventListener('click', resetSaved);
   $('clear').addEventListener('click', () => { clearTerm(); refocus(); });
-  $('theme').addEventListener('click', () => {
-    theme = theme === 'auto' ? 'light' : theme === 'light' ? 'dark' : 'auto';
-    store.set('theme', theme);
-    applyTheme();
-  });
+  $('theme').addEventListener('click', cycleTheme);
   $('notice-action').addEventListener('click', () => { const f = noticeAction; hideNotice(); if (f) f(); });
   $('notice-alt').addEventListener('click', () => { const f = noticeAlt; hideNotice(); if (f) f(); });
   $('notice-close').addEventListener('click', hideNotice);
@@ -850,6 +1007,67 @@
     if (document.visibilityState !== 'hidden') return;
     ack();
     flush();
+  });
+
+  // ---- tabs: the Console and the Notebook (notebook.js)
+
+  const tabs = [$('tab-console'), $('tab-notebook')];
+  const tabName = t => t.id.replace(/^tab-/, '');
+  const activeTab = () => consoleVisible() ? 'console' : 'notebook';
+  // focus: from the keys of the tablist, which keep the focus there
+  function selectTab(tab, focus, quiet) {
+    for (const t of tabs) {
+      const on = t === tab;
+      t.setAttribute('aria-selected', String(on));
+      t.tabIndex = on ? 0 : -1;
+      $(t.getAttribute('aria-controls')).hidden = !on;
+    }
+    const nb = tab.id === 'tab-notebook';
+    $('toolbar').hidden = nb;
+    $('nb-toolbar').hidden = !nb;
+    statusPill.hidden = nb;             // the notebook has its own
+    store.set('tab', tabName(tab));
+    if (focus) tab.focus();
+    if (!nb) {
+      render();
+      term.scrollTop = term.scrollHeight;
+      if (!focus) refocus();
+    }
+    if (!quiet) dispatchEvent(new CustomEvent('pharo:tab', { detail: { tab: tabName(tab) } }));
+  }
+  for (const t of tabs) {
+    t.addEventListener('click', () => selectTab(t));
+    t.addEventListener('keydown', e => {
+      const i = tabs.indexOf(t);
+      let j = null;
+      if (e.key === 'ArrowRight') j = (i + 1) % tabs.length;
+      else if (e.key === 'ArrowLeft') j = (i + tabs.length - 1) % tabs.length;
+      else if (e.key === 'Home') j = 0;
+      else if (e.key === 'End') j = tabs.length - 1;
+      if (j !== null) { e.preventDefault(); selectTab(tabs[j], true); }
+    });
+  }
+  // The tab of the last visit.  Its event goes once the scripts after this
+  // one (notebook.js) listen.
+  const lastTab = tabs.find(t => tabName(t) === store.get('tab', 'console'));
+  if (lastTab && lastTab !== tabs[0]) selectTab(lastTab, false, true);
+  document.addEventListener('DOMContentLoaded', () => {
+    dispatchEvent(new CustomEvent('pharo:tab', { detail: { tab: activeTab() } }));
+  });
+
+  // ---- what the notebook (notebook.js) gets of the page
+
+  window.PharoPage = Object.freeze({
+    Q, BUILD, store, touch, HTTP_HINT, countLines, siteKey,
+    // null, or why no VM can run in this page (then none is started)
+    unavailable: () => unavailable || (noMemory64 ? NO_MEMORY64 : null),
+    wasmModule,                         // Promise<WebAssembly.Module>, compiled once
+    workerUrl: 'vm-worker.js' + Q,
+    gitProxy: () => gitProxy,           // '' when none
+    gitHttp: () => gitHttp,             // the VM has libgit2's smart-HTTP transport (ready)
+    openSettings, cycleTheme,
+    themeLabel: () => THEMES[theme],    // System, Light or Dark
+    activeTab,                          // 'console' or 'notebook'
   });
 
   // ---- start

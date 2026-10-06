@@ -1,18 +1,19 @@
 {
-  "build": "2a85a1e5b-2f39395ef11c",
+  "build": "61f5d0ef5-a542c9c9e73a",
+  "ffi": true,
   "files": [
     {
-      "gzSize": 7355,
+      "gzSize": 9557,
       "path": "Pharo.changes",
-      "sha256": "6e73c9cb6d7584dfa481c43759025c67e182d9df0dfe510780e7669d3c093cb6",
-      "size": 26601,
+      "sha256": "3475cb191baf11a26da4040f49ca62711e581838383653c72cff953c35dfc351",
+      "size": 33320,
       "url": "image/Pharo.changes.gz"
     },
     {
-      "gzSize": 16875055,
+      "gzSize": 16876142,
       "path": "Pharo.image",
-      "sha256": "0438c689ee80a57d84abb62e3992d672e06cbfb46ec8a743bd7aa101252cc6b2",
-      "size": 63479832,
+      "sha256": "f02ce4853d65a0ced771a6b4fcb719fb1991c4b9b0f0de84d4e4b929fffe2f73",
+      "size": 63482968,
       "url": "image/Pharo.image.gz"
     },
     {
@@ -23,12 +24,23 @@
       "url": "image/Pharo15.0-64bit-4e572fe.sources.gz"
     }
   ],
+  "fonts": "freetype",
+  "git": true,
+  "gitHttp": true,
   "image": "Pharo.image",
+  "libraries": [
+    "libSDL2-2.0.so.0",
+    "libcairo.so.2",
+    "libgit2.so.1.4.4"
+  ],
   "memory64": 2,
+  "sdl2": true,
   "st": [
     "st/OSWindow-Web.st",
     "st/web-bootstrap.st",
+    "st/web-notebook.st",
     "st/web-repl.st"
   ],
+  "webPackage": 4,
   "world": true
 }

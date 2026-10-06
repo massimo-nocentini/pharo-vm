@@ -10,9 +10,16 @@
 // 'Pharo.changes' and 'Pharo.sources', and a record 'meta' that makes them a
 // slot: {id, image, changes, imageSize, changesSize, savedAt, syncedAt, ...}
 // with an id of its own, the keys of the two files and what the saver added
-// (the build, ...), and, when the slot has a .sources, {sources, sourcesName,
-// sourcesSize}: its key, the name the image reads it under and its size.  A
-// save writes them all in one transaction, so a slot is never half there.
+// (vm-worker.js: build, prepared and webPackage), and, when the slot has a
+// .sources, {sources, sourcesName, sourcesSize}: its key, the name the image
+// reads it under and its size.  A save writes them all in one transaction,
+// so a slot is never half there.
+//
+// webPackage is the version of the OSWindow-Web package that the image of
+// the slot has (OSWebDriver class>>packageVersion), as the saver measured it
+// from the image: 0 without the package.  The slots saved before there were
+// versions have none, only prepared: webPackage(meta) answers what they
+// count as.
 //
 // IndexedDB is per origin, but the sites of an origin are its directories
 // (the project sites of GitHub Pages, /stable/ and /preview/ of a host): the
@@ -28,6 +35,7 @@
 //   await store.syncChanges(changes, meta)  // the .changes of the slot alone
 //   await store.reset()                     // no slot any more
 //   await store.estimate()                  // {usage, quota}, or null
+//   PharoStorage.webPackage(meta)           // the version of OSWindow-Web of the slot
 //
 // image and changes are Uint8Arrays.  sources is the .sources of the slot,
 // {name, data} with data a Uint8Array or a Blob, or null when it has none
@@ -267,6 +275,18 @@
     };
   }
 
-  const api = { open, memory, indexedDB: indexedDBBackend, databaseName, backend: null, DATABASE, STORE };
+  // The version of OSWindow-Web of the image of the slot with this meta: its
+  // webPackage, else, for a slot saved before there were versions, 1 when its
+  // image could open the world (it had the package, which then had none) and
+  // 0 when it could not; null when the meta does not say (the caller looks
+  // at the image)
+  function webPackage(meta) {
+    if (!meta) return null;
+    if (Number.isInteger(meta.webPackage) && meta.webPackage >= 0) return meta.webPackage;
+    if (meta.prepared === undefined) return null;
+    return meta.prepared ? 1 : 0;
+  }
+
+  const api = { open, memory, indexedDB: indexedDBBackend, databaseName, webPackage, backend: null, DATABASE, STORE };
   return api;
 });
