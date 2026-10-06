@@ -550,10 +550,13 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       };
       const stalled = await settle() - acked;
       B.alive();
-      assert(!events(B).some(e => e.ev === 'done'), 'stalled before the end');
-      // (the worker pauses the VM between slices, and a slice may write
-      // many events of 50 KB)
-      assert(stalled >= (1 << 20) && stalled < 3 << 20, 'stalled above 1 MiB unacked, within a slice of it (' + stalled + ' bytes)');
+      const early = events(B);
+      assert(!early.some(e => e.ev === 'done'), 'stalled before the end');
+      // (the worker pauses the VM only between slices, and how many events
+      // of 50 KB a slice writes depends on the speed of the machine: it
+      // stalled at 1.05 to 3.2 MB in 14 runs, so no bound above but the end)
+      assert(stalled >= (1 << 20), 'stalled above 1 MiB unacked (' + stalled + ' bytes)');
+      assert(early.filter(e => e.ev === 'display').length < 80, 'stalled before the last display');
       // 600 KiB still unacked: still paused
       B.post({ type: 'ack', chars: stalled - 600 * 1024 });
       acked += stalled - 600 * 1024;

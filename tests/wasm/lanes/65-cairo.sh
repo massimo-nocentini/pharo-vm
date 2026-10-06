@@ -35,10 +35,10 @@
 #             A build with SDL2 (WASM_SDL2=ON in its CMake cache) has
 #             SurfacePlugin built in (cmake/plugins.cmake): there the stock
 #             image's Athens registers its surface with it, and Athens shapes
-#             must draw instead: an extent and a SHA256, which is not that
-#             of the golden file (the stock asForm, whose Form BitBlt reads
-#             through SurfacePlugin, does not give the bits of the
-#             extension's copy);
+#             must draw instead the pixels of the golden file: the stock
+#             asForm answers a Form whose bits are the id of the surface,
+#             which athens-parity.st copies with BitBlt, through
+#             SurfacePlugin, into a Form of its own before it hashes it;
 #   hidden    the negative control of the registry: with cairo hidden from
 #             the VM (PHARO_WASM_FFI_HIDE=cairo), Athens shapes must fail with
 #             a SymbolNotFoundError, without a crash or a failed callout.
@@ -259,10 +259,14 @@ run stock shapes && quiet stock && {
     if test "x$(value surface)" = xOSWindow-Web; then
 	fail stock "the stock image has the extension of OSWindow-Web"
     elif test -n "$surface_plugin"; then
-	if echo "$shapes_line" | grep -Eqx '[0-9]+x[0-9]+ [0-9a-f]{64}'; then
-	    ok stock "SurfacePlugin built in (WASM_SDL2): $shapes_line"
+	golden=$golden_dir/athens-p$(value major).txt
+	expected=$(sed -n 's/^athens-shapes: //p' "$golden" 2>/dev/null | head -n 1)
+	if test -z "$expected"; then
+	    fail stock "no line athens-shapes in $golden for the Pharo of the stock image (major: '$(value major)')"
+	elif test "x$shapes_line" = "x$expected"; then
+	    ok stock "SurfacePlugin built in (WASM_SDL2): the pixels of ${golden#$SRCDIR/}, $shapes_line"
 	else
-	    fail stock "with SurfacePlugin built in (WASM_SDL2), the stock image's Athens shapes did not draw: '$(echo "$shapes_line" | cut -c 1-200)'"
+	    fail stock "with SurfacePlugin built in (WASM_SDL2), the stock image's Athens shapes are not those of ${golden#$SRCDIR/}: expected '$expected', got '$(echo "$shapes_line" | cut -c 1-200)'"
 	fi
     else
 	case $shapes_line in

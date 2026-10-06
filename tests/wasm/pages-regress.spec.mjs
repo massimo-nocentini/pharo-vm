@@ -498,8 +498,13 @@ await run(async t => {
   const stock = path.join(t.webDir, '..', 'image', 'stock');
   const stockImage = fs.existsSync(stock) && fs.readdirSync(stock).find(f => f.endsWith('.image'));
   if (stockImage) await check('world: an image said prepared that does not open the world points to the Console', async () => {
-    // the slot of a stock image, as a byte scan that a string fooled saved it
+    // the slot of a stock image, as a byte scan that a string fooled saved
+    // it: of the version of OSWindow-Web of the site, which the worker
+    // trusts.  (A slot that says only prepared, of before the versions,
+    // counts as version 1, older than the site's: the page prepares its
+    // image, which then opens the world)
     const context = await fresh();
+    const version = Number.isInteger(manifest.webPackage) && manifest.webPackage || 1;
     try {
       const files = { '/__stock/image': path.join(stock, stockImage),
                       '/__stock/changes': path.join(stock, stockImage.replace(/\.image$/, '.changes')) };
@@ -510,7 +515,7 @@ await run(async t => {
       });
       const p = await context.newPage();
       await p.goto(base + '__blank');
-      await p.evaluate(async () => {
+      await p.evaluate(async ([build, webPackage]) => {
         const [image, changes] = await Promise.all(['/__stock/image', '/__stock/changes'].map(u => fetch(u).then(r => r.blob())));
         const db = await new Promise((resolve, reject) => {
           const r = indexedDB.open('pharo-wasm', 1);
@@ -523,12 +528,13 @@ await run(async t => {
           s.put(image, 'Pharo.image');
           s.put(changes, 'Pharo.changes');
           s.put({ id: 'stock-prepared', image: 'Pharo.image', changes: 'Pharo.changes', imageSize: image.size,
-                  changesSize: changes.size, savedAt: Date.now(), syncedAt: Date.now(), prepared: true }, 'meta');
+                  changesSize: changes.size, savedAt: Date.now(), syncedAt: Date.now(), build, prepared: true,
+                  webPackage }, 'meta');
           tx.oncomplete = resolve;
           tx.onabort = () => reject(tx.error);
         });
         db.close();
-      });
+      }, [manifest.build, version]);
       await p.goto(base + 'world.html');
       await p.waitForFunction(() => !document.getElementById('notice').hidden &&
                               (/has not opened yet/.test(document.getElementById('notice-text').textContent) ||

@@ -11,8 +11,8 @@ bits, a line each, '<key>: <value>':
 	                OSWindow-Web when the image has the extension of
 	                packaging/emscripten/st/OSWindow-Web, which copies the
 	                pixels of a surface into a Form (asForm) instead of
-	                registering it with the SurfacePlugin, which the
-	                WebAssembly VMs do not have
+	                registering it with the SurfacePlugin, which only the
+	                WebAssembly VMs with SDL2 have
 	web package     OSWebDriver packageVersion, or none
 	library         CairoLibrary uniqueInstance libraryName, the file that
 	                the image found (a placeholder, on WebAssembly)
@@ -35,11 +35,14 @@ bits, a line each, '<key>: <value>':
 
 A scene prints '<extent> <SHA256 of the bits of the Form>', the 32-bit words
 of the bits in the byte order of the VM's memory (little-endian, on x86-64
-as on WebAssembly), in hex; or, when it raised an error, 'error <class of
-the error>: <its messageText>'.  Then 'ms <scene>: <ms>' says how long it
-took.  Any error is caught and printed as the value of its line, so that
-every line is there; the line 'errors: ' lists the scenes that failed, or
-says none.
+as on WebAssembly), in hex.  A Form whose bits are the id of a surface of
+the SurfacePlugin (the asForm of an image without the extension, on a VM
+with the plugin) is copied first with BitBlt, which reads its pixels
+through the plugin, into a Form of its own.  When a scene raised an
+error, it prints 'error <class of the error>: <its messageText>'.  Then
+'ms <scene>: <ms>' says how long it took.  Any error is caught and printed
+as the value of its line, so that every line is there; the line 'errors: '
+lists the scenes that failed, or says none.
 
 Environment:
 
@@ -68,7 +71,13 @@ wanted := (env at: 'WASM_ATHENS_SCENES' ifAbsent: [ nil ]) ifNotNil: [ :names |
 	((names substrings: ',') collect: [ :each | each trimBoth ]) asSet ].
 png := (env at: 'WASM_ATHENS_PNG' ifAbsent: [ nil ]) notNil.
 failed := OrderedCollection new.
-hash := [ :form | (form extent x printString , 'x' , form extent y printString) , ' ' , (SHA256 hashMessage: form bits asByteArray) hex ].
+hash := [ :form |
+	| pixels |
+	pixels := form.
+	form bits isInteger ifTrue: [
+		pixels := Form extent: form extent depth: 32.
+		pixels copyBits: form boundingBox from: form at: 0 @ 0 clippingBox: pixels boundingBox rule: Form over fillColor: nil ].
+	(form extent x printString , 'x' , form extent y printString) , ' ' , (SHA256 hashMessage: pixels bits asByteArray) hex ].
 line value: 'major' value: [ SystemVersion current major ].
 line value: 'backend' value: [ FFIBackend current class name ].
 line value: 'surface' value: [ (AthensCairoSurface class >> #registerSurface:) package name ].
