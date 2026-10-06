@@ -12,5 +12,14 @@ of the licence files that the library declares.  The runtime of Emscripten
 follows: its JavaScript support code, the C library (musl) and the compiler
 runtime (compiler-rt), which every Emscripten program contains.
 
+Two components that a build may have are under the GNU Lesser General Public
+License (LGPL) or the Mozilla Public License (MPL): cairo, available under
+the LGPL 2.1 or the MPL 1.1 (its COPYING), and LibXDiff, which libgit2
+includes, under the LGPL 2.1 or later; a build has them only with cairo and
+with libgit2, and then lists them below.  The sources of every library are
+those of the pinned archive named below, which its SHA256 identifies, built
+as cmake/emscripten/deps of the repository says; they are available on
+request from whoever distributed this build.
+
 The build itself is described in docs/WebAssembly.md of the repository, and
 cmake/emscripten/stage.cmake assembles this file.

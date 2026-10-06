@@ -38,6 +38,10 @@
 # must be those the configuration was made for, or the build stops: config.h
 # says which FreeType API there is (HAVE_FT_COLR_V1, HAVE_FT_SVG_DOCUMENT,
 # HAVE_FT_LOAD_NO_SVG), and another cairo or FreeType needs it made again.
+#
+# cairo is available under the LGPL 2.1 or the MPL 1.1, whose texts COPYING
+# names: the notices give all three files (THIRD-PARTY-NOTICES.txt,
+# cmake/emscripten/stage.cmake).
 
 set(WASM_CAIRO_VERSION "1.18.4")
 # The FreeType the configuration was made for
@@ -54,7 +58,7 @@ pharo_wasm_dep_fetch(cairo
     URL "https://www.cairographics.org/releases/cairo-${WASM_CAIRO_VERSION}.tar.xz"
     SHA256 445ed8208a6e4823de1226a74ca319d3600e83f6369f99b14265006599c32ccb
     FILE cairo-${WASM_CAIRO_VERSION}.tar.xz
-    LICENSES COPYING COPYING-MPL-1.1)
+    LICENSES COPYING COPYING-LGPL-2.1 COPYING-MPL-1.1)
 set(source "${cairo_SOURCE_DIR}")
 set(dir "${CMAKE_CURRENT_BINARY_DIR}/cairo")
 
