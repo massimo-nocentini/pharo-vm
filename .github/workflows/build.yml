@@ -375,9 +375,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -- artifacts/*/*
-          test $# -eq 1
-          unzip -q "$1" -d unpacked
+          # one artifact is saved in artifacts itself, several each in a
+          # directory of its own: take the one file wherever it is
+          zip=$(find artifacts -type f)
+          test -n "$zip"
+          test "$(echo "$zip" | wc -l)" -eq 1
+          unzip -q "$zip" -d unpacked
           mkdir site
           cp -R unpacked/PharoVM-*-WebAssembly/web/. site/
           touch site/.nojekyll
