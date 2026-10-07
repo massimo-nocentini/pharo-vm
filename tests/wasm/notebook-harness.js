@@ -696,14 +696,16 @@ async function partK() {
     eq([n.out, n.err], ['', ''], 'the next cell');
   });
 
-  await check('K23 a 64-bit VM; a recursion 1e6 deep; an endless recursion stopped after 1 s', async () => {
+  await check('K23 a 64-bit VM; a recursion 1e6 deep; an endless recursion stopped after 300 ms', async () => {
+    // Not later: the recursion fills the 512 MiB of old space in about 1 s on a
+    // fast machine with the default engine, and the VM then aborts (docs/WebAssembly.md).
     await ok(K, 'Smalltalk vm wordSize', ['8']);
     await ok(K, defineClass('NbRec') + ". NbRec compile: 'down: n ^ n = 0 ifTrue: [ 0 ] ifFalse: [ 1 + (self down: n - 1) ]'. " +
                 "NbRec compile: 'forever: n ^ 1 + (self forever: n)'. 0", ['0']);
     await ok(K, 'NbRec new down: 1000000', ['1000000'], 120000);
     const rid = K.post('NbRec new forever: 0');
     await waitFor('start', () => K.find(e => e.ev === 'start' && e.rid === rid));
-    await sleep(1000);
+    await sleep(300);
     K.drv.interrupt();
     eq((await K.result(rid, 60000)).done.status, 'interrupted', 'status');
     await ok(K, '3 + 4', ['7']);

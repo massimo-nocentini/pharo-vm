@@ -726,6 +726,8 @@ On a build with libgit2 and SDL2, in Chromium 153 and Firefox 155 together, the 
 - libgit2 reaches http:// and https:// remotes only, through a CORS proxy for a server of another origin, without credentials; its working copies are lost on a reload.
 - Old space is at most 512 MiB by default, and perm space is not supported (see `WASM_OLD_SPACE_BASE`).
   Spur asks for more old space than an object needs (512 MiB for a 256 MB ByteArray), so a single object of 256 MB already fails with the default base, in both VMs.
+  Objects that the scavenger moves to a full old space get no `OutOfMemory`: the VM aborts, as a native one does when the system has no more memory to give.
+  An endless recursion gets there in a second or two (about 2 million contexts a second, of some 230 bytes each, with node's default engine); in the Notebook the cell ends `crashed`, and the next run starts a new kernel.
   The VM has about 710 MB of linear memory once booted, and the Notebook's kernel as much again.
 - The clock has a resolution of 1 ms, and browsers clamp nested timers, which wake a sleeping VM, to 4 ms: 200 Delays of 1 ms took 1135 ms in Chromium and 1333 ms in Firefox.
   In Firefox, `performance.now()`, the monotonic clock of the VM and of its heartbeat, steps by 1 ms in a worker of a page that is not cross-origin isolated (the pages are not), against 0.1 ms in Chromium.
