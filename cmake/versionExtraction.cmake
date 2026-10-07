@@ -40,8 +40,9 @@ endif()
 
 if (GIT_FOUND AND VERSION_UPDATE_FROM_GIT)
 
-	# Get last tag from git
-	execute_process(COMMAND ${GIT_EXECUTABLE} describe --abbrev=0 --tags --always
+	# Get last tag from git: a release tag (v12.0.5-beta), not one of the
+	# tags of the GitHub releases of a build (PharoVM-v12.0.5-beta-<sha>)
+	execute_process(COMMAND ${GIT_EXECUTABLE} describe --abbrev=0 --tags --always --match "v[0-9]*"
 		WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 		OUTPUT_VARIABLE ${PROJECT_NAME}_VERSION_STRING
 		OUTPUT_STRIP_TRAILING_WHITESPACE)

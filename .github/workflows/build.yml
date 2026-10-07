@@ -7,6 +7,11 @@
 #   PharoVM-<version>-Darwin-arm64-bin.zip     macos-15
 #   PharoVM-<version>-Windows-x86_64-bin.zip   windows-2025, MSYS2 UCRT64
 #
+# where <version> is the version of the VM without the count of commits
+# since its tag (v12.0.5-beta-4266c4ec4 for v12.0.5-beta+28.4266c4ec4).
+# On a push, when the five jobs succeed, the zips are also published as
+# the GitHub release PharoVM-<version>, tagged at the commit built.
+#
 # Linux and macOS bundle the prebuilt libraries of files.pharo.org
 # (PHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES), Windows the DLLs of the
 # MSYS2 packages (cmake/importMinGWDependencies.cmake).
@@ -53,7 +58,7 @@ jobs:
       - name: Fetch the release tags
         run: |
           git fetch --no-tags --force https://github.com/pharo-project/pharo-vm.git '+refs/tags/v*:refs/tags/v*'
-          git describe --tags
+          git describe --tags --match 'v[0-9]*'
 
       - name: Install the dependencies
         run: |
@@ -73,6 +78,12 @@ jobs:
 
       - name: Package
         run: cmake --build build --target package
+
+      - name: Drop the commit count from the name of the zip
+        run: |
+          cd build/build/packages
+          for zip in PharoVM-*-bin.zip; do mv "$zip" "$(echo "$zip" | sed -E 's/\+[0-9]+\./-/')"; done
+          ls PharoVM-*-bin.zip
 
       # --version stops before loading an image: also run the VMMaker image
       - name: Run the VM of the zip
@@ -107,7 +118,7 @@ jobs:
       - name: Fetch the release tags
         run: |
           git fetch --no-tags --force https://github.com/pharo-project/pharo-vm.git '+refs/tags/v*:refs/tags/v*'
-          git describe --tags
+          git describe --tags --match 'v[0-9]*'
 
       # The platform name of the zip and the prebuilt libraries follow the
       # host, not CMAKE_OSX_ARCHITECTURES
@@ -137,6 +148,12 @@ jobs:
 
       - name: Package
         run: cmake --build build --target package
+
+      - name: Drop the commit count from the name of the zip
+        run: |
+          cd build/build/packages
+          for zip in PharoVM-*-bin.zip; do mv "$zip" "$(echo "$zip" | sed -E 's/\+[0-9]+\./-/')"; done
+          ls PharoVM-*-bin.zip
 
       # --version stops before loading an image: also run the VMMaker image
       - name: Run the VM of the zip
@@ -195,7 +212,7 @@ jobs:
         run: |
           git config --global --add safe.directory '*'
           git fetch --no-tags --force https://github.com/pharo-project/pharo-vm.git '+refs/tags/v*:refs/tags/v*'
-          git describe --tags
+          git describe --tags --match 'v[0-9]*'
 
       - name: Configure
         run: |
@@ -211,6 +228,12 @@ jobs:
 
       - name: Package
         run: cmake --build build --target package
+
+      - name: Drop the commit count from the name of the zip
+        run: |
+          cd build/build/packages
+          for zip in PharoVM-*-bin.zip; do mv "$zip" "$(echo "$zip" | sed -E 's/\+[0-9]+\./-/')"; done
+          ls PharoVM-*-bin.zip
 
       # Outside of MSYS2, with only the zip and the system directories in the
       # PATH, so that a DLL missing from the zip makes this step fail: load
@@ -238,3 +261,42 @@ jobs:
           path: build/build/packages/PharoVM-*-Windows-x86_64-bin.zip
           archive: false
           if-no-files-found: error
+
+  release:
+    name: Release
+    if: github.event_name == 'push'
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      # Each artifact is a zip uploaded as is: keep it, in a directory named
+      # after it (with skip-decompress the file itself may be named artifact)
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: PharoVM-*
+          path: artifacts
+          skip-decompress: true
+
+      - name: Publish the zips as a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir zips
+          for dir in artifacts/*/; do
+            mv "$dir"* "zips/$(basename "$dir")"
+          done
+          ls -l zips
+          test "$(ls zips | wc -l)" -eq 5
+          tags=$(ls zips | sed -E 's/-(Linux|Darwin|Windows)-[^-]+-bin\.zip$//' | sort -u)
+          test "$(echo "$tags" | wc -l)" -eq 1
+          tag=$tags
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" zips/* --clobber
+          else
+            gh release create "$tag" zips/* \
+              --target "$GITHUB_SHA" \
+              --title "$tag" \
+              --notes "The Pharo VM built from $GITHUB_SHA ($GITHUB_REF_NAME) by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          fi
