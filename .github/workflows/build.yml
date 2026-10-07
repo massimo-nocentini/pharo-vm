@@ -320,6 +320,21 @@ jobs:
           export PATH="$(dirname "$EMSDK_NODE"):$PATH"
           make wasm-check WASM_IMAGE_ZIP="$RUNNER_TEMP/pharo15.zip" WASM_LIBGIT2=ON WASM_SDL2=ON
 
+      # The logs of the lanes (and the stderr of the VMs of the failed cases,
+      # kept in their directories), which the job log shows only in part
+      - name: Keep the logs of the lanes
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: wasm-check-logs
+          path: |
+            build-wasm/tests-run/**/*.log
+            build-wasm/tests-run/**/*.err
+            build-wasm/tests-run/**/*.out
+            build-wasm/tests-run/**/*.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Package
         run: |
           version=$(cut -d'*' -f1 build-wasm/cmake/version.info | sed -E 's/\+[0-9]+\./-/')
