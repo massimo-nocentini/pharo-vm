@@ -1,7 +1,7 @@
 "
 I am the backend of the Pharo world's window in a web page, where the page draws my canvas. I turn the page's event records into OSWindow events (see OSWebDriver for their layout), and pass title, clipboard, cursor and focus requests to the page through the WebDisplayPlugin.
 
-The canvas has one pixel per CSS pixel, so my screenScaleFactor is 1 and the browser scales the canvas on high-density displays.
+My extent is that of the canvas in CSS pixels, so is the position of the mouse, and my screenScaleFactor is 1: the world has the size of the canvas on every display. The page also reports the canvas in device pixels (#pixelExtent), which my renderer answers as its outputExtent: OSWorldRenderer then takes devicePixelRatio for its canvasScaleFactor, and draws the world that much larger, one pixel per device pixel, as on a Retina display with SDL.
 
 As with SDL, keys and text are separate events: the page sends text input only for the keys that type a character, so Escape and the shortcuts reach Morphic as key downs, and text input reaches Morphic without modifiers.
 
@@ -72,6 +72,13 @@ OSWebBackendWindow >> extent [
 	"The page reports the size of its canvas. Natively, and before the page reports it, the attributes stand in. A hidden canvas has no pixels, but OSWorldRenderer divides by this extent: answer one pixel at least"
 
 	^ (self primCanvasExtent ifNil: [ attributes extent ]) max: 1 @ 1
+]
+
+{ #category : 'accessing' }
+OSWebBackendWindow >> pixelExtent [
+	"The extent of the canvas in device pixels, devicePixelRatio times #extent. Natively, and before the page reports it, #extent stands in: one device pixel per CSS pixel"
+
+	^ (self primCanvasPixelExtent ifNil: [ ^ self extent ]) max: 1 @ 1
 ]
 
 { #category : 'event handling' }
@@ -270,6 +277,14 @@ OSWebBackendWindow >> primCanvasExtent [
 ]
 
 { #category : 'primitives' }
+OSWebBackendWindow >> primCanvasPixelExtent [
+	"Answer the extent of the page's canvas in device pixels, or nil before the page reports one"
+
+	<primitive: #primitiveWebCanvasPixelExtent module: #WebDisplayPlugin>
+	^ nil
+]
+
+{ #category : 'primitives' }
 OSWebBackendWindow >> primClipboardText [
 	"Answer the UTF-8 bytes last pasted into the page"
 
@@ -322,13 +337,14 @@ OSWebBackendWindow >> raise [
 
 { #category : 'accessing' }
 OSWebBackendWindow >> screenScaleFactor [
+	"The world has the size of the canvas in CSS pixels, and mouse positions are in CSS pixels. The pixels of high-density displays come from the canvasScaleFactor (see my class comment)"
 
 	^ 1
 ]
 
 { #category : 'cursor' }
 OSWebBackendWindow >> setMouseCursor: cursor mask: mask andScale: scale [
-	"The page turns the 1-bit Forms into a CSS cursor. The canvas is not scaled, so neither is the cursor"
+	"The page turns the 1-bit Forms into a CSS cursor, whose pixels are CSS pixels as those of the world are"
 
 	| maskForm |
 	maskForm := mask ifNil: [ cursor ].

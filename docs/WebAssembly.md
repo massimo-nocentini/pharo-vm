@@ -226,7 +226,8 @@ It fetches the `.sources` once per boot, and the image only when this browser ha
 ## The world page
 
 `world.html` boots the saved image, or the world image of the build, with `--interactive`, and the world draws itself in the canvas.
-The canvas has one pixel per CSS pixel and follows the size of the page.
+The canvas follows the size of the page, and the world has its size in CSS pixels.
+On a high-density display the world draws in device pixels: the page reports the canvas in device pixels too, from which Pharo's world renderer takes `devicePixelRatio` for its `canvasScaleFactor`, as with SDL on a Retina display, and draws a Form that much larger, which the page shows one pixel per device pixel; it follows the ratio when the window moves to another screen, or with the zoom of the page.
 The world's text is drawn with FreeType, in the stock fonts of the image (Source Sans Pro and Source Code Pro): text beyond Latin-1, emphasis such as the strike-out of deprecated classes, and exact font sizes are drawn as natively.
 With cairo, Athens draws too: Roassal, the Canvas view of the Inspector, Epicea's Code Changes (whose graph Hiedra draws) and the color picker of the Settings.
 
@@ -247,7 +248,7 @@ With cairo, Athens draws too: Roassal, the Canvas view of the Inspector, Epicea'
 - The canvas shows one OSWindow at a time: the newest one that has an event handler, such as the window of the Emergency Debugger of Pharo 12, takes the canvas and the input, and the world comes back when it closes.
 - The status pill says Busy while the VM has not slept for a second, or while it does not answer at all (a long primitive).
 - Open, or a drop of files on the page, starts an image of your own, as in the Console.
-  An image without the OSWindow-Web package, a stock image say, or with an older version of it (the site has version 4), is prepared first: the worker boots it with the REPL, files in the package and saves, the pill says Preparing meanwhile, and then the world boots from the saved image.
+  An image without the OSWindow-Web package, a stock image say, or with an older version of it (the site has version 5), is prepared first: the worker boots it with the REPL, files in the package and saves, the pill says Preparing meanwhile, and then the world boots from the saved image.
   The stock image of the build was unpacked, prepared and painted in 4.3 s (Chromium) and 5.0 s (Firefox) after it was chosen.
 - The Console button opens the Console page.
   When the world has not drawn 30 s after the VM started, or the VM ended before it drew, the notice points to the Console, which can run the image or reset it.
@@ -524,7 +525,7 @@ Git servers, github.com among them, send no CORS headers, so a page of another o
 The proxy is a setting of the Console page (Settings), kept in this browser's localStorage, which the world page, `sdl.html` and the Notebook use too (a change reaches their running VMs), and `PHARO_WASM_GIT_PROXY` in the node VM; there is none by default.
 It is never taken from a URL: the proxy sees the code and any credentials that pass through it, and a link must not choose where a user's git traffic goes; a `?gitProxy=` of the page's URL is ignored.
 A request that the browser does not give the answer of (CORS, the network) fails with "git http: request failed (CORS or network)", and a remote that asks for credentials (401, 403 or 407) fails with `GIT_EAUTH`.
-OSWindow-Web (version 4) sets Iceberg's remotes to https.
+OSWindow-Web (version 4 and later) sets Iceberg's remotes to https.
 In the browsers, a clone through the proxy of the spec took 509 ms (Chromium) and 404 ms (Firefox), with 2 requests.
 
 The working copies live in the memory of the VM, and are lost on a reload: only the image is kept in the browser.
@@ -588,16 +589,16 @@ The Pharo world draws itself into a Form, and the VM only blits it.
 SDL2 under Emscripten would need the DOM of the main thread, or pthreads, and the image's SDL2 driver blits through SurfacePlugin, so the world page does without it (`sdl.html` gives it a shim of the DOM instead).
 The world image has the OSWindow-Web package (`packaging/emscripten/st/OSWindow-Web`): OSWebDriver, a backend window and a Form renderer, which a startUp: hook picks whenever the page gives a display, and the extension of AthensCairoSurface that copies cairo's pixels into a Form.
 It keeps the FreeType fonts of the image, unless the build has no FreeType, and then gets bitmap fonts: `OSWebDriver>>setUpImage` takes the fonts the build gives from `webimage-fonts.txt`, and the manifest says which (`fonts`).
-The package is at version 4 (`OSWebDriver class>>packageVersion`, the manifest's `webPackage`): version 2 kept the FreeType fonts, 3 added the AthensCairoSurface extension, and 4 makes Iceberg's remotes https:// ones; an image saved with an older version is prepared again when the world page opens it.
+The package is at version 5 (`OSWebDriver class>>packageVersion`, the manifest's `webPackage`): version 2 kept the FreeType fonts, 3 added the AthensCairoSurface extension, 4 makes Iceberg's remotes https:// ones, and 5 draws the world in device pixels on high-density displays; an image saved with an older version is prepared again when the world page opens it.
 The native Pharo VM prepares it at build time, which is fast and keeps the world image independent of the VM being built; it is prepared again when a class of the package changes, comes or goes.
 
-`src/emscripten/plugins/WebDisplayPlugin.c` is a builtin plugin of 12 primitives.
+`src/emscripten/plugins/WebDisplayPlugin.c` is a builtin plugin of 13 primitives.
 The image blits each damaged rectangle of its 32-bit Form into the frame, an RGBA copy, and presents the frame once per Morphic cycle.
 The dirty rectangles (up to 64, then their bounding box) go to the page, and the slice ends, so that the canvas shows them at once.
 The page's events come back as records of 8 integers, in a ring of 256 records, and each one signals the image's input semaphore.
 The title, the cursor (1-bit Forms, as RGBA), the clipboard and the focus go to the page as well.
 In the worker, `display-worker.js` paints the dirty rectangles, straight from the VM's memory, into the OffscreenCanvas that the page transferred to it.
-`world.js` sends it the size of the canvas and the input, which `keymap.js` maps to SDL keycodes, scancodes and modifiers.
+`world.js` sends it the size of the canvas, in CSS pixels and in device pixels, and the input, which `keymap.js` maps to SDL keycodes, scancodes and modifiers.
 
 A stock image cannot open the world page as it is: its world starts through OSSDL2Driver.
 The world page prepares the stock images that it opens, and the Console offers to ("Prepare for the world"): both run `packaging/emscripten/st/web-bootstrap.st`, which files in the package and sets up the fonts, and then save.
@@ -740,7 +741,7 @@ On a build with libgit2 and SDL2, in Chromium 153 and Firefox 155 together, the 
   - a huge output of right-to-left text takes long to lay out in Chromium: 500000 characters written in one line took 9.7 s (Hebrew) and 24.3 s (Arabic) to show, against 0.14 s for Latin text, and 1.0 s and 0.9 s in Firefox.
 - `sdl.html` keeps nothing in the browser, and its clipboard, resizing, HiDPI and input methods are SDL's, not bridged to the page; it costs about 3.5 to 6 times the idle VM time of the world page.
 - Safari is untested.
-- The canvas of the world has one pixel per CSS pixel, so it is blurred on HiDPI screens.
+- The canvas of `sdl.html` has one pixel per CSS pixel, so it is blurred on HiDPI screens (the world page draws in device pixels).
   Input methods commit their text when the composition ends, touch gestures are not supported, and touch screens are untested.
 
 ## Licences

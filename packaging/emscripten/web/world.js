@@ -323,8 +323,8 @@
     if (g !== gen) return;
     const { width, height } = stageSize();
     const c = freshCanvas();
-    c.width = Math.max(1, width);
-    c.height = Math.max(1, height);
+    c.width = Math.max(1, Math.round(width * ratio()));
+    c.height = Math.max(1, Math.round(height * ratio()));
     let offscreen, w;
     try {
       offscreen = c.transferControlToOffscreen();
@@ -881,21 +881,38 @@
   sink.addEventListener('focus', gainedFocus);
 
   // ---- the size of the canvas
+  //
+  // The page sends the size of the stage in CSS pixels, the extent of the
+  // world's window, and in device pixels (devicePixelRatio times that), the
+  // extent the image draws in: it takes its canvasScaleFactor from the two,
+  // and paints frames of devicePixelRatio times the size of the world.  The
+  // canvas shows them one frame pixel per device pixel (the CSS of #world,
+  // with --world-dpr).  The ratio changes when the window moves to another
+  // screen, or with the zoom of the page: the sizes are sent again.
 
   let sentSize = null, resizeTimer = 0, observed = false;
+  const ratio = () => (window.devicePixelRatio > 0 ? window.devicePixelRatio : 1);
   const stageSize = () => ({ width: stage.clientWidth, height: stage.clientHeight });
   function sendSize() {
     const { width, height } = stageSize();
     if (!worker || !width || !height) return;         // hidden: the world stays as it is
-    if (sentSize && sentSize.width === width && sentSize.height === height) return;
-    sentSize = { width, height };
-    worker.postMessage({ type: 'display', kind: 'resize', width, height });
+    const r = ratio(), pixelWidth = Math.round(width * r), pixelHeight = Math.round(height * r);
+    if (sentSize && sentSize.width === width && sentSize.height === height &&
+        sentSize.pixelWidth === pixelWidth && sentSize.pixelHeight === pixelHeight) return;
+    sentSize = { width, height, pixelWidth, pixelHeight };
+    worker.postMessage({ type: 'display', kind: 'resize', width, height, pixelWidth, pixelHeight });
   }
   new ResizeObserver(() => {
     clearTimeout(resizeTimer);
     if (!observed) { observed = true; sendSize(); }
     else resizeTimer = setTimeout(sendSize, RESIZE_MS);
   }).observe(stage);
+  (function watchRatio() {
+    const r = ratio();
+    document.documentElement.style.setProperty('--world-dpr', String(r));
+    const query = matchMedia('(resolution: ' + r + 'dppx)');
+    query.addEventListener('change', () => { watchRatio(); sendSize(); }, { once: true });
+  })();
 
   // ---- the toolbar
 

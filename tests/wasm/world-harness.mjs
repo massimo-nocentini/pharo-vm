@@ -261,13 +261,14 @@ const median = a => { const s = a.slice().sort((x, y) => x - y); return s[Math.f
     const ctx = { putImageData: (img, ...at) => calls.push(['put', img, ...at]) };
     const canvas = { width: 300, height: 150, getContext: (type, o) => { calls.push(['getContext', type, JSON.stringify(o)]); return ctx; } };
     const memory = new WebAssembly.Memory({ initial: 1, maximum: 4 });
-    let full = false, kicks = 0, extent = null, clip = null;
+    let full = false, kicks = 0, extent = null, pixelExtent = null, clip = null;
     const pushed = [];
     const module = {
       get HEAPU8() { return new Uint8Array(memory.buffer); },
       get HEAP32() { return new Int32Array(memory.buffer); },
       _webdisplay_push_event: (...e) => { if (full) return 0; pushed.push(e); return 1; },
       _webdisplay_set_extent: (w, h) => { extent = [w, h]; },
+      _webdisplay_set_pixel_extent: (w, h) => { pixelExtent = [w, h]; },
       _webdisplay_clipboard_buffer: n => 16384,
       _webdisplay_clipboard_commit: n => { clip = new TextDecoder().decode(new Uint8Array(memory.buffer, 16384, n)); },
     };
@@ -282,6 +283,12 @@ const median = a => { const s = a.slice().sort((x, y) => x - y); return s[Math.f
       d.handle({ type: 'display', kind: 'resize', width: 40, height: 30 }, vm);
       assert(String(extent) === '40,30' && String(pushed[0].slice(2)) === '0,0,40,0,30,0' && pushed[0][0] === 8 && kicks === 1,
              'the extent, then a resize record, then a kick: ' + JSON.stringify(pushed));
+      assert(String(pixelExtent) === '40,30', 'without device pixels, the CSS ones: ' + pixelExtent);
+      d.handle({ type: 'display', kind: 'resize', width: 40, height: 30, pixelWidth: 80, pixelHeight: 99999 }, vm);
+      assert(String(extent) === '40,30' && String(pixelExtent) === '80,16384' && String(pushed[1].slice(2)) === '0,0,40,0,30,0',
+             'the device pixels, clamped, and a resize record of the CSS ones: ' + pixelExtent + ' ' + JSON.stringify(pushed[1]));
+      pushed.length = 0;
+      kicks = 0;
       const rects = (...r) => new Int32Array(memory.buffer).set(r, 8192 / 4);
       const puts = () => calls.filter(c => c[0] === 'put').map(c => c.slice(2).join(','));
       const images = () => calls.filter(c => c[0] === 'ImageData').length;
@@ -460,6 +467,22 @@ const median = a => { const s = a.slice().sort((x, y) => x - y); return s[Math.f
     p = await probe('a World of 800x600', p => p.world[0] === 800 && p.world[1] === 600);
     page('resize', { width: WIDTH, height: HEIGHT });
     p = await probe('a World of 1024x768 again', p => p.world[0] === WIDTH && p.world[1] === HEIGHT);
+  });
+
+  await check('8b a canvas of 800x600 CSS pixels and 1600x1200 device pixels: frames of 1600x1200, a World of 800x600, the mouse in CSS pixels', async () => {
+    const t = now();
+    page('resize', { width: 800, height: 600, pixelWidth: 1600, pixelHeight: 1200 });
+    const f = await waitFor('a frame of 1600x1200', () => S.frames.find(f => f.t > t && f.width === 1600 && f.height === 1200));
+    timing('resize at 2x -> frame', f.t - t);
+    p = await probe('a World of 800x600 drawn in a Form of 1600x1200',
+                    p => p.world[0] === 800 && p.world[1] === 600 && p.display && p.display[0] === 1600 && p.display[1] === 1200);
+    move(321, 123);
+    p = await probe('the hand where the CSS pixels say', p => p.hand[0] === 321 && p.hand[1] === 123);
+    const t2 = now();
+    page('resize', { width: WIDTH, height: HEIGHT });
+    await waitFor('a frame of 1024x768', () => S.frames.find(f => f.t > t2 && f.width === WIDTH && f.height === HEIGHT));
+    p = await probe('a World and a Form of 1024x768 again',
+                    p => p.world[0] === WIDTH && p.world[1] === HEIGHT && p.display && p.display[0] === WIDTH && p.display[1] === HEIGHT);
   });
 
   await check('9 a burst of 400 mouse moves: the ring overflows, the moves wait and merge, the last arrives', async () => {

@@ -26,9 +26,11 @@
 // The canvas is init.canvas, the OffscreenCanvas that the page transferred,
 // drawn with putImageData through an ImageData over HEAPU8, which is made
 // again when the frame moves or changes size, or when a growth of the memory
-// detached the old one.  The canvas takes the size of the frame, so the page
-// shows the frame one pixel per CSS pixel, and what was drawn in a slice
-// shows when the worker's task ends.  Without a canvas (node) the frame is
+// detached the old one.  The canvas takes the size of the frame, which the
+// image makes devicePixelRatio times the size of the world in CSS pixels
+// (its canvasScaleFactor), and the page shows it at that size divided by the
+// ratio, one frame pixel per device pixel; what was drawn in a slice shows
+// when the worker's task ends.  Without a canvas (node) the frame is
 // copied into display.frame {width, height, data}, a memory framebuffer.
 //
 // The page sees the display through messages {type: 'display', kind, ...},
@@ -44,8 +46,11 @@
 // and sends its own, which onMessage handles between slices:
 //
 //   event {event}          an input record of 8 integers (see OSWebDriver)
-//   resize {width, height} the canvas has that size now: the extent of the
-//                          plugin, then a resize record
+//   resize {width, height, pixelWidth, pixelHeight}
+//                          the canvas has that size now, in CSS pixels and in
+//                          device pixels (the CSS ones when they are not
+//                          given): the extents of the plugin, then a resize
+//                          record of the CSS size
 //   clipboard {text}       the text of a paste, before the key that pastes
 //
 // Each of them kicks the VM.  The display learns its VM, whose memory
@@ -209,6 +214,8 @@
         case 'resize': {
           const width = clamp(m.width, 0, MAX_EXTENT), height = clamp(m.height, 0, MAX_EXTENT);
           M._webdisplay_set_extent(width, height);
+          M._webdisplay_set_pixel_extent(clamp(m.pixelWidth == null ? width : m.pixelWidth, 0, MAX_EXTENT),
+                                         clamp(m.pixelHeight == null ? height : m.pixelHeight, 0, MAX_EXTENT));
           queue([RESIZE, now(), 0, 0, width, 0, height, 0]);
           break;
         }

@@ -117,10 +117,11 @@ await run(async t => {
   const siteSources = manifest.files.find(f => f.path.endsWith('.sources'));
   const sourcesUrl = '/' + siteSources.url;
 
-  await t.context.route('**/vm-driver.js*', async route => {
+  const withProbe = async route => {
     const body = fs.readFileSync(path.join(t.webDir, 'vm-driver.js'), 'utf8');
     route.fulfill({ contentType: 'text/javascript', body: body + probePatch });
-  });
+  };
+  await t.context.route('**/vm-driver.js*', withProbe);
 
   // world.js logs a crash of the VM, with the Smalltalk stacks, as a warning
   page.on('console', m => {
@@ -187,14 +188,14 @@ await run(async t => {
     return parts.join('');
   };
 
-  // The probe written after the call that pred accepts
-  async function probe(what, pred, timeout = 30000) {
+  // The probe written after the call that pred accepts, on the page pg
+  async function probeOn(pg, what, pred, timeout = 30000) {
     const t0 = Date.now();
     let first = null, last = null;
     for (;;) {
       let p = null;
       try {
-        p = JSON.parse(await page.evaluate(() => window.PharoWorld.readFile('/pharo/probe.json')
+        p = JSON.parse(await pg.evaluate(() => window.PharoWorld.readFile('/pharo/probe.json')
           .then(d => new TextDecoder().decode(d))));
       } catch (e) { /* not yet, or being written */ }
       if (p && p.seq) {
@@ -203,14 +204,15 @@ await run(async t => {
         if (p.seq > first && pred(p)) return p;
       }
       if (Date.now() - t0 > timeout) {
-        const shown = await page.evaluate(() => [document.getElementById('status-text').textContent,
+        const shown = await pg.evaluate(() => [document.getElementById('status-text').textContent,
                                                  document.getElementById('notice-text').textContent]);
         throw new Error('timed out after ' + timeout + ' ms waiting for ' + what + '; the page says ' + JSON.stringify(shown) +
                         '; probe: ' + JSON.stringify(last).slice(0, 1200));
       }
-      await page.waitForTimeout(100);
+      await pg.waitForTimeout(100);
     }
   }
+  const probe = (what, pred, timeout) => probeOn(page, what, pred, timeout);
   // A click at a point of the world
   async function click(p, button = 'left') {
     const box = await canvasBox();
@@ -790,6 +792,35 @@ await run(async t => {
     await f.waitForFunction(() => document.getElementById('status').dataset.state === 'error', null, { timeout: 10000 });
     assert(/served over HTTP/.test(await f.textContent('#notice-text')), 'notice: ' + await f.textContent('#notice-text'));
     await f.close();
+  });
+
+  await check('at devicePixelRatio 2 the world has the size of the canvas in CSS pixels, and draws in device pixels', async () => {
+    const context = await t.browser.newContext({ viewport: { width: 1000, height: 700 }, deviceScaleFactor: 2 });
+    try {
+      await context.route('**/vm-driver.js*', withProbe);
+      const f = await context.newPage();
+      t.watch(f);
+      await f.goto(t.base + 'world.html');
+      let q = await probeOn(f, 'a World in a Form of twice its size',
+                            q => q.display && q.display[0] === 2 * q.world[0] && q.display[1] === 2 * q.world[1], 120000);
+      await f.waitForFunction(([w, h]) => {
+        const c = document.getElementById('world');
+        return c.width === w && c.height === h;
+      }, q.display);
+      // the canvas shows at the size of the stage, which is that of the World
+      const box = await f.locator('#world').boundingBox();
+      const stage = await f.evaluate(() => { const s = document.getElementById('world').parentElement; return [s.clientWidth, s.clientHeight]; });
+      assert(Math.abs(box.width - stage[0]) < 1 && Math.abs(box.height - stage[1]) < 1,
+             'the canvas shows at the size of the stage: ' + JSON.stringify([box, stage]));
+      assert(q.world[0] === stage[0] && q.world[1] === stage[1], 'a World of the stage in CSS pixels: ' + JSON.stringify([q.world, stage]));
+      // a point of the desktop: over a window, a temporary cursor (an
+      // I-beam, say) would offset the hand by its hot spot
+      const at = [q.world[0] - 12, q.world[1] - 9];
+      assert(!q.windows.some(w => inside(at, w.bounds)), 'no window at ' + at + ': ' + JSON.stringify(q.windows.map(w => w.bounds)));
+      await f.mouse.move(box.x + at[0], box.y + at[1]);
+      q = await probeOn(f, 'the hand where the mouse is, in CSS pixels', q => q.hand[0] === at[0] && q.hand[1] === at[1]);
+      await f.close();
+    } finally { await context.close(); }
   });
 
   await check('no worker warned of an engine error or an exception of the display', async () => {

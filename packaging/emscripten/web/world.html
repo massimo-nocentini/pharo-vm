@@ -217,14 +217,21 @@ button { font: inherit; color: inherit; }
   border-radius: var(--radius);
   box-shadow: var(--shadow);
 }
-/* One canvas pixel per CSS pixel, from the top left corner: until the image
-   paints a frame of a new size, the old one is neither stretched nor moved */
+/* The frames are devicePixelRatio (--world-dpr, which world.js sets) times
+   the size of the stage, and show one frame pixel per device pixel: the
+   canvas is that much larger than the stage, shows the frame one pixel per
+   canvas pixel from its top left corner, and is scaled down to the stage.
+   Until the image paints a frame of a new size, the old one is neither
+   stretched nor moved */
 #world {
   position: absolute;
-  inset: 0;
+  left: 0;
+  top: 0;
   display: block;
-  width: 100%;
-  height: 100%;
+  width: calc(100% * var(--world-dpr, 1));
+  height: calc(100% * var(--world-dpr, 1));
+  transform: scale(calc(1 / var(--world-dpr, 1)));
+  transform-origin: 0 0;
   object-fit: none;
   object-position: left top;
   touch-action: none;

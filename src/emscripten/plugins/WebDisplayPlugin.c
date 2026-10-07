@@ -16,7 +16,10 @@
  *  - the page pushes its input as records of 8 integers into a ring, and
  *    each push signals the image's input semaphore;
  *  - title, cursor, clipboard and focus requests go to the page as well, and
- *    the size of the canvas and the text pasted into the page come back.
+ *    the size of the canvas and the text pasted into the page come back: its
+ *    size in CSS pixels, the extent of the world's window, and in device
+ *    pixels, the extent the world draws in (devicePixelRatio times the
+ *    other), from which the image takes its canvasScaleFactor.
  *
  * The page's side is Module.webDisplay, an object the host gives the VM
  * (display-worker.js on the world page).  Without it, in the node command
@@ -332,6 +335,7 @@ webClipboardSet(WebClipboard *clipboard, const char *bytes, int size)
 static const char *getModuleName(void);
 static void primitiveWebBlit(void);
 static void primitiveWebCanvasExtent(void);
+static void primitiveWebCanvasPixelExtent(void);
 static void primitiveWebClipboardText(void);
 static void primitiveWebDisplayIsAvailable(void);
 static void primitiveWebFocus(void);
@@ -354,6 +358,8 @@ static WebEventRing events;
 static WebClipboard clipboard = { NULL, -1, 0 };
 static int canvasWidth = -1;	/* -1 until the page reports its canvas */
 static int canvasHeight = -1;
+static int canvasPixelWidth = -1;	/* the same, in device pixels */
+static int canvasPixelHeight = -1;
 
 
 /*** Module.webDisplay ***
@@ -523,6 +529,27 @@ primitiveWebCanvasExtent(void)
 		return;
 	}
 	extent = interpreterProxy->makePointwithxValueyValue(canvasWidth, canvasHeight);
+	if (!extent) {
+		interpreterProxy->primitiveFailFor(PrimErrNoMemory);
+		return;
+	}
+	interpreterProxy->popthenPush(1, extent);
+}
+
+
+/*	Answer the extent of the page's canvas in device pixels as a Point, or
+	nil before the page reported it. */
+
+static void
+primitiveWebCanvasPixelExtent(void)
+{
+	sqInt extent;
+
+	if (canvasPixelWidth < 0) {
+		interpreterProxy->popthenPush(1, interpreterProxy->nilObject());
+		return;
+	}
+	extent = interpreterProxy->makePointwithxValueyValue(canvasPixelWidth, canvasPixelHeight);
 	if (!extent) {
 		interpreterProxy->primitiveFailFor(PrimErrNoMemory);
 		return;
@@ -782,6 +809,16 @@ webdisplay_set_extent(int width, int height)
 	canvasHeight = height < 0 ? 0 : height > WEB_MAX_EXTENT ? WEB_MAX_EXTENT : height;
 }
 
+/*	The page's canvas has width x height device pixels now, the CSS pixels of
+	webdisplay_set_extent() times devicePixelRatio. */
+
+EMSCRIPTEN_KEEPALIVE void
+webdisplay_set_pixel_extent(int width, int height)
+{
+	canvasPixelWidth = width < 0 ? 0 : width > WEB_MAX_EXTENT ? WEB_MAX_EXTENT : width;
+	canvasPixelHeight = height < 0 ? 0 : height > WEB_MAX_EXTENT ? WEB_MAX_EXTENT : height;
+}
+
 /*	Answer the address of a buffer for size bytes of pasted UTF-8 text, or 0.
 	The page writes the text there, then commits it with
 	webdisplay_clipboard_commit(), before it pushes the keys that paste. */
@@ -807,6 +844,7 @@ void* WebDisplayPlugin_exports[][3] = {
 	{(void*)_m, "getModuleName", (void*)getModuleName},
 	{(void*)_m, "primitiveWebBlit\000\000", (void*)primitiveWebBlit},
 	{(void*)_m, "primitiveWebCanvasExtent\000\377", (void*)primitiveWebCanvasExtent},
+	{(void*)_m, "primitiveWebCanvasPixelExtent\000\377", (void*)primitiveWebCanvasPixelExtent},
 	{(void*)_m, "primitiveWebClipboardText\000\377", (void*)primitiveWebClipboardText},
 	{(void*)_m, "primitiveWebDisplayIsAvailable\000\377", (void*)primitiveWebDisplayIsAvailable},
 	{(void*)_m, "primitiveWebFocus\000\377", (void*)primitiveWebFocus},

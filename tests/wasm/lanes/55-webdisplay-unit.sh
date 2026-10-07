@@ -112,6 +112,7 @@ cls := Object newAnonymousSubclass.
    'clip: t' #primitiveWebSetClipboardText
    'clip' #primitiveWebClipboardText
    'extent' #primitiveWebCanvasExtent
+   'pixelExtent' #primitiveWebCanvasPixelExtent
    'cursor: b mask: m extent: e offset: o' #primitiveWebSetCursor
    'sema: i' #primitiveWebSetInputSemaphore
    'avail' #primitiveWebDisplayIsAvailable ) pairsDo: [ :pattern :name |
@@ -155,6 +156,7 @@ check value: 'clipboard text, the copy' value: '#[104 195 169]' value: [ cls cli
 check value: 'clipboard text, not consumed' value: '#[104 195 169]' value: [ cls clip ].
 check value: 'set clipboard text, nil' value: 'fails #''bad argument''' value: [ cls clip: nil ].
 check value: 'canvas extent, not reported' value: 'nil' value: [ cls extent ].
+check value: 'canvas pixel extent, not reported' value: 'nil' value: [ cls pixelExtent ].
 check value: 'cursor' value: 'self' value: [ cls cursor: (Bitmap new: 16) mask: (Bitmap new: 16) extent: 16 @ 16 offset: -3 @ -4 ].
 check value: 'cursor, 257 wide' value: 'fails #''bad argument''' value: [ cls cursor: (Bitmap new: 9 * 257) mask: (Bitmap new: 9 * 257) extent: 257 @ 257 offset: 0 @ 0 ].
 check value: 'cursor, a short mask' value: 'fails #''bad argument''' value: [ cls cursor: (Bitmap new: 16) mask: (Bitmap new: 15) extent: 16 @ 16 offset: 0 @ 0 ].
