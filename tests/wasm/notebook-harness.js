@@ -120,7 +120,25 @@ async function check(name, f) {
     failures++;
     console.log('not ok - ' + name + '\n  ' + String((e && e.message) || e));
     if (current && current.tail) console.log('  recent traffic:\n  | ' + current.tail().split('\n').join('\n  | '));
+    if (current && current.crash && !current.crashReported) reportCrash(current);
   }
+}
+// The first failing case of a kernel that crashed writes all it has of the
+// crash into TEST_DIR (the directory the lane runs in): the message, the JS
+// stack, the Smalltalk stacks, what the runtime printed (printErr) and fd 2,
+// whose last lines are what recent traffic shows; and prints the lines of
+// fd 2 and of the runtime that say what failed
+let crashes = 0;
+function reportCrash(s) {
+  s.crashReported = true;
+  const file = path.join(process.env.TEST_DIR || process.cwd(), 'notebook-crash-' + process.pid + '-' + (++crashes) + '.txt');
+  const report = ['crash: ' + s.crash, '--- JS stack', s.crashStack, '--- Smalltalk stacks', s.crashStacks,
+                  '--- printErr', s.diag, '--- fd 2', s.output(2)].join('\n');
+  try { fs.writeFileSync(file, report); console.log('  crash report: ' + file); } catch (e) { console.log('  crash report not written: ' + e.message); }
+  const said = (s.diag + '\n' + s.output(2)).split('\n').filter(l => /ERROR|[Ee]rror|Abort|abort|signal|memory/.test(l)).slice(-20);
+  if (said.length) console.log('  what failed:\n  | ' + said.join('\n  | '));
+  const js = String(s.crashStack || '').split('\n').slice(0, 25);
+  if (js.length) console.log('  JS stack:\n  | ' + js.join('\n  | '));
 }
 const skip = (name, why) => console.log('# skip ' + name + ': ' + why);
 
@@ -202,7 +220,7 @@ async function kernel(opts = {}) {
     onState: st => s.states.push(st),
     onHost: (kind, text) => s.host.push({ kind, text }),
     onExit: code => { s.exit = code; },
-    onCrash: msg => { s.crash = msg; },
+    onCrash: (msg, stack, stacks) => { s.crash = msg; s.crashStack = stack; s.crashStacks = stacks; },
     onDiag: t => { s.diag += t; },
   });
   current = s;
