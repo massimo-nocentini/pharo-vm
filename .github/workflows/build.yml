@@ -303,15 +303,21 @@ jobs:
           echo "$PHARO_IMAGE_SHA256  $RUNNER_TEMP/pharo15.zip" | sha256sum -c -
 
       # make wasm records its settings but does not remember them: give
-      # wasm-check the same ones, or it builds the defaults again
+      # wasm-check the same ones, or it builds the defaults again.  The node
+      # VM (wasm64, a 64-bit table) needs node 24.15 or later: the node of
+      # emsdk (EMSDK_NODE), which emsdk_env.sh leaves off the PATH, and not
+      # the node 22 of the runner
       - name: Build
         run: |
           source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          export PATH="$(dirname "$EMSDK_NODE"):$PATH"
+          node --version
           make wasm WASM_IMAGE_ZIP="$RUNNER_TEMP/pharo15.zip" WASM_LIBGIT2=ON WASM_SDL2=ON
 
       - name: Run the node test lanes
         run: |
           source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          export PATH="$(dirname "$EMSDK_NODE"):$PATH"
           make wasm-check WASM_IMAGE_ZIP="$RUNNER_TEMP/pharo15.zip" WASM_LIBGIT2=ON WASM_SDL2=ON
 
       - name: Package
