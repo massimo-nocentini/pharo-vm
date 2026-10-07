@@ -6,6 +6,8 @@ CPackSourceConfig.cmake
 Makefile
 cmake_install.cmake
 build
+# The all-C comparison build of branch pharo-12-rust
+build-c
 install_manifest.txt
 CMakeSettings.json*
 !CMakeSettings.json.template
@@ -376,3 +378,7 @@ healthchecksdb
 /docs/try/
 
 **/.DS_Store
+
+# The Cargo build directories of branch pharo-12-rust
+/rust/target
+/rust/plugins/target
