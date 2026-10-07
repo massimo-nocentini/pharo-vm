@@ -1,6 +1,0 @@
-#!/bin/sh
-# Run the Pharo VM for WebAssembly (pharo.js, next to this script) with node.
-# NODE selects node, and NODE_OPTIONS_WASM gives it options, such as
-# --stack-size=900 or --liftoff.
-d=$(dirname "$0")
-exec "${NODE:-node}" ${NODE_OPTIONS_WASM} "$d/pharo.js" "$@"

@@ -13,10 +13,11 @@
 # On a push, when the six jobs succeed, the zips are also published as
 # the GitHub release PharoVM-<version>, tagged at the commit built.
 #
-# The WebAssembly zip is what `make wasm` stages (docs/WebAssembly.md), as
-# docs/ publishes it: the site web/ and the node VM node/, built with the
-# Pharo 15 image, libgit2 and SDL2, with docs/README.md, serve.mjs and
-# node-try.sh.
+# The WebAssembly zip is what `make wasm` stages (docs/WebAssembly.md): the
+# site web/ and the node VM node/, built with the Pharo 15 image, libgit2
+# and SDL2, with serve.mjs and packaging/emscripten/dist (README.md, which
+# names the commit, and node-try.sh).  On a push to pharo-12-wasm, its web/
+# is also deployed to the root of branch gh-pages, which GitHub Pages serves.
 #
 # Linux and macOS bundle the prebuilt libraries of files.pharo.org
 # (PHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES), Windows the DLLs of the
@@ -30,6 +31,7 @@ name: Build
 
 on:
   push:
+    branches-ignore: [gh-pages]
     paths-ignore: ['docs/**', '**/*.md']
   pull_request:
     paths-ignore: ['docs/**', '**/*.md']
@@ -318,8 +320,9 @@ jobs:
           sha=$(cut -d'*' -f8 build-wasm/cmake/version.info)
           name=PharoVM-$version-WebAssembly
           mkdir -p "dist/$name"
-          cp -R build-wasm/web build-wasm/node docs/serve.mjs docs/node-try.sh "dist/$name/"
-          sed "s/\`61f5d0ef5\`/\`$sha\`/" docs/README.md > "dist/$name/README.md"
+          cp -R build-wasm/web build-wasm/node packaging/emscripten/tools/serve.mjs \
+            packaging/emscripten/dist/node-try.sh "dist/$name/"
+          sed "s/@PHAROVM_COMMIT@/$sha/" packaging/emscripten/dist/README.md > "dist/$name/README.md"
           cd dist && zip -qr "$name-bin.zip" "$name"
           ls -l "$name-bin.zip"
 
@@ -328,6 +331,42 @@ jobs:
           path: dist/PharoVM-*-WebAssembly-bin.zip
           archive: false
           if-no-files-found: error
+
+  # The site of the WebAssembly zip at the root of gh-pages, as a single
+  # commit (force-pushed, so that the branch does not keep every build of
+  # the image), with .nojekyll so that GitHub Pages serves the files as they
+  # are.  Settings > Pages must deploy from branch gh-pages, folder /.
+  pages:
+    name: GitHub Pages
+    if: github.event_name == 'push' && github.ref == 'refs/heads/pharo-12-wasm'
+    needs: wasm
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: PharoVM-*-WebAssembly-bin.zip
+          path: artifacts
+          skip-decompress: true
+
+      - name: Deploy the site to gh-pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -- artifacts/*/*
+          test $# -eq 1
+          unzip -q "$1" -d unpacked
+          mkdir site
+          cp -R unpacked/PharoVM-*-WebAssembly/web/. site/
+          touch site/.nojekyll
+          cd site
+          git init -q -b gh-pages
+          git add -A
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -q -m "Deploy the WebAssembly site of $GITHUB_SHA"
+          git push --force "https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY.git" gh-pages
 
   release:
     name: Release

@@ -1,7 +1,7 @@
 # Pharo 15 on WebAssembly
 
 The Pharo VM built for WebAssembly, from branch `pharo-12-wasm` at commit
-`61f5d0ef5` of pharo-vm, with a Pharo 15 image: Pharo15.0-SNAPSHOT, build 41
+`@PHAROVM_COMMIT@` of pharo-vm, with a Pharo 15 image: Pharo15.0-SNAPSHOT, build 41
 (`4e572fed79`, from https://files.pharo.org/image/150/latest-64.zip as of
 1 October 2026), prepared for the world page.  The VMs have the FFI
 (libffi), FreeType, cairo, libgit2 and SDL2 built in.  `docs/WebAssembly.md`
@@ -14,10 +14,11 @@ in the repository says how it is made and how it works.
     serve.mjs       a static HTTP server for web/ (node, no dependencies)
     node-try.sh     runs the node VM on the image of web/
 
-Where this folder is served, as GitHub Pages serves the `docs` folder of a
-branch, the pages are [web/](web/) (the Console and the Notebook),
-[web/world.html](web/world.html) (the Pharo world) and
-[web/sdl.html](web/sdl.html) (the Pharo world through SDL2).
+GitHub Pages serves the site of the latest build of `pharo-12-wasm` from
+the root of branch `gh-pages`; where this folder is served, the pages are
+[web/](web/) (the Console and the Notebook), [web/world.html](web/world.html)
+(the Pharo world) and [web/sdl.html](web/sdl.html) (the Pharo world through
+SDL2).
 
 ## In a browser
 

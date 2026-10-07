@@ -372,10 +372,6 @@ healthchecksdb
 /stack32/generated
 /stack64/generated
 /build-wasm*/
-# The node launcher of the WebAssembly site in docs/, which the rule pharo
-# above would leave out, and the image that docs/node-try.sh unpacks
-!/docs/node/pharo
-/docs/try/
 
 **/.DS_Store
 
