@@ -45,7 +45,7 @@ set(FFI_INCLUDE_DIRS ${FFI_INCLUDE_DIR})
 
 
 if(FFI_FOUND AND NOT TARGET FFI::lib)
-    add_library(FFI::lib SHARED IMPORTED)
+    add_library(FFI::lib UNKNOWN IMPORTED)
     set_target_properties(FFI::lib PROPERTIES
             IMPORTED_LOCATION "${FFI_LIBRARY}"
             INTERFACE_INCLUDE_DIRECTORIES "${FFI_INCLUDE_DIR}"

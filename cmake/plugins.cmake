@@ -80,7 +80,8 @@ if(FEATURE_PLUGIN_SSL)
         target_link_libraries(SqueakSSL PRIVATE OpenSSL::SSL OpenSSL::Crypto)
         # The VM builds on an ubuntu with openssl 1.0, thus the ssl plugin links to it.
         # Ship ssl 1.0 with the VM, so the ssl plugin loads
-        if(BUILD_BUNDLE)
+        # (files.pharo.org has no openssl 1.0.2q for Linux on ARM)
+        if(BUILD_BUNDLE AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|armv7l")
             add_third_party_dependency("openssl-1.0.2q")
         endif()
     endif()

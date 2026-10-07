@@ -73,8 +73,9 @@ if(GENERATE_SOURCES)
         elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND (${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64"))
             message("Defining Linux AARCH64 VM to download for code generation")
             set(VMMAKER_VM       ${VMMAKER_DIR}/vm/pharo)
-            set(VM_URL https://files.pharo.org/vm/pharo-spur64-headless/Linux-aarch64/PharoVM-10.3.2-b8793dd2-Linux-aarch64-bin.zip)
-            set(VM_URL_HASH      SHA256=2fe44aab3715f26378796bef835fc1bd51da0baa02aad3fee03610926e80a59f)
+            # 10.3.2 has no Linux-aarch64 build on files.pharo.org: 10.2.1 is the latest one
+            set(VM_URL https://files.pharo.org/vm/pharo-spur64-headless/Linux-aarch64/PharoVM-10.2.1-d417aebd-Linux-aarch64-bin.zip)
+            set(VM_URL_HASH      SHA256=5674071d3f041967d9d821ef9e588e385ba78c463c41884665eda3cd12c8d6a6)
         elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND (${CMAKE_SYSTEM_PROCESSOR} MATCHES "armv7l"))
             message("Defining Linux ARM 32 VM to download for code generation")
             set(VMMAKER_VM       ${VMMAKER_DIR}/vm/pharo)
@@ -113,6 +114,8 @@ if(GENERATE_SOURCES)
             PREFIX "${VMMAKER_DIR}"
             SOURCE_DIR "${VMMAKER_DIR}/vm"
             BUILD_IN_SOURCE True
+            # Ninja needs to know which rule makes the VM the generation depends on
+            BUILD_BYPRODUCTS ${VMMAKER_VM}
             )
     endif()
 

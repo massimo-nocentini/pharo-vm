@@ -65,7 +65,7 @@ endmacro()
 macro(convert_cygwin_path_ifNeeded INPUT OUTVARNAME)
   	# transform the path into a windows path with unix backslashes C:/bla/blu
   	# this is the path required to send as argument to libraries outside of the control of cygwin (like pharo itself)
-	if(WIN AND NOT MSVC)
+	if(CYGWIN)
 		execute_process(
 			COMMAND cygpath ${INPUT} --mixed
 			OUTPUT_VARIABLE ${OUTVARNAME}

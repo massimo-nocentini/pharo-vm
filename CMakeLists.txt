@@ -122,6 +122,17 @@ endif()
 #This needs to be at this point, after setting the toolchain configuration
 project(PharoVM)
 
+# MinGW-w64 toolchains (MSYS2 UCRT64/CLANG64 with their own native CMake, or a
+# MinGW cross toolchain): CMake sets MINGW and WIN32 but neither UNIX nor
+# CYGWIN, so select the GNU-flavoured Windows branch below
+if(MINGW AND NOT CYGWIN)
+  set(WIN 1)
+  # A native CMake reports the host's AMD64, the Cygwin build says x86_64
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|x64)$")
+    set(CMAKE_SYSTEM_PROCESSOR x86_64)
+  endif()
+endif()
+
 include(cmake/versionExtraction.cmake)
 
 set(BUILT_FROM "${PharoVM_VERSION_STRING_FULL} - Commit: ${PharoVM_VERSION_GIT_SHA} - Date: ${PharoVM_VERSION_GIT_COMMIT_DATE}")
