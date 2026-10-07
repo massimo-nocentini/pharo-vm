@@ -6,11 +6,17 @@
 #   PharoVM-<version>-Darwin-x86_64-bin.zip    macos-15-intel
 #   PharoVM-<version>-Darwin-arm64-bin.zip     macos-15
 #   PharoVM-<version>-Windows-x86_64-bin.zip   windows-2025, MSYS2 UCRT64
+#   PharoVM-<version>-WebAssembly-bin.zip      ubuntu-24.04, Emscripten
 #
 # where <version> is the version of the VM without the count of commits
 # since its tag (v12.0.5-beta-4266c4ec4 for v12.0.5-beta+28.4266c4ec4).
-# On a push, when the five jobs succeed, the zips are also published as
+# On a push, when the six jobs succeed, the zips are also published as
 # the GitHub release PharoVM-<version>, tagged at the commit built.
+#
+# The WebAssembly zip is what `make wasm` stages (docs/WebAssembly.md), as
+# docs/ publishes it: the site web/ and the node VM node/, built with the
+# Pharo 15 image, libgit2 and SDL2, with docs/README.md, serve.mjs and
+# node-try.sh.
 #
 # Linux and macOS bundle the prebuilt libraries of files.pharo.org
 # (PHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES), Windows the DLLs of the
@@ -262,10 +268,71 @@ jobs:
           archive: false
           if-no-files-found: error
 
+  wasm:
+    name: WebAssembly
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      # The version the port needs (docs/WebAssembly.md)
+      EMSDK_VERSION: 6.0.10
+      # Pharo15.0-SNAPSHOT build 41, the image of the site in docs/
+      PHARO_IMAGE_URL: https://files.pharo.org/image/150/Pharo15.0-SNAPSHOT.build.41.sha.4e572fed79.arch.64bit.zip
+      PHARO_IMAGE_SHA256: 8ce97d8d8a1b466a4a591d52a8f9f5822e2cff03669eacf91713b8f29db46727
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch the release tags
+        run: |
+          git fetch --no-tags --force https://github.com/pharo-project/pharo-vm.git '+refs/tags/v*:refs/tags/v*'
+          git describe --tags --match 'v[0-9]*'
+
+      - name: Install Emscripten
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          "$RUNNER_TEMP/emsdk/emsdk" install "$EMSDK_VERSION"
+          "$RUNNER_TEMP/emsdk/emsdk" activate "$EMSDK_VERSION"
+
+      - name: Download the Pharo 15 image
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/pharo15.zip" "$PHARO_IMAGE_URL"
+          echo "$PHARO_IMAGE_SHA256  $RUNNER_TEMP/pharo15.zip" | sha256sum -c -
+
+      # make wasm records its settings but does not remember them: give
+      # wasm-check the same ones, or it builds the defaults again
+      - name: Build
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          make wasm WASM_IMAGE_ZIP="$RUNNER_TEMP/pharo15.zip" WASM_LIBGIT2=ON WASM_SDL2=ON
+
+      - name: Run the node test lanes
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          make wasm-check WASM_IMAGE_ZIP="$RUNNER_TEMP/pharo15.zip" WASM_LIBGIT2=ON WASM_SDL2=ON
+
+      - name: Package
+        run: |
+          version=$(cut -d'*' -f1 build-wasm/cmake/version.info | sed -E 's/\+[0-9]+\./-/')
+          sha=$(cut -d'*' -f8 build-wasm/cmake/version.info)
+          name=PharoVM-$version-WebAssembly
+          mkdir -p "dist/$name"
+          cp -R build-wasm/web build-wasm/node docs/serve.mjs docs/node-try.sh "dist/$name/"
+          sed "s/\`61f5d0ef5\`/\`$sha\`/" docs/README.md > "dist/$name/README.md"
+          cd dist && zip -qr "$name-bin.zip" "$name"
+          ls -l "$name-bin.zip"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          path: dist/PharoVM-*-WebAssembly-bin.zip
+          archive: false
+          if-no-files-found: error
+
   release:
     name: Release
     if: github.event_name == 'push'
-    needs: [linux, macos, windows]
+    needs: [linux, macos, windows, wasm]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -288,8 +355,8 @@ jobs:
             mv "$dir"* "zips/$(basename "$dir")"
           done
           ls -l zips
-          test "$(ls zips | wc -l)" -eq 5
-          tags=$(ls zips | sed -E 's/-(Linux|Darwin|Windows)-[^-]+-bin\.zip$//' | sort -u)
+          test "$(ls zips | wc -l)" -eq 6
+          tags=$(ls zips | sed -E 's/-(Linux-[^-]+|Darwin-[^-]+|Windows-[^-]+|WebAssembly)-bin\.zip$//' | sort -u)
           test "$(echo "$tags" | wc -l)" -eq 1
           tag=$tags
           if gh release view "$tag" > /dev/null 2>&1; then
