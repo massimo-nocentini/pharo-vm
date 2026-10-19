@@ -11,12 +11,12 @@ each prepared for the world page:
 
 The site also serves the `.sources` of Pharo 15 build 41 (`4e572fed79`),
 its image before, for the images saved in a browser from that one.  The
-VMs have the FFI (libffi), FreeType, cairo, libgit2 and SDL2 built in.
+VMs have the FFI (libffi), FreeType, cairo and libgit2 built in.
 `docs/WebAssembly.md` in the repository says how it is made and how it
 works.
 
     web/            the static site: the Console page with its Notebook tab,
-                    the world page and the world page through SDL2
+                    and the world page
     node/           the command-line VM for node (pharo, pharo.js, pharo.wasm,
                     and the empty files the image looks for as its libraries)
     serve.mjs       a static HTTP server for web/ (node, no dependencies)
@@ -24,9 +24,8 @@ works.
 
 GitHub Pages serves the site of the latest build of `pharo-12-wasm` from
 the root of branch `gh-pages`; where this folder is served, the pages are
-[web/](web/) (the Console and the Notebook), [web/world.html](web/world.html)
-(the Pharo world) and [web/sdl.html](web/sdl.html) (the Pharo world through
-SDL2).
+[web/](web/) (the Console and the Notebook) and
+[web/world.html](web/world.html) (the Pharo world).
 
 ## In a browser
 
@@ -56,10 +55,6 @@ then open:
   Playground), type `3 + 4` and press Ctrl+P (Cmd+P on macOS).  Alt+. or
   the Stop button interrupts a busy evaluation and opens a debugger on it.
   Roassal and the other Athens views draw through cairo.
-- http://localhost:8080/sdl.html — the same world drawn as the desktop VMs
-  draw it, through OSSDL2Driver and SDL2; it runs stock images too,
-  unprepared, but keeps nothing in the browser and costs several times
-  the idle time of the world page.
 
 ### Images
 
@@ -93,8 +88,8 @@ repositories can be cloned, and pushing is not supported.
 
 ### Your own image
 
-The Console, the world page and sdl.html have an Open button, and take a
-drop of files anywhere on the page:
+The Console and the world page have an Open button, and take a drop of
+files anywhere on the page:
 
 - a Pharo zip as files.pharo.org gives them, as it is, for example
   https://files.pharo.org/image/150/latest-64.zip (Pharo 15) or
@@ -141,7 +136,7 @@ image:
 - The interpreter only (no JIT): about 5 to 6 times slower than the
   native StackVM, 14 to 27 times slower than the native JIT.
 - The FFI reaches only the libraries and functions built into the VM
-  (libffi, FreeType, cairo, libgit2, SDL2 and the C library); no
+  (libffi, FreeType, cairo, libgit2 and the C library); no
   name resolution, fork, OSProcess, SSL, SSH or threads.
 - Old space is at most 512 MiB; the Notebook's VM takes as much memory
   again as the Console's.
