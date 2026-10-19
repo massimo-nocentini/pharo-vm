@@ -46,7 +46,24 @@
 #             stock image initializes libgit2 at each start, and the error
 #             of that, with git2 hidden, ends the VM with status 1 (the
 #             image's StartupUIManager defers it to an action that quits),
-#             before the script runs or after it, as the image goes.
+#             before the script runs or after it, as the image goes;
+#   redirect  the smart-HTTP transport of the VM (src/emscripten/gitSupport.c,
+#             WASM_LIBGIT2_HTTP), which the node VM makes with curl:
+#             tests/wasm/st/git-http-clone.st clones with Iceberg from
+#             tests/wasm/lib/git-http.mjs, a git server on 127.0.0.1 (`git
+#             http-backend') in its redirect mode, the repository r named
+#             without its .git, as GitLab and Codeberg take it: the clone must
+#             check out master, with its one commit, and the server must have
+#             got the GET of r/info/refs (which it redirects to r.git) and
+#             then the POST of the pack to r.git/git-upload-pack, never to
+#             r/git-upload-pack (which it refuses with 422): the transport
+#             takes the redirect of the refs for the next requests;
+#   missing   in the same run, a clone of a repository that is not there must
+#             fail with the transport's 'git http: no git repository at
+#             <url> (404)', after a single request (GIT_ERROR_HTTP: Iceberg
+#             does not retry it), and the VM must go on.
+#             Both are skipped without the transport (WASM_LIBGIT2_HTTP=OFF),
+#             curl, or git with `git http-backend'.
 #
 # Every run must exit with 0, print no line of the guard of the callouts
 # ('FFI callout failed, its declaration does not match ...' or 'FFI callout
@@ -134,6 +151,13 @@ unresolved() (
 hidden() (
     PHARO_WASM_FFI_HIDE=git2 WASM_ICEFLOW_STEPS='libgit2 version,create repo,after'
     export PHARO_WASM_FFI_HIDE WASM_ICEFLOW_STEPS
+    vm "$WASM_DIR/node/pharo"
+)
+# (the clones over HTTP, from the git server whose URL is $git_url)
+http_clone() (
+    script=$SRCDIR/tests/wasm/st/git-http-clone.st
+    WASM_GIT_HTTP_REMOTE=${git_url}r WASM_GIT_HTTP_MISSING=${git_url}nope
+    export WASM_GIT_HTTP_REMOTE WASM_GIT_HTTP_MISSING
     vm "$WASM_DIR/node/pharo"
 )
 
@@ -333,6 +357,92 @@ else
 	    *) fail hidden "with git2 hidden, the version of libgit2 did not fail with a SymbolNotFoundError: '$(echo "$version" | cut -c 1-200)'" ;;
 	esac
     }
+fi
+
+# The smart-HTTP transport: a git server of the check's own (git-http.mjs,
+# its log in server.log, a line '<server> <method> <url> <status>' a
+# request), stopped at the end of the check, or of the lane
+server_pid=
+stop_server() {
+    if test -n "$server_pid"; then
+	kill "$server_pid" 2>/dev/null
+	wait "$server_pid" 2>/dev/null
+	server_pid=
+    fi
+}
+trap stop_server EXIT
+# start_server: starts it in the current directory, with the repository r,
+# and sets git_url; false when it did not start (see server.err)
+start_server() {
+    "$NODE" "$SRCDIR/tests/wasm/lib/git-http.mjs" repos --redirect --seed r --log server.log \
+	>server.out 2>server.err </dev/null &
+    server_pid=$!
+    waited=0
+    while ! grep -q '^CORS proxy ' server.out 2>/dev/null; do
+	if ! kill -0 "$server_pid" 2>/dev/null || test "$waited" -ge 300; then
+	    stop_server
+	    return 1
+	fi
+	waited=$((waited + 1))
+	sleep 0.1
+    done
+    git_url=$(sed -n 's/^git server \([^ ]*\).*/\1/p' server.out)
+    test -n "$git_url"
+}
+# (whether node finds git with `git http-backend', as the server needs; the
+# module is named in the environment, since one named by process.argv[1]
+# would take itself for the program and serve)
+has_git() {
+    GIT_HTTP_MJS=$SRCDIR/tests/wasm/lib/git-http.mjs "$NODE" -e 'import(require("url").pathToFileURL(process.env.GIT_HTTP_MJS).href)
+	.then(m => process.exit(m.hasGit() ? 0 : 1), () => process.exit(1))'
+}
+if ! grep -Eiq '^WASM_LIBGIT2_HTTP:BOOL=(ON|TRUE|YES|Y|1)$' "$WASM_DIR/cmake/CMakeCache.txt" 2>/dev/null; then
+    skip_check redirect "no smart-HTTP transport (WASM_LIBGIT2_HTTP=OFF)"
+    skip_check missing "no smart-HTTP transport (WASM_LIBGIT2_HTTP=OFF)"
+elif ! command -v curl >/dev/null 2>&1; then
+    skip_check redirect "no curl, which the node VM makes its HTTP requests with"
+    skip_check missing "no curl, which the node VM makes its HTTP requests with"
+elif ! has_git; then
+    skip_check redirect "no git, or no git http-backend, to serve the repositories"
+    skip_check missing "no git, or no git http-backend, to serve the repositories"
+else
+    fresh http
+    home
+    mkdir -p repos
+    if ! start_server; then
+	checks=$((checks + 1))
+	fail redirect "the git server did not start: $(head -n 1 server.err | cut -c 1-200)"
+    elif run redirect http_clone && quiet redirect; then
+	stop_server
+	# (the requests of r, and of nope, in the order the server answered them)
+	grep -E '^git [A-Z]+ /r(\.git)?/' server.log >r.log
+	grep -E '^git [A-Z]+ /nope(\.git)?/' server.log >nope.log
+	refs_at=$(grep -n -m 1 '^git GET /r/info/refs?service=git-upload-pack 301$' r.log | cut -d : -f 1)
+	pack_at=$(grep -n -m 1 '^git POST /r\.git/git-upload-pack 200$' r.log | cut -d : -f 1)
+	if test "x$(value 'redirect clone')" != xmaster || test "x$(value 'redirect log')" != xfirst; then
+	    fail redirect "the clone of ${git_url}r: '$(value 'redirect clone' | cut -c 1-200)', its log '$(value 'redirect log' | cut -c 1-100)'"
+	elif test -z "$refs_at" || test -z "$pack_at" || test "$pack_at" -lt "$refs_at"; then
+	    fail redirect "the server did not get the GET of r/info/refs, then the POST of r.git/git-upload-pack: $(tr '\n' ';' <r.log | cut -c 1-400)"
+	elif grep -q '^git POST /r/' r.log; then
+	    fail redirect "the transport did not take the redirect for the pack: $(tr '\n' ';' <r.log | cut -c 1-400)"
+	else
+	    ok redirect "$(tr '\n' ';' <r.log | cut -c 1-300)"
+	fi
+	checks=$((checks + 1))
+	missing=$(value 'missing clone')
+	case $missing in
+	    "error "*"git http: no git repository at ${git_url}nope/info/refs (404)")
+		if test "$(grep -c '' nope.log)" -ne 1; then
+		    fail missing "expected a single request of nope, got: $(tr '\n' ';' <nope.log | cut -c 1-300)"
+		elif test "x$(value after)" != x7; then
+		    fail missing "the VM did not go on after the clone: after is '$(value after)'"
+		else
+		    ok missing "$(echo "$missing" | cut -c 1-120)"
+		fi ;;
+	    *) fail missing "the clone of ${git_url}nope did not fail with the 404 of the transport: '$(echo "$missing" | cut -c 1-200)'" ;;
+	esac
+    fi
+    stop_server
 fi
 
 # The advice of a native VM: the same flow on the stock image, on a VM that

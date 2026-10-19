@@ -14,7 +14,7 @@
 //   commitTo(root, name, files, message)
 //                       adds a commit of FILES to the branch master of
 //                       ROOT/NAME.git; answers its id
-//   startGitHttp(root, {proxyHosts})
+//   startGitHttp(root, {proxyHosts, redirect, onLog})
 //                       starts two servers on 127.0.0.1, each on a port of
 //                       its own, and answers {git, proxy, log, close()}:
 //
@@ -23,7 +23,13 @@
 //             them (GIT_HTTP_EXPORT_ALL), for fetches only (no push).  It
 //             answers no CORS headers, so that a page of another origin
 //             cannot read it: what a page gets from a git server of its
-//             own, such as github.com;
+//             own, such as github.com.
+//             With redirect: true it also does what GitLab and Codeberg do
+//             with a remote named without its .git: for a repository
+//             ROOT/<repo>.git, GET /<repo>/info/refs?... answers 301 to
+//             /<repo>.git/info/refs?..., and POST /<repo>/git-upload-pack
+//             answers 422, so that a client that does not take the
+//             redirect for its next requests fails;
 //     proxy   the URL of the CORS proxy, ending in /: a request for
 //             <proxy><host>/<path> goes to http://<host>/<path>, as the
 //             transport of the VM asks for it (the proxy, then the URL of
@@ -31,19 +37,31 @@
 //             with the CORS headers that let any page read it, and the
 //             preflights (OPTIONS) are answered.  It goes only to the hosts
 //             of proxyHosts (host:port), by default the git server's, and
-//             answers 403 to any other: it is no open proxy;
+//             answers 403 to any other: it is no open proxy.  It follows no
+//             redirect: a Location to one of those hosts comes back made a
+//             path of the proxy (/<host>/<path>), as isomorphic-git's proxy
+//             makes it, so that the browser follows it through the proxy;
 //     log     what each server got, in order: log.git and log.proxy are
-//             arrays of {method, url, origin, proxied}, url the path and
-//             query that it got, origin the Origin header (a browser's
-//             request has one), proxied whether the proxy forwarded it;
+//             arrays of {method, url, origin, proxied, status}, url the
+//             path and query that it got, origin the Origin header (a
+//             browser's request has one), proxied whether the proxy
+//             forwarded it, status what it answered (once it has);
+//             onLog(server, entry), if given, is called with each entry
+//             once it is answered, server 'git' or 'proxy';
 //     close() stops both.
 //
-// Run as a program, it serves ROOT until it is stopped, for a try by hand:
+// Run as a program, it serves ROOT until it is stopped, for a try by hand,
+// and for tests/wasm/lanes/66-libgit2.sh:
 //
-//   node tests/wasm/lib/git-http.mjs ROOT
+//   node tests/wasm/lib/git-http.mjs ROOT [--redirect] [--seed NAME]... [--log FILE]
 //
-// prints the URLs of the git server and of the proxy.  Nothing here needs
-// the network: both servers listen on 127.0.0.1.
+// prints the URLs of the git server and of the proxy, on lines 'git server
+// <url> ...' and 'CORS proxy <url>', once both listen.  --seed NAME first
+// makes ROOT/NAME.git, a repository of Iceberg's layout (its code in src,
+// in Tonel) with one commit, 'first'; --redirect is the option above; --log
+// FILE appends a line '<server> <method> <url> <status>' to FILE for each
+// request answered.  Nothing here needs the network: both servers listen
+// on 127.0.0.1.
 
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -176,19 +194,44 @@ const CORS = {
   'access-control-max-age': '600',
 };
 
-export async function startGitHttp(root, { proxyHosts } = {}) {
+// With redirect: what the git server answers itself for a remote named
+// without its .git (see above), or null for git http-backend to answer
+function renamed(root, request) {
+  const [pathInfo, query] = request.url.split('?');
+  const m = /^\/(.+)\/(info\/refs|git-upload-pack)$/.exec(pathInfo);
+  if (!m || m[1].endsWith('.git') || m[1].split('/').includes('..')) return null;
+  const repo = decodeURIComponent(m[1]);
+  if (!fs.existsSync(path.join(root, repo + '.git'))) return null;
+  if (m[2] === 'info/refs' && request.method === 'GET')
+    return { status: 301, headers: { location: `/${m[1]}.git/info/refs${query === undefined ? '' : '?' + query}`,
+                                     'content-type': 'text/plain' },
+             body: Buffer.from('moved to ' + m[1] + '.git\n') };
+  if (m[2] === 'git-upload-pack' && request.method === 'POST')
+    return { status: 422, headers: { 'content-type': 'text/plain' },
+             body: Buffer.from('git-http.mjs: ' + m[1] + ' is ' + m[1] + '.git, its redirect was not taken\n') };
+  return null;
+}
+
+export async function startGitHttp(root, { proxyHosts, redirect = false, onLog } = {}) {
   const log = { git: [], proxy: [] };
+  const answered = (server, entry, status) => {
+    entry.status = status;
+    if (onLog) onLog(server, entry);
+  };
   const gitServer = http.createServer(async (request, response) => {
+    const entry = { method: request.method, url: request.url, origin: request.headers.origin || null,
+                    proxied: request.headers['x-git-http-proxy'] === '1' };
     try {
       const data = await body(request);
-      log.git.push({ method: request.method, url: request.url, origin: request.headers.origin || null,
-                     proxied: request.headers['x-git-http-proxy'] === '1' });
-      const r = await backend(root, request, data);
+      log.git.push(entry);
+      const r = (redirect && renamed(root, request)) || await backend(root, request, data);
       response.writeHead(r.status, r.headers);
       response.end(r.body);
+      answered('git', entry, r.status);
     } catch (e) {
       response.writeHead(500, { 'content-type': 'text/plain' });
       response.end(String(e && e.message || e));
+      answered('git', entry, 500);
     }
   });
   const gitUrl = await listen(gitServer);
@@ -198,13 +241,15 @@ export async function startGitHttp(root, { proxyHosts } = {}) {
     log.proxy.push(entry);
     if (request.method === 'OPTIONS') {
       response.writeHead(204, CORS);
-      return response.end();
+      response.end();
+      return answered('proxy', entry, 204);
     }
     // <proxy><host>/<path>: the URL of the remote without its scheme
     const m = /^\/([^/?#]+)(\/.*)?$/.exec(request.url);
     if (!m || !allowed.has(m[1])) {
       response.writeHead(403, { ...CORS, 'content-type': 'text/plain' });
-      return response.end('git-http.mjs: this proxy goes only to ' + [...allowed].join(', '));
+      response.end('git-http.mjs: this proxy goes only to ' + [...allowed].join(', '));
+      return answered('proxy', entry, 403);
     }
     try {
       const data = await body(request);
@@ -216,12 +261,22 @@ export async function startGitHttp(root, { proxyHosts } = {}) {
       });
       const answer = Buffer.from(await r.arrayBuffer());
       entry.proxied = true;
-      response.writeHead(r.status, { ...CORS, 'content-type': r.headers.get('content-type') || 'application/octet-stream',
-                                     'cache-control': 'no-cache' });
+      const answers = { ...CORS, 'content-type': r.headers.get('content-type') || 'application/octet-stream',
+                        'cache-control': 'no-cache' };
+      // (a redirect stays in the proxy: http://<host>/<path> becomes
+      // /<host>/<path>; one to a host it does not go to is not passed on)
+      const location = r.headers.get('location');
+      if (location) {
+        const to = new URL(location, 'http://' + m[1] + (m[2] || '/'));
+        if (to.protocol === 'http:' && allowed.has(to.host)) answers.location = '/' + to.host + to.pathname + to.search;
+      }
+      response.writeHead(r.status, answers);
       response.end(answer);
+      answered('proxy', entry, r.status);
     } catch (e) {
       response.writeHead(502, { ...CORS, 'content-type': 'text/plain' });
       response.end('git-http.mjs: ' + String(e && e.message || e));
+      answered('proxy', entry, 502);
     }
   });
   const proxyUrl = await listen(proxyServer);
@@ -235,11 +290,32 @@ export async function startGitHttp(root, { proxyHosts } = {}) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
-  const root = path.resolve(process.argv[2] || '.');
+  const args = process.argv.slice(2), seeds = [];
+  let root = null, redirect = false, logFile = null;
+  while (args.length) {
+    const a = args.shift();
+    if (a === '--redirect') redirect = true;
+    else if (a === '--seed' && args.length) seeds.push(args.shift());
+    else if (a === '--log' && args.length) logFile = path.resolve(args.shift());
+    else if (!a.startsWith('--') && root === null) root = a;
+    else {
+      console.error('usage: node git-http.mjs ROOT [--redirect] [--seed NAME]... [--log FILE]');
+      process.exit(2);
+    }
+  }
+  root = path.resolve(root || '.');
   if (!hasGit()) {
     console.error('git-http.mjs: no git, or no git http-backend');
     process.exit(1);
   }
-  const s = await startGitHttp(root);
+  // (the layout of a repository of Iceberg: its code in src, in Tonel)
+  for (const name of seeds)
+    seedRepository(root, name, {
+      '.project': "{\n\t'srcDirectory' : 'src'\n}\n",
+      'src/.properties': '{\n\t#format : #tonel\n}\n',
+      'README.md': 'git-http.mjs\n',
+    }, 'first');
+  const onLog = logFile && ((server, e) => fs.appendFileSync(logFile, `${server} ${e.method} ${e.url} ${e.status}\n`));
+  const s = await startGitHttp(root, { redirect, onLog });
   console.log(`git server ${s.git} (the repositories of ${root})\nCORS proxy ${s.proxy}`);
 }
