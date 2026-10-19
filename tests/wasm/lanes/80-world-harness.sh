@@ -12,13 +12,16 @@
 # of tests/wasm/st/world-probe.st saying what the world shows.  It prints a
 # table of timings; the median keystroke-to-present must be under 100 ms.
 # An engine-level failure on its stderr, where it also writes what the
-# emscripten runtime said, fails the lane too.  Last, with a host Pharo,
+# emscripten runtime said, fails the lane too.  It then runs again on each
+# other world image of the catalog (manifest.images, the extra images of
+# WASM_EXTRA_IMAGES with world: true), with WORLD_IMAGE_ID, under the same
+# checks.  Last, with a host Pharo,
 # tests/wasm/st/osweb-native.st drives the image side natively, on a copy
 # of the prepared image (build-wasm/image/web), whose primitives then fail
 # and fall back.  Without a world image (WASM_WORLD=OFF, or no host Pharo
 # to prepare it) only the keymap is checked, and the lane skips.
-# keymap.test.mjs is stopped after WASM_CHECK_TIMEOUT (120) seconds, the
-# harness and each native run after 600.
+# keymap.test.mjs is stopped after WASM_CHECK_TIMEOUT (120) seconds, each
+# run of the harness and each native run after 600.
 #
 # Environment (from make wasm-check): NODE, WASM_DIR, HOST_PHARO, SRCDIR,
 # TEST_DIR; and WASM_CHECK_TIMEOUT.
@@ -49,19 +52,35 @@ if ! grep -q '"world": *true' "$manifest"; then
     exit 77
 fi
 
+# harness ERR [ID]: world-harness.mjs on the default image, or on the image ID
+# of the catalog, its stderr into ERR; sets status to 1 when it fails
+harness() {
+    harness_status=0
+    limit 600 env WORLD_IMAGE_ID="${2:-}" "$NODE" "$SRCDIR/tests/wasm/world-harness.mjs" "$WASM_DIR/web" \
+        2>"$1" || harness_status=$?
+    if test "$harness_status" -eq 124; then
+        echo "FAIL 80-world-harness: world-harness.mjs${2:+ ($2)} timed out after 600 s"
+    fi
+    if test "$harness_status" -ne 0; then status=1; fi
+    if grep -E 'RuntimeError|RangeError|Aborted|unreachable|signature_mismatch|unsupported syscall' "$1" >/dev/null; then
+        echo "FAIL 80-world-harness: engine error on stderr${2:+ ($2)}"
+        status=1
+    fi
+    cat "$1" >&2
+}
+
 echo "80-world-harness: world-harness.mjs"
-err=$TEST_DIR/80-world-harness.err
 status=0
-limit 600 "$NODE" "$SRCDIR/tests/wasm/world-harness.mjs" "$WASM_DIR/web" 2>"$err" || status=$?
-if test "$status" -eq 124; then
-    echo "FAIL 80-world-harness: world-harness.mjs timed out after 600 s"
-fi
-if test "$status" -ne 0; then status=1; fi
-if grep -E 'RuntimeError|RangeError|Aborted|unreachable|signature_mismatch|unsupported syscall' "$err" >/dev/null; then
-    echo "FAIL 80-world-harness: engine error on stderr"
-    status=1
-fi
-cat "$err" >&2
+harness "$TEST_DIR/80-world-harness.err"
+
+# The other world images of the catalog
+ids=$("$NODE" -e '
+const m = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+for (const i of m.images || []) if (!i.default && i.world) console.log(i.id);' "$manifest")
+for id in $ids; do
+    echo "80-world-harness: world-harness.mjs, image $id"
+    harness "$TEST_DIR/80-world-harness-$id.err" "$id"
+done
 
 # The image side natively.  The script forces OSWebDriver and saves the image
 # it runs in, so it gets a copy; the first run makes the copy boot through

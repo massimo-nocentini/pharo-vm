@@ -1,10 +1,13 @@
 // world-harness.mjs - the Pharo world of the world page, in node, without a browser
 //
-// usage: node [v8 flags] world-harness.mjs WEB_DIR
+// usage: [WORLD_IMAGE_ID=<id>] node [v8 flags] world-harness.mjs WEB_DIR
 //
 // WEB_DIR is a built web directory (build-wasm/web) whose manifest.json says
-// world: true, so that its image is the prepared world image.  The harness
-// boots it as the world page does: pharo-web.js (the MEMORY64=2 module of the
+// world: true, so that its image is the prepared world image; or, with
+// WORLD_IMAGE_ID, whose catalog (manifest.images) has an image of that id
+// with world: true, which the harness then runs instead of the default one
+// (its files, as PharoCatalog.find(manifest, id).files gives them to the
+// worker).  The harness boots it as the world page does: pharo-web.js (the MEMORY64=2 module of the
 // pages) through packaging/emscripten/web/vm-driver.js, the files of the
 // manifest in MEMFS (with the empty placeholders of manifest.libraries, as
 // vm-worker.js writes them, for the image to find libcairo.so.2), and
@@ -56,16 +59,25 @@ const MOVE = 1, PRESS = 2, RELEASE = 3, KEY_DOWN = 5, KEY_UP = 6, TEXT = 7, SAVE
 // What onDiag must not say: an engine error, or an exception of the display
 const ENGINE_ERRORS = /RuntimeError|RangeError|Aborted|unreachable|signature_mismatch|unsupported syscall|webDisplay\./;
 
-if (!manifest.world) {
-  console.log(`${webDir}/manifest.json has no world image (world: false)`);
+// The image: the default one, or the one of WORLD_IMAGE_ID in the catalog
+const imageId = process.env.WORLD_IMAGE_ID || '';
+const entry = imageId ? (manifest.images || []).find(i => i.id === imageId) : null;
+if (imageId && !entry) {
+  console.log(`${webDir}/manifest.json has no image ${imageId} in its catalog`);
   process.exit(1);
 }
+if (!(entry ? entry.world : manifest.world)) {
+  console.log(`${webDir}/manifest.json has no world image${imageId ? ' ' + imageId : ''} (world: false)`);
+  process.exit(1);
+}
+const imageFiles = entry ? entry.files : manifest.files;
+if (imageId) console.log(`image ${imageId}: ${entry.label}${entry.pharoBuild ? ' build ' + entry.pharoBuild : ''}`);
 
 // The files of the world page, in MEMFS: what the worker writes there,
 // the placeholders of the libraries of the FFI first
 function worldFiles() {
   const files = (manifest.libraries || []).map(name => ({ path: '/pharo/' + name, data: new Uint8Array(0) }));
-  for (const f of manifest.files) {
+  for (const f of imageFiles) {
     const data = fs.readFileSync(path.join(webDir, f.url));
     files.push({ path: '/pharo/' + f.path, data: data[0] === 0x1f && data[1] === 0x8b ? zlib.gunzipSync(data) : data });
   }
