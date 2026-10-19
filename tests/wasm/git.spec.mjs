@@ -39,6 +39,8 @@
 //     image's own LGit and the transport of the VM: each request of git's
 //     smart HTTP is a synchronous XMLHttpRequest of the worker), and every
 //     request that reached the git server came through the proxy;
+//   - a remote whose URL has a user name and a token clones through it
+//     too, and the proxy never sees them;
 //   - after a commit on the server, Iceberg fetches it through the proxy;
 //   - a remote named without its .git, which the git server redirects,
 //     clones through the proxy: the browser follows the redirect through
@@ -55,7 +57,7 @@
 // console error or a failed request, which name the git server) are what
 // the check of None expects: they are taken out of the errors of pw.mjs,
 // whose last check is then that there were no others.  With that last
-// check, 11 checks for each browser.
+// check, 12 checks for each browser.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -285,6 +287,17 @@ await run(async t => {
     assert(proxied().length > 0 && proxied().every(r => r.origin === pageOrigin),
            'the proxy got the requests of the page only: ' + JSON.stringify(proxied()));
     console.log(`#   ${t.name}: cloned in ${ms} ms, ${asked.length} requests through the proxy`);
+  });
+
+  await check('a remote with a user name and a token in its URL clones through the proxy, which never sees them', async () => {
+    const withUser = server.git.replace(/^(https?:\/\/)/, '$1git-spec-user:s3cret-token@') + name + '.git';
+    proxyAt = server.log.proxy.length;
+    const before = server.log.git.length;
+    const out = await evalTo(clone('with-user', withUser), /'master'|'error [^']*'/);
+    assert(/'master'/.test(out), 'the clone: ' + out.trim().slice(-300));
+    assert(proxied().length > 0 && proxied().every(r => !/git-spec-user|s3cret-token/.test(r.url)),
+           'the proxy got no user name or token: ' + JSON.stringify(proxied().map(r => r.url)));
+    assert(server.log.git.slice(before).every(r => r.proxied && !/s3cret-token/.test(r.url)), 'nor the git server');
   });
 
   await check('after a commit on the server, Iceberg fetches it through the proxy', async () => {

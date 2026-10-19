@@ -45,17 +45,21 @@
  * PHARO_WASM_GIT_PROXY (node).  The pages give the site's default
  * (manifest.gitProxyDefault, the build's WASM_GIT_PROXY) unless the user
  * chose another proxy, or none, in Settings.  The proxy sees everything that
- * goes through it, the code and any credentials in the remote's URL: it is
- * never taken from the URL of a page.  Without a proxy the request goes to
- * the remote itself, whose response a browser gives only when the remote is
- * of the page's origin or answers CORS.
+ * goes through it, the code and the URLs of the repositories: it is never
+ * taken from the URL of a page, and the user name and password of a
+ * remote's URL (https://user:token@host/...) never go to it (the site's
+ * default is a public proxy, which the user did not choose): the request
+ * through a proxy is made without them.  Without a proxy the request goes
+ * to the remote itself, whose response a browser gives only when the remote
+ * is of the page's origin or answers CORS.
  *
- * Redirects.  The browser (or curl -L) follows them, and the request
- * remembers where its response came from: XMLHttpRequest's responseURL, or
- * curl's url_effective, less the proxy's prefix (with the remote's scheme
- * put back; a final URL is compared with the prefix as it is, then as the
- * browser writes it, and one outside the prefix is not the remote's, and is
- * left alone).  When the advertisement of the refs (GET .../info/refs?service=)
+ * Redirects.  The browser (or curl -L, which goes from an https:// URL only
+ * to another https:// one, as libgit2's own transport does) follows them,
+ * and the request remembers where its response came from: XMLHttpRequest's
+ * responseURL, or curl's url_effective, less the proxy's prefix (with the
+ * remote's scheme put back; a final URL is compared with the prefix as it
+ * is, then as the browser writes it, and one outside the prefix is not the
+ * remote's, and is left alone).  When the advertisement of the refs (GET .../info/refs?service=)
  * answered 200 from another URL than it asked, one that ends with the same
  * path, and not an https:// remote gone to http://, the subtransport keeps
  * that URL, less the path, as the remote's (from, to), and the next requests
@@ -148,8 +152,10 @@ EM_JS(int, gitHttpRequest, (const char *method, const char *url, const char *con
 		return m ? { scheme: m[1].toLowerCase(), host: m[2].replace(/^.*@/, "") } : null;
 	};
 	var remote = parts(url);
+	/* the URL without its user info, which never goes to a proxy */
+	var bare = url.replace(/^(https?:[/][/])[^/?#]*@/i, "$1");
 	var state = Module['pharoGitHttp'] = { body: null, type: "", error: "", url: url, finalUrl: "",
-		host: remote ? remote.host : "", proxyOrigin: "" };
+		host: remote ? remote.host : "", proxyOrigin: "", withoutUser: false };
 	var status = (function () {
 		var prefix = "", requested = url;
 		/* no response: -1 without a proxy, -2 through one, and what to do */
@@ -185,7 +191,9 @@ EM_JS(int, gitHttpRequest, (const char *method, const char *url, const char *con
 				}
 			if (!within(final))
 				return url;
-			return (remote ? remote.scheme : "https:") + "//" + final.slice(prefix.length);
+			final = (remote ? remote.scheme : "https:") + "//" + final.slice(prefix.length);
+			/* (asked without the user info: the same URL) */
+			return final == bare ? url : final;
 		};
 		if (proxy) {
 			var normal = null;
@@ -199,7 +207,8 @@ EM_JS(int, gitHttpRequest, (const char *method, const char *url, const char *con
 			}
 			state.proxyOrigin = normal.origin;
 			prefix = normal.href + (normal.href.endsWith("/") ? "" : "/");
-			requested = prefix + url.replace(/^https?:[/][/]/i, "");
+			state.withoutUser = bare != url;
+			requested = prefix + bare.replace(/^https?:[/][/]/i, "");
 		}
 		try {
 			if (typeof XMLHttpRequest != "undefined") {
@@ -223,6 +232,9 @@ EM_JS(int, gitHttpRequest, (const char *method, const char *url, const char *con
 			 * content type and the status on three lines of their own */
 			var args = ["-s", "-L", "-X", method, "-o", "-", "-w", "\n%{url_effective}\n%{content_type}\n%{http_code}",
 				"-H", "Accept: " + accept];
+			/* (an https:// request is never redirected to http://) */
+			if (/^https:/i.test(requested))
+				args.push("--proto-redir", "=https");
 			if (contentType)
 				args.push("-H", "Content-Type: " + contentType);
 			if (data)
@@ -285,7 +297,8 @@ EM_JS(void, gitHttpDescribe, (int status, char *message, int size), {
 	var text;
 	if (status == 401)
 		text = "git http: " + host + " answered 401: the repository does not exist or is private"
-			+ " (this VM sends no credentials)";
+			+ (state.withoutUser ? " (this VM sends no credentials: the user name and password of the remote's URL"
+				+ " never go through the proxy " + origin + ")" : " (this VM sends no credentials)");
 	else if (status == 403 && origin)
 		text = "git http: the proxy " + origin + " refused the request to " + host
 			+ " (403): it forwards only git requests of public repositories";
