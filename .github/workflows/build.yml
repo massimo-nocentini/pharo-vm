@@ -14,10 +14,14 @@
 # the GitHub release PharoVM-<version>, tagged at the commit built.
 #
 # The WebAssembly zip is what `make wasm` stages (docs/WebAssembly.md): the
-# site web/ and the node VM node/, built with the Pharo 15 image, libgit2
-# and SDL2, with serve.mjs and packaging/emscripten/dist (README.md, which
-# names the commit, and node-try.sh).  On a push to pharo-12-wasm, its web/
-# is also deployed to the root of branch gh-pages, which GitHub Pages serves.
+# site web/ and the node VM node/, built with libgit2 and SDL2 and the images
+# of the site, Pharo 15 (the default), 14 and 13.1, each prepared for the
+# world, and the .sources of the Pharo 15 build that the site had before
+# (for the images saved in a browser from it), with serve.mjs and
+# packaging/emscripten/dist (README.md, which names the commit, and
+# node-try.sh).  On a push to pharo-12-wasm, its web/ is also deployed to
+# the root of branch gh-pages, which GitHub Pages serves, once every file of
+# its manifest is checked (and small enough for git).
 #
 # Linux and macOS bundle the prebuilt libraries of files.pharo.org
 # (PHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES), Windows the DLLs of the
@@ -277,9 +281,16 @@ jobs:
     env:
       # The version the port needs (docs/WebAssembly.md)
       EMSDK_VERSION: 6.0.10
-      # Pharo15.0-SNAPSHOT build 41, the image of the site in docs/
-      PHARO_IMAGE_URL: https://files.pharo.org/image/150/Pharo15.0-SNAPSHOT.build.41.sha.4e572fed79.arch.64bit.zip
-      PHARO_IMAGE_SHA256: 8ce97d8d8a1b466a4a591d52a8f9f5822e2cff03669eacf91713b8f29db46727
+      # The images of the site (docs/WebAssembly.md, Pharo versions): 15 is the default
+      PHARO15_URL: https://files.pharo.org/image/150/Pharo15.0-SNAPSHOT.build.50.sha.b85960fcc6.arch.64bit.zip
+      PHARO15_SHA256: 27164cb9c16685c108df4d2b11106fd6d26a62f37b3e39bb7bfabd176336f036
+      PHARO14_URL: https://files.pharo.org/image/140/Pharo14.0-SNAPSHOT.build.785.sha.74f3a1b398.arch.64bit.zip
+      PHARO14_SHA256: 5396878ea912f87ce99fdbb7137e01a8122745b690a2ee6949338c0aa438b0ea
+      PHARO13_URL: https://files.pharo.org/image/130/Pharo13.0-SNAPSHOT.build.749.sha.d7c6f761d5.arch.64bit.zip
+      PHARO13_SHA256: 31991e50d6ddbb19170d35fabc6d1fb0a8e95ea311b69b079109426e3fec76ae
+      # Pharo 15 build 41, the image of the site before: only its .sources is staged, for the images saved on it
+      PHARO15B41_URL: https://files.pharo.org/image/150/Pharo15.0-SNAPSHOT.build.41.sha.4e572fed79.arch.64bit.zip
+      PHARO15B41_SHA256: 8ce97d8d8a1b466a4a591d52a8f9f5822e2cff03669eacf91713b8f29db46727
     steps:
       - uses: actions/checkout@v7
         with:
@@ -297,10 +308,19 @@ jobs:
           "$RUNNER_TEMP/emsdk/emsdk" install "$EMSDK_VERSION"
           "$RUNNER_TEMP/emsdk/emsdk" activate "$EMSDK_VERSION"
 
-      - name: Download the Pharo 15 image
+      # (under their own names, from which stage.mjs reads the build of each)
+      - name: Download the Pharo images
         run: |
-          curl -fsSL -o "$RUNNER_TEMP/pharo15.zip" "$PHARO_IMAGE_URL"
-          echo "$PHARO_IMAGE_SHA256  $RUNNER_TEMP/pharo15.zip" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/images" "$RUNNER_TEMP/legacy"
+          for v in 15 14 13 15B41; do
+            eval "url=\$PHARO${v}_URL sha=\$PHARO${v}_SHA256"
+            f="$RUNNER_TEMP/images/$(basename "$url")"
+            curl -fsSL -o "$f" "$url"
+            echo "$sha  $f" | sha256sum -c -
+            echo "PHARO${v}_ZIP=$f" >> "$GITHUB_ENV"
+          done
+          unzip -j -o "$RUNNER_TEMP/images/$(basename "$PHARO15B41_URL")" '*.sources' -d "$RUNNER_TEMP/legacy"
+          echo "PHARO_LEGACY_SOURCES=$(ls "$RUNNER_TEMP"/legacy/*.sources)" >> "$GITHUB_ENV"
 
       # make wasm records its settings but does not remember them: give
       # wasm-check the same ones, or it builds the defaults again.  The node
@@ -312,13 +332,17 @@ jobs:
           source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
           export PATH="$(dirname "$EMSDK_NODE"):$PATH"
           node --version
-          make wasm WASM_IMAGE_ZIP="$RUNNER_TEMP/pharo15.zip" WASM_LIBGIT2=ON WASM_SDL2=ON
+          make wasm WASM_IMAGE_ZIP="$PHARO15_ZIP" WASM_IMAGE_ID=p15 \
+            WASM_EXTRA_IMAGES="p13=$PHARO13_ZIP p14=$PHARO14_ZIP" \
+            WASM_EXTRA_SOURCES="$PHARO_LEGACY_SOURCES" WASM_LIBGIT2=ON WASM_SDL2=ON
 
       - name: Run the node test lanes
         run: |
           source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
           export PATH="$(dirname "$EMSDK_NODE"):$PATH"
-          make wasm-check WASM_IMAGE_ZIP="$RUNNER_TEMP/pharo15.zip" WASM_LIBGIT2=ON WASM_SDL2=ON
+          make wasm-check WASM_IMAGE_ZIP="$PHARO15_ZIP" WASM_IMAGE_ID=p15 \
+            WASM_EXTRA_IMAGES="p13=$PHARO13_ZIP p14=$PHARO14_ZIP" \
+            WASM_EXTRA_SOURCES="$PHARO_LEGACY_SOURCES" WASM_LIBGIT2=ON WASM_SDL2=ON
 
       # The logs of the lanes (and the stderr of the VMs of the failed cases,
       # kept in their directories), which the job log shows only in part
@@ -344,6 +368,7 @@ jobs:
           cp -R build-wasm/web build-wasm/node packaging/emscripten/tools/serve.mjs \
             packaging/emscripten/dist/node-try.sh "dist/$name/"
           sed "s/@PHAROVM_COMMIT@/$sha/" packaging/emscripten/dist/README.md > "dist/$name/README.md"
+          du -sh build-wasm/web/image/*
           cd dist && zip -qr "$name-bin.zip" "$name"
           ls -l "$name-bin.zip"
 
@@ -384,6 +409,14 @@ jobs:
           mkdir site
           cp -R unpacked/PharoVM-*-WebAssembly/web/. site/
           touch site/.nojekyll
+          # every file of the manifest is there, as large as it says, and
+          # small enough for git (GitHub refuses files over 100 MB)
+          node -e 'const fs=require("fs"),m=JSON.parse(fs.readFileSync("site/manifest.json"));
+            const all=[...m.files,...(m.images||[]).flatMap(i=>i.files),...(m.extraSources||[])];
+            for(const f of all){const s=fs.statSync("site/"+f.url).size; if(s!==f.gzSize) throw new Error("bad "+f.url);
+              if(s>95e6) throw new Error("too large for git "+f.url);}
+            if(!m.images||m.images.length!==3) throw new Error("expected 3 images");'
+          du -sh site
           cd site
           git init -q -b gh-pages
           git add -A

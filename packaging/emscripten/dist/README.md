@@ -1,18 +1,26 @@
-# Pharo 15 on WebAssembly
+# Pharo 13, 14 and 15 on WebAssembly
 
 The Pharo VM built for WebAssembly, from branch `pharo-12-wasm` at commit
-`@PHAROVM_COMMIT@` of pharo-vm, with a Pharo 15 image: Pharo15.0-SNAPSHOT, build 41
-(`4e572fed79`, from https://files.pharo.org/image/150/latest-64.zip as of
-1 October 2026), prepared for the world page.  The VMs have the FFI
-(libffi), FreeType, cairo, libgit2 and SDL2 built in.  `docs/WebAssembly.md`
-in the repository says how it is made and how it works.
+`@PHAROVM_COMMIT@` of pharo-vm, with three images from files.pharo.org,
+each prepared for the world page:
+
+- Pharo 15 (the default): Pharo15.0-SNAPSHOT, build 50 (`b85960fcc6`);
+- Pharo 14: Pharo14.0-SNAPSHOT, build 785 (`74f3a1b398`);
+- Pharo 13.1: Pharo13.0-SNAPSHOT, build 749 (`d7c6f761d5`, the stable
+  Pharo 13).
+
+The site also serves the `.sources` of Pharo 15 build 41 (`4e572fed79`),
+its image before, for the images saved in a browser from that one.  The
+VMs have the FFI (libffi), FreeType, cairo, libgit2 and SDL2 built in.
+`docs/WebAssembly.md` in the repository says how it is made and how it
+works.
 
     web/            the static site: the Console page with its Notebook tab,
                     the world page and the world page through SDL2
     node/           the command-line VM for node (pharo, pharo.js, pharo.wasm,
                     and the empty files the image looks for as its libraries)
     serve.mjs       a static HTTP server for web/ (node, no dependencies)
-    node-try.sh     runs the node VM on the image of web/
+    node-try.sh     runs the node VM on the default image of web/
 
 GitHub Pages serves the site of the latest build of `pharo-12-wasm` from
 the root of branch `gh-pages`; where this folder is served, the pages are
@@ -53,16 +61,35 @@ then open:
   unprepared, but keeps nothing in the browser and costs several times
   the idle time of the world page.
 
+### Images
+
+The first visit to the world page asks which image to start: Pharo 15,
+14 or 13.1, each a download of its own (about 25 MB gzipped, with its
+.sources).  The Images button (on the Console and on the world page)
+starts another one fresh, and lists the images saved in this browser:
+open, rename or delete each one, or open it on the other page.  Save
+keeps the running image in the browser (IndexedDB) under its name, Save
+as keeps it as a new one, and the next visit boots the image saved or
+used last; `?slot=<id>` and `?fresh=<id>` in the address of a page name
+the image (only among the user's own images and the site's).  Each saved
+image keeps the files of the image's directory as they were at its last
+save too: Iceberg's clones (with their `.git`), the package cache and the
+logs.  A saved image takes about 60 MB of the browser's storage, more with
+its clones; the Images dialog shows what this browser uses, and offers to
+keep it safe from the browser's cleanup.
+
 ### Git
 
 Iceberg works in the VMs, on libgit2: repositories in the memory of the
 VM, and clones of http:// and https:// remotes.  Git servers, github.com
 among them, send no CORS headers, so a page reads them only through a CORS
-proxy, which the Console's Settings hold (kept in this browser, and used by
-the world pages and the Notebook too); there is none by default, and it is
-never taken from a URL, since the proxy sees the code and any credentials
-that pass through it.  The working copies are lost on a reload: only the
-image is kept in the browser.
+proxy.  By default it is the public proxy https://cors.isomorphic-git.org/,
+which sees what you clone; the Settings of the Console and of the world
+page (kept in this browser, and used by every page and the Notebook) choose
+the site's default, none (requests go to the git host itself, which works
+only for hosts that let the page in), or a proxy of your own.  The setting
+is never taken from a URL.  No credentials are sent, so only public
+repositories can be cloned, and pushing is not supported.
 
 ### Your own image
 
@@ -75,17 +102,17 @@ drop of files anywhere on the page:
 - or an `.image` with its `.changes`, and its `.sources`.
 
 The page unpacks the zip in the browser, uses the image's own `.sources`,
-and keeps the image (with that `.sources`) in the browser once it has
-started.  On the world page, a stock image is first prepared for the
-browser (the OSWindow-Web package is filed in, with its FreeType fonts,
-and the image saved, in a few seconds), and then its world opens.  Pharo 12 and
-Pharo 15 images were tested; Pharo 13 and 14 were not.
+and keeps the image (with that `.sources`) in the browser, as a new saved
+image, once it has started: it never replaces one.  On the world page, a
+stock image is first prepared for the browser (the OSWindow-Web package is
+filed in, with its FreeType fonts, and the image saved, in a few seconds),
+and then its world opens.  Pharo 12 to Pharo 15 images were tested.
 
 The first visit downloads about 26 MB (the image and the .sources,
-gzipped, and the VM).  Save keeps the image in the browser (IndexedDB),
-and the next visit, on the Console or the world page, boots it (the
-Notebook boots it too, read-only); Download gives the image and its
-.changes; Reset (Console) goes back to the image of the site.
+gzipped, and the VM).  The Notebook boots the image of the Console,
+read-only; Download gives the image and its .changes; Delete (Console)
+removes the image saved in this browser and goes back to the image of the
+site.
 
 No special headers are needed (no SharedArrayBuffer, no COOP/COEP): the
 VM runs in a Web Worker and gives the browser its thread back between
