@@ -6,59 +6,85 @@
 // Messages:
 //
 //   page -> worker   init {wasmModule, manifestUrl, build, mode, sliceMs,
-//                          persist, upload: {image, changes, sources},
-//                          prepare, display, gitProxy, canvas},
-//                    input {text}, eof, interrupt, save, ack {chars},
-//                    fs {id, op, path, data}, download {id},
-//                    resetStorage {id}, flush, display {...},
+//                          persist, upload: {name, image, changes, sources},
+//                          slot, fresh, name, prepare, display, gitProxy,
+//                          canvas},
+//                    input {text}, eof, interrupt, save, saveAs {name},
+//                    ack {chars}, fs {id, op, path, ...}, download {id},
+//                    resetStorage {id, slot, all}, flush, display {...},
 //                    gitProxy {gitProxy}, sdl {event}, stats {id}
 //   worker -> page   progress {phase, loaded, total},
 //                    ready {image, source, persisted, savedAt, world,
 //                           prepared, webPackage, preparing, sources,
-//                           storageError, fonts, git, gitHttp, sdl2, mode},
+//                           storageError, fonts, git, gitHttp, sdl2, mode,
+//                           slot, imageId, pharo, slotMissing, freshMissing,
+//                           sourcesMissing, gitProxy, gitProxyDefault},
 //                    output {fd, text}, output {fd: 3, bytes},
 //                    state {state, waiting}, tick,
 //                    interrupted {registered}, edited {edited},
 //                    storing, saved {bytes, prepared, webPackage, error,
-//                                    upload},
-//                    prepared {error, saved, webPackage},
-//                    superseded, reset {id, error}, exit {code},
-//                    crash {message, stack, stacks}, fs-result {id, ...},
-//                    file {id, name, data, count}, error {id, message},
-//                    display {...}, sdl {kind, ...}, stats {id, stats}
+//                                    upload, slot, created, treeFiles,
+//                                    treeSize, treeError},
+//                    prepared {error, saved, webPackage, slot},
+//                    superseded {slot}, reset {id, slot, error},
+//                    exit {code}, crash {message, stack, stacks},
+//                    fs-result {id, ...}, file {id, name, data, count},
+//                    error {id, message}, display {...}, sdl {kind, ...},
+//                    stats {id, stats}, git {event, method, host, proxy,
+//                                            status, error}
 //
 // Messages that arrive before "ready" are queued and replayed after it;
 // "ready" always precedes the first "state".  When the VM cannot start, or
 // the boot fails, the worker says "crash" instead, and still answers what
 // needs no VM (resetStorage, whose storage is opened first of all, so that it
-// deletes the slot even when the manifest could not be fetched).  After
+// deletes a slot even when the manifest could not be fetched).  After
 // "exit" and "crash" it stays, so that the files of the VM can still be read
-// and downloaded, until the page terminates it.
+// and downloaded, until the page terminates it.  "fs" ops: readFile,
+// writeFile {data, mode, mtime} (with the directories it needs), listDir,
+// remove, mkdir {mode}, symlink {target} and stat (fs-result {mode, size,
+// mtime, link}).
 //
-// Boot.  init.manifestUrl is web/manifest.json, written by stage.mjs.  The
-// image and its .changes come from init.upload, else from the slot of
-// vm-storage.js when init.persist and there is one, else from the manifest,
-// like the st files, which always do.  So does the .sources, unless the
-// image comes with one: init.upload {image, changes, sources: {name, data}}
-// (Uint8Arrays, ArrayBuffers or Blobs, as open-image.js gives them; sources
-// is optional), or the slot, which keeps the .sources of its image when
-// that is its own, not the one of the manifest (another name, or size).
-// The .sources goes into /pharo under its name, which is the name that the
-// image looks for, and ready.sources says which one the VM got.  Every
-// file of the manifest is fetched and inflated as it comes
-// (DecompressionStream) into a buffer of its size, unless its first bytes
-// are not gzip's 1f 8b: a server that sent it with Content-Encoding: gzip
-// had the browser inflate it.  Everything goes into /pharo, the working
-// directory and the VM's directory (thisProgram is /pharo/pharo), which
-// must be writable.  So do the placeholders of manifest.libraries, empty
-// files (libcairo.so.2): the image finds such a library only as a file of
-// the VM's directory (FFIUnix64LibraryFinder), and the VM, which has it
-// built in, never reads them.  The VM then boots with
-// PharoVMDriver.vmArgs(init.mode): the REPL of st/web-repl.st, or the
-// world ('world' and 'sdl'), or the notebook kernel of st/web-notebook.st
-// ('notebook', below).  progress says how far the loading got:
-// "fetch" (the bytes of the files, inflated), "restore" (the slot), then
-// "boot".
+// Boot.  init.manifestUrl is web/manifest.json, written by stage.mjs, whose
+// catalog (catalog.js, PharoCatalog) lists the images that the site offers.
+// The image and its .changes come from, the first that applies:
+// init.upload (an image the user opened, as open-image.js gives it); the
+// catalog entry init.fresh (an unknown id: the default entry, and
+// ready.freshMissing says it); the slot init.slot of vm-storage.js (one
+// that is not there: the default entry, and ready.slotMissing says it);
+// with init.persist, the slot booted or saved last (PharoStorage last());
+// the default entry of the catalog.  An entry's files are its image, its
+// .changes and its .sources, fetched with the st files, which always are.
+// A slot or an upload brings the image and the .changes, and the .sources
+// is: its own (init.upload's sources {name, data}, Uint8Arrays,
+// ArrayBuffers or Blobs, as open-image.js gives them, or the one a slot
+// keeps); else the one of its name that the site serves (any entry's, or
+// manifest.extraSources), the name being the one the meta of the slot says
+// (sourcesName) or the one the image's bytes have
+// (Pharo<v>-<bits>bit-<commit>, when they have one only); none when the
+// site does not serve that one (ready.sourcesMissing names it: the image
+// shows its methods decompiled); and the default entry's when no name is
+// known.  A .sources of its own that is one of the site (the same name and
+// size) is not its own.  The .sources goes into /pharo under its name,
+// which is the name that the image looks for, and ready.sources says which
+// one the VM got.  Every file of the manifest is fetched and inflated as it
+// comes (DecompressionStream) into a buffer of its size, unless its first
+// bytes are not gzip's 1f 8b: a server that sent it with Content-Encoding:
+// gzip had the browser inflate it.  Everything goes into /pharo, the
+// working directory and the VM's directory (thisProgram is /pharo/pharo),
+// which must be writable: the files of the slot first (its tree, below),
+// then the placeholders of manifest.libraries, empty files
+// (libcairo.so.2): the image finds such a library only as a file of the
+// VM's directory (FFIUnix64LibraryFinder), and the VM, which has it built
+// in, never reads them; then the site's files and the image.  The image is
+// always /pharo/Pharo.image.  The VM then boots with
+// PharoVMDriver.vmArgs(init.mode): the REPL of st/web-repl.st, or the world
+// ('world' and 'sdl'), or the notebook kernel of st/web-notebook.st
+// ('notebook', below).  progress says how far the loading got: "fetch"
+// (the bytes of the files, inflated), "restore" (the slot), then "boot".
+// ready.slot is the slot booted, {slot, name, pharo, imageId, origin,
+// savedAt}, or null (a fresh image, an upload); ready.imageId and
+// ready.pharo say which catalog entry and which Pharo the image is of, as
+// far as known.
 //
 // Output.  What the VM writes to fd 1 and 2 is decoded as UTF-8 (one
 // streaming decoder per fd), coalesced up to 64 KB, and posted at the end
@@ -72,10 +98,24 @@
 // something; while the VM is BUSY and nothing else was posted for a second,
 // "tick" says that it is alive.
 //
-// Persistence.  When the VM has written an image (HOST_IMAGE_SAVED, which
-// comes after the slice that saved it), the worker reads it and its .changes
-// from /pharo, says "storing", stores them as the new slot, with the
-// .sources of the image when it has its own, and says "saved".
+// Persistence.  The browser keeps any number of images, each in a slot of
+// vm-storage.js.  A VM is bound to the slot it saves into: the slot it
+// booted from, else none (a fresh image, an upload) until its first save
+// makes it one, named init.name, else the label of its catalog entry (Pharo
+// 14), else the name of the upload (a name a slot has gets " (2)", " (3)",
+// ...); the first slot made is 'main' (vm-storage.js).  When the VM has
+// written an image (HOST_IMAGE_SAVED, which comes after the slice that
+// saved it), the worker reads it, its .changes and the tree of /pharo from
+// MEMFS, says "storing", stores them into the slot bound, with the .sources
+// of the image when it has its own, and says "saved {slot: {slot, name,
+// pharo}, created}": created when the save made a new slot.  After
+// "saveAs {name}" the next save makes a new slot of that name, which the VM
+// is then bound to (the Console types the save itself; the world page asks
+// its image).  A slot says what the image is: sourcesName, pharo and
+// imageId, and its origin (fresh:<id>, upload:<name>, save-as:<slot>); the
+// worker says them for a slot of before (annotate) when it boots it.  The
+// slot booted or saved is the last one (setLast), which a page told no slot
+// boots.
 // The slot says which version of OSWindow-Web its image has (webPackage, 0
 // without the package), and so whether it can open the world (prepared):
 // the version must be at least manifest.webPackage, the one of this site
@@ -87,27 +127,44 @@
 // >>packageMarker), or 1 when none does (the package before the versions).
 // The version is measured from the image, never taken from the manifest; a
 // slot saved before there were versions counts as 1 when it was prepared
-// (PharoStorage.webPackage).  An image saved in the Console with an older
-// version keeps it, and is prepared again on its next world boot.  An
-// upload becomes the slot only once it has booted: when the REPL first waits for
-// input (the world: first sleeps), with "saved {upload: true}"; one that
-// crashes or quits before leaves the slot as it was.  ready.persisted says
-// whether there is a slot: the one booted, the one that an upload would
-// replace, or one that could not be read.  The .changes of the slot that
-// the worker booted from or saved is stored again when it changed: SETTLE_MS
-// after the VM went idle (the REPL waits for input, the world sleeps), at
-// the latest SYNC_MS after it was last stored, on "flush" (the page goes
-// away, which a worker may not outlive: little is left for it), and when the
-// VM exits; "exit" is posted once the storage is done.  Only while that
-// slot is still the stored one, though: once another page (a second tab,
-// the world) saved over it or reset it, the .changes of this VM would not
-// match the image stored, so the worker stops and says "superseded", until
-// its VM saves again.  A failure of the storage is reported in "saved",
-// never fatal.  "save" types Smalltalk snapshot: true andQuit: false into
-// the REPL; the image itself may save at any time too.  In the Console,
-// "edited" says whether the .changes of the VM differs from the one it had
-// when it first waited for input, or when its image was last stored: code
-// was changed that the slot does not have.
+// (PharoStorage.webPackage); a fresh image has the version of its catalog
+// entry.  An image saved in the Console with an older version keeps it, and
+// is prepared again on its next world boot.  An upload becomes a slot, a
+// new one, never over another, only once it has booted: when the REPL first
+// waits for input (the world: first sleeps), with "saved {upload: true}";
+// one that crashes or quits before is not kept.  ready.persisted says
+// whether the browser has a slot (one that could not be read too).  The
+// .changes of the slot that the worker booted from or saved is stored again
+// when it changed: SETTLE_MS after the VM went idle (the REPL waits for
+// input, the world sleeps), at the latest SYNC_MS after it was last stored,
+// on "flush" (the page goes away, which a worker may not outlive: little is
+// left for it), and when the VM exits; "exit" is posted once the storage is
+// done.  Only while that slot is still the stored one, though: once another
+// page (a second tab, the world) saved over that slot or deleted it, the
+// .changes of this VM would not match the image stored, so the worker stops
+// and says "superseded {slot}", until its VM saves again (into that slot:
+// the latest save wins).  Pages on other slots never supersede each other.
+// A failure of the storage is reported in "saved", never fatal.  "save"
+// types Smalltalk snapshot: true andQuit: false into the REPL; the image
+// itself may save at any time too.  In the Console, "edited" says whether
+// the .changes of the VM differs from the one it had when it first waited
+// for input, or when its image was last stored: code was changed that the
+// slot does not have.  "resetStorage" deletes a slot: {all: true} every
+// one, {slot} that one, else the one bound (else the last one); "reset
+// {slot}" says which, and a VM whose slot was deleted is bound to none.
+//
+// The tree.  A save keeps with the image the files of /pharo that are
+// neither the image's (a top-level .image, .changes or .sources) nor the
+// site's (st/, the placeholders, WORLD_FILE): Iceberg's clones in
+// pharo-local with their .git, the package cache, PharoDebug.log, what the
+// user wrote; files, directories (empty ones too: git needs them) and
+// symbolic links, with their modes and times.  They are read in the same
+// pause between slices as the image, so they are what the image knew.  At
+// most TREE_MAX_BYTES and TREE_MAX_ENTRIES: beyond, the slot keeps the
+// tree it had, and "saved {treeError}" says what is lost on a reload.  A
+// boot of the slot writes them back into /pharo before anything else (a
+// path with '', '.' or '..' in it is skipped); saved {treeFiles, treeSize}
+// says what the slot keeps.
 //
 // Preparation.  The world page sends init.prepare: an image that cannot
 // open the world (not prepared: it lacks OSWindow-Web, or has an older
@@ -118,14 +175,15 @@
 // types PREPARE, which files in st/web-bootstrap.st (OSWindow-Web, and the
 // fonts) and saves, in one evaluation that an error stops before the save.
 // "prepared" ends it: without error once the image saved, with the version
-// of OSWindow-Web of the manifest exactly, as the REPL says, is stored as
-// the slot, which the page then boots in a world worker of its own; else
-// error says why, with saved: true when the image saved itself (Download
-// gives it) but could not be stored or has another version (webPackage,
-// stored as it is: the worker does not prepare it again by itself), and
-// saved: false when the evaluation failed (error is then what it wrote on
-// stderr).  ready.fonts is manifest.fonts, the fonts that a preparation sets
-// up: 'freetype' or 'bitmap' (null for a manifest without it).
+// of OSWindow-Web of the manifest exactly, as the REPL says, is stored in
+// the slot bound, prepared.slot, which the page then boots in a world worker
+// of its own; else error says why, with saved: true when the image saved
+// itself (Download gives it) but could not be stored or has another version
+// (webPackage, stored as it is: the worker does not prepare it again by
+// itself), and saved: false when the evaluation failed (error is then what
+// it wrote on stderr).  ready.fonts is manifest.fonts, the fonts that a
+// preparation sets up: 'freetype' or 'bitmap' (null for a manifest without
+// it).
 //
 // M2.  With init.display the worker loads display-worker.js, whose
 // PharoDisplay.create(init.display, post) is the webDisplay of the VM.  It
@@ -134,12 +192,19 @@
 // "display" messages of the page, with PharoDisplay.onMessage.
 //
 // Git.  init.gitProxy, and later "gitProxy", is the CORS proxy of git's
-// HTTP requests, which the user typed into the Console's Settings (page.js
-// keeps it, world.js and sdl.js read it): an http: or https: URL prefix, or
-// '' for none.  The worker makes it Module.gitHttpProxy, which the smart-HTTP
-// transport of libgit2 (src/emscripten/gitSupport.c) reads at each request,
-// so a change holds from the next one.  It goes nowhere else: not into the
-// environment of the image, nor to any server but the proxy itself.
+// HTTP requests, as the user chose it in Settings (git-proxy.js keeps it):
+// an http: or https: URL prefix, '' for none, and null (or undefined) for
+// the site's default, manifest.gitProxyDefault (stage.mjs, WASM_GIT_PROXY;
+// '' or absent: none).  The worker makes it Module.gitHttpProxy, which the
+// smart-HTTP transport of libgit2 (src/emscripten/gitSupport.c) reads at
+// each request, so a change holds from the next one.  It goes nowhere else:
+// not into the environment of the image, nor to any server but the proxy
+// itself.  ready.gitProxy is the proxy in effect ('' for none),
+// ready.gitProxyDefault the site's.  The transport calls Module.onGitHttp
+// ({method, host, proxy, status, error}) after every request, and the
+// worker posts "git {event: 'request'}" at the first one of its VM, and
+// "git {event: 'failed'}" when one got no answer (status < 0) or an HTTP
+// error (400 and up), at most every GIT_FAILED_MS, for the page to say why.
 // ready.git says whether the VM has libgit2 (manifest.git, WASM_LIBGIT2),
 // ready.gitHttp whether it has that transport (manifest.gitHttp,
 // WASM_LIBGIT2_HTTP), which is what the proxy is for.
@@ -166,13 +231,15 @@
 // in st/web-notebook.st (vmArgs('notebook')) with the device of its events
 // (PharoVMDriver's events), which the worker posts as fd 3 output.  The
 // requests are JSON lines that the page types with "input"; Stop is
-// "interrupt", as in the Console.  With init.persist it boots the slot of
-// the Console when there is one, else the image of the manifest, but only
-// reads it: it never stores an image or the .changes, and posts no
-// storing, saved, edited, superseded or prepared.  The VM's saves
-// (HOST_IMAGE_SAVED), save, init.upload and init.prepare are ignored, and
-// resetStorage answers reset {id, error: 'not in notebook mode'}.  ready
-// says mode: 'notebook' (the other modes' ready has no mode).
+// "interrupt", as in the Console.  It boots as the Console does (init.slot
+// or init.fresh, as the Console's page gives them, else with init.persist
+// the last slot, with its tree), but only reads the slot: it never stores
+// an image, the .changes or anything else (not even the last slot), and
+// posts no storing, saved, edited, superseded or prepared.  The VM's saves
+// (HOST_IMAGE_SAVED), save, saveAs, init.upload and init.prepare are
+// ignored, and resetStorage answers reset {id, error: 'not in notebook
+// mode'}.  ready says mode: 'notebook' (the other modes' ready has no
+// mode).
 //
 // The worker URL's ?v= query (the build id) is passed on to every script.
 
@@ -180,7 +247,7 @@
 
 const V = new URLSearchParams(self.location.search).get('v') || '';
 const q = V ? '?v=' + encodeURIComponent(V) : '';
-importScripts('pharo-web.js' + q, 'vm-driver.js' + q, 'vm-storage.js' + q);
+importScripts('pharo-web.js' + q, 'vm-driver.js' + q, 'vm-storage.js' + q, 'catalog.js' + q);
 
 // A zero-delay macrotask: setTimeout(f, 0) is clamped to 4 ms once nested.
 const ch = new MessageChannel();
@@ -205,10 +272,30 @@ const PACKAGE_MARKER = 'OSWindowWebPackage';
 const WORLD_FILE = DIR + '/.pharo-web-world';
 // What prepares an image for the world, in one evaluation of the REPL
 const PREPARE = "CodeImporter evaluateFileNamed: '" + DIR + "/st/web-bootstrap.st'. " + SAVE;
+// The most that the tree of a slot keeps: the bytes of its files, and its
+// entries
+const TREE_MAX_BYTES = 256 * 1024 * 1024, TREE_MAX_ENTRIES = 50000;
+// "git {event: 'failed'}" at most this often
+const GIT_FAILED_MS = 2000;
+const { MAIN, SLOT_ID } = PharoStorage;
 
 let drv = null, settled = false, queue = [];
 let mode = null, manifest = null, display = null, sdl = null;
 let store = null, storageError = null;
+// the slot that this VM saves into (it booted from it or saved it), or null
+// (a fresh image or an upload, until its first save), and its name; only
+// resetStorage of it unbinds it
+let bound = null, boundName = null;
+// the catalog entry that this VM booted from the site, or null; the name
+// that init gave for the slot it becomes, and the name of the upload
+let freshEntry = null, initName = '', uploadName = '';
+// the name of the next save, a new slot (saveAs), or null
+let saveAsName = null;
+// what the image is: the name of its .sources when known (the one it reads,
+// whoever serves it), its version and its catalog id
+let sourcesName = null, pharo = null, imageId = null;
+// git's requests: whether one was made, and when one last failed
+let gitRequested = false, gitFailedAt = -Infinity;
 // the meta of the slot that this VM booted from or saved, while it is the
 // stored one
 let owned = null, syncTimer = 0, syncedKey = '', syncedAt = 0, settleTimer = 0;
@@ -247,8 +334,13 @@ const concat = chunks => {
   return all;
 };
 const errorText = e => String((e && (e.message || e.name || e.code)) || e);
-// The proxy of git's requests that the page gave, or '' (the page checked it)
-const gitProxyOf = p => typeof p === 'string' && /^https?:\/\//i.test(p) ? p : '';
+// A proxy of git's requests, or ''
+const proxyOf = p => typeof p === 'string' && /^https?:\/\//i.test(p) ? p : '';
+// The default proxy of the site (manifest.gitProxyDefault), or ''
+const defaultProxy = () => proxyOf(manifest && manifest.gitProxyDefault);
+// The proxy of git's requests for what the page gave: null or undefined
+// for the site's default, else its choice ('' none; the page checked it)
+const gitProxyOf = p => p == null ? defaultProxy() : proxyOf(p);
 
 // ---- output
 
@@ -319,11 +411,139 @@ function storageFailure(e) {
 }
 
 // The slot is another page's now (or none): its .changes is no longer this
-// VM's to store
+// VM's to store.  It stays bound: the next save of this VM is its again.
 function superseded() {
   owned = null;
   stopSync();
-  post({ type: 'superseded' });
+  post({ type: 'superseded', slot: bound });
+}
+
+// The slot of meta is this VM's now, under that name: the one to boot when
+// a page is told none
+async function bind(meta, name) {
+  bound = meta.slot || MAIN;
+  owned = meta;
+  if (name) boundName = name;
+  try { await store.setLast(bound); } catch (e) { /* only a convenience */ }
+}
+
+// What "saved" and "ready" say of the slot bound
+const slotSaid = () => ({ slot: bound, name: boundName, pharo });
+
+// name, else name (2), name (3), ...: one that no slot has
+async function uniqueName(name) {
+  let taken = [];
+  try { taken = (await store.list()).map(s => s.name); } catch (e) { /* none known */ }
+  if (!taken.includes(name)) return name;
+  for (let n = 2; ; n++) if (!taken.includes(name + ' (' + n + ')')) return name + ' (' + n + ')';
+}
+
+// What a save adds to the meta of its slot (vm-storage.js)
+function extraOf(prepared, webPackage, origin, tree) {
+  const extra = { build: manifest.build, prepared, webPackage, sourcesName, pharo, imageId, tree };
+  if (origin) extra.origin = origin;
+  return extra;
+}
+
+// ---- the tree of a slot: the files of /pharo but the image's and the site's
+
+// The files of DIR that a save keeps with the image, read now (between
+// slices): {tree: {entries, data, size, files}} (null when there is none),
+// or {error} when they are too many or too large (TREE_MAX_*), and the slot
+// keeps the tree it has.  Not the image, its .changes or a .sources, nor
+// what the site gives at every boot (st/, the placeholders of
+// manifest.libraries) or the REPL's WORLD_FILE: Iceberg's clones in
+// pharo-local, the package cache, PharoDebug.log and what the user wrote.
+function captureTree() {
+  const FS = drv.FS, entries = [], chunks = [];
+  const skip = new Set(['st', WORLD_FILE.slice(DIR.length + 1)].concat(manifest.libraries || []));
+  let size = 0, count = 0, over = false;
+  const walk = (dir, rel) => {
+    let names;
+    try { names = FS.readdir(dir); } catch (e) { return; }
+    for (const name of names.sort()) {
+      if (name === '.' || name === '..') continue;
+      if (!rel && (skip.has(name) || /\.(image|changes|sources)$/.test(name))) continue;
+      const p = rel ? rel + '/' + name : name, full = dir + '/' + name;
+      let st;
+      try { st = FS.lstat(full); } catch (e) { continue; }
+      const mode = st.mode, mtime = Number(st.mtime) || 0;
+      if (FS.isLink(mode)) {
+        if (!over) entries.push([p, 'l', mode, mtime, 0, 0, FS.readlink(full)]);
+      } else if (FS.isDir(mode)) {
+        if (!over) entries.push([p, 'd', mode, mtime, 0, 0, null]);
+      } else if (FS.isFile(mode)) {
+        if (over) size += st.size;
+        else {
+          const data = FS.readFile(full);
+          entries.push([p, 'f', mode, mtime, size, data.length, null]);
+          chunks.push(data);
+          size += data.length;
+        }
+      } else continue;                  // a device, a pipe: not kept
+      count++;
+      if (!over && (size > TREE_MAX_BYTES || count > TREE_MAX_ENTRIES)) {
+        over = true;
+        entries.length = chunks.length = 0;
+      }
+      if (FS.isDir(mode)) walk(full, p);
+    }
+  };
+  walk(DIR, '');
+  if (over) {
+    return { error: 'the files of the image (' + Math.round(size / 1048576) + ' MB, ' + count +
+                    ' files) are too large to keep: clones made since the last save are lost on reload' };
+  }
+  if (!entries.length) return { tree: null };
+  return { tree: { entries, data: new Blob(chunks), size, files: entries.length } };
+}
+
+// The files of the tree of a slot, for the driver to write into DIR (a
+// path that is not one is said and skipped)
+function treeFiles(tree) {
+  const files = [];
+  for (const e of tree.entries || []) {
+    const [p, kind, mode, mtime, offset, length, link] = Array.isArray(e) ? e : [];
+    const path = DIR + '/' + p;
+    if (!PharoStorage.checkPath(p)) {
+      console.warn('vm-worker: a file of the saved image is not restored: ' + JSON.stringify(p));
+    } else if (kind === 'd') {
+      files.push({ path, dir: true, mode });
+    } else if (kind === 'f' && Number.isInteger(offset) && Number.isInteger(length) && offset >= 0 &&
+               offset + length <= tree.data.length) {
+      files.push({ path, data: tree.data.subarray(offset, offset + length), mode, mtime });
+    } else if (kind === 'l' && typeof link === 'string') {
+      files.push({ path, link });
+    } else {
+      console.warn('vm-worker: a file of the saved image is damaged: ' + JSON.stringify(p));
+    }
+  }
+  return files;
+}
+
+// ---- the .sources
+
+// The name of the .sources that the image reads, from its bytes: every
+// Pharo<major>.<minor>-<32|64>bit-<7 hex digits> in them, not followed by
+// another hex digit, when they are all one; else null
+function sourcesNameOf(image) {
+  const names = new Set();
+  const digits = (k, f) => { const s = k; while (k < image.length && f(image[k])) k++; return k > s ? k : -1; };
+  const isDigit = c => c >= 0x30 && c <= 0x39, isHex = c => isDigit(c) || (c >= 0x61 && c <= 0x66);
+  eachEnd(image, 'Pharo', end => {
+    let k = digits(end, isDigit);
+    if (k < 0 || image[k] !== 0x2e) return true;
+    k = digits(k + 1, isDigit);
+    if (k < 0 || image[k] !== 0x2d) return true;
+    const bits = String.fromCharCode(image[k + 1], image[k + 2]) + String.fromCharCode(...image.subarray(k + 3, k + 7));
+    if (bits !== '64bit-' && bits !== '32bit-') return true;
+    const h = k + 7;
+    for (let i = h; i < h + 7; i++) if (!(i < image.length && isHex(image[i]))) return true;
+    if (h + 7 < image.length && isHex(image[h + 7])) return true;
+    names.add(new TextDecoder().decode(image.subarray(end - 5, h + 7)));
+    return names.size < 2;
+  });
+  return names.size === 1 ? [...names][0] + '.sources' : null;
 }
 
 // The size and time of the .changes of the VM, or ''
@@ -449,27 +669,33 @@ function remember(path) {
   syncedAt = performance.now();
 }
 
-// The upload booted: the REPL waits for input, the world idles.  Store it
-// as the slot, so that the next boot is of it too.  The REPL has now said
-// whether it can open the world.
+// The upload booted: the REPL waits for input, the world idles.  Keep it
+// in a new slot, never over another one, so that the next boot is of it
+// too.  The REPL has now said whether it can open the world.
 function keepUpload() {
   const { image, changes } = upload;
   const webPackage = webPackageOf(image), prepared = canOpen(webPackage);
   upload = null;
   post({ type: 'storing' });
   enqueue(async () => {
+    const said = { type: 'saved', bytes: image.length, prepared, webPackage, upload: true };
     try {
-      owned = await store.save(image, changes, { build: manifest.build, prepared, webPackage }, ownSources, null);
+      const name = await uniqueName(initName || uploadName || 'Opened image');
+      const meta = await store.save(image, changes, extraOf(prepared, webPackage, 'upload:' + (uploadName || name)),
+                                    ownSources, null, { slot: null, name });
+      await bind(meta, name);
       startSync();
-      post({ type: 'saved', bytes: image.length, prepared, webPackage, upload: true });
+      post(Object.assign(said, { slot: slotSaid(), created: true, treeFiles: 0, treeSize: 0 }));
     } catch (e) {
-      post({ type: 'saved', bytes: image.length, prepared, webPackage, upload: true, error: storageFailure(e) });
+      post(Object.assign(said, { error: storageFailure(e) }));
     }
   });
 }
 
 // HOST_IMAGE_SAVED: the VM wrote the image at path.  Read it now, between
-// slices, with its .changes, and store both.
+// slices, with its .changes and the tree of DIR, and store them: into the
+// slot bound, else (a fresh image, an upload not kept yet, or saveAs) into
+// a new slot, which is bound from then on.
 function imageSaved(path) {
   let image, changes;
   try {
@@ -481,7 +707,10 @@ function imageSaved(path) {
   }
   remember(path);
   const key = syncedKey;
+  const wasUpload = !!upload;
   upload = null;                        // this save is the slot now
+  const asName = saveAsName;
+  saveAsName = null;
   const webPackage = webPackageOf(image), prepared = canOpen(webPackage);
   const prepare = preparing === 2;
   if (prepare) prepareSaved = true;
@@ -491,17 +720,39 @@ function imageSaved(path) {
     if (prepare) prepareEnd(error, webPackage);
     return;
   }
+  let tree;
+  try { tree = captureTree(); }
+  catch (e) { tree = { error: 'the files of the image cannot be read: ' + errorText(e) }; }
   post({ type: 'storing' });
   enqueue(async () => {
+    const said = { type: 'saved', bytes: image.length, prepared, webPackage };
+    if (tree.error) said.treeError = tree.error;
     try {
-      // (a .sources that the slot of this VM has stays as stored)
-      owned = await store.save(image, changes, { build: manifest.build, prepared, webPackage }, ownSources, owned);
+      let target, origin, name = null;
+      if (asName || !bound) {
+        name = await uniqueName(asName || initName || (wasUpload && uploadName) ||
+                                (freshEntry && freshEntry.label) || 'Saved image');
+        origin = asName && bound ? 'save-as:' + bound : wasUpload ? 'upload:' + (uploadName || name)
+          : freshEntry ? 'fresh:' + freshEntry.id : undefined;
+        target = { slot: null, name };
+      } else {
+        target = { slot: bound };
+      }
+      // (a .sources that the slot of this VM has stays as stored; a new slot
+      // gets the one of this VM written)
+      const meta = await store.save(image, changes, extraOf(prepared, webPackage, origin, tree.tree), ownSources, owned,
+                                    target);
+      if (!name) {
+        try { name = await store.name(meta.slot || MAIN); } catch (e) { /* the one known */ }
+      }
+      await bind(meta, name || boundName || PharoCatalog.labelOf(pharo));
       startSync();
-      post({ type: 'saved', bytes: image.length, prepared, webPackage });
+      post(Object.assign(said, { slot: slotSaid(), created: !target.slot, treeFiles: meta.tree ? meta.treeFiles : 0,
+                                 treeSize: meta.tree ? meta.treeSize : 0 }));
       storedChanges(key);
       if (prepare) prepareEnd(prepareMismatch(webPackage), webPackage);
     } catch (e) {
-      post({ type: 'saved', bytes: image.length, prepared, webPackage, error: storageFailure(e) });
+      post(Object.assign(said, { error: storageFailure(e) }));
       if (prepare) prepareEnd(storageFailure(e), webPackage);
     }
   });
@@ -535,7 +786,8 @@ function prepareMismatch(version) {
 // stored (error null), or not
 function prepareEnd(error, webPackage) {
   preparing = 3;
-  post(error ? { type: 'prepared', saved: true, webPackage, error } : { type: 'prepared', saved: true, webPackage });
+  const said = { type: 'prepared', saved: true, webPackage, slot: bound };
+  post(error ? Object.assign(said, { error }) : said);
 }
 
 // ---- loading
@@ -608,17 +860,18 @@ function progress(phase, total) {
   return report;
 }
 
-// The files of /pharo and where the image came from
+// The files of /pharo and where the image came from: init.upload, else the
+// catalog entry init.fresh, else the slot init.slot, else (init.persist)
+// the slot booted or saved last, else the default entry of the catalog
 async function load(m) {
   // the notebook kernel takes no upload, and only reads the slot
   const notebook = mode === 'notebook', up = notebook ? null : m.upload;
   const v = '?v=' + encodeURIComponent(manifest.build);
   const imageName = manifest.image, changesName = changesOf(imageName);
-  const siteSources = manifest.files.find(f => /\.sources$/.test(f.path)) || null;
-  let image = null, changes = null, source = 'download', savedAt = null;
-  // the image of the site has the version of the manifest: stage.mjs reads
-  // it from the package that prepared that image
-  let webPackage = manifest.world ? wantedPackage() : 0;
+  const said = { slot: null, slotMissing: undefined, freshMissing: undefined, sourcesMissing: undefined };
+  let entry = null;                     // the catalog entry whose image boots
+  let image = null, changes = null, source = 'download', savedAt = null, saved = null;
+  let webPackage = 0;
   let sources = null;                   // {name, data}: the .sources that came with the image
   if (up) {
     image = await read(up.image);
@@ -628,49 +881,107 @@ async function load(m) {
       if (!/^[^/]+\.sources$/.test(name)) throw new Error('the .sources of the upload is named ' + JSON.stringify(name));
       sources = { name, data: up.sources.data };
     }
+    uploadName = typeof up.name === 'string' ? up.name : '';
     source = 'upload';
     webPackage = webPackageOf(image);
-  } else if (store) {
-    try {
-      let report = null;
-      const saved = await store.load((loaded, total) => (report || (report = progress('restore', total)))(loaded));
-      if (saved) {
-        image = saved.image;
-        changes = saved.changes;
-        sources = saved.sources;
-        source = 'saved';
-        savedAt = saved.meta.savedAt;
-        const kept = PharoStorage.webPackage(saved.meta);
-        webPackage = kept === null ? webPackageOf(image) : kept;
-        if (!notebook) owned = saved.meta;
+  } else {
+    // the slot to boot: that of init.slot, or (undefined) the last one
+    let slot = null;
+    if (typeof m.fresh === 'string' && m.fresh) {
+      entry = PharoCatalog.find(manifest, m.fresh);
+      if (!entry) said.freshMissing = m.fresh;
+    } else if (m.slot !== undefined && m.slot !== null) {
+      if (store && typeof m.slot === 'string' && SLOT_ID.test(m.slot)) slot = m.slot;
+      else said.slotMissing = String(m.slot);
+    } else if (store) {
+      slot = undefined;
+    }
+    if (slot !== null && store) {
+      try {
+        let report = null;
+        saved = await store.load((loaded, total) => (report || (report = progress('restore', total)))(loaded), slot);
+        if (!saved && typeof slot === 'string') said.slotMissing = slot;
+      } catch (e) {
+        storageError = e && e.unavailable
+          ? 'this browser does not keep images here (' + errorText(e) + '); use Download to keep a copy'
+          : 'the saved image could not be read (' + errorText(e) + ')';
       }
-    } catch (e) {
-      storageError = e && e.unavailable
-        ? 'this browser does not keep images here (' + errorText(e) + '); use Download to keep a copy'
-        : 'the saved image could not be read (' + errorText(e) + ')';
+    }
+    if (saved) {
+      image = saved.image;
+      changes = saved.changes;
+      sources = saved.sources;
+      source = 'saved';
+      savedAt = saved.meta.savedAt;
+      const kept = PharoStorage.webPackage(saved.meta);
+      webPackage = kept === null ? webPackageOf(image) : kept;
+      const slotId = saved.meta.slot || MAIN;
+      said.slot = { slot: slotId, name: saved.name, pharo: null, imageId: null, origin: saved.meta.origin || null,
+                    savedAt };
+      if (!notebook) {
+        bound = slotId;
+        boundName = saved.name;
+        owned = saved.meta;
+      }
+    } else {
+      entry = entry || PharoCatalog.defaultEntry(manifest);
+      if (!entry) throw new Error('manifest.json lists no image');
     }
   }
-  // the .sources of the image is its own unless it is the one of the
-  // manifest, which is then not fetched either
-  let sourcesData = null;
-  if (sources) {
-    sourcesData = await read(sources.data);
-    if (!siteSources || sources.name !== siteSources.path || sourcesData.length !== siteSources.size)
-      ownSources = { name: sources.name, data: sources.data instanceof Blob ? sources.data : new Blob([sourcesData]) };
+  let wanted, sourcesData = null, served = null, known = null;
+  if (entry) {
+    // a fresh image of the site: its files, with the version of OSWindow-Web
+    // that stage.mjs read from the package that prepared it
+    freshEntry = entry;
+    wanted = entry.files.slice();
+    webPackage = entry.world ? (Number.isInteger(entry.webPackage) && entry.webPackage) || wantedPackage() : 0;
+    const s = PharoCatalog.sourcesOf(entry);
+    served = known = s ? s.path : null;
+    imageId = entry.id;
+  } else {
+    // the image of a slot or an upload: its own .sources, else the one of
+    // the site of the name the slot says or the image has, else (none
+    // known) the default one
+    let chosen = null;
+    if (sources) {
+      sourcesData = await read(sources.data);
+      chosen = PharoCatalog.sourcesFile(manifest, sources.name);
+      // its own unless it is one of the site (which is then not fetched)
+      if (!chosen || sourcesData.length !== chosen.size)
+        ownSources = { name: sources.name, data: sources.data instanceof Blob ? sources.data : new Blob([sourcesData]) };
+      served = known = sources.name;
+      wanted = [];
+    } else {
+      known = (saved && saved.meta.sourcesName) || sourcesNameOf(image);
+      chosen = known ? PharoCatalog.sourcesFile(manifest, known)
+        : PharoCatalog.sourcesOf(PharoCatalog.defaultEntry(manifest));
+      if (known && !chosen) said.sourcesMissing = known;
+      served = chosen ? chosen.path : null;
+      wanted = chosen ? [chosen] : [];
+    }
+    const of = PharoCatalog.entryOfFile(manifest, chosen);
+    imageId = (saved && saved.meta.imageId) || (of && known === chosen.path ? of.id : null);
   }
-  const wanted = manifest.files.filter(f => (!image || (f.path !== imageName && f.path !== changesName)) &&
-                                       !(sourcesData && f === siteSources));
+  sourcesName = known;
+  pharo = (saved && saved.meta.pharo) || PharoCatalog.pharoOf(known) || (entry && entry.pharo) || null;
+  if (said.slot) Object.assign(said.slot, { pharo, imageId });
+  // a slot of before the versions in its meta: say them, from now on
+  if (saved && !notebook && known && (!saved.meta.sourcesName || !saved.meta.pharo)) {
+    said.annotate = { sourcesName: known, pharo: PharoCatalog.pharoOf(known), imageId };
+  }
   const report = progress('fetch', wanted.reduce((n, f) => n + f.size, 0));
   let loaded = 0;
   const [fetched, st] = await Promise.all([
     Promise.all(wanted.map(f => fetchFile(f, v, n => report(loaded += n)))),
     Promise.all((manifest.st || []).map(p => fetchText(p + v))),
   ]);
-  // the placeholders first: a file of the manifest of the same name wins
-  const files = (manifest.libraries || []).map(name => {
+  // the files of the slot first, then the placeholders: a file of the
+  // manifest of the same name wins
+  const files = saved && saved.tree ? treeFiles(saved.tree) : [];
+  for (const name of manifest.libraries || []) {
     if (!/^[^/]+$/.test(name)) throw new Error('manifest.json names the library file ' + JSON.stringify(name));
-    return { path: DIR + '/' + name, data: new Uint8Array(0) };
-  });
+    files.push({ path: DIR + '/' + name, data: new Uint8Array(0) });
+  }
   wanted.forEach((f, i) => files.push({ path: DIR + '/' + f.path, data: fetched[i] }));
   (manifest.st || []).forEach((p, i) => files.push({ path: DIR + '/' + p, data: st[i] }));
   if (image) {
@@ -678,18 +989,17 @@ async function load(m) {
     files.push({ path: DIR + '/' + changesName, data: changes });
   }
   if (sourcesData) files.push({ path: DIR + '/' + sources.name, data: sourcesData });
-  // An upload becomes the slot once it has booted (keepUpload): a broken
-  // one must not replace the image saved in this browser
+  // An upload becomes a slot once it has booted (keepUpload): a broken one
+  // is not kept
   if (up && store) upload = { image, changes };
-  // Whether an image is saved in this browser: the slot booted, or the one
-  // that an upload replaces once it has booted, or one that could not be
-  // read (which resetStorage deletes)
-  let stored = !!owned;
-  if (!stored && store) {
-    try { stored = !!(await store.meta()); } catch (e) { /* none that can be used */ }
+  // Whether an image is saved in this browser: any slot, one that could not
+  // be read too (which resetStorage deletes)
+  let stored = false;
+  if (store) {
+    try { stored = (await store.list()).length > 0; } catch (e) { /* none that can be used */ }
   }
-  return { files, source, savedAt, webPackage, prepared: canOpen(webPackage), stored,
-           sources: sourcesData ? sources.name : siteSources ? siteSources.path : null };
+  return Object.assign(said, { files, source, savedAt, webPackage, prepared: canOpen(webPackage), stored,
+                               sources: served });
 }
 
 async function boot(m) {
@@ -703,7 +1013,9 @@ async function boot(m) {
   if (mode === 'sdl' && !manifest.sdl2) throw new Error('this build has no SDL2 (make wasm WASM_SDL2=ON)');
   if (mode === 'sdl' && !(typeof OffscreenCanvas === 'function' && m.canvas instanceof OffscreenCanvas))
     throw new Error('init.canvas is not an OffscreenCanvas');
-  const { files, source, savedAt, webPackage, prepared, stored, sources } = await load(m);
+  initName = typeof m.name === 'string' ? m.name.trim().slice(0, 200) : '';
+  const loaded = await load(m);
+  const { files, source, savedAt, webPackage, prepared, stored, sources } = loaded;
   // an image that cannot open the world is prepared for it, in the REPL: one
   // without OSWindow-Web, or with an older version of it
   if (m.prepare && mode === 'world' && manifest.world && !prepared) {
@@ -719,6 +1031,7 @@ async function boot(m) {
   }
   const gitProxy = gitProxyOf(m.gitProxy);
   if (gitProxy) config.gitHttpProxy = gitProxy;
+  config.onGitHttp = gitHttp;
   const image = DIR + '/' + manifest.image;
   const env = mode === 'console' ? { PHARO_WEB_WORLD_FILE: WORLD_FILE } : {};
   if (mode === 'sdl') {
@@ -765,12 +1078,42 @@ async function boot(m) {
   if (sdl) sdl.attach(drv);
   remember(image);
   if (owned) startSync();
+  if (bound) {
+    // the slot booted is the one to boot next, and says its version
+    const annotate = loaded.annotate;
+    enqueue(async () => {
+      try { await store.setLast(bound); } catch (e) { /* only a convenience */ }
+      if (!annotate || !owned) return;
+      const meta = await store.annotate(owned, annotate);
+      if (meta && owned && owned.id === meta.id) owned = meta;
+    });
+  }
   const ready = { type: 'ready', image, source, persisted: stored, savedAt, world: !!manifest.world, prepared,
                   webPackage, preparing: !!preparing, sources, storageError, fonts: manifest.fonts || null,
-                  git: !!manifest.git, gitHttp: !!(manifest.git && manifest.gitHttp), sdl2: !!manifest.sdl2 };
+                  git: !!manifest.git, gitHttp: !!(manifest.git && manifest.gitHttp), sdl2: !!manifest.sdl2,
+                  slot: loaded.slot, imageId, pharo, gitProxy, gitProxyDefault: defaultProxy() };
+  for (const k of ['slotMissing', 'freshMissing', 'sourcesMissing']) if (loaded[k]) ready[k] = loaded[k];
   if (mode === 'notebook') ready.mode = mode;
   post(ready);
   drv.begin();
+}
+
+// Module.onGitHttp (gitSupport.c): git's smart-HTTP transport made a
+// request, {method, host, proxy, status, error}.  Called inside a slice:
+// it only posts.
+function gitHttp(r) {
+  const status = Number(r && r.status);
+  const said = { type: 'git', method: String((r && r.method) || ''), host: String((r && r.host) || ''),
+                 proxy: String((r && r.proxy) || ''), status, error: String((r && r.error) || '') };
+  if (!gitRequested) {
+    gitRequested = true;
+    post(Object.assign({ event: 'request' }, said));
+  }
+  const t = performance.now();
+  if ((status < 0 || status >= 400) && t - gitFailedAt >= GIT_FAILED_MS) {
+    gitFailedAt = t;
+    post(Object.assign({ event: 'failed' }, said));
+  }
 }
 
 // ---- the messages of the page
@@ -800,6 +1143,12 @@ function handle(m) {
   case 'save':
     if (live && mode === 'console') { drv.feed(SAVE + '\n'); stateDirty = true; }
     break;
+  case 'saveAs':
+    // the next save goes into a new slot of that name
+    if (mode === 'notebook') break;
+    saveAsName = (typeof m.name === 'string' && m.name.trim().slice(0, 200)) || 'Saved image';
+    if (live && mode === 'console') { drv.feed(SAVE + '\n'); stateDirty = true; }
+    break;
   case 'ack':
     unacked = Math.max(0, unacked - (m.chars || 0));
     if (unacked < HIGH / 2 && live) drv.resumeOutput();
@@ -812,10 +1161,30 @@ function handle(m) {
         post({ type: 'fs-result', id: m.id, path: m.path, data }, [data.buffer]);
         break;
       }
-      case 'writeFile':
+      case 'writeFile': {
+        const dir = m.path.slice(0, m.path.lastIndexOf('/'));
+        if (dir) FS.mkdirTree(dir);
         FS.writeFile(m.path, typeof m.data === 'string' ? m.data : bytes(m.data));
+        if (m.mode) FS.chmod(m.path, m.mode & 0o7777);
+        if (m.mtime) FS.utime(m.path, m.mtime, m.mtime);
         post({ type: 'fs-result', id: m.id, path: m.path });
         break;
+      }
+      case 'mkdir':
+        FS.mkdirTree(m.path);
+        if (m.mode) FS.chmod(m.path, m.mode & 0o7777);
+        post({ type: 'fs-result', id: m.id, path: m.path });
+        break;
+      case 'symlink':
+        FS.symlink(String(m.target), m.path);
+        post({ type: 'fs-result', id: m.id, path: m.path });
+        break;
+      case 'stat': {
+        const st = FS.lstat(m.path);
+        post({ type: 'fs-result', id: m.id, path: m.path, mode: st.mode, size: st.size, mtime: Number(st.mtime),
+               link: FS.isLink(st.mode) ? FS.readlink(m.path) : null });
+        break;
+      }
       case 'listDir':
         post({ type: 'fs-result', id: m.id, path: m.path,
                entries: FS.readdir(m.path).filter(e => e !== '.' && e !== '..') });
@@ -841,16 +1210,26 @@ function handle(m) {
       post({ type: 'reset', id: m.id, error: 'not in notebook mode' });
       break;
     }
-    upload = null;                      // nor the upload
+    // every slot, that one, or the one of this VM (else the last one); a
+    // reset of this VM's keeps no upload either
+    if (m.all || m.slot === undefined || m.slot === null) upload = null;
     enqueue(async () => {
-      stopSync();
-      owned = null;
+      let sid = null;
       try {
-        if (store) await store.reset();
-        else if (storageError) throw new Error(storageError);
-        post({ type: 'reset', id: m.id });
+        if (!store) throw new Error(storageError || 'this page does not keep images');
+        if (m.all) {
+          await store.reset();
+        } else {
+          sid = m.slot !== undefined && m.slot !== null ? String(m.slot) : bound || await store.last();
+          if (sid) await store.remove(sid);
+        }
+        if (m.all || (sid && sid === bound)) {
+          stopSync();
+          bound = owned = boundName = null;
+        }
+        post({ type: 'reset', id: m.id, slot: sid });
       } catch (e) {
-        post({ type: 'reset', id: m.id, error: errorText(e) });
+        post({ type: 'reset', id: m.id, slot: sid, error: errorText(e) });
       }
     });
     break;

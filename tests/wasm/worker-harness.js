@@ -42,6 +42,24 @@
 // st/web-notebook.st, its events (output {fd: 3, bytes}), a request posted
 // before ready, Stop, the credit of the events, and a worker that boots the
 // slot without ever storing anything.
+// The slots and the catalog (C1-C10) run on sites of their own, made in
+// TEST_DIR from WEB_DIR's files with a manifest.json whose catalog has a
+// second entry, px, of the same files under image/px/ (and, for the
+// .sources, one whose default entry has a .sources of another name and an
+// extra one): init.fresh fetches the files of its entry only; the first
+// save of a fresh image makes main, with its origin and name, the next one a
+// slot of its own, which its saves then go into; two workers on two slots
+// never supersede each other; resetStorage of a slot, of the VM's and of
+// all; saveAs; a meta of before the slots boots as main and gets its
+// version; the files of /pharo (a file with its mode and time, an empty
+// directory, a link, a Unicode path) are kept with the image and come back
+// on a boot, but not st/, the placeholders or the REPL's file, and too many
+// of them keep the tree of before (treeError); init.gitProxy null is the
+// site's default; a slot gets the .sources of its name from another entry
+// or manifest.extraSources, and none (sourcesMissing) when the site has
+// none of that name; an init.slot or init.fresh that is not there boots the
+// default entry.  An upload is kept in a slot of its own (18, 19), and
+// prepared.slot is the slot that the world page then boots (19).
 // Prints every case and their count, and exits with
 // status 1 if any fails.  Lane 70 (tests/wasm/lanes/70-worker-harness.sh)
 // runs it.
@@ -107,18 +125,18 @@ async function waitFor(what, pred, ms = 30000) {
   }
 }
 
-let current = null;
+let current = null, fsIds = 100000;
 const sessions = [];
 let shim = null;
 
 // One worker.  `autoAck' acks every output message, as the page does after
 // rendering it.
-function session(init = {}, { autoAck = true, encodeGzip = false, display = false, override = null } = {}) {
-  const site = shim.site({ encodeGzip, override });
+function session(init = {}, { autoAck = true, encodeGzip = false, display = false, override = null, on = shim } = {}) {
+  const site = on.site({ encodeGzip, override });
   const s = { n: site.n, msgs: [], out: '', err: '', states: [], progress: [], ready: null, exit: null, crash: null,
               saved: [], prepared: null, superseded: 0, files: [], ticks: 0, error: null, diag: '', log: site.log,
               markAt: 0, errAt: 0, stateAt: 0, msgAt: 0, acked: 0, ev: [], evBytes: 0 };
-  s.w = shim.worker(site, { overrides: display ? { 'display-worker.js': displayStub } : {} });
+  s.w = on.worker(site, { overrides: display ? { 'display-worker.js': displayStub } : {} });
   // what the worker prints (console.warn of the emscripten runtime)
   s.w.stdout.on('data', d => { s.diag += d; });
   s.w.stderr.on('data', d => { s.diag += d; });
@@ -149,6 +167,7 @@ function session(init = {}, { autoAck = true, encodeGzip = false, display = fals
     case 'state':    s.states.push(m.state); break;
     case 'tick':     s.ticks++; break;
     case 'saved':    s.saved.push(m); break;
+    case 'git':      (s.git = s.git || []).push(m); break;
     case 'prepared': s.prepared = m; break;
     case 'superseded': s.superseded++; break;
     case 'file':     s.files.push(m); break;
@@ -182,6 +201,13 @@ function session(init = {}, { autoAck = true, encodeGzip = false, display = fals
   s.close = () => s.w.terminate();
   s.post(Object.assign({ type: 'init', wasmModule, manifestUrl: 'manifest.json?v=' + encodeURIComponent(manifest.build),
                          build: manifest.build, mode: 'console', persist: true }, init));
+  s.fs = async (op, p, more = {}) => {
+    const id = ++fsIds;
+    s.post(Object.assign({ type: 'fs', id, op, path: p }, more));
+    const r = await s.reply('fs-result', id);
+    if (r.type === 'error') throw new Error(op + ' ' + p + ': ' + r.message);
+    return r;
+  };
   current = s;
   sessions.push(s);
   return s;
@@ -205,6 +231,8 @@ const val = v => new RegExp('(^|> )' + v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') 
 const fetched = (s, name) => s.log.includes('/' + manifest.files.find(f => f.path === name).url);
 const imageName = manifest.image, changesName = imageName.replace(/\.image$/, '.changes');
 const sourcesName = manifest.files.find(f => f.path.endsWith('.sources')).path;
+const PharoCatalog = require(path.join(webDir, 'catalog.js'));
+const defaultEntry = PharoCatalog.defaultEntry(manifest);
 // The events of a notebook worker so far, parsed: JSON lines, each one
 // with "bytes": N followed by N bytes and a newline (its attachment); a
 // line that does not parse fails the case
@@ -391,7 +419,8 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
   await check('8 an upload of a truncated image: crash {message}, the slot as it was; resetStorage still answers', async () => {
     const gz = fs.readFileSync(path.join(webDir, manifest.files.find(f => f.path === imageName).url));
     const image = zlib.gunzipSync(gz).subarray(0, 1 << 20);
-    // a slot that the upload must not replace, as it does not boot
+    // a slot there, which the upload, that does not boot, leaves alone (an
+    // upload that boots is kept in a slot of its own)
     const slot = await PharoStorage.open(memory).save(new Uint8Array(7), new Uint8Array(3), { build: 'earlier' });
     const X = session({ upload: { image, changes: new Uint8Array(0) } });
     X.crashExpected = true;
@@ -403,13 +432,15 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       console.log('#   ' + (X.crash ? 'crash: ' + X.crash.message.split('\n')[0] : 'exit ' + X.exit) +
                   ' / ' + X.err.trim().split('\n').join(' / '));
       assert(!fetched(X, imageName) && fetched(X, sourcesName), 'the upload replaced the fetch of the image');
-      // persisted: a slot is there, which the upload would replace
-      assert(X.ready && X.ready.source === 'upload' && X.ready.persisted === true, 'ready ' + JSON.stringify(X.ready));
+      // persisted: a slot is there
+      assert(X.ready && X.ready.source === 'upload' && X.ready.persisted === true && X.ready.slot === null,
+             'ready ' + JSON.stringify(X.ready));
       assert(!X.saved.length, 'saved ' + JSON.stringify(X.saved));
       assert(memory.map.get('meta').id === slot.id && memory.map.get('Pharo.image').size === 7, 'the slot was replaced');
+      // (no slot of its own: the last one)
       X.post({ type: 'resetStorage', id: 81 });
       const r = await X.reply('reset', 81);
-      assert(r.type === 'reset' && !r.error, 'reset ' + JSON.stringify(r));
+      assert(r.type === 'reset' && !r.error && r.slot === 'main', 'reset ' + JSON.stringify(r));
       assert(memory.map.size === 0, 'the store is empty');
     } finally { await X.close(); }
   });
@@ -437,6 +468,9 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     const m = S.saved[0];
     assert(!m.error && m.bytes > 1e7 && m.prepared === !!manifest.world &&
            m.webPackage === (manifest.world ? webPackage : 0), 'saved ' + JSON.stringify(m));
+    // the first save of a fresh image makes main, named after its entry
+    assert(m.created === true && m.slot && m.slot.slot === 'main' && m.slot.name === defaultEntry.label,
+           'saved ' + JSON.stringify(m));
     const meta = memory.map.get('meta');
     assert(meta && meta.image === 'Pharo.image' && meta.imageSize === m.bytes && meta.build === manifest.build &&
            meta.webPackage === m.webPackage && meta.prepared === m.prepared, 'meta ' + JSON.stringify(meta));
@@ -445,7 +479,8 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     const R = session();
     try {
       await R.started();
-      assert(R.ready.source === 'saved' && R.ready.persisted === true && R.ready.savedAt === meta.savedAt,
+      assert(R.ready.source === 'saved' && R.ready.persisted === true && R.ready.savedAt === meta.savedAt &&
+             R.ready.slot && R.ready.slot.slot === 'main' && R.ready.slot.name === defaultEntry.label,
              'ready ' + JSON.stringify(R.ready));
       assert(R.progress.some(p => p.phase === 'restore'), 'restore progress');
       assert(!fetched(R, imageName) && !fetched(R, changesName), 'the image and its .changes were not fetched');
@@ -506,7 +541,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     const iWaiting = N.msgs.findIndex(m => m.type === 'state' && m.state === WAITING);
     assert(iReady >= 0 && iReady < iHello && iHello < iWaiting, `ready ${iReady} < hello ${iHello} < WAITING ${iWaiting}`);
     const hello = events(N)[0];
-    assert(hello.ev === 'hello' && hello.proto === 1 && /^1[25]\.\d+$/.test(hello.version), 'hello ' + JSON.stringify(hello));
+    assert(hello.ev === 'hello' && hello.proto === 1 && /^1[2-9]\.\d+$/.test(hello.version), 'hello ' + JSON.stringify(hello));
     assert(events(N).map(e => e.ev).join() === 'hello,start,done', 'events ' + events(N).map(e => e.ev));
     await waitFor('WAITING', () => N.states[N.states.length - 1] === WAITING);
     assert(!N.msgs.some(m => m.type === 'output' && m.fd !== 3), 'no output on fds 1 and 2: ' + JSON.stringify(N.out));
@@ -834,8 +869,9 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
   await check('17 vm-storage.js: guarded writes, a fresh id per save, meta, a load during a save, an IndexedDB that fails to open', async () => {
     const m = PharoStorage.memory(), st = PharoStorage.open(m), bytes = n => new Uint8Array(n);
     assert(await st.meta() === null, 'no meta in an empty store');
+    // (storage.test.mjs tests the slots: these are main's)
     const a = await st.save(bytes(3), bytes(2), { build: 'x' });
-    const b = await st.save(bytes(3), bytes(2), { build: 'x' });
+    const b = await st.save(bytes(3), bytes(2), { build: 'x' }, null, a);
     assert(a.id && b.id && a.id !== b.id, 'ids ' + a.id + ' ' + b.id);
     assert(JSON.stringify(await st.meta()) === JSON.stringify(b), 'meta is that of the last save');
     assert(await st.syncChanges(bytes(5), a) === null, 'the slot of a is gone');
@@ -850,7 +886,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     let raced = false;
     const racing = Object.assign({}, m, { get: async key => {
       const v = await m.get(key);
-      if (key === 'Pharo.image' && !raced) { raced = true; await st.save(bytes(4), bytes(4), {}); }
+      if (key === 'Pharo.image' && !raced) { raced = true; await st.save(bytes(4), bytes(4), {}, null, null, { slot: 'main' }); }
       return v;
     } });
     const got = await PharoStorage.open(racing).load();
@@ -878,7 +914,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     const s2 = await st.save(bytes(4), bytes(2), {}, src, s1);
     assert(m.map.get('Pharo.sources') === stored && m.map.get('meta').id === s2.id && s2.sourcesSize === 11,
            'kept as stored when the slot had it');
-    const other = await st.save(bytes(5), bytes(2), {}, null, null);
+    const other = await st.save(bytes(5), bytes(2), {}, null, null, { slot: 'main' });
     assert(!m.map.has('Pharo.sources') && !other.sources, 'deleted by a save without one');
     const s3 = await st.save(bytes(4), bytes(2), {}, { name: 'Other.sources', data: bytes(11) }, s2);
     assert(m.map.get('Pharo.sources').size === 11 && s3.sourcesName === 'Other.sources', 'written again once superseded');
@@ -938,13 +974,19 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       assert(!R.saved[0].error && meta.sourcesName === sourcesName, 'saved ' + JSON.stringify(R.saved[0]));
       assert(memory.map.get('Pharo.sources') === stored, 'the .sources was written again');
     } finally { await R.close(); current = S; }
-    // the .sources of the site, given: not fetched, and not kept in the slot
-    const M = session({ upload: { image, changes, sources: { name: sourcesName, data: site } } });
+    // the .sources of the site, given: not fetched, and not kept in the slot,
+    // a new one (an upload never replaces a slot)
+    const M = session({ upload: { name: 'given.image', image, changes, sources: { name: sourcesName, data: site } } });
     try {
       await M.started();
       assert(M.ready.sources === sourcesName && !fetched(M, sourcesName), 'not fetched: ' + M.log.join(' '));
       await waitFor('saved {upload}', () => M.saved.length, 30000);
-      assert(!memory.map.get('meta').sources && !memory.map.has('Pharo.sources'), 'the slot has no .sources of its own');
+      const m = M.saved[0], k = f => PharoStorage.keyOf(m.slot.slot, f);
+      assert(m.created && m.slot.slot !== 'main' && m.slot.name === 'given.image', 'saved ' + JSON.stringify(m));
+      assert(!memory.map.get(k('meta')).sources && !memory.map.has(k('Pharo.sources')) &&
+             memory.map.get(k('meta')).origin === 'upload:given.image', 'the slot has no .sources of its own');
+      assert(memory.map.get('meta').sourcesName === sourcesName && memory.map.get('Pharo.sources').size === own.length,
+             'main stays');
     } finally { await M.close(); }
   });
 
@@ -952,6 +994,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
   const stock = manifest.world && fs.existsSync(path.join(stockDir, 'Pharo.image'))
     ? { image: fs.readFileSync(path.join(stockDir, 'Pharo.image')), changes: fs.readFileSync(path.join(stockDir, 'Pharo.changes')) }
     : null;
+  let prepared = null;
   if (!stock) console.log('# skip 19: no world image, or no stock image in ' + stockDir);
   else await check('19 init.prepare: a stock image in the world is prepared in the REPL, saved, and kept; or says why not', async () => {
     const world = { mode: 'world', prepare: true, display: { canvas: 'stub' } };
@@ -982,16 +1025,26 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
              'saved ' + JSON.stringify(P.saved));
       assert(P.msgs.indexOf(P.prepared) > P.msgs.indexOf(P.saved[1]), 'prepared after saved');
       assert(P.prepared.webPackage === webPackage, 'prepared ' + JSON.stringify(P.prepared));
-      const meta = memory.map.get('meta');
+      // (the upload is kept in a slot of its own, main being F's; the image
+      // that PREPARE saved goes into it, which prepared says)
+      const slot = P.saved[0].slot.slot;
+      assert(slot !== 'main' && P.saved[1].slot.slot === slot && P.prepared.slot === slot,
+             'prepared.slot ' + JSON.stringify(P.prepared) + ' ' + JSON.stringify(P.saved));
+      prepared = slot;
+      const meta = memory.map.get(PharoStorage.keyOf(slot, 'meta'));
       assert(meta.prepared === true && meta.webPackage === webPackage, 'the slot is prepared: ' + JSON.stringify(meta));
+      assert(memory.map.get('meta').prepared === false, 'main, F\'s, is not');
     } finally { await P.close(); current = S; }
-    const W = session(world, { display: true });
-    try {
-      await waitFor('ready', () => W.ready || W.crash, 60000);
-      assert(W.ready.source === 'saved' && W.ready.prepared === true && W.ready.preparing === false,
-             'ready ' + JSON.stringify(W.ready));
-      assert(W.msgs.some(m => m.type === 'display' && m.kind === 'created'), 'a display');
-    } finally { await W.close(); }
+    // the page then boots prepared.slot (world.js onPrepared), as the last one does too
+    for (const init of [{ slot: prepared }, {}]) {
+      const W = session(Object.assign({}, world, init), { display: true });
+      try {
+        await waitFor('ready', () => W.ready || W.crash, 60000);
+        assert(W.ready.source === 'saved' && W.ready.prepared === true && W.ready.preparing === false &&
+               W.ready.slot.slot === prepared, 'ready ' + JSON.stringify(W.ready));
+        assert(W.msgs.some(m => m.type === 'display' && m.kind === 'created'), 'a display');
+      } finally { await W.close(); }
+    }
   });
 
   // ---- the versions of OSWindow-Web (manifest.webPackage)
@@ -1356,6 +1409,388 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       await R.prompt();
     } finally { await R.close(); current = S; }
   });
+
+  // ---- the catalog and the slots (catalog.js, vm-storage.js)
+  //
+  // Sites of their own, in TEST_DIR: WEB_DIR's files (linked), with a
+  // manifest.json of a catalog of two entries, the default one and px, whose
+  // files are the default's, served under image/px/ (catalogSite); and one
+  // whose default entry has a .sources of another name, px the real one,
+  // and extraSources one more name (sourcesSite)
+  const scratch = path.dirname(displayStub);
+  const realSources = sourcesName;
+  const siteOf = (name, edit) => {
+    const dir = path.join(scratch, name);
+    fs.mkdirSync(path.join(dir, 'image'), { recursive: true });
+    for (const e of fs.readdirSync(webDir)) {
+      if (e !== 'manifest.json' && e !== 'image') fs.symlinkSync(path.join(webDir, e), path.join(dir, e));
+    }
+    for (const sub of ['', 'px', 'sources']) {
+      fs.mkdirSync(path.join(dir, 'image', sub), { recursive: true });
+      for (const f of manifest.files) {
+        const base = path.basename(f.url);
+        if (!fs.existsSync(path.join(dir, 'image', sub, base)))
+          fs.symlinkSync(path.join(webDir, f.url), path.join(dir, 'image', sub, base));
+      }
+    }
+    const m = JSON.parse(JSON.stringify(manifest));
+    const files = m.files.map(f => Object.assign({}, f));
+    const px = files.map(f => Object.assign({}, f, { url: f.url.replace(/^image\//, 'image/px/') }));
+    m.imageId = defaultEntry.id === 'default' ? 'p0' : defaultEntry.id;
+    m.images = [Object.assign({}, defaultEntry, { id: m.imageId, default: true, files }),
+                Object.assign({}, defaultEntry, { id: 'px', label: 'Pharo X', pharoBuild: 1, files: px, default: undefined })];
+    m.gitProxyDefault = 'http://127.0.0.1:9/';
+    edit(m);
+    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(m, null, 2));
+    return { dir, manifest: m };
+  };
+  const catalogSite = siteOf('catalog', () => {});
+  const otherName = 'Pharo15.0-64bit-0000000.sources', legacyName = 'Pharo15.0-64bit-4e572fe.sources';
+  const sourcesSite = siteOf('sources', m => {
+    const def = m.images[0], src = def.files.find(f => f.path === realSources);
+    src.path = otherName;
+    m.files = def.files;
+    const legacy = Object.assign({}, src, { path: legacyName, url: src.url.replace(/^image\//, 'image/sources/') });
+    m.extraSources = [legacy];
+  });
+  const shimOf = async site => WorkerShim.start(site.dir, { memory });
+  const C = await shimOf(catalogSite), CS = await shimOf(sourcesSite);
+  const on = sh => ({ on: sh });
+  const has = (s, url) => s.log.includes('/' + url);
+  const keyOf = PharoStorage.keyOf;
+  const px = catalogSite.manifest.images[1];
+  const slotIds = () => [...memory.map.keys()].map(k => /^slot\/([^/]+)\/meta$/.exec(k)).filter(Boolean).map(x => x[1]);
+  let A = null, B = null;
+
+  await check('C1 init.fresh px: only the files of px are fetched; ready {imageId, slot: null, gitProxy}', async () => {
+    memory.map.clear();
+    A = session({ fresh: 'px' }, on(C));
+    current = A;
+    await A.started();
+    for (const f of px.files) assert(has(A, f.url), f.url + ' fetched: ' + A.log.join(' '));
+    for (const f of manifest.files) assert(!has(A, f.url), f.url + ' not fetched');
+    const r = A.ready;
+    assert(r.source === 'download' && r.slot === null && r.imageId === 'px' && r.pharo === px.pharo &&
+           r.persisted === false && !r.freshMissing && !r.slotMissing && !r.sourcesMissing &&
+           r.gitProxy === 'http://127.0.0.1:9/' && r.gitProxyDefault === 'http://127.0.0.1:9/', 'ready ' + JSON.stringify(r));
+  });
+
+  await check('C2 the first save of a fresh image makes main (origin fresh:px, its name); a second fresh one a slot', async () => {
+    assert(A && A.ready, 'no session of C1');
+    current = A;
+    A.post({ type: 'save' });
+    await waitFor('saved', () => A.saved.length, 60000);
+    await A.prompt(60000);
+    const m = A.saved[0];
+    assert(!m.error && m.created === true && m.slot.slot === 'main' && m.slot.name === 'Pharo X' && m.treeFiles >= 0,
+           'saved ' + JSON.stringify(m));
+    const meta = memory.map.get('meta');
+    assert(meta.slot === 'main' && meta.origin === 'fresh:px' && meta.imageId === 'px' && meta.sourcesName === realSources &&
+           meta.pharo === px.pharo && memory.map.get('Pharo.name') === 'Pharo X', 'meta ' + JSON.stringify(meta));
+    assert(memory.map.get('last').slot === 'main', 'last');
+    B = session({ fresh: 'px', name: 'Pharo X' }, on(C));
+    current = B;
+    await B.started();
+    B.post({ type: 'save' });
+    await waitFor('saved', () => B.saved.length, 60000);
+    await B.prompt(60000);
+    const b = B.saved[0], sid = b.slot.slot;
+    assert(!b.error && b.created && sid !== 'main' && PharoStorage.SLOT_ID.test(sid) && b.slot.name === 'Pharo X (2)',
+           'saved ' + JSON.stringify(b));
+    assert(memory.map.get(keyOf(sid, 'meta')).origin === 'fresh:px' && memory.map.get('last').slot === sid &&
+           memory.map.get(keyOf(sid, 'Pharo.name')) === 'Pharo X (2)', 'slot ' + sid);
+    // a save again goes into the same slot
+    B.post({ type: 'save' });
+    await waitFor('saved again', () => B.saved.length > 1, 60000);
+    await B.prompt(60000);
+    assert(B.saved[1].slot.slot === sid && B.saved[1].created === false && slotIds().length === 1,
+           'saved ' + JSON.stringify(B.saved[1]));
+  });
+
+  await check('C3 two workers on main and on a slot: their saves and .changes never supersede each other', async () => {
+    assert(A && B && B.saved.length > 1, 'no sessions of C2');
+    const sid = B.saved[0].slot.slot;
+    const changesOf = slot => memory.map.get(keyOf(slot, 'Pharo.changes'));
+    current = A;
+    A.send("Object compile: 'slotProbeA ^ 1' classified: 'harness'. #a\n");
+    await A.expectOut(val('#a'));
+    await A.prompt();
+    A.post({ type: 'save' });
+    await waitFor('A saved', () => A.saved.length > 1, 60000);
+    await A.prompt(60000);
+    const before = changesOf(sid);
+    current = B;
+    B.send("Object compile: 'slotProbeB ^ 2' classified: 'harness'. #b\n");
+    await B.expectOut(val('#b'));
+    await B.prompt();
+    B.post({ type: 'flush' });
+    await waitFor('the .changes of B stored', () => changesOf(sid) !== before, 3000);
+    current = A;
+    const mainBefore = changesOf('main');
+    A.send("Object compile: 'slotProbeA2 ^ 3' classified: 'harness'. #a2\n");
+    await A.expectOut(val('#a2'));
+    await A.prompt();
+    A.post({ type: 'flush' });
+    await waitFor('the .changes of A stored', () => changesOf('main') !== mainBefore, 3000);
+    await sleep(600);
+    assert(!A.superseded && !B.superseded, 'superseded: A ' + A.superseded + ', B ' + B.superseded);
+    // a third worker on init.slot main
+    const T = session({ slot: 'main' }, on(C));
+    try {
+      current = T;
+      await T.started();
+      assert(T.ready.source === 'saved' && T.ready.slot.slot === 'main' && T.ready.slot.name === 'Pharo X' &&
+             T.ready.slot.origin === 'fresh:px' && T.ready.imageId === 'px', 'ready ' + JSON.stringify(T.ready));
+      // (the image A saved, with the .changes A stored since)
+      T.send('{ Object canUnderstand: #slotProbeA. Object canUnderstand: #slotProbeB }\n');
+      await T.expectOut(val('#(true false)'));
+    } finally { await T.close(); }
+  });
+
+  await check('C4 resetStorage {slot} deletes that slot only; {} the slot of the VM; {all: true} every one', async () => {
+    assert(A && B, 'no sessions of C2');
+    const sid = B.saved[0].slot.slot;
+    current = A;
+    A.post({ type: 'resetStorage', id: 401, slot: sid });
+    const r1 = await A.reply('reset', 401);
+    assert(r1.type === 'reset' && !r1.error && r1.slot === sid, 'reset ' + JSON.stringify(r1));
+    assert(!slotIds().length && ![...memory.map.keys()].some(k => k.startsWith('slot/')) && memory.map.get('meta'),
+           'only B\'s: ' + [...memory.map.keys()]);
+    // B's VM saves again: its slot comes back
+    current = B;
+    B.post({ type: 'save' });
+    await waitFor('B saved', () => B.saved.length > 2, 60000);
+    await B.prompt(60000);
+    assert(B.saved[2].slot.slot === sid && memory.map.get(keyOf(sid, 'meta')), 'recreated: ' + JSON.stringify(B.saved[2]));
+    current = A;
+    A.post({ type: 'resetStorage', id: 402 });
+    const r2 = await A.reply('reset', 402);
+    assert(!r2.error && r2.slot === 'main' && !memory.map.has('meta') && memory.map.get(keyOf(sid, 'meta')),
+           'reset ' + JSON.stringify(r2) + ': ' + [...memory.map.keys()]);
+    // A is bound to none now: its next save is a new slot, main (free again)
+    A.post({ type: 'save' });
+    await waitFor('A saved', () => A.saved.length > 2, 60000);
+    await A.prompt(60000);
+    assert(A.saved[2].created && A.saved[2].slot.slot === 'main', 'saved ' + JSON.stringify(A.saved[2]));
+    B.post({ type: 'resetStorage', id: 403, all: true });
+    const r3 = await B.reply('reset', 403);
+    assert(!r3.error && r3.slot === null && memory.map.size === 0, 'reset ' + JSON.stringify(r3) + ': ' + [...memory.map.keys()]);
+  });
+  if (A) await A.close();
+  if (B) await B.close();
+
+  await check('C5 saveAs: a new slot of that name (origin save-as:<slot>), which the next saves go into', async () => {
+    memory.map.clear();
+    const F = session({}, on(C));
+    try {
+      current = F;
+      await F.started();
+      F.post({ type: 'save' });
+      await waitFor('saved', () => F.saved.length, 60000);
+      await F.prompt(60000);
+      const main = memory.map.get('meta');
+      F.post({ type: 'saveAs', name: 'My copy' });
+      await waitFor('saved as', () => F.saved.length > 1, 60000);
+      await F.prompt(60000);
+      const m = F.saved[1], sid = m.slot.slot;
+      assert(!m.error && m.created && sid !== 'main' && m.slot.name === 'My copy', 'saved ' + JSON.stringify(m));
+      const meta = memory.map.get(keyOf(sid, 'meta'));
+      assert(meta.origin === 'save-as:main' && memory.map.get('meta').id === main.id, 'meta ' + JSON.stringify(meta));
+      F.post({ type: 'save' });
+      await waitFor('saved again', () => F.saved.length > 2, 60000);
+      await F.prompt(60000);
+      assert(F.saved[2].slot.slot === sid && !F.saved[2].created && memory.map.get('meta').id === main.id,
+             'into the copy: ' + JSON.stringify(F.saved[2]));
+      // a name taken: (2)
+      F.post({ type: 'saveAs', name: 'My copy' });
+      await waitFor('saved as again', () => F.saved.length > 3, 60000);
+      await F.prompt(60000);
+      assert(F.saved[3].slot.name === 'My copy (2)' && slotIds().length === 2, 'saved ' + JSON.stringify(F.saved[3]));
+    } finally { await F.close(); }
+  });
+
+  await check('C6 a slot of before the slots (a meta without slot or version) boots as main, and gets its version', async () => {
+    memory.map.clear();
+    const image = manifestFile(imageName), changes = manifestFile(changesName);
+    await memory.write([['Pharo.image', new Blob([image])], ['Pharo.changes', new Blob([changes])],
+                        ['meta', { id: 'legacy', image: 'Pharo.image', changes: 'Pharo.changes', imageSize: image.length,
+                                   changesSize: changes.length, savedAt: 1, syncedAt: 1, build: 'earlier',
+                                   prepared: !!manifest.world, webPackage: manifest.world ? webPackage : 0 }]]);
+    const L = session({}, on(C));
+    try {
+      current = L;
+      await L.started();
+      const r = L.ready;
+      assert(r.source === 'saved' && r.slot && r.slot.slot === 'main' && r.slot.name === 'Saved image' &&
+             r.pharo === PharoCatalog.pharoOf(realSources) && r.sources === realSources, 'ready ' + JSON.stringify(r));
+      assert(!has(L, catalogSite.manifest.files.find(f => f.path === imageName).url), 'the image not fetched');
+      await waitFor('annotated', () => memory.map.get('meta').sourcesName === realSources, 5000);
+      const meta = memory.map.get('meta');
+      assert(meta.id === 'legacy' && meta.pharo === r.pharo && !('slot' in meta) && memory.map.get('last').slot === 'main',
+             'meta ' + JSON.stringify(meta));
+      // its .changes still follows, under the guard of main
+      L.send("Object compile: 'legacyProbe ^ 1' classified: 'harness'. #l\n");
+      await L.expectOut(val('#l'));
+      await L.prompt();
+      L.post({ type: 'flush' });
+      await waitFor('synced', () => memory.map.get('meta').changesSize > changes.length, 3000);
+      assert(memory.map.get('meta').sourcesName === realSources, 'the annotation stays');
+    } finally { await L.close(); }
+  });
+
+  await check('C7 the tree: files, an empty directory and a link of /pharo survive a save and a boot; st/, the placeholders and WORLD_FILE do not', async () => {
+    memory.map.clear();
+    const T = session({}, on(C));
+    let treeFiles = 0;
+    try {
+      current = T;
+      await T.started();
+      await T.fs('writeFile', '/pharo/pharo-local/x/y', { data: new TextEncoder().encode('kept'), mode: 0o100600,
+                                                          mtime: 1700000000000 });
+      await T.fs('mkdir', '/pharo/pharo-local/iceberg/r/.git/refs');
+      await T.fs('symlink', '/pharo/pharo-local/link', { target: 'x/y' });
+      await T.fs('writeFile', '/pharo/dir é/文件.txt', { data: 'ünïcødé' });
+      T.post({ type: 'save' });
+      await waitFor('saved', () => T.saved.length, 60000);
+      await T.prompt(60000);
+      const m = T.saved[0];
+      assert(!m.error && !m.treeError && m.treeFiles >= 7 && m.treeSize > 0, 'saved ' + JSON.stringify(m));
+      treeFiles = m.treeFiles;
+      const tree = memory.map.get('Pharo.tree'), paths = tree.entries.map(e => e[0]);
+      for (const p of ['pharo-local', 'pharo-local/x/y', 'pharo-local/iceberg/r/.git/refs', 'pharo-local/link', 'dir é/文件.txt'])
+        assert(paths.includes(p), p + ' kept: ' + paths.join(' '));
+      for (const p of paths) {
+        assert(!/^st(\/|$)/.test(p) && !(manifest.libraries || []).includes(p) && p !== '.pharo-web-world' &&
+               !/^[^/]*\.(image|changes|sources)$/.test(p), p + ' is not kept');
+      }
+      assert(memory.map.get('meta').treeFiles === paths.length, 'treeFiles');
+    } finally { await T.close(); }
+    const R = session({}, on(C));
+    try {
+      current = R;
+      await R.started();
+      const y = await R.fs('stat', '/pharo/pharo-local/x/y');
+      assert((y.mode & 0o7777) === 0o600 && y.mtime === 1700000000000 && y.size === 4, 'stat ' + JSON.stringify(y));
+      const read = await R.fs('readFile', '/pharo/pharo-local/x/y');
+      assert(new TextDecoder().decode(read.data) === 'kept', 'its bytes');
+      const d = await R.fs('stat', '/pharo/pharo-local/iceberg/r/.git/refs');
+      assert((d.mode & 0o170000) === 0o040000, 'a directory: ' + JSON.stringify(d));
+      const l = await R.fs('stat', '/pharo/pharo-local/link');
+      assert(l.link === 'x/y', 'a link: ' + JSON.stringify(l));
+      const u = await R.fs('readFile', '/pharo/dir é/文件.txt');
+      assert(new TextDecoder().decode(u.data) === 'ünïcødé', 'a Unicode path');
+      R.send("('pharo-local/link' asFileReference) contents\n");
+      await R.expectOut(val("'kept'"));
+      await R.prompt();
+      // more than TREE_MAX_ENTRIES: the slot keeps the tree it has
+      const n = 50001;
+      for (let i = 0; i < n; i++) R.post({ type: 'fs', id: 500000 + i, op: 'mkdir', path: '/pharo/many/d' + i });
+      await waitFor('the directories', () => R.msgs.some(x => x.id === 500000 + n - 1), 120000);
+      assert(!R.msgs.some(x => x.type === 'error' && x.id >= 500000), 'mkdir failed');
+      R.post({ type: 'save' });
+      await waitFor('saved', () => R.saved.length, 120000);
+      await R.prompt(60000);
+      const m = R.saved[0];
+      assert(!m.error && /^the files of the image \(\d+ MB, \d+ files\) are too large to keep: clones made since the last save are lost on reload$/
+               .test(m.treeError || '') && m.treeFiles === treeFiles, 'saved ' + JSON.stringify(m));
+      assert(memory.map.get('meta').treeFiles === treeFiles && memory.map.get('Pharo.tree').entries.length === treeFiles,
+             'the tree of before stays');
+    } finally { await R.close(); }
+  });
+
+  await check('C8 init.gitProxy: null or absent is the site\'s default, \'\' none, a URL that one', async () => {
+    const cases = [[null, 'http://127.0.0.1:9/'], [undefined, 'http://127.0.0.1:9/'], ['', ''], ['ftp://x/', ''],
+                   ['https://proxy.example/', 'https://proxy.example/']];
+    for (const [given, want] of cases) {
+      const init = { persist: false };
+      if (given !== undefined) init.gitProxy = given;
+      const G = session(init, on(C));
+      try {
+        current = G;
+        await waitFor('ready', () => G.ready || G.crash, 60000);
+        G.alive();
+        assert(G.ready.gitProxy === want && G.ready.gitProxyDefault === 'http://127.0.0.1:9/',
+               JSON.stringify(given) + ': ready ' + JSON.stringify(G.ready));
+      } finally { await G.close(); }
+    }
+    // a site without a default: none
+    const G = session({ persist: false, gitProxy: null });
+    try {
+      await waitFor('ready', () => G.ready || G.crash, 60000);
+      assert(G.ready.gitProxy === (manifest.gitProxyDefault || '') && G.ready.gitProxyDefault === (manifest.gitProxyDefault || ''),
+             'ready ' + JSON.stringify(G.ready));
+    } finally { await G.close(); }
+  });
+
+  await check('C9 the .sources of a slot: another entry\'s or an extra one of its name; sourcesMissing when the site has none', async () => {
+    const image = manifestFile(imageName), changes = manifestFile(changesName);
+    const def = sourcesSite.manifest.images[0], pxs = sourcesSite.manifest.images[1];
+    const pxSources = pxs.files.find(f => f.path === realSources), legacy = sourcesSite.manifest.extraSources[0];
+    const seed = async meta => {
+      memory.map.clear();
+      await memory.write([['Pharo.image', new Blob([image])], ['Pharo.changes', new Blob([changes])],
+                          ['meta', Object.assign({ id: 's', image: 'Pharo.image', changes: 'Pharo.changes',
+                                                   imageSize: image.length, changesSize: changes.length, savedAt: 1,
+                                                   prepared: !!manifest.world,
+                                                   webPackage: manifest.world ? webPackage : 0 }, meta)]]);
+    };
+    const boot = async () => {
+      const X = session({}, on(CS));
+      current = X;
+      await X.started();
+      return X;
+    };
+    // the name in the image: px's file (the default's has another name)
+    await seed({});
+    let X = await boot();
+    try {
+      assert(X.ready.sources === realSources && X.ready.imageId === 'px' && !X.ready.sourcesMissing,
+             'ready ' + JSON.stringify(X.ready));
+      assert(has(X, pxSources.url) && !X.log.some(u => /\.sources/.test(u) && u !== '/' + pxSources.url),
+             'fetched ' + X.log.join(' '));
+      X.send('(Object >> #printString) sourceCode lines first\n');
+      await X.expectOut(val("'printString'"));
+    } finally { await X.close(); }
+    // the name of the meta: the extra .sources
+    await seed({ sourcesName: legacyName, pharo: '15.0' });
+    X = await boot();
+    try {
+      assert(X.ready.sources === legacyName && X.ready.imageId === null && !X.ready.sourcesMissing,
+             'ready ' + JSON.stringify(X.ready));
+      assert(has(X, legacy.url), 'fetched ' + X.log.join(' '));
+    } finally { await X.close(); }
+    // a name that the site does not serve: none, and sourcesMissing
+    await seed({ sourcesName: 'Pharo11.0-64bit-1111111.sources', pharo: '11.0' });
+    X = await boot();
+    try {
+      assert(X.ready.sourcesMissing === 'Pharo11.0-64bit-1111111.sources' && X.ready.sources === null &&
+             X.ready.pharo === '11.0', 'ready ' + JSON.stringify(X.ready));
+      assert(!X.log.some(u => /\.sources/.test(u)), 'nothing fetched: ' + X.log.join(' '));
+      X.send('3 + 4\n');
+      await X.expectOut(val('7'));
+    } finally { await X.close(); }
+    assert(def.files.some(f => f.path === otherName), 'the default entry\'s .sources has another name');
+  });
+
+  await check('C10 init.slot that is not there: slotMissing; init.fresh unknown: freshMissing; both boot the default entry', async () => {
+    memory.map.clear();
+    for (const [init, key, value] of [[{ slot: 'zzzz-1-1' }, 'slotMissing', 'zzzz-1-1'],
+                                      [{ slot: '../meta' }, 'slotMissing', '../meta'],
+                                      [{ fresh: 'nope' }, 'freshMissing', 'nope']]) {
+      const X = session(init, on(C));
+      try {
+        current = X;
+        await waitFor('ready', () => X.ready || X.crash, 60000);
+        X.alive();
+        assert(X.ready[key] === value && X.ready.source === 'download' && X.ready.slot === null &&
+               X.ready.imageId === catalogSite.manifest.imageId, JSON.stringify(init) + ': ready ' + JSON.stringify(X.ready));
+        for (const f of catalogSite.manifest.files) assert(has(X, f.url), f.url + ' fetched');
+      } finally { await X.close(); }
+    }
+  });
+  await C.close();
+  await CS.close();
+  current = S;
 
   await S.close();
   // the crashes asked for excepted

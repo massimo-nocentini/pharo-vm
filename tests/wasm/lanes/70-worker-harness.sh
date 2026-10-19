@@ -1,6 +1,9 @@
 #!/bin/sh
 # 70-worker-harness - the Web Worker of the pages, in node
 #
+# storage.test.mjs first checks the slots of vm-storage.js and the catalog
+# of catalog.js, of this tree, on the in-memory store (keys, main if free,
+# the guards per slot, the tree, last, rename and remove).  Then
 # worker-harness.js runs build-wasm/web/vm-worker.js, as staged, in
 # worker_threads Workers with a 1 MB stack, behind the shim of the worker
 # globals of tests/wasm/lib/worker-shim.js, and plays the page: the protocol
@@ -18,8 +21,13 @@
 # to 3, the AthensCairoSurface extension, and from 3 to 4, Iceberg's https://
 # remotes), and, when manifest.libraries has some, the placeholders of the
 # libraries of the FFI (24); a case whose build lacks what it needs says
-# '# skip' and why.  An engine-level failure on its stderr fails the lane
-# too.  The harness is stopped after 600 s.
+# '# skip' and why.  On sites of its own with a catalog of two images (C1-
+# C10) it checks init.fresh, init.slot and the slots: main if free, a slot
+# per fresh image, saveAs, two workers on two slots, resetStorage of a
+# slot, a meta of before the slots, the tree of /pharo kept with the image,
+# the site's default git proxy, and the .sources a slot gets by name.  An
+# engine-level failure on its stderr fails the lane too.  The harness is
+# stopped after 600 s.
 #
 # Environment (from make wasm-check): NODE, WASM_DIR, SRCDIR, TEST_DIR.
 
@@ -29,7 +37,7 @@ SRCDIR=$(cd "${SRCDIR:-$(dirname "$0")/../../..}" && pwd)
 # (the defaults of WASM_DIR, TEST_DIR, which it exports, and NODE, and limit)
 . "$SRCDIR/tests/wasm/lib/common.sh"
 
-for f in vm-worker.js vm-driver.js vm-storage.js pharo-web.js pharo-web.wasm manifest.json; do
+for f in vm-worker.js vm-driver.js vm-storage.js catalog.js pharo-web.js pharo-web.wasm manifest.json; do
     if ! test -f "$WASM_DIR/web/$f"; then
         echo "FAIL 70-worker-harness: no $WASM_DIR/web/$f (make wasm)"
         exit 1
@@ -38,6 +46,14 @@ done
 
 err=$TEST_DIR/70-worker-harness.err
 status=0
+limit 120 "$NODE" "$SRCDIR/tests/wasm/storage.test.mjs" || status=$?
+if test "$status" -eq 124; then
+    echo "FAIL 70-worker-harness: storage.test.mjs timed out after 120 s"
+fi
+if test "$status" -ne 0; then
+    echo "FAIL 70-worker-harness: storage.test.mjs"
+    exit 1
+fi
 limit 600 "$NODE" "$SRCDIR/tests/wasm/worker-harness.js" "$WASM_DIR/web" 2>"$err" || status=$?
 if test "$status" -eq 124; then
     echo "FAIL 70-worker-harness: timed out after 600 s"

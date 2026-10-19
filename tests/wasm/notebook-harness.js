@@ -17,12 +17,14 @@
 // against the real WEB_DIR/vm-worker.js in worker_threads, behind the shim
 // of tests/wasm/lib/worker-shim.js, whose store is the IndexedDB of the
 // page: with an image of another Pharo than the site's (another .sources),
-// that image is the Console's slot, which the kernel boots from.  With
+// that image is the Console's slot, which the kernel boots from; and init
+// as a function, called at each start (notebook.js gives it the Console's
+// choice of slot), boots the slot it names (C24).  With
 // HOST_PHARO set, K31 also runs the kernel in that native VM, with
 // NOTEBOOK_EVENTS=/dev/fd/3.
 //
 // NB_CASES=<regexp> runs only the cases whose names match it.
-// The cases follow the plan's tests (K1-K31, F1-F3, C1-C23); they branch on
+// The cases follow the plan's tests (K1-K31, F1-F3, C1-C24); they branch on
 // hello.major only where Pharo 12 and 15 really differ.  Prints every case
 // and their count, and exits with status 1 if any fails.  Lane 61
 // (tests/wasm/lanes/61-notebook-harness.sh) runs it once in default node
@@ -43,6 +45,7 @@ const createPharoVM = require(path.join(webDir, 'pharo-web.js'));
 const Driver = require(path.join(srcWeb, 'vm-driver.js'));
 const Kernel = require(path.join(srcWeb, 'nb-kernel.js'));
 const PharoStorage = require(path.join(webDir, 'vm-storage.js'));
+const PharoCatalog = require(path.join(webDir, 'catalog.js'));
 const WorkerShim = require('./lib/worker-shim.js');
 const { WAITING, BUSY, SLEEPING, EXITED, HOST_IMAGE_SAVED } = Driver;
 const wasmModule = new WebAssembly.Module(fs.readFileSync(path.join(webDir, 'pharo-web.wasm')));
@@ -296,7 +299,7 @@ async function partK() {
     const h = await K.hello();
     eq(h.proto, 1, 'proto');
     assert(h.major === 12 || h.major === 15, 'major ' + h.major);
-    assert(/^1[25]\.\d+$/.test(h.version) && h.version.startsWith(h.major + '.'), 'version ' + h.version);
+    assert(/^1[2-9]\.\d+$/.test(h.version) && h.version.startsWith(h.major + '.'), 'version ' + h.version);
     eq(h.wordSize, 8, 'wordSize');
     major = h.major;
     await K.idle();
@@ -1043,7 +1046,7 @@ async function partC() {
     await C.k.start();
     eq(C.states, ['starting', 'idle'], 'states');
     const i = C.k.info;
-    assert(i && i.proto === 1 && i.major === major && /^1[25]\.\d+$/.test(i.version) && i.wordSize === 8 &&
+    assert(i && i.proto === 1 && i.major === major && /^1[2-9]\.\d+$/.test(i.version) && i.wordSize === 8 &&
            i.source === (otherPharo ? 'saved' : 'download'), 'info ' + J(i));
   });
   if (!C || C.k.state !== 'idle') { console.log('cannot continue'); return; }
@@ -1384,6 +1387,48 @@ async function partC() {
       eq(M.k.info.source, 'download', 'source');
       assert(M.worker().site.log.includes(imageUrl), 'the image was not fetched: ' + M.worker().site.log.join(' '));
     } finally { M.k.dispose(); }
+  });
+
+  // init as a function, which the kernel calls at each start: the Console's
+  // choice of now (notebook.js: P.bootChoice()), here a slot
+  await check('C24 init as a function with init.slot: the kernel boots that slot, and the next start the slot of then', async () => {
+    assert(consoleSaved, 'no slot (C21)');
+    memory.map.clear();
+    const st = PharoStorage.open(memory);
+    // two slots: main, of another image, and the Console's (PageMarker 777)
+    // as a slot of its own
+    const image = zlib.gunzipSync(fs.readFileSync(path.join(webDir, manifest.files.find(f => f.path === manifest.image).url)));
+    const changes = zlib.gunzipSync(fs.readFileSync(path.join(webDir, manifest.files.find(f => /\.changes$/.test(f.path)).url)));
+    await st.save(image, changes, { build: manifest.build }, null, null, { slot: null, name: 'plain' });
+    const w = newWorker();
+    let sid = null;
+    try {
+      const msgs = [];
+      let out = '';
+      w.onmessage = e => { msgs.push(e.data); if (e.data.type === 'output' && e.data.fd !== 3) { out += e.data.text; w.postMessage({ type: 'ack', chars: e.data.text.length }); } };
+      w.postMessage({ type: 'init', wasmModule, manifestUrl: 'manifest.json?v=' + encodeURIComponent(manifest.build),
+                      build: manifest.build, mode: 'console', persist: true, fresh: PharoCatalog.defaultEntry(manifest).id });
+      await waitFor('the prompt', () => /st> $/.test(out), 60000);
+      w.postMessage({ type: 'input', text: 'Smalltalk at: #PageMarker put: 778\n' });
+      await waitFor('778', () => /778\nst> $/.test(out), 30000);
+      w.postMessage({ type: 'save' });
+      const saved = await waitFor('saved', () => msgs.find(m => m.type === 'saved'), 120000);
+      assert(!saved.error && saved.slot && saved.slot.slot !== 'main', 'saved ' + J(saved));
+      sid = saved.slot.slot;
+    } finally { w.terminate(); }
+    let choice = { slot: 'main' };
+    const base = { manifestUrl: 'manifest.json?v=' + encodeURIComponent(manifest.build), build: manifest.build,
+                   persist: true, gitProxy: '' };
+    const N = client({ init: () => Object.assign({}, base, choice) });
+    try {
+      eq((await N.k.run('m', 'Smalltalk at: #PageMarker ifAbsent: [ #none ]')).values, ['#none'], 'main');
+      eq(N.k.info.source, 'saved', 'source');
+      choice = { slot: sid };
+      await N.k.restart();
+      eq((await N.k.run('m2', 'Smalltalk at: #PageMarker ifAbsent: [ #none ]')).values, ['778'], 'the slot of then');
+    } finally { N.k.dispose(); }
+    const keys = [...memory.map.keys()].sort().join();
+    assert(memory.map.get('last').slot === sid, 'the Console worker set last, the kernel never: ' + keys);
   });
 }
 

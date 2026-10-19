@@ -22,8 +22,12 @@
 // callback.  begin() runs the first slice, which loads the image.  Options:
 //
 //   args         the VM's arguments (default vmArgs('console'))
-//   files        [{path, data}] written into MEMFS before main() runs, with
-//                the directories they need; data is a Uint8Array or a string
+//   files        written into MEMFS before main() runs, in order, with the
+//                directories they need: {path, data, mode?, mtime?}, a file
+//                (data a Uint8Array or a string; mode its permission bits,
+//                of a stat mode; mtime in ms), {path, dir: true, mode?}, a
+//                directory (an empty one too), and {path, link}, a symbolic
+//                link to link (the files of a slot, vm-worker.js)
 //   cwd          the working directory (default '/pharo', created)
 //   thisProgram  argv[0] (default '/pharo/pharo': the VM's directory is /pharo)
 //   env          {name: value} added to the environment of the VM
@@ -241,9 +245,21 @@
         FS.mkdirTree(cwd);
         FS.chdir(cwd);
         for (const f of o.files || []) {
+          if (f.dir) {
+            FS.mkdirTree(f.path);
+            if (f.mode) FS.chmod(f.path, f.mode & 0o7777);
+            continue;
+          }
           const dir = f.path.slice(0, f.path.lastIndexOf('/'));
           if (dir) FS.mkdirTree(dir);
+          if (f.link !== undefined) {
+            try { FS.unlink(f.path); } catch (e) { /* none there */ }
+            FS.symlink(f.link, f.path);
+            continue;
+          }
           FS.writeFile(f.path, f.data);
+          if (f.mode) FS.chmod(f.path, f.mode & 0o7777);
+          if (f.mtime) FS.utime(f.path, f.mtime, f.mtime);
         }
         for (const name in o.env || {}) mod.ENV[name] = String(o.env[name]);
         // stdin stays the terminal (/dev/tty), as for a user at a console:

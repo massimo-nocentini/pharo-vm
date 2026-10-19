@@ -14,7 +14,8 @@
 // rest (DecompressionStream, Blob, TextDecoder).  The storage of
 // vm-storage.js is `memory' (PharoStorage.memory() of the harness), which
 // outlives the workers as IndexedDB outlives a page: the shim makes it
-// PharoStorage.backend, through a port.  guard(op), when given, is called
+// PharoStorage.backend, through a port (get, write, clear and keys, which
+// lists the slots).  guard(op), when given, is called
 // before each operation of that store, and what it throws is the error of
 // the operation (a full disk, a database that cannot be opened).
 //
@@ -68,7 +69,7 @@ const prelude = `
     storePort.postMessage({ n: lastCall, op, args });
   });
   const store = { get: key => call('get', [key]), write: (e, guard) => call('write', [e, guard]),
-                  clear: () => call('clear', []) };
+                  clear: () => call('clear', []), keys: () => call('keys', []) };
   globalThis.importScripts = (...files) => files.forEach(p => {
     const name = p.split('?')[0], file = overrides[name] || path.join(dir, name);
     vm.runInThisContext(fs.readFileSync(file, 'utf8'), { filename: file });
