@@ -20,14 +20,24 @@
 // files.pharo.org): each must be unpacked and started with its own
 // .sources, whether its image then runs the REPL or not.
 //
+// The images: the Console boots the image of ?slot= (the URL then says the
+// image that runs, and so does the link to the world); an opened image
+// becomes a slot of its own, never over another; Delete deletes the slot
+// of the Console only (two slots); Images lists the slots, and starts
+// another one; Save as makes a new slot.
+//
 // Settings, the CORS proxy of git's requests, is checked in contexts of
 // their own, on any build: one without libgit2's smart-HTTP transport is
 // given a manifest that says it has it, so that the page shows Settings.
-// The proxy typed in is checked, shown with its origin, kept in
+// The site's default (pw.mjs serves a manifest whose gitProxyDefault is a
+// dead local proxy) goes to the worker as null, and the start note names
+// it; a proxy typed in is checked, shown with its origin, kept in
 // localStorage and given to the worker (init.gitProxy, then "gitProxy"),
-// also by the world page; a ?gitProxy= of the URL is ignored; without
-// localStorage it holds for the session.  A clone through the proxy is
-// git.spec.mjs's.
+// also by the world page; None keeps 'none' and gives '', Default removes
+// the key and gives null; a ?gitProxy= or #gitProxy= of the URL is
+// ignored; without localStorage it holds for the session.  What the worker
+// says of git's requests (its "git" messages) gives a note once, or why a
+// request failed.  A clone through the proxy is git.spec.mjs's.
 //
 // The Console is the first of two tabs, Console and Notebook (whose checks
 // are notebook.spec.mjs's): while the Notebook shows, Esc, Ctrl+C and
@@ -159,8 +169,11 @@ await run(async t => {
                       new RegExp(src).test(document.getElementById('notice-text').textContent), re.source, { timeout });
   const buttons = p => p.evaluate(() => ['notice-action', 'notice-alt'].map(id => document.getElementById(id))
                                     .filter(b => !b.hidden).map(b => b.textContent));
-  // the meta of the image saved in this browser (vm-storage.js), or null
+  // the meta of the image saved in this browser that the Console runs (the
+  // slot of its URL, vm-storage.js), or null
   const slotMeta = () => page.evaluate(async () => {
+    const slot = window.PharoPage.bootChoice().slot;
+    if (!slot) return null;
     const db = await new Promise((resolve, reject) => {
       const r = indexedDB.open('pharo-wasm', 1);
       r.onupgradeneeded = () => r.result.createObjectStore('files');
@@ -169,11 +182,14 @@ await run(async t => {
     });
     try {
       return await new Promise(resolve => {
-        const r = db.transaction('files').objectStore('files').get('meta');
+        const r = db.transaction('files').objectStore('files').get(slot === 'main' ? 'meta' : 'slot/' + slot + '/meta');
         r.onsuccess = () => resolve(r.result || null);
       });
     } finally { db.close(); }
   });
+  // the slots saved in this browser, as vm-storage.js lists them, on page p
+  const slotsOf = (p = page) => p.evaluate(() => PharoStorage.open().list());
+  const choiceOf = (p = page) => p.evaluate(() => window.PharoPage.bootChoice());
   async function slotSays(pred, what, timeout = 30000) {
     let meta = null;
     for (const t0 = Date.now(); Date.now() - t0 < timeout; await page.waitForTimeout(200))
@@ -209,7 +225,8 @@ await run(async t => {
     assert(full >= 0 && starting > full && waiting > starting, 'status ' + JSON.stringify(log.slice(0, 8)) + ' ... ' +
            JSON.stringify(log.slice(-4)));
     assert(log.filter(s => /^Loading \d+%$/.test(s)).length >= 5, 'progress shown');
-    assert(/^st> $/.test(await term()), 'only the prompt: ' + JSON.stringify(await term()));
+    // (and the note of the git proxy of the site, on a build with git over HTTP)
+    assert(/^("Git requests go through the proxy at [^"]*"\n)?st> $/.test(await term()), 'only the prompt: ' + JSON.stringify(await term()));
     console.log('  # prompt after ' + (Date.now() - t0) + ' ms');
   });
 
@@ -222,20 +239,21 @@ await run(async t => {
     assert(/default-src 'self'/.test(meta) && /script-src 'self' 'wasm-unsafe-eval'/.test(meta) && /object-src 'none'/.test(meta) &&
            /form-action 'none'/.test(meta), 'the policy: ' + meta);
     const vm = await page.$$eval('script[src]', l => l.map(e => e.getAttribute('src').replace(/\?.*/, '')));
-    assert(JSON.stringify(vm) === JSON.stringify(['open-image.js', 'page.js', 'notebook-lib.js', 'notebook-st.js', 'nb-kernel.js', 'notebook.js']),
+    assert(JSON.stringify(vm) === JSON.stringify(['open-image.js', 'vm-storage.js', 'catalog.js', 'git-proxy.js', 'images.js', 'page.js',
+                                                  'notebook-lib.js', 'notebook-st.js', 'nb-kernel.js', 'notebook.js']),
            'the scripts: ' + vm);
   });
 
   await check('3+4 and Enter gives 7; Transcript output', async () => {
     await evalTo('3+4', /\n7\nst> $/);
-    assert(/^st> 3\+4\n7\n/.test(await term()), 'input echoed after the prompt');
+    assert(/^("[^"]*"\n)?st> 3\+4\n7\n/.test(await term()), 'input echoed after the prompt');
     await evalTo("Transcript show: 'hello'; cr. #shown", /hello\n#shown\nst> $/);
     // the form of the line submits nowhere (its form-action is 'none')
     await mark();
     await page.fill('#line', '5 * 5');
     await page.click('#send');
     await waitSince(/\n25\nst> $/);
-    assert(page.url() === t.base + 'index.html', 'the page went to ' + page.url());
+    assert(page.url().split('?')[0] === t.base + 'index.html', 'the page went to ' + page.url());
   });
 
   await check('multi-line input with Shift+Enter', async () => {
@@ -315,6 +333,9 @@ await run(async t => {
     // the REPL answers in a slice after the one that saved
     await waitSince(/\na SnapshotOperation\nst> $/);
     assert(!(await page.isDisabled('#reset')), 'Reset enabled');
+    // the first save makes the slot main, which the URL and the world's link say
+    assert(/\/index\.html\?slot=main$/.test(page.url()), 'the URL ' + page.url());
+    assert(await page.getAttribute('#world', 'href') === 'world.html?slot=main', 'the world link ' + await page.getAttribute('#world', 'href'));
     const n = t.requests.length;
     await reload();
     const served = requestsSince(n);
@@ -430,6 +451,63 @@ await run(async t => {
     downloaded = { image, changes };
   });
 
+  await check('Save as makes a slot of its own; Images lists both and starts the other; ?slot= boots one; Delete deletes it alone', async () => {
+    assert((await choiceOf()).slot === 'main', 'the Console runs main: ' + JSON.stringify(await choiceOf()));
+    await evalTo('Smalltalk at: #CopyMarker put: 5', /\n5\nst> $/);
+    let asked = null;
+    onDialog(d => { asked = [d.type(), d.message(), d.defaultValue()]; d.accept('Spec copy'); });
+    await page.evaluate(() => { document.getElementById('notice-text').textContent = ''; });
+    await page.click('#save-as');
+    await noticeSays(page, /^The image is saved in this browser as 'Spec copy' \(/, 60000);
+    await waitStatus('waiting');
+    assert(asked && asked[0] === 'prompt' && asked[1] === 'Save as a new image named', 'asked ' + JSON.stringify(asked));
+    assert(await page.textContent('#notice-action') === 'Rename', 'Rename offered');
+    const copy = (await choiceOf()).slot;
+    assert(copy && copy !== 'main' && page.url().endsWith('?slot=' + copy), 'bound to a new slot: ' + copy + ' ' + page.url());
+    let all = await slotsOf();
+    assert(all.length === 2 && all.some(s => s.slot === 'main') && all.some(s => s.slot === copy && s.name === 'Spec copy'),
+           'two slots: ' + JSON.stringify(all.map(s => [s.slot, s.name])));
+
+    // Images: both, the one that runs said so; Open starts the other
+    await page.click('#images');
+    await page.waitForSelector('#images-dialog[open] #images-saved li[data-slot]', { timeout: 10000 });
+    const rows = await page.$$eval('#images-saved li[data-slot]', l => l.map(li => [li.dataset.slot,
+      li.querySelector('.name').textContent, !!li.querySelector('.badge'), li.querySelector('[data-act="other"]').getAttribute('href')]));
+    assert(rows.length === 2 && rows.some(r => r[0] === copy && r[2] && r[3] === 'world.html?slot=' + copy) &&
+           rows.some(r => r[0] === 'main' && !r[2]), 'rows ' + JSON.stringify(rows));
+    const fresh = await page.$$eval('#images-fresh [data-fresh]', l => l.map(b => b.dataset.fresh));
+    assert(fresh.length === (manifest.images || [1]).length, 'the fresh images ' + JSON.stringify(fresh));
+    await mark();
+    await page.click('#images-saved li[data-slot="main"] [data-act="open"]');
+    await waitSince(/Started the image saved in this browser[^\n]*\n[\s\S]*st> $/, 90000);
+    await waitStatus('waiting');
+    assert(await page.$eval('#images-dialog', d => !d.open), 'the dialog closed');
+    assert((await choiceOf()).slot === 'main' && page.url().endsWith('?slot=main'), 'main again: ' + page.url());
+    await evalTo('Smalltalk at: #CopyMarker ifAbsent: [ #none ]', /\n#none\nst> $/);
+
+    // ?slot= of another tab boots that one; its Delete deletes it alone
+    const b = await t.context.newPage();
+    t.watch(b);
+    try {
+      await b.goto(t.base + 'index.html?slot=' + copy);
+      await b.waitForFunction(() => document.getElementById('status').dataset.state === 'waiting' &&
+                              /(^|\n)st> $/.test(document.getElementById('term').textContent), null, { timeout: 90000 });
+      assert(/"Started the image saved in this browser on [^"]*: 'Spec copy' \(Pharo [\d.]+\)\."/.test(await b.$eval('#term', e => e.textContent)),
+             'the note ' + JSON.stringify(await b.$eval('#term', e => e.textContent)));
+      await evalIn(b, 'Smalltalk at: #CopyMarker ifAbsent: [ #none ]', /\n5\nst> $/);
+      b.once('dialog', d => { asked = d.message(); d.accept(); });
+      await b.click('#reset');
+      await b.waitForFunction(() => /"Deleted the image saved in this browser \('Spec copy'\)\."[\s\S]*st> $/.test(
+        document.getElementById('term').textContent), null, { timeout: 90000 });
+      assert(asked === "Delete 'Spec copy' from this browser, and start again?", 'asked ' + asked);
+      all = await slotsOf();
+      assert(all.length === 1 && all[0].slot === 'main', 'main is left: ' + JSON.stringify(all.map(s => s.slot)));
+      await b.waitForFunction(() => document.getElementById('status').dataset.state === 'waiting', null, { timeout: 30000 });
+      assert(!/[?&]slot=/.test(b.url()) || b.url().endsWith('?slot=main'), 'the URL ' + b.url());
+      await evalIn(b, 'Smalltalk at: #PageMarker', /\n777\nst> $/);
+    } finally { await b.close(); }
+  });
+
   await check('Reset deletes the saved image and starts the original one', async () => {
     const n = t.requests.length;
     await mark();
@@ -445,6 +523,7 @@ await run(async t => {
   await check('Open starts the downloaded image and keeps it once it prompts, also across a reload', async () => {
     assert(downloaded, 'nothing downloaded');
     await mark();
+    accept();                             // what was evaluated since the start is lost
     await page.setInputFiles('#open-file', [downloaded.image, downloaded.changes]);
     await waitSince(/"Started the opened image, [^"]*Pharo\.image, with the \.sources of this site, [^"]*\."\n[\s\S]*st> $/, 90000);
     await waitStatus('waiting');
@@ -464,20 +543,21 @@ await run(async t => {
     crashing = true;
     try {
       await mark();
-      accept();                           // replace the saved image
+      accept();                           // (what was evaluated since the last save is lost)
       await page.setInputFiles('#open-file', [broken]);
       await waitStatus('crashed', 90000);
       await noticeSays(page, /^The opened image did not start; it was not kept\.$/, 5000);
       assert(JSON.stringify(await buttons(page)) === '["Restart"]', 'buttons ' + JSON.stringify(await buttons(page)));
-      // the saved image is still there: Reset may delete it, and another
-      // upload asks before it replaces it
-      assert(!(await page.isDisabled('#reset')), 'Reset is disabled');
+      // the saved image is still there: Delete may delete it; another upload
+      // asks nothing (no VM runs, nothing is lost), and fails the same way
+      assert(!(await page.isDisabled('#reset')), 'Delete is disabled');
       let asked = null;
       onDialog(d => { asked = d.message(); d.dismiss(); });
+      const at = await page.evaluate(() => window.statusLog.length);
       await page.setInputFiles('#open-file', [broken]);
-      for (let i = 0; i < 50 && asked === null; i++) await new Promise(r => setTimeout(r, 100));
-      assert(/^Replace the image saved in this browser with /.test(asked || ''), 'asked ' + JSON.stringify(asked));
-      assert(await page.$eval('#status', e => e.dataset.state) === 'crashed', 'a dismissed Open starts nothing');
+      await page.waitForFunction(at => window.statusLog.slice(at).includes('Crashed'), at, { timeout: 90000 });
+      onDialog(null);
+      assert(asked === null, 'asked ' + JSON.stringify(asked));
       await mark();
       await page.click('#notice-action');
       await waitSince(/Started the image saved in this browser[\s\S]*st> $/, 90000);
@@ -503,19 +583,26 @@ await run(async t => {
   });
 
   await check('Open a Pharo zip: unpacked, with the progress; started with its own .sources; kept once it prompts', async () => {
-    const z = specZips(t.webDir);
+    const z = specZips(t.webDir), before = await choiceOf();
     await mark();
-    accept();                             // replace the saved image
+    let asked = null;
+    onDialog(d => { asked = d.message(); d.accept(); });
     await page.evaluate(() => { window.noticeLog.length = 0; });
     const n = t.requests.length;
     await page.setInputFiles('#open-file', z.own);
     await waitSince(new RegExp('"Starting ' + esc(z.base) + '\\.image from spec12\\.zip…"\\n[\\s\\S]*' +
                                '"Started the opened image, ' + esc(z.base) + '\\.image\\."\\n[\\s\\S]*st> $'), 90000);
     await waitStatus('waiting');
+    assert(asked === 'Open ' + z.base + '.image as a new image? What you did since the last save is lost.',
+           'asked ' + JSON.stringify(asked));
     // kept with its .sources (a stock image of a site with the world is
-    // offered the preparation instead of the notice that says so)
+    // offered the preparation instead of the notice that says so), in a
+    // slot of its own: the one before is still there
     await slotSays(m => m && m.sourcesName === siteSources.path && m.sourcesSize === z.ownSize && m.imageSize > 50e6,
                    'the opened one, with its .sources');
+    const now = await choiceOf();
+    assert(now.slot && now.slot !== before.slot && (await slotsOf()).some(s => s.slot === before.slot),
+           'a new slot: ' + JSON.stringify([before, now, await slotsOf()]));
     await noticeSays(page, /The opened image is now kept in this browser|This image cannot open the Pharo world yet/, 30000);
     const log = await page.evaluate(() => window.noticeLog);
     assert(log.some(s => /^Unpacking spec12\.zip… [1-9]\d?%$/.test(s)) && log.includes('Unpacking spec12.zip… 100%'),
@@ -540,7 +627,7 @@ await run(async t => {
   await check('a drop of the downloaded image, its .changes and the .sources of the site opens it; that .sources is not kept', async () => {
     assert(downloaded, 'nothing downloaded');
     await mark();
-    accept();                             // replace the saved image
+    accept();                             // (what was evaluated since the last save is lost)
     const d = await dropFiles(page, [downloaded.image, downloaded.changes,
                                      path.join(t.webDir, '..', 'image', 'stock', siteSources.path)]);
     assert(d.shown && d.took && d.hidden, 'the drop ' + JSON.stringify(d));
@@ -548,7 +635,7 @@ await run(async t => {
                                '[\\s\\S]*"Started the opened image, [^"]*Pharo\\.image\\."\\n[\\s\\S]*st> $'), 90000);
     await waitStatus('waiting');
     await noticeSays(page, /The opened image is now kept in this browser/, 30000);
-    await slotSays(m => m && !m.sources && !m.sourcesName, 'without a .sources of its own');
+    await slotSays(m => m && !m.sources && m.sourcesName === siteSources.path, 'without a .sources of its own');
     await evalTo('Smalltalk at: #PageMarker', /\n777\nst> $/);
     const n = t.requests.length;
     await reload();
@@ -563,7 +650,7 @@ await run(async t => {
   if (stockImage) await check('Prepare for the world: an opened stock image gets OSWindow-Web, saved', async () => {
     assert(await page.isHidden('#world') === false, 'the world image links to the world');
     await mark();
-    accept();                           // replace the saved image
+    accept();                           // (what was evaluated since the last save is lost)
     await page.setInputFiles('#open-file', [path.join(stock, stockImage), path.join(stock, stockImage.replace(/\.image$/, '.changes'))]);
     await waitSince(/Started the opened image[\s\S]*st> $/, 90000);
     await waitStatus('waiting');
@@ -577,28 +664,30 @@ await run(async t => {
     await evalTo('Smalltalk hasClassNamed: #OSWebDriver', /\ntrue\nst> $/);
   });
 
-  await check('a saved image that does not start: the notice offers Reset next to Restart', async () => {
-    // the image of the slot, cut short, as by a broken save
-    await page.evaluate(async () => {
+  await check('a saved image that does not start: the notice offers to delete it next to Restart', async () => {
+    // the image of the slot of the Console, cut short, as by a broken save
+    const broken = (await choiceOf()).slot;
+    assert(broken, 'the Console runs no slot: ' + JSON.stringify(await choiceOf()));
+    await page.evaluate(async key => {
       const db = await new Promise((resolve, reject) => {
         const r = indexedDB.open('pharo-wasm', 1);
         r.onsuccess = () => resolve(r.result);
         r.onerror = () => reject(r.error);
       });
       const blob = await new Promise(resolve => {
-        const r = db.transaction('files').objectStore('files').get('Pharo.image');
+        const r = db.transaction('files').objectStore('files').get(key);
         r.onsuccess = () => resolve(r.result);
       });
       // a Blob of its own: Firefox stores a slice of a stored Blob whole
       const cut = new Blob([await blob.slice(0, 1 << 20).arrayBuffer()]);
       await new Promise((resolve, reject) => {
         const tx = db.transaction('files', 'readwrite');
-        tx.objectStore('files').put(cut, 'Pharo.image');
+        tx.objectStore('files').put(cut, key);
         tx.oncomplete = resolve;
         tx.onabort = () => reject(tx.error);
       });
       db.close();
-    });
+    }, broken === 'main' ? 'Pharo.image' : 'slot/' + broken + '/Pharo.image');
     crashing = true;
     try {
       markAt = 0;
@@ -606,7 +695,7 @@ await run(async t => {
       await page.waitForFunction(() => /^(crashed|exited)$/.test(document.getElementById('status').dataset.state),
                                  null, { timeout: 90000 });
       await noticeSays(page, /^The image saved in this browser did not start\.$/, 5000);
-      assert(JSON.stringify(await buttons(page)) === '["Restart","Reset saved image"]',
+      assert(JSON.stringify(await buttons(page)) === '["Restart","Delete it"]',
              'buttons ' + JSON.stringify(await buttons(page)));
       await mark();
       accept();
@@ -614,8 +703,13 @@ await run(async t => {
       await waitSince(/Deleted the image saved in this browser[\s\S]*st> $/, 90000);
       await waitStatus('waiting');
     } finally { crashing = false; }
-    assert(await page.isDisabled('#reset'), 'nothing to reset');
-    await evalTo('Smalltalk at: #PageMarker ifAbsent: [ #none ]', /\n#none\nst> $/);
+    // that slot alone is gone; the Console starts the image saved last of
+    // the others
+    const left = await slotsOf();
+    assert(!left.some(s => s.slot === broken) && left.length > 0, 'the slots ' + JSON.stringify(left.map(s => s.slot)));
+    assert((await choiceOf()).slot === left[0].slot, 'the Console runs ' + JSON.stringify(await choiceOf()));
+    assert(/Started the image saved in this browser/.test(await since()), 'from a slot: ' + JSON.stringify(await since()));
+    await evalTo('3 + 4', /\n7\nst> $/);
   });
 
   if (t.shots) {
@@ -807,7 +901,7 @@ await run(async t => {
   // (last: they leave the image they opened in this browser)
   for (const z of (process.env.OPEN_ZIPS || '').split(':').filter(Boolean)) await check('Open ' + z + ': unpacked, started with its own .sources', async () => {
     await mark();
-    accept();                             // replace the saved image
+    accept();                             // (what was evaluated since the last save is lost)
     const n = t.requests.length;
     crashing = true;                      // it may not run the REPL
     try {
@@ -836,11 +930,15 @@ await run(async t => {
   // Settings: the CORS proxy of git's requests.  In contexts of their own,
   // whose pages record what they tell their workers of it; a build without
   // libgit2's smart-HTTP transport gets a manifest that says it has it, for
-  // the page to show Settings (its VM never reads the proxy then)
+  // the page to show Settings (its VM never reads the proxy then).  The
+  // manifest is the one that pw.mjs serves, whose default proxy is a dead
+  // local one (t.manifestOverride)
+  const DEFAULT = t.servedManifest().gitProxyDefault || '';
+  const DEFAULT_ORIGIN = DEFAULT ? new URL(DEFAULT).origin : '';
   async function gitContext(blockStorage) {
     const context = await t.browser.newContext();
     if (!(manifest.git && manifest.gitHttp)) {
-      const body = JSON.stringify(Object.assign({}, manifest, { git: true, gitHttp: true }));
+      const body = JSON.stringify(Object.assign(t.servedManifest(), { git: true, gitHttp: true }));
       await context.route(url => url.pathname.endsWith('/manifest.json'),
                           route => route.fulfill({ contentType: 'application/json', body }));
     }
@@ -849,6 +947,7 @@ await run(async t => {
       const post = Worker.prototype.postMessage;
       Worker.prototype.postMessage = function (m, ...rest) {
         if (m && (m.type === 'init' || m.type === 'gitProxy')) window.gitProxySent.push([m.type, m.gitProxy]);
+        if (m && m.type === 'init') window.__worker = this;
         return post.call(this, m, ...rest);
       };
       if (blocked) Object.defineProperty(window, 'localStorage', { configurable: true,
@@ -858,40 +957,59 @@ await run(async t => {
   }
   const EVIL = 'http://proxy-from-a-link.invalid/';
   const PROXY = 'http://127.0.0.1:9';
+  // (a site of several images shows its launcher on a first visit: the
+  // world page is given its default image)
+  const images = t.manifest.images || [];
+  const worldFirst = images.length >= 2 ? 'world.html?fresh=' + images.find(e => e.default).id + '&' : 'world.html?';
   const gitPage = async (context, file) => {
     const p = await context.newPage();
     t.watch(p);
     listen(p);
-    await p.goto(t.base + file + '?gitProxy=' + encodeURIComponent(EVIL));
+    const evil = 'gitProxy=' + encodeURIComponent(EVIL);
+    await p.goto(t.base + (file === 'world.html' ? worldFirst + evil : file + '?' + evil) + '#' + evil);
     return p;
   };
   const prompt = p => p.waitForFunction(() => document.getElementById('status').dataset.state === 'waiting' &&
                                         /(^|\n)st> $/.test(document.getElementById('term').textContent), null, { timeout: 90000 });
   const sent = p => p.evaluate(() => window.gitProxySent);
+  const lastSent = async p => JSON.stringify((await sent(p)).slice(-1));
   const stored = p => p.evaluate(() => localStorage.getItem('pharo-wasm.gitProxy'));
   const proxyState = p => p.$eval('#git-proxy-state', e => [e.dataset.kind, e.textContent]);
+  const mode = p => p.evaluate(() => ['default', 'none', 'custom'].find(m => document.getElementById('git-proxy-mode-' + m).checked));
+  const termOf = p => p.$eval('#term', e => e.textContent);
   async function typeProxy(p, text) {
     await p.fill('#git-proxy', text);
     await p.press('#git-proxy', 'Enter');
   }
+  async function choose(p, which) {
+    await p.click('#settings');
+    await p.click('#git-proxy-mode-' + which);
+    await p.click('#settings-save');
+    assert(!(await p.$eval('#settings-dialog', d => d.open)), 'closed by Save');
+  }
 
-  await check('Settings: the git proxy is typed in, shown with its origin, kept in this browser, never taken from the URL', async () => {
+  await check('Settings: the site\'s default, a proxy typed in, None and Default again, kept in this browser, never taken from the URL', async () => {
     const context = await gitContext(false);
     const hosts = new Set();
     context.on('request', r => hosts.add(new URL(r.url()).host));
     try {
       const p = await gitPage(context, 'index.html');
       await prompt(p);
-      assert(JSON.stringify(await sent(p)) === '[["init",""]]', 'init without a proxy: ' + JSON.stringify(await sent(p)));
+      assert(JSON.stringify(await sent(p)) === '[["init",null]]', 'init with the default: ' + JSON.stringify(await sent(p)));
       assert(await stored(p) === null, 'nothing stored from the URL');
-      assert(!/Git requests/.test(await p.$eval('#term', e => e.textContent)), 'no note of a proxy');
+      if (DEFAULT_ORIGIN)
+        assert((await termOf(p)).includes('"Git requests go through the proxy at ' + DEFAULT_ORIGIN + ' (this site\'s default) (Settings)."'),
+               'a note names the default: ' + JSON.stringify(await termOf(p)));
       assert(await p.isVisible('#settings'), 'Settings shown');
 
-      // typed in: rejected, then accepted
+      // the default, then a proxy typed in: rejected, then accepted
       await p.click('#settings');
       assert(await p.$eval('#settings-dialog', d => d.open), 'the dialog opens');
-      assert(await p.inputValue('#git-proxy') === '', 'empty');
-      assert((await proxyState(p))[0] === 'none', 'no proxy: ' + await proxyState(p));
+      assert(await mode(p) === 'default' && await p.inputValue('#git-proxy') === '', 'the default, and an empty field');
+      assert(JSON.stringify(await proxyState(p)) === JSON.stringify(['default', DEFAULT_ORIGIN ? 'Default: git requests go to ' + DEFAULT_ORIGIN + '.'
+                                                                               : 'Default: no proxy, git requests go to the repository itself.']),
+             'the default: ' + await proxyState(p));
+      assert(await p.textContent('#git-proxy-default-url') === DEFAULT_ORIGIN, 'the default named: ' + await p.textContent('#git-proxy-default-url'));
       for (const [bad, why] of [['ftp://127.0.0.1/', /http:\/\/ or https:\/\//], ['http://me:pw@127.0.0.1:9/', /user name/],
                                 [PROXY + '/#x', /fragment/], ['git proxy', /not a URL/]]) {
         await typeProxy(p, bad);
@@ -900,6 +1018,7 @@ await run(async t => {
         assert(await p.$eval('#settings-dialog', d => d.open), bad + ' is not saved');
       }
       await p.fill('#git-proxy', PROXY);
+      assert(await mode(p) === 'custom', 'typing chooses custom: ' + await mode(p));
       assert(JSON.stringify(await proxyState(p)) === JSON.stringify(['proxy', 'Git requests go to ' + PROXY + '.']),
              'the origin shown: ' + await proxyState(p));
       if (t.shots) {
@@ -914,8 +1033,7 @@ await run(async t => {
       await p.press('#git-proxy', 'Enter');
       assert(!(await p.$eval('#settings-dialog', d => d.open)), 'closed by Save');
       assert(await stored(p) === PROXY + '/', 'stored with its /: ' + await stored(p));
-      assert(JSON.stringify((await sent(p)).slice(-1)) === JSON.stringify([['gitProxy', PROXY + '/']]),
-             'given to the VM: ' + JSON.stringify(await sent(p)));
+      assert(await lastSent(p) === JSON.stringify([['gitProxy', PROXY + '/']]), 'given to the VM: ' + JSON.stringify(await sent(p)));
       await p.waitForFunction(o => document.getElementById('term').textContent.includes(
         '"Git requests now go through the proxy at ' + o + '."'), PROXY);
       await evalIn(p, '3 + 4', /\n7\nst> $/);
@@ -923,7 +1041,7 @@ await run(async t => {
       // Cancel and Escape keep it
       for (const close of ['#settings-cancel', 'Escape']) {
         await p.click('#settings');
-        assert(await p.inputValue('#git-proxy') === PROXY + '/', 'the dialog shows it');
+        assert(await mode(p) === 'custom' && await p.inputValue('#git-proxy') === PROXY + '/', 'the dialog shows it');
         await p.fill('#git-proxy', 'https://other.invalid/');
         if (close === 'Escape') await p.keyboard.press('Escape'); else await p.click(close);
         assert(!(await p.$eval('#settings-dialog', d => d.open)) && await stored(p) === PROXY + '/', close + ' keeps it');
@@ -935,29 +1053,84 @@ await run(async t => {
       await p.reload();
       await prompt(p);
       assert(JSON.stringify(await sent(p)) === JSON.stringify([['init', PROXY + '/']]), 'init: ' + JSON.stringify(await sent(p)));
-      assert((await p.$eval('#term', e => e.textContent)).includes('"Git requests go through the proxy at ' + PROXY + ' (Settings)."'),
-             'a note names it');
+      assert((await termOf(p)).includes('"Git requests go through the proxy at ' + PROXY + ' (Settings)."'), 'a note names it');
 
       // the world page reads it, and hears of its changes
-      const w = await context.newPage();
-      const worldErrors = [];
-      w.on('pageerror', e => worldErrors.push(e.message));
-      await w.goto(t.base + 'world.html?gitProxy=' + encodeURIComponent(EVIL));
+      const w = await gitPage(context, 'world.html');
       await w.waitForFunction(() => window.gitProxySent.length > 0, null, { timeout: 30000 });
       assert(JSON.stringify(await sent(w)) === JSON.stringify([['init', PROXY + '/']]), 'world init: ' + JSON.stringify(await sent(w)));
-      await p.click('#settings');
-      await p.click('#git-proxy-clear');
-      assert((await proxyState(p))[0] === 'none', 'cleared');
-      await p.click('#settings-save');
-      assert(await stored(p) === null, 'removed');
-      assert(JSON.stringify((await sent(p)).slice(-1)) === '[["gitProxy",""]]', 'the VM forgets it');
+      // None: kept as 'none', and '' for the VMs of both pages
+      await choose(p, 'none');
+      assert(await stored(p) === 'none', 'none stored: ' + await stored(p));
+      assert(await lastSent(p) === '[["gitProxy",""]]', 'the VM goes without: ' + JSON.stringify(await sent(p)));
       await w.waitForFunction(() => window.gitProxySent.length > 1, null, { timeout: 10000 });
-      assert(JSON.stringify((await sent(w)).slice(-1)) === '[["gitProxy",""]]', 'and the world: ' + JSON.stringify(await sent(w)));
-      assert(!worldErrors.length, 'world: ' + worldErrors.join(' | '));
-      await w.close();
+      assert(await lastSent(w) === '[["gitProxy",""]]', 'and the world: ' + JSON.stringify(await sent(w)));
       await p.waitForFunction(() => document.getElementById('term').textContent.includes(
         '"Git requests now go to the repositories themselves, without a proxy."'));
+      // Default again: no key, and null (the site's default) for both
+      await choose(p, 'default');
+      assert(await stored(p) === null, 'removed: ' + await stored(p));
+      assert(await lastSent(p) === '[["gitProxy",null]]', 'the VM gets the default: ' + JSON.stringify(await sent(p)));
+      await w.waitForFunction(() => window.gitProxySent.length > 2, null, { timeout: 10000 });
+      assert(await lastSent(w) === '[["gitProxy",null]]', 'and the world: ' + JSON.stringify(await sent(w)));
+      await w.close();
       assert(![...hosts].some(h => /invalid|:9$/.test(h)), 'no request to a proxy: ' + [...hosts].join(' '));
+      await p.close();
+    } finally { await context.close(); }
+  });
+
+  await check('Settings: None survives a reload; the URL never sets the proxy', async () => {
+    const context = await gitContext(false);
+    try {
+      const p = await gitPage(context, 'index.html');
+      await prompt(p);
+      await choose(p, 'none');
+      await p.reload();
+      await prompt(p);
+      assert(JSON.stringify(await sent(p)) === '[["init",""]]', 'init without a proxy: ' + JSON.stringify(await sent(p)));
+      assert(!/Git requests go through/.test(await termOf(p)), 'no note of a proxy');
+      await p.click('#settings');
+      assert(await mode(p) === 'none' && JSON.stringify(await proxyState(p)) ===
+             JSON.stringify(['none', 'No proxy: git requests go to the repository itself.']), 'None shown: ' + await proxyState(p));
+      await p.keyboard.press('Escape');
+      await p.close();
+    } finally { await context.close(); }
+  });
+
+  await check('git\'s requests: the first one through the site\'s default says so once; one that failed says why, with Settings', async () => {
+    // as the worker says them (vm-worker.js "git"), from Module.onGitHttp
+    const context = await gitContext(false);
+    try {
+      const p = await gitPage(context, 'index.html');
+      await prompt(p);
+      const git = m => p.evaluate(m => window.__worker.dispatchEvent(new MessageEvent('message', { data: Object.assign({ type: 'git' }, m) })), m);
+      const notice = () => p.evaluate(() => document.getElementById('notice').hidden ? '' : document.getElementById('notice-text').textContent);
+      const origin = 'http://127.0.0.1:9';
+      await git({ event: 'request', method: 'GET', host: 'github.com', proxy: origin, status: 200, error: '' });
+      assert(/^Git requests \(Iceberg clones, Metacello github:\/\/\) go through the public CORS proxy http:\/\/127\.0\.0\.1:9, which sees what you clone\.$/
+             .test(await notice()), 'the note: ' + await notice());
+      assert(await p.textContent('#notice-action') === 'Settings', 'Settings offered');
+      assert(await p.evaluate(() => localStorage.getItem('pharo-wasm.gitProxyNoted')) === origin, 'noted');
+      await p.click('#notice-action');
+      assert(await p.$eval('#settings-dialog', d => d.open), 'the notice opens Settings');
+      await p.keyboard.press('Escape');
+      // once: not again, not after a reload
+      await git({ event: 'request', method: 'GET', host: 'github.com', proxy: origin, status: 200, error: '' });
+      assert(await notice() === '', 'noted again: ' + await notice());
+      await p.reload();
+      await prompt(p);
+      await git({ event: 'request', method: 'GET', host: 'github.com', proxy: origin, status: 200, error: '' });
+      assert(await notice() === '', 'noted after a reload: ' + await notice());
+      // failures
+      await git({ event: 'failed', method: 'GET', host: 'github.com', proxy: origin, status: -1, error: 'x' });
+      assert(await notice() === 'The git proxy http://127.0.0.1:9 did not answer.', 'down: ' + await notice());
+      await git({ event: 'failed', method: 'GET', host: 'github.com', proxy: origin, status: 403, error: 'x' });
+      assert(await notice() === 'The git proxy http://127.0.0.1:9 refused the request to github.com.', 'refused: ' + await notice());
+      await git({ event: 'failed', method: 'GET', host: 'github.com', proxy: '', status: -1, error: 'x' });
+      assert(await notice() === "The browser blocked git's request to github.com (CORS): git over HTTPS needs a proxy here.",
+             'CORS: ' + await notice());
+      assert((await termOf(p)).includes('"The browser blocked git\'s request to github.com (CORS): git over HTTPS needs a proxy here. (Settings)"'),
+             'a note too');
       await p.close();
     } finally { await context.close(); }
   });
@@ -967,15 +1140,15 @@ await run(async t => {
     try {
       const p = await gitPage(context, 'index.html');
       await prompt(p);
-      assert(JSON.stringify(await sent(p)) === '[["init",""]]', 'init: ' + JSON.stringify(await sent(p)));
+      assert(JSON.stringify(await sent(p)) === '[["init",null]]', 'init: ' + JSON.stringify(await sent(p)));
       await p.click('#settings');
       await typeProxy(p, PROXY + '/git/');
-      assert(JSON.stringify((await sent(p)).slice(-1)) === JSON.stringify([['gitProxy', PROXY + '/git/']]), 'given to the VM');
+      assert(await lastSent(p) === JSON.stringify([['gitProxy', PROXY + '/git/']]), 'given to the VM');
       await p.waitForFunction(() => !document.getElementById('notice').hidden &&
                               /cannot keep the setting: it holds for this session only/.test(document.getElementById('notice-text').textContent));
       await p.click('#restart');
       await p.waitForFunction(() => window.gitProxySent.filter(([type]) => type === 'init').length === 2, null, { timeout: 30000 });
-      assert(JSON.stringify((await sent(p)).slice(-1)) === JSON.stringify([['init', PROXY + '/git/']]), 'Restart keeps it');
+      assert(await lastSent(p) === JSON.stringify([['init', PROXY + '/git/']]), 'Restart keeps it');
       await prompt(p);
       await p.close();
     } finally { await context.close(); }

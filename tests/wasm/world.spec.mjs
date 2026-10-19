@@ -40,7 +40,22 @@
 // with a line added to its .sources (a .sources of its own): the page must
 // prepare it for the world, then boot it, also from the image saved in
 // this browser.  Then the world image of the Download check is dropped on
-// the page, which boots it at once.
+// the page, which boots it at once.  Each becomes a slot of its own, and
+// Open asks first only when the world has input that is not saved.
+//
+// The images (vm-storage.js slots, images.js): a first visit to a site of
+// several images (manifest.images) shows the launcher, which Escape does
+// not close and where Enter starts the default image (gotoWorld gives the
+// other first visits that image, ?fresh=); every other image of the
+// catalog starts fresh and paints; the first Save makes a slot, which the
+// URL (?slot=) and the link to the Console say; Images lists the slots,
+// Save as makes another, which an Open of Images leaves for the first,
+// Rename renames, Delete deletes; a file written into /pharo is kept with
+// the image (the tree) across a Save and a reload.  Settings (git-proxy.js)
+// on the world page: the site's default (pw.mjs serves a dead local one),
+// None, which a reload keeps, and a proxy of the user's, given to the VM;
+// the "git" messages of the worker give the note of the public proxy once,
+// and say why a request failed.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -113,6 +128,20 @@ const inside = (p, b) => p[0] >= b[0] && p[0] < b[2] && p[1] >= b[1] && p[1] < b
 await run(async t => {
   const { page, check, assert, manifest } = t;
   if (!manifest.world) throw new Error(t.webDir + '/manifest.json has no world image (world: false)');
+  // The catalog of the site: on a first visit to a site of several, the
+  // launcher shows, so gotoWorld names the default image (?fresh=), unless
+  // told the choice ({slot} or {fresh}) or that the launcher is wanted (null)
+  const catalog = manifest.images && manifest.images.length ? manifest.images : [{ id: manifest.imageId || 'default', default: true }];
+  const defaultId = catalog.find(e => e.default).id;
+  const multi = catalog.length >= 2;
+  const worldUrl = choice => t.base + 'world.html' +
+    (choice === null ? '' : choice && choice.slot ? '?slot=' + choice.slot : choice && choice.fresh ? '?fresh=' + choice.fresh
+     : multi ? '?fresh=' + defaultId : '');
+  const gotoWorld = (pg, choice) => pg.goto(worldUrl(choice));
+  // the slots saved in this browser, as vm-storage.js lists them, and the
+  // image of the page
+  const slotsOf = (pg = page) => pg.evaluate(() => PharoStorage.open().list());
+  const choice = (pg = page) => pg.evaluate(() => window.PharoWorld.choice);
   const imageUrl = '/' + manifest.files.find(f => f.path === manifest.image).url;
   const siteSources = manifest.files.find(f => f.path.endsWith('.sources'));
   const sourcesUrl = '/' + siteSources.url;
@@ -131,14 +160,17 @@ await run(async t => {
   const diag = [];
   page.on('worker', w => w.on('console', m => { if (ENGINE_ERRORS.test(m.text())) diag.push(m.text()); }));
 
-  // The input records that world.js posts, and the worker it posts them to;
-  // and the states of the pill, the texts of the overlay and of the notice
+  // The input records that world.js posts, and the worker it posts them to,
+  // with what it tells it of the git proxy; and the states of the pill, the
+  // texts of the overlay and of the notice
   await page.addInitScript(() => {
     const post = Worker.prototype.postMessage;
     window.__records = [];
+    window.__gitPosts = [];
     Worker.prototype.postMessage = function (m, transfer) {
       window.__worker = this;
       if (m && m.type === 'display' && m.kind === 'event') window.__records.push(m.event);
+      if (m && (m.type === 'init' || m.type === 'gitProxy')) window.__gitPosts.push([m.type, m.gitProxy]);
       return post.call(this, m, transfer);
     };
     window.__log = { states: [], overlays: [], notices: [] };
@@ -300,7 +332,7 @@ await run(async t => {
   let p, t0;
   await check('the page loads, without cross-origin isolation or SharedArrayBuffer', async () => {
     t0 = Date.now();
-    await page.goto(t.base + 'world.html');
+    await gotoWorld(page);
     assert(await page.title() === 'Pharo World', 'title ' + await page.title());
     const [isolated, sab] = await page.evaluate(() => [self.crossOriginIsolated, typeof SharedArrayBuffer]);
     assert(isolated === false && sab === 'undefined', `crossOriginIsolated ${isolated}, SharedArrayBuffer ${sab}`);
@@ -622,6 +654,12 @@ await run(async t => {
     await page.waitForFunction(() => /saved in this browser/.test(document.getElementById('notice-text').textContent) &&
                                !document.getElementById('notice').hidden, null, { timeout: 120000 });
     await waitState('running');
+    // the slot that the first save made (main), which the URL and the link
+    // to the Console say
+    assert(JSON.stringify(await choice()) === '{"slot":"main"}' && page.url().endsWith('/world.html?slot=main'),
+           'the image is main: ' + page.url());
+    assert(await page.getAttribute('#console', 'href') === 'index.html?slot=main', 'the Console link ' +
+           await page.getAttribute('#console', 'href'));
     const n = t.requests.length, dialogs = [];
     const dialog = d => { dialogs.push(d.type()); d.accept(); };
     page.on('dialog', dialog);
@@ -656,12 +694,17 @@ await run(async t => {
   await check('what cannot be opened: the notice says why, offers another, and the world goes on', async () => {
     const notImage = path.join(tmp, 'notes.image');
     fs.writeFileSync(notImage, 'these are notes, not an image');
+    // input that is not saved: Open asks first
+    await click(center(p.playground.bounds));
+    await page.keyboard.type('y');
+    await page.waitForFunction(() => window.PharoWorld.unsaved);
     const starts = (await stats()).starts;
     const dialogs = await accepting(async () => {
       await page.setInputFiles('#open-file', notImage);
       await noticeSays(/^notes\.image is not a Pharo image that this VM can run \(its header says format \d+, not 68021\)\.$/);
     });
-    assert(dialogs.length === 1 && /^Replace the image saved in this browser with notes\.image\?$/.test(dialogs[0]), 'asked ' + dialogs);
+    assert(dialogs.length === 1 && dialogs[0] === 'Open notes.image as a new image? What the world did since it was last saved is lost.',
+           'asked ' + dialogs);
     assert(await page.textContent('#notice-action') === 'Open another' && await page.isVisible('#notice-action'), 'Open another');
     assert((await stats()).starts === starts && await page.evaluate(() => window.PharoWorld.state) === 'running', 'the world goes on');
     p = await probe('the world still', p => p.driver === 'OSWebDriver');
@@ -677,13 +720,19 @@ await run(async t => {
                                  { timeout: 240000 });
     });
     console.log('  # unpacked, prepared, and painted in ' + (Date.now() - t1) + ' ms');
-    assert(dialogs.length === 1 && dialogs[0] === 'Replace the image saved in this browser with ' + z.name + '?', 'asked ' + dialogs);
+    assert(dialogs.length === 1 && dialogs[0] === 'Open ' + z.name + ' as a new image? What the world did since it was last saved is lost.',
+           'asked ' + dialogs);
+    // a slot of its own, which the world runs now; main is still there
+    const now = await choice(), all = await slotsOf();
+    assert(now.slot && now.slot !== 'main' && all.some(s => s.slot === 'main') && all.some(s => s.slot === now.slot),
+           'the slots ' + JSON.stringify([now, all.map(s => [s.slot, s.name])]));
+    assert(page.url().endsWith('?slot=' + now.slot), 'the URL ' + page.url());
     await waitState('running');
     const l = await log();
     assert(l.notices.some(s => /^Unpacking stock12\.zip… [1-9]\d?%$/.test(s)), 'the progress ' + JSON.stringify(l.notices.slice(0, 4)));
     assert(l.states.includes('preparing') && l.overlays.some(s => /^Preparing the image for the world/.test(s)),
            'Preparing shown: ' + JSON.stringify(l.states) + ' ' + JSON.stringify(l.overlays));
-    const prepared = `The image is prepared for the world (OSWindow-Web and ${fontsNamed(manifest.fonts)} fonts), and saved in this browser.`;
+    const prepared = `The image is prepared for the world (OSWindow-Web and ${fontsNamed(manifest.fonts)} fonts), and saved in this browser as '${z.name}'.`;
     assert((await page.textContent('#notice-text')).startsWith(prepared), 'the notice ' + await page.textContent('#notice-text'));
     const served = t.requests.slice(n);
     assert(!served.includes(imageUrl) && !served.includes(sourcesUrl), 'fetched ' + served.join(' '));
@@ -719,15 +768,174 @@ await run(async t => {
     const dialogs = await accepting(async () => {
       drop = await dropFiles(page, [downloaded.image, downloaded.changes]);
       await page.waitForFunction(n => window.PharoWorld.stats.starts > n && window.PharoWorld.stats.frames > 0, starts, { timeout: 90000 });
-      await noticeSays(/^The opened image is now kept in this browser\.$/, 60000);
+      await noticeSays(/^The opened image is now kept in this browser as '[^']*Pharo\.image'\.$/, 60000);
     });
     assert(drop.shown && drop.took && drop.hidden, 'the drop ' + JSON.stringify(drop));
-    assert(dialogs.length === 1 && /^Replace the image saved in this browser with [^ ]*Pharo\.image\?$/.test(dialogs[0]), 'asked ' + dialogs);
+    // (no input since the prepared image started: nothing to lose)
+    assert(!dialogs.length, 'asked ' + dialogs);
     assert((await stats()).starts === starts + 1 && !(await log()).states.includes('preparing'), 'no preparation');
     assert((await log()).notices.some(s => /^Started the opened image, [^ ]*Pharo\.image\.$/.test(s)), 'the note');
     assert(t.requests.slice(n).includes(sourcesUrl) && !t.requests.slice(n).includes(imageUrl), 'the .sources of the site');
     await waitState('running');
     p = await probe('the world of the dropped image', p => p.driver === 'OSWebDriver' && p.menubar.length);
+  });
+
+  // ---- the images saved in this browser (images.js)
+
+  // Images open, and its saved rows: [slot, name, running, href of the Console]
+  async function imageRows(pg = page) {
+    if (!(await pg.$eval('#images-dialog', d => d.open).catch(() => false))) await pg.click('#images');
+    await pg.waitForSelector('#images-dialog[open]', { timeout: 10000 });
+    // (the list is read from IndexedDB, after the dialog shows)
+    await pg.waitForFunction(() => document.querySelectorAll('#images-saved li[data-slot]').length > 0 ||
+                             !document.querySelector('#images-saved .empty').hidden, null, { timeout: 10000 });
+    return pg.$$eval('#images-saved li[data-slot]', l => l.map(li => [li.dataset.slot, li.querySelector('.name').textContent,
+      !!li.querySelector('.badge'), (li.querySelector('[data-act="other"]') || {}).href || null]));
+  }
+  const closeImages = (pg = page) => pg.evaluate(() => window.PharoWorld.images.close());
+  // the world started again, on the image of the page, and painted
+  const restarted = (n, timeout = 120000) =>
+    page.waitForFunction(n => window.PharoWorld.stats.starts > n && window.PharoWorld.stats.frames > 0, n, { timeout });
+
+  await check('Images lists the images of the site and those saved in this browser; the one that runs says so', async () => {
+    const rows = await imageRows(), now = (await choice()).slot, all = await slotsOf();
+    assert(rows.length === all.length && all.length >= 3, 'rows ' + JSON.stringify(rows) + ' slots ' + JSON.stringify(all.map(s => s.slot)));
+    assert(JSON.stringify(rows.map(r => r[0])) === JSON.stringify(all.map(s => s.slot)), 'newest first: ' + JSON.stringify(rows));
+    assert(rows.filter(r => r[2]).map(r => r[0]).join() === now, 'the running one: ' + JSON.stringify(rows) + ' ' + now);
+    assert(rows.every(r => r[3] === t.base + 'index.html?slot=' + r[0]), 'links to the Console: ' + JSON.stringify(rows));
+    const fresh = await page.$$eval('#images-fresh [data-fresh]', l => l.map(b => [b.dataset.fresh, b.querySelector('.label').textContent]));
+    assert(JSON.stringify(fresh.map(f => f[0])) === JSON.stringify(catalog.map(e => e.id)), 'fresh ' + JSON.stringify(fresh));
+    assert(await page.isVisible('#images-close') && await page.isVisible('#images-open-file'), 'Close and Open a file…');
+    if (t.shots) await page.screenshot({ path: t.shot('world-images.png') });
+    await page.keyboard.press('Escape');
+    assert(await page.$eval('#images-dialog', d => !d.open), 'Escape closes it');
+    assert(await page.getAttribute('#console', 'href') === 'index.html?slot=' + now, 'the Console link');
+  });
+
+  await check('a file written into /pharo is kept with the image: Save, reload, it is there', async () => {
+    const file = '/pharo/pharo-local/world-spec/kept.txt', dir = '/pharo/pharo-local/world-spec/empty';
+    const mtime = Date.UTC(2024, 1, 2, 3, 4, 5);
+    await page.evaluate(([file, dir, mtime]) => Promise.all([
+      window.PharoWorld.fs('writeFile', file, { data: 'kept by world.spec\n', mode: 0o100600, mtime }),
+      window.PharoWorld.fs('mkdir', dir, { mode: 0o40750 })]), [file, dir, mtime]);
+    await page.evaluate(() => { document.getElementById('notice-text').textContent = ''; });
+    await page.click('#save');
+    await noticeSays(/^The image is saved in this browser as '[^']*' \(/, 120000);
+    await waitState('running');
+    const kept = (await slotsOf()).find(s => s.slot === (/[?&]slot=([^&]+)/.exec(page.url()) || [])[1]);
+    assert(kept && kept.treeFiles >= 2, 'the slot keeps files: ' + JSON.stringify(kept));
+    await accepting(async () => {
+      await page.reload();
+      await page.waitForFunction(() => window.PharoWorld && window.PharoWorld.stats.frames > 0, null, { timeout: 90000 });
+    });
+    const text = await page.evaluate(f => window.PharoWorld.readFile(f).then(d => new TextDecoder().decode(d)), file);
+    assert(text === 'kept by world.spec\n', 'the file ' + JSON.stringify(text));
+    const st = await page.evaluate(f => window.PharoWorld.fs('stat', f), file);
+    assert((st.mode & 0o777) === 0o600 && st.mtime === mtime, 'its mode and time: ' + JSON.stringify(st));
+    const d = await page.evaluate(f => window.PharoWorld.fs('stat', f), dir);
+    assert((d.mode & 0o170000) === 0o040000, 'the empty directory: ' + JSON.stringify(d));
+    await waitState('running');
+  });
+
+  await check('Save as makes a slot of its own, bound from then on; Images starts the first again, renames and deletes', async () => {
+    const first = (await choice()).slot, n0 = (await slotsOf()).length;
+    p = await probe('the world', p => p.driver === 'OSWebDriver' && p.menubar.length);
+    let asked = null;
+    const answer = d => { asked = [d.type(), d.message(), d.defaultValue()]; d.accept('World copy'); };
+    page.once('dialog', answer);
+    await page.evaluate(() => { document.getElementById('notice-text').textContent = ''; });
+    await page.click('#save-as');
+    await noticeSays(/^The image is saved in this browser as 'World copy' \(/, 120000);
+    await waitState('running');
+    assert(asked && asked[0] === 'prompt' && asked[1] === 'Save as a new image named' && / copy$/.test(asked[2]),
+           'asked ' + JSON.stringify(asked));
+    assert(await page.textContent('#notice-action') === 'Rename', 'Rename offered');
+    const copy = (await choice()).slot;
+    assert(copy && copy !== first && page.url().endsWith('?slot=' + copy), 'a new slot: ' + copy + ' ' + page.url());
+    let rows = await imageRows();
+    assert(rows.length === n0 + 1 && rows.some(r => r[0] === copy && r[1] === 'World copy' && r[2]), 'rows ' + JSON.stringify(rows));
+    // the first one again
+    const starts = (await stats()).starts;
+    await page.click(`#images-saved li[data-slot="${first}"] [data-act="open"]`);
+    await restarted(starts);
+    await waitState('running');
+    assert((await choice()).slot === first && page.url().endsWith('?slot=' + first), 'the first again: ' + page.url());
+    assert(/^Started the image saved in this browser on /.test(await page.textContent('#notice-text')), 'the note');
+    // Rename the copy, then Delete it
+    rows = await imageRows();
+    page.once('dialog', d => d.accept('World copy renamed'));
+    await page.click(`#images-saved li[data-slot="${copy}"] [data-act="rename"]`);
+    await page.waitForFunction(copy => [...document.querySelectorAll('#images-saved li[data-slot]')].some(li =>
+      li.dataset.slot === copy && li.querySelector('.name').textContent === 'World copy renamed'), copy, { timeout: 10000 });
+    let confirmed = null;
+    page.once('dialog', d => { confirmed = d.message(); d.accept(); });
+    await page.click(`#images-saved li[data-slot="${copy}"] [data-act="delete"]`);
+    await page.waitForFunction(copy => ![...document.querySelectorAll('#images-saved li[data-slot]')].some(li => li.dataset.slot === copy),
+                               copy, { timeout: 10000 });
+    assert(confirmed === "Delete 'World copy renamed' from this browser?", 'asked ' + confirmed);
+    assert(!(await slotsOf()).some(s => s.slot === copy) && (await stats()).starts === starts + 1, 'deleted, and the world goes on');
+    await closeImages();
+  });
+
+  // Settings: the git proxy of the world page (git-proxy.js), and what the
+  // worker says of git's requests (its "git" messages, here posted to the
+  // page as it would)
+  const gitSent = () => page.evaluate(() => window.__gitPosts);
+  const lastGit = async () => JSON.stringify((await gitSent()).slice(-1));
+  const stored = () => page.evaluate(() => localStorage.getItem('pharo-wasm.gitProxy'));
+  const mode = () => page.evaluate(() => ['default', 'none', 'custom'].find(m => document.getElementById('git-proxy-mode-' + m).checked));
+  const DEFAULT = t.servedManifest().gitProxyDefault || '', DEFAULT_ORIGIN = DEFAULT ? new URL(DEFAULT).origin : '';
+  if (manifest.git && manifest.gitHttp) await check('Settings on the world page: the default, None (kept across a reload), a proxy of one\'s own', async () => {
+    assert(await page.isVisible('#settings'), 'Settings shown');
+    assert(JSON.stringify((await gitSent()).filter(m => m[0] === 'init').slice(-1)) === '[["init",null]]', 'the default: ' +
+           JSON.stringify(await gitSent()));
+    await page.click('#settings');
+    assert(await page.$eval('#settings-dialog', d => d.open) && await mode() === 'default', 'the dialog, on the default');
+    assert(await page.textContent('#git-proxy-default-url') === DEFAULT_ORIGIN, 'the default named');
+    if (t.shots) await page.screenshot({ path: t.shot('world-settings.png') });
+    await page.click('#git-proxy-mode-none');
+    await page.click('#settings-save');
+    assert(await stored() === 'none' && await lastGit() === '[["gitProxy",""]]', 'None: ' + await stored() + ' ' + await lastGit());
+    await accepting(async () => {
+      await page.reload();
+      await page.waitForFunction(() => window.PharoWorld && window.PharoWorld.stats.frames > 0, null, { timeout: 90000 });
+    });
+    assert(await lastGit() === '[["init",""]]', 'None after a reload: ' + await lastGit());
+    await page.click('#settings');
+    assert(await mode() === 'none', 'None shown: ' + await mode());
+    await page.fill('#git-proxy', 'http://127.0.0.1:9/world/');
+    assert(await mode() === 'custom', 'typing chooses custom');
+    await page.press('#git-proxy', 'Enter');
+    assert(await stored() === 'http://127.0.0.1:9/world/' && await lastGit() === '[["gitProxy","http://127.0.0.1:9/world/"]]',
+           'custom: ' + await lastGit());
+    await page.click('#settings');
+    await page.click('#git-proxy-mode-default');
+    await page.click('#settings-save');
+    assert(await stored() === null && await lastGit() === '[["gitProxy",null]]', 'the default again: ' + await lastGit());
+    await waitState('running');
+  });
+
+  await check('git\'s first request through the site\'s default says so once; a failed one says why, with Settings', async () => {
+    const git = m => page.evaluate(m => window.__worker.dispatchEvent(new MessageEvent('message', { data: Object.assign({ type: 'git' }, m) })), m);
+    const notice = () => page.evaluate(() => document.getElementById('notice').hidden ? '' : document.getElementById('notice-text').textContent);
+    const origin = 'http://127.0.0.1:9';
+    await page.evaluate(() => { localStorage.removeItem('pharo-wasm.gitProxyNoted'); document.getElementById('notice').hidden = true; });
+    await git({ event: 'request', method: 'GET', host: 'github.com', proxy: origin, status: 200, error: '' });
+    assert(await notice() === 'Git requests (Iceberg clones, Metacello github://) go through the public CORS proxy ' + origin +
+           ', which sees what you clone.', 'the note: ' + await notice());
+    assert(await page.textContent('#notice-action') === 'Settings', 'Settings offered');
+    await page.click('#notice-action');
+    assert(await page.$eval('#settings-dialog', d => d.open), 'the notice opens Settings');
+    await page.keyboard.press('Escape');
+    await git({ event: 'request', method: 'GET', host: 'github.com', proxy: origin, status: 200, error: '' });
+    assert(await notice() === '', 'twice: ' + await notice());
+    await git({ event: 'failed', method: 'POST', host: 'github.com', proxy: origin, status: -1, error: 'x' });
+    assert(await notice() === 'The git proxy ' + origin + ' did not answer.', 'down: ' + await notice());
+    await git({ event: 'failed', method: 'GET', host: 'github.com', proxy: '', status: -1, error: 'x' });
+    assert(await notice() === "The browser blocked git's request to github.com (CORS): git over HTTPS needs a proxy here.",
+           'CORS: ' + await notice());
+    await page.click('#notice-close');
+    await waitState('running');
   });
 
   if (t.shots) {
@@ -800,7 +1008,7 @@ await run(async t => {
       await context.route('**/vm-driver.js*', withProbe);
       const f = await context.newPage();
       t.watch(f);
-      await f.goto(t.base + 'world.html');
+      await gotoWorld(f);
       let q = await probeOn(f, 'a World in a Form of twice its size',
                             q => q.display && q.display[0] === 2 * q.world[0] && q.display[1] === 2 * q.world[1], 120000);
       await f.waitForFunction(([w, h]) => {
@@ -819,6 +1027,54 @@ await run(async t => {
       assert(!q.windows.some(w => inside(at, w.bounds)), 'no window at ' + at + ': ' + JSON.stringify(q.windows.map(w => w.bounds)));
       await f.mouse.move(box.x + at[0], box.y + at[1]);
       q = await probeOn(f, 'the hand where the mouse is, in CSS pixels', q => q.hand[0] === at[0] && q.hand[1] === at[1]);
+      await f.close();
+    } finally { await context.close(); }
+  });
+
+  if (!multi) console.log('  # one image in the catalog: no launcher, and no other image to start fresh');
+  else await check('a first visit shows the launcher: no VM, Escape stays, Enter starts the default; Images starts the others fresh', async () => {
+    const context = await t.browser.newContext({ viewport: { width: 1280, height: 800 } });
+    try {
+      // (no route of the context: every request reaches t.requests' route of
+      // its own context only, so the requests of this one are counted here)
+      const fetched = [];
+      await context.route('**/*', r => { fetched.push(new URL(r.request().url()).pathname); r.continue(); });
+      const f = await context.newPage();
+      t.watch(f);
+      await gotoWorld(f, null);
+      await f.waitForSelector('#images-dialog[open]', { timeout: 30000 });
+      await f.waitForFunction(() => document.getElementById('status').dataset.state === 'choosing');
+      const fresh = await f.$$eval('#images-fresh [data-fresh]', l => l.map(b => b.dataset.fresh));
+      assert(JSON.stringify(fresh) === JSON.stringify(catalog.map(e => e.id)), 'the images of the site: ' + JSON.stringify(fresh));
+      assert(await f.isHidden('#images-close'), 'no Close');
+      assert(await f.evaluate(() => document.activeElement && document.activeElement.dataset.fresh) === defaultId, 'the default has the focus');
+      assert(!f.workers().length && (await f.evaluate(() => window.PharoWorld.stats.starts)) === 0, 'no VM');
+      assert(/^Choose a Pharo image/.test(await f.textContent('#overlay-text')), 'the overlay: ' + await f.textContent('#overlay-text'));
+      if (t.shots) await f.screenshot({ path: t.shot('world-launcher.png') });
+      await f.keyboard.press('Escape');
+      await f.waitForTimeout(200);
+      assert(await f.$eval('#images-dialog', d => d.open), 'Escape closed the launcher');
+      await f.keyboard.press('Enter');
+      await f.waitForFunction(() => window.PharoWorld.stats.frames > 0, null, { timeout: 120000 });
+      assert(f.url().endsWith('/world.html?fresh=' + defaultId), 'the default, fresh: ' + f.url());
+      assert(/^Started a fresh /.test(await f.textContent('#notice-text')), 'the note ' + await f.textContent('#notice-text'));
+      // every other image of the site starts fresh, from its own files
+      for (const e of catalog.filter(e => !e.default)) {
+        const n = fetched.length, starts = await f.evaluate(() => window.PharoWorld.stats.starts);
+        await f.click('#images');
+        await f.waitForSelector('#images-dialog[open]');
+        await f.click(`#images-fresh [data-fresh="${e.id}"]`);
+        await f.waitForFunction(n => window.PharoWorld.stats.starts > n && window.PharoWorld.stats.frames > 0, starts, { timeout: 120000 });
+        const image = e.files.find(x => x.path === 'Pharo.image');
+        assert(fetched.slice(n).includes('/' + image.url), e.id + ' fetched ' + JSON.stringify(fetched.slice(n)));
+        assert(f.url().endsWith('/world.html?fresh=' + e.id) && JSON.stringify(await choice(f)) === JSON.stringify({ fresh: e.id }),
+               'the URL ' + f.url());
+        assert(await f.textContent('#notice-text') === 'Started a fresh ' + e.label + '. Save keeps it in this browser.',
+               'the note ' + await f.textContent('#notice-text'));
+        await f.waitForFunction(() => window.PharoWorld.state === 'running', null, { timeout: 60000 });
+        console.log(`  # ${e.label} (${e.id}) paints`);
+      }
+      assert(!(await slotsOf(f)).length, 'nothing saved');
       await f.close();
     } finally { await context.close(); }
   });

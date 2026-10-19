@@ -31,16 +31,20 @@
 //   - a stock image opened on the page (a zip of WASM_DIR/image/stock, as
 //     files.pharo.org has them) opens its world through OSSDL2Driver too,
 //     unprepared;
-//   - the git proxy that the Console's Settings keep (pharo-wasm.gitProxy,
+//   - the git proxy that Settings keep (git-proxy.js: pharo-wasm.gitProxy,
 //     set from another page of the site) goes to the running VM when it
-//     changes, '' when it is not one that the Console takes, and to the
-//     worker of a Restart in its init;
+//     changes, '' when it is not one that Settings take, null (the site's
+//     default) when the key is removed, and to the worker of a Restart in
+//     its init; a first load gives the worker null, the site's default;
+//   - on a site of several images (manifest.images), ?fresh=<id> boots that
+//     image of the site, from its own files;
 //   - the negative control: world.html on the same build still runs the
 //     world on OSWebDriver; and its idle cost is measured the same way,
 //     on a load without the probe.
 //
 // With the last check of pw.mjs (no console errors, no failed requests,
-// and no exception in a page or a worker), 9 checks for each browser.
+// and no exception in a page or a worker), 9 checks for each browser, 10
+// on a site of several images.
 // Exits with status 1 if any check fails, the page logs an error, or a
 // worker warns of an engine error.
 
@@ -138,7 +142,7 @@ await run(async t => {
     window.__gitPosts = [];
     Worker.prototype.postMessage = function (m, transfer) {
       window.__worker = this;
-      if (m && (m.type === 'init' || m.type === 'gitProxy')) window.__gitPosts.push({ type: m.type, gitProxy: m.gitProxy });
+      if (m && (m.type === 'init' || m.type === 'gitProxy')) window.__gitPosts.push({ type: m.type, gitProxy: m.gitProxy, fresh: m.fresh });
       return post.call(this, m, transfer);
     };
     window.__costs = () => new Promise((resolve, reject) => {
@@ -276,6 +280,9 @@ await run(async t => {
     t0 = Date.now();
     await page.goto(t.base + 'sdl.html');
     await page.waitForFunction(() => window.PharoSDL && window.PharoSDL.stats.paintedAt > 0, null, { timeout: 90000 });
+    const inits = await page.evaluate(() => window.__gitPosts.filter(m => m.type === 'init'));
+    assert(inits.length === 1 && inits[0].gitProxy === null && inits[0].fresh === undefined,
+           'the init: the site\'s default proxy, the default image: ' + JSON.stringify(inits));
     const s = await sdlStats(), costs = await page.evaluate(() => window.PharoSDL.costs());
     console.log(`  # first present ${(s.paintedAt - s.startedAt).toFixed(0)} ms after the worker started ` +
                 `(${Date.now() - t0} ms here, nothing cached); SDL's first present ${costs.firstPresentMs.toFixed(0)} ms after the shim`);
@@ -363,15 +370,19 @@ await run(async t => {
     const other = await t.context.newPage();
     const set = async v => {
       await gitPosts();
-      await other.evaluate(v => localStorage.setItem('pharo-wasm.gitProxy', v), v);
+      await other.evaluate(v => v === null ? localStorage.removeItem('pharo-wasm.gitProxy')
+                                          : localStorage.setItem('pharo-wasm.gitProxy', v), v);
     };
     try {
       await other.goto(t.base + 'THIRD-PARTY-NOTICES.txt');
       await set(PROXY);
       await posted('gitProxy', PROXY);
-      // one with credentials, which the Console does not take: none
+      // one with credentials, which Settings do not take: none
       await set('http://u:p@127.0.0.1:9/');
       await posted('gitProxy', '');
+      // no key: the site's default
+      await set(null);
+      await posted('gitProxy', null);
       await set(PROXY);
       await posted('gitProxy', PROXY);
       await gitPosts();
@@ -391,13 +402,31 @@ await run(async t => {
     }
   });
 
+  const others = (manifest.images || []).filter(e => !e.default);
+  if (others.length) await check('?fresh= boots that image of the site, from its own files', async () => {
+    const e = others[0], n = t.requests.length;
+    const dialogs = await accepting(async () => {
+      await page.goto(t.base + 'sdl.html?fresh=' + e.id);
+      await page.waitForFunction(() => window.PharoSDL && window.PharoSDL.stats.paintedAt > 0, null, { timeout: 120000 });
+    });
+    const inits = await page.evaluate(() => window.__gitPosts.filter(m => m.type === 'init'));
+    assert(inits.length === 1 && inits[0].fresh === e.id, 'the init: ' + JSON.stringify(inits));
+    const image = '/' + e.files.find(f => f.path === 'Pharo.image').url;
+    assert(t.requests.slice(n).includes(image), 'fetched ' + t.requests.slice(n).join(' '));
+    await waitState('running');
+    console.log(`  # ${e.label} (${e.id}) paints through SDL2 (${dialogs.length} dialogs)`);
+  });
+
   await check('world.html on the same build runs OSWebDriver', async () => {
     if (!manifest.world) {
       console.log('  # no world image (manifest.json world: false): world.html is not checked');
       return;
     }
     on = 'world';
-    await page.goto(t.base + 'world.html');
+    // (a site of several images shows its launcher on a first visit: its
+    // default image then)
+    const images = manifest.images || [];
+    await page.goto(t.base + 'world.html' + (images.length >= 2 ? '?fresh=' + images.find(e => e.default).id : ''));
     await page.waitForFunction(() => window.PharoWorld && window.PharoWorld.stats.frames > 0, null, { timeout: 90000 });
     await waitState('running');
     p = await probe('the world of world.html', p => p.menubar.length);

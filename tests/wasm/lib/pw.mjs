@@ -16,7 +16,15 @@
 //   t.name             the browser: chromium, firefox, ...
 //   t.browser, t.context, t.page
 //   t.base             the URL of WEB_DIR, ending in /
-//   t.webDir, t.manifest   WEB_DIR and its manifest.json
+//   t.webDir, t.manifest   WEB_DIR and its manifest.json, as it is on disk
+//   t.manifestOverride an object whose fields the server merges into the
+//                      manifest.json that it serves (for every page and
+//                      worker of the browser, from the next request on):
+//                      by default {gitProxyDefault: 'http://127.0.0.1:9/'},
+//                      a dead local proxy, so that no test sends git's
+//                      requests to the site's public default; a spec may
+//                      change it, or set more fields, before a goto
+//   t.servedManifest() the manifest.json that the server serves now
 //   t.check(name, f)   runs the check f, printing 'ok - <browser>: name' or
 //                      'not ok - ...' with the error
 //   t.assert(c, msg)
@@ -26,7 +34,10 @@
 //                      the server)
 //   t.errors           what went wrong in the browser so far: console errors
 //                      of the pages and their workers, uncaught exceptions
-//                      and failed requests
+//                      and failed requests; and every request that a page
+//                      or a worker made to cors.isomorphic-git.org, the
+//                      public proxy that a site has by default (the route
+//                      of the context aborts it)
 //   t.watch(page)      records the errors of another page too
 //   t.shots            the SHOTS directory, or null
 //   t.shot(file)       the path of a screenshot <browser>-<file> in it
@@ -136,17 +147,32 @@ export async function dropFiles(page, paths) {
   }, urls);
 }
 
+// The public CORS proxy that sites have by default (WASM_GIT_PROXY): no test
+// may send it anything
+const PUBLIC_PROXY = /(^|\.)cors\.isomorphic-git\.org$/;
+
 export async function run(spec) {
   const pw = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   const webDir = path.resolve(process.argv[2] || 'build-wasm/web');
   const manifest = JSON.parse(fs.readFileSync(path.join(webDir, 'manifest.json'), 'utf8'));
+  // the t of the browser being run, whose manifestOverride the server merges
+  let current = null;
+  const served = () => JSON.stringify(Object.assign(JSON.parse(fs.readFileSync(path.join(webDir, 'manifest.json'), 'utf8')),
+                                                    (current && current.manifestOverride) || {}), null, 2) + '\n';
+  const files = handler(webDir);
+  const serve = (req, res) => {
+    if (new URL(req.url, 'http://x').pathname !== '/manifest.json' || req.method !== 'GET') return files(req, res);
+    const body = Buffer.from(served(), 'utf8');
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': body.length, 'Cache-Control': 'no-cache' });
+    res.end(body);
+  };
   const browsers = (process.env.BROWSERS || 'chromium').split(',').map(s => s.trim()).filter(Boolean);
   let shots = process.env.SHOTS || null;
   if (shots === '1' || shots === 'yes')
     shots = path.join(process.env.TEST_DIR || path.join(webDir, '..', 'tests-run'), 'shots');
   if (shots) fs.mkdirSync(shots = path.resolve(shots), { recursive: true });
 
-  const server = http.createServer(handler(webDir));
+  const server = http.createServer(serve);
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const base = 'http://127.0.0.1:' + server.address().port + '/';
 
@@ -177,16 +203,24 @@ export async function run(spec) {
       const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, acceptDownloads: true });
       const requests = [];
       await context.route('**/*', route => {
-        requests.push(new URL(route.request().url()).pathname);
+        const u = new URL(route.request().url());
+        if (PUBLIC_PROXY.test(u.hostname)) {
+          errors.push('request to the public git proxy: ' + u.href);
+          return route.abort();
+        }
+        requests.push(u.pathname);
         route.continue();
       });
       const page = await context.newPage();
       watch(page);
-      await spec({
+      const t = current = {
         name, browser, context, page, base, webDir, manifest, requests, errors, watch, check, shots,
+        manifestOverride: { gitProxyDefault: 'http://127.0.0.1:9/' },
+        servedManifest: () => JSON.parse(served()),
         assert(c, msg) { if (!c) throw new Error('assertion failed: ' + msg); },
         shot: file => shots ? path.join(shots, `${name}-${file}`) : null,
-      });
+      };
+      await spec(t);
       await check('zero console, page and worker errors', async () => {
         if (errors.length) throw new Error(errors.join('\n'));
       });

@@ -18,9 +18,13 @@
 // MB of output while the page is hidden, and the autosaves of two sites of
 // one origin.  The world, when WEB_DIR has
 // it: its progress bar and live region, F6 and Tab, a refused clipboard
-// write, and a world that does not open.  The checks that make a page fail
-// on purpose do so in contexts of their own, whose errors are not counted.
-// Exits with status 1 if any check fails.
+// write, a world that does not open, and an image saved in this browser by
+// a build of before the slots (the legacy keys, slot main), which Images
+// lists as "Saved image" and the world boots.  On a site of several images,
+// the first visits of the world are given its default one (?fresh=), past
+// the launcher.  The checks that make a page fail on purpose do so in
+// contexts of their own, whose errors are not counted.  Exits with status 1
+// if any check fails.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -61,6 +65,12 @@ const INIT = () => {
 await run(async t => {
   const { page, check, assert, manifest, base } = t;
   await t.context.addInitScript(INIT);
+  // the world page of a first visit: past the launcher of a site of several
+  // images, to its default one
+  const catalog = manifest.images || [];
+  const firstWorld = catalog.length >= 2 ? 'world.html?fresh=' + catalog.find(e => e.default).id : 'world.html';
+  // the link to the Console, as the world gives it (with the image it runs)
+  const CONSOLE_HREF = /^index\.html(\?(slot|fresh)=[\w-]+)?$/;
 
   // ---- helpers on a Console page p
   const state = p => p.$eval('#status', e => e.dataset.state);
@@ -223,9 +233,10 @@ await run(async t => {
     const labels = await page.evaluate(() => ['notice-action', 'notice-alt'].map(id => document.getElementById(id))
                                          .filter(b => !b.hidden).map(b => b.textContent));
     assert(JSON.stringify(labels) === '["Save, then open the world","Open it without saving"]', 'buttons ' + JSON.stringify(labels));
-    assert(/index\.html$/.test(page.url()), 'still on the Console');
+    assert(/index\.html(\?.*)?$/.test(page.url()), 'still on the Console');
     await page.click('#notice-action');
-    await page.waitForURL(/world\.html$/, { timeout: 120000 });
+    await page.waitForURL(/world\.html(\?.*)?$/, { timeout: 120000 });
+    assert(/world\.html\?slot=main$/.test(page.url()), 'the world of the image of the Console: ' + page.url());
     await page.waitForFunction(() => window.PharoWorld && window.PharoWorld.stats.frames > 0, null, { timeout: 120000 });
     await page.goto(base + 'index.html');
     await started(page);
@@ -425,7 +436,7 @@ await run(async t => {
     try {
       const p = await context.newPage();
       t.watch(p);
-      await p.goto(base + 'world.html');
+      await p.goto(base + firstWorld);
       await framed(p);
       const values = (await p.evaluate(() => window.__progress)).filter(v => v !== null).map(Number);
       assert(values.length >= 5 && values.every(v => v >= 0 && v <= 100) && Math.max(...values) >= 99,
@@ -441,7 +452,7 @@ await run(async t => {
       await p.keyboard.press('F6');
       assert(await p.evaluate(() => document.activeElement.id) === 'stop', 'F6 went to ' + await p.evaluate(() => document.activeElement.id));
       let at = '';
-      for (let i = 0; i < 6 && at !== 'sink'; i++) {
+      for (let i = 0; i < 10 && at !== 'sink'; i++) {
         await p.keyboard.press('Tab');
         at = await p.evaluate(() => document.activeElement.id);
       }
@@ -460,7 +471,7 @@ await run(async t => {
       });
       const p = await context.newPage();
       t.watch(p);
-      await p.goto(base + 'world.html');
+      await p.goto(base + firstWorld);
       await framed(p);
       // (a paste event of the page's own: Firefox drops the clipboardData
       // given to the constructor of a ClipboardEvent)
@@ -485,11 +496,11 @@ await run(async t => {
     try {
       await context.route('**/manifest.json*', r => r.fulfill({ status: 503, body: 'unavailable' }));
       const p = await context.newPage();
-      await p.goto(base + 'world.html');
+      await p.goto(base + firstWorld);
       await p.waitForFunction(() => /^(crashed|exited)$/.test(document.getElementById('status').dataset.state), null,
                               { timeout: 60000 });
       assert(await p.textContent('#notice-action') === 'Restart' && await p.isVisible('#notice-alt') &&
-             await p.getAttribute('#notice-alt', 'href') === 'index.html' &&
+             CONSOLE_HREF.test(await p.getAttribute('#notice-alt', 'href')) &&
              await p.textContent('#notice-alt') === 'Open the Console', 'the notice ' + await p.textContent('#notice-text'));
       await p.close();
     } finally { await context.close(); }
@@ -541,7 +552,62 @@ await run(async t => {
                                !document.getElementById('notice-alt').hidden), null, { timeout: 60000 });
       const link = await p.evaluate(() => [...document.querySelectorAll('#notice a')].filter(a => !a.hidden)
                                       .map(a => [a.textContent, a.getAttribute('href')]));
-      assert(JSON.stringify(link).includes('["Open the Console","index.html"]'), 'links ' + JSON.stringify(link));
+      assert(link.some(([text, href]) => text === 'Open the Console' && CONSOLE_HREF.test(href)), 'links ' + JSON.stringify(link));
+      await p.close();
+    } finally { await context.close(); }
+  });
+
+  await check('world: an image saved by a build of before the slots is listed as "Saved image", and boots', async () => {
+    // the legacy keys (meta without slot, name or origin: slot main), with
+    // the site's world image, as a build of before saved it
+    const context = await fresh();
+    const files = manifest.files;
+    const url = path => '/' + files.find(f => f.path === path).url;
+    try {
+      const p = await context.newPage();
+      t.watch(p);
+      await p.goto(base + 'THIRD-PARTY-NOTICES.txt');
+      await p.evaluate(async ([image, changes, build, webPackage]) => {
+        // (the site's files are gzipped: inflated as the worker does)
+        const inflate = async u => {
+          const r = await fetch(u);
+          const b = new Uint8Array(await r.arrayBuffer());
+          return b[0] === 0x1f && b[1] === 0x8b
+            ? new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'))).blob() : new Blob([b]);
+        };
+        const [i, c] = await Promise.all([inflate(image), inflate(changes)]);
+        const db = await new Promise((resolve, reject) => {
+          const r = indexedDB.open('pharo-wasm', 1);
+          r.onupgradeneeded = () => r.result.createObjectStore('files');
+          r.onsuccess = () => resolve(r.result);
+          r.onerror = () => reject(r.error);
+        });
+        await new Promise((resolve, reject) => {
+          const tx = db.transaction('files', 'readwrite'), s = tx.objectStore('files');
+          s.put(i, 'Pharo.image');
+          s.put(c, 'Pharo.changes');
+          s.put({ id: 'legacy-1', image: 'Pharo.image', changes: 'Pharo.changes', imageSize: i.size, changesSize: c.size,
+                  savedAt: Date.now() - 86400000, syncedAt: Date.now() - 86400000, build, prepared: true, webPackage }, 'meta');
+          tx.oncomplete = resolve;
+          tx.onabort = () => reject(tx.error);
+        });
+        db.close();
+      }, [url(manifest.image), url(manifest.image.replace(/\.image$/, '.changes')), manifest.build, manifest.webPackage || 1]);
+      await p.goto(base + 'world.html');
+      await framed(p);
+      const said = await p.textContent('#notice-text');
+      assert(/^Started the image saved in this browser on .*: 'Saved image'/.test(said), 'the note ' + said);
+      assert(p.url().endsWith('/world.html?slot=main'), 'the URL ' + p.url());
+      await p.click('#images');
+      await p.waitForSelector('#images-saved li[data-slot="main"]', { timeout: 10000 });
+      const row = await p.$eval('#images-saved li[data-slot="main"]', li => [li.querySelector('.name').textContent,
+        li.querySelector('.sub').textContent, !!li.querySelector('.badge')]);
+      assert(row[0] === 'Saved image' && row[2], 'the row ' + JSON.stringify(row));
+      // the worker said its version (annotate) when it booted it
+      let m = null;
+      for (const t0 = Date.now(); Date.now() - t0 < 10000 && !(m && m.sourcesName && m.pharo); await p.waitForTimeout(200))
+        m = await p.evaluate(() => PharoStorage.open().meta('main'));
+      assert(m && m.sourcesName && m.pharo && !m.slot, 'annotated: ' + JSON.stringify(m && [m.slot, m.sourcesName, m.pharo]));
       await p.close();
     } finally { await context.close(); }
   });

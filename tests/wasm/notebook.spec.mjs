@@ -42,7 +42,9 @@
 //   - the image of the Console: a Save, then a Restart of the kernel, which
 //     boots it (and fetches no image from the server), a snapshot in a cell
 //     that leaves the saved image as it was, the notice after a Save and a
-//     Reset; the memory of the two VMs is logged;
+//     Delete; after the Console switched to another of its slots (Save as,
+//     then Images), the kernel boots that one (the Console's ?slot=); the
+//     memory of the two VMs is logged;
 //   - from file:// and without memory64, the notebook starts no worker;
 //   - no Content-Security-Policy violation on any page, no worker warning
 //     of an engine error.
@@ -72,7 +74,8 @@ const SYN_KINDS = ['comment', 'string', 'char', 'number', 'quote', 'constant', '
 const synVar = k => '--syn-' + (k === 'char' ? 'string' : k);
 
 // The init script of every context: the violations of the CSP, and the
-// workers with what the page tells them of their mode and of the git proxy
+// workers with what the page tells them of their mode, of the git proxy
+// and of the slot they boot
 const INIT = () => {
   document.addEventListener('securitypolicyviolation', e => {
     const said = e.violatedDirective + ' ' + (e.blockedURI || '') + ' at ' + location.href;
@@ -85,7 +88,7 @@ const INIT = () => {
     constructor(...a) { super(...a); this.__n = n++; }
     postMessage(m, ...rest) {
       if (m && (m.type === 'init' || m.type === 'gitProxy'))
-        window.__posts.push({ worker: this.__n, type: m.type, mode: m.mode || 'console', gitProxy: m.gitProxy });
+        window.__posts.push({ worker: this.__n, type: m.type, mode: m.mode || 'console', gitProxy: m.gitProxy, slot: m.slot });
       return super.postMessage(m, ...rest);
     }
   };
@@ -251,7 +254,7 @@ await run(async t => {
     const ms = Date.now() - t0;
     const states = await page.evaluate(() => window.__nbStates);
     assert(states.indexOf('loading') >= 0 && states.indexOf('loading') < states.lastIndexOf('ready'), 'states ' + states);
-    assert(/^Pharo 1[25]\.\d+ \u00b7 wasm64$/.test(await page.textContent('#nb-info')), 'info ' + await page.textContent('#nb-info'));
+    assert(/^Pharo 1[2-9]\.\d+ \u00b7 wasm64$/.test(await page.textContent('#nb-info')), 'info ' + await page.textContent('#nb-info'));
     assert(vmWorkers() === 2, 'two VM workers after it: ' + vmWorkers());
     assert(await notebookInits() === 1, 'one notebook init: ' + JSON.stringify(await posts()));
     // without an image saved in this browser, the kernel fetches the one of
@@ -1242,7 +1245,7 @@ await run(async t => {
     try {
       await context.exposeFunction('__nbCsp', s => { csp.push(s); });
       await context.addInitScript(INIT);
-      const body = JSON.stringify(Object.assign({}, manifest, { git: true, gitHttp: true }));
+      const body = JSON.stringify(Object.assign(t.servedManifest(), { git: true, gitHttp: true }));
       await context.route(url => url.pathname.endsWith('/manifest.json'), route => route.fulfill({ contentType: 'application/json', body }));
       const p = await context.newPage();
       t.watch(p);
@@ -1869,6 +1872,37 @@ await run(async t => {
     assert((await nb.values(i)).join() === '#none', 'the site\'s image: ' + await nb.out(i));
   });
 
+  await check('after the Console switched to another slot (Images), a Restart of the kernel boots that one', async () => {
+    // two slots of the Console, made by Save as: one, then two
+    const saveAs = async (name, mark) => {
+      await evalIn(page, 'Smalltalk at: #NbSlotMark put: ' + mark, new RegExp('\\n' + mark + '\\nst> $'));
+      await page.evaluate(() => { document.getElementById('notice-text').textContent = ''; });
+      page.once('dialog', d => d.accept(name));
+      await page.click('#save-as');
+      await noticeSays(new RegExp("^The image is saved in this browser as '" + name + "'"), page, 90000);
+      await waitState('waiting');
+      return page.evaluate(() => window.PharoPage.bootChoice().slot);
+    };
+    await page.click('#tab-console');
+    const one = await saveAs('nb one', 1), two = await saveAs('nb two', 2);
+    assert(one && two && one !== two && page.url().endsWith('?slot=' + two), 'two slots: ' + [one, two, page.url()]);
+    // Images: the first one again
+    await page.evaluate(() => { document.getElementById('nb-notice-text').textContent = ''; });
+    await page.click('#images');
+    await page.waitForSelector(`#images-saved li[data-slot="${one}"] [data-act="open"]`, { timeout: 10000 });
+    await page.click(`#images-saved li[data-slot="${one}"] [data-act="open"]`);
+    await started();
+    assert(page.url().endsWith('?slot=' + one), 'the Console runs the first: ' + page.url());
+    await page.click('#tab-notebook');
+    await nb.noticeSays(/image changed/i);
+    await page.click('#nb-notice-action');
+    await nb.waitState(/^ready$/);
+    const sent = (await posts()).filter(m => m.type === 'init' && m.mode === 'notebook');
+    assert(sent.length >= 2 && sent[sent.length - 1].slot === one, 'the kernel was restarted on it: ' + JSON.stringify(sent));
+    const i = await nb.eval('Smalltalk at: #NbSlotMark ifAbsent: [ #none ]');
+    assert((await nb.values(i)).join() === '1', 'the kernel booted the first slot: ' + await nb.out(i));
+  });
+
   await check('two VMs in one page: the memory, logged', async () => {
     const m = await page.evaluate(async () => {
       if (!self.crossOriginIsolated || !performance.measureUserAgentSpecificMemory)
@@ -1956,7 +1990,7 @@ await run(async t => {
     await page.click('#nb-notice-action');
     await nb.waitState(/^ready$/, 120000);
     const info = await page.textContent('#nb-info');
-    assert(/^Pharo 1[25]\.\d+ \u00b7 wasm64$/.test(info), 'info ' + info);
+    assert(/^Pharo 1[2-9]\.\d+ \u00b7 wasm64$/.test(info), 'info ' + info);
     console.log('  # ' + path.basename(zip) + ': ' + info);
     await accepting(() => nb.menu('example'));
     await page.waitForFunction(() => document.querySelector('#nb-cells > li') &&
