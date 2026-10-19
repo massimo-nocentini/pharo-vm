@@ -143,15 +143,24 @@
 // page (a second tab, the world) saved over that slot or deleted it, the
 // .changes of this VM would not match the image stored, so the worker stops
 // and says "superseded {slot}", until its VM saves again (into that slot:
-// the latest save wins).  Pages on other slots never supersede each other.
+// the latest save wins; a slot deleted is made again, with its name and
+// origin).  Unless the id of the slot is another image's now (main,
+// deleted and made again by another page: a createdAt that is not the one
+// of the slot bound): the save then makes a slot of its own, under the name
+// and origin of the one bound, and never overwrites the other image.  Pages
+// on other slots never supersede each other.
 // A failure of the storage is reported in "saved", never fatal.  "save"
 // types Smalltalk snapshot: true andQuit: false into the REPL; the image
 // itself may save at any time too.  In the Console, "edited" says whether
 // the .changes of the VM differs from the one it had when it first waited
 // for input, or when its image was last stored: code was changed that the
 // slot does not have.  "resetStorage" deletes a slot: {all: true} every
-// one, {slot} that one, else the one bound (else the last one); "reset
-// {slot}" says which, and a VM whose slot was deleted is bound to none.
+// one, {slot} that one, else the one bound, else the one that init told the
+// VM to boot (init.slot, else, without init.upload or init.fresh, the last
+// one: its boot failed, or the slot could not be read), else none: a fresh
+// image or an upload not kept deletes nothing ("reset {slot: null}");
+// "reset {slot}" says which, and a VM whose slot was deleted is bound to
+// none.
 //
 // The tree.  A save keeps with the image the files of /pharo that are
 // neither the image's (a top-level .image, .changes or .sources) nor the
@@ -284,8 +293,17 @@ let mode = null, manifest = null, display = null, sdl = null;
 let store = null, storageError = null;
 // the slot that this VM saves into (it booted from it or saved it), or null
 // (a fresh image or an upload, until its first save), and its name; only
-// resetStorage of it unbinds it
-let bound = null, boundName = null;
+// resetStorage of it unbinds it.  boundSince and boundOrigin are the
+// createdAt and the origin of that slot: a slot whose meta has another
+// createdAt is another image under the same id (main, deleted by a page and
+// made again by another), which a save never overwrites
+let bound = null, boundName = null, boundSince, boundOrigin;
+// the slot that init told this VM to boot (init.slot, else, without
+// init.upload or init.fresh, the last one), while it is bound to none: the
+// one that resetStorage without a slot deletes when the boot failed or the
+// slot could not be read; null once the VM is bound, and for a fresh image
+// or an upload, which delete nothing
+let intended = null;
 // the catalog entry that this VM booted from the site, or null; the name
 // that init gave for the slot it becomes, and the name of the upload
 let freshEntry = null, initName = '', uploadName = '';
@@ -423,6 +441,9 @@ function superseded() {
 async function bind(meta, name) {
   bound = meta.slot || MAIN;
   owned = meta;
+  boundSince = meta.createdAt;
+  boundOrigin = meta.origin;
+  intended = null;
   if (name) boundName = name;
   try { await store.setLast(bound); } catch (e) { /* only a convenience */ }
 }
@@ -728,20 +749,33 @@ function imageSaved(path) {
     const said = { type: 'saved', bytes: image.length, prepared, webPackage };
     if (tree.error) said.treeError = tree.error;
     try {
-      let target, origin, name = null;
-      if (asName || !bound) {
-        name = await uniqueName(asName || initName || (wasUpload && uploadName) ||
-                                (freshEntry && freshEntry.label) || 'Saved image');
-        origin = asName && bound ? 'save-as:' + bound : wasUpload ? 'upload:' + (uploadName || name)
+      let target, origin, name = null, recreated = false;
+      // the slot bound as it is stored now: when another image took its id
+      // meanwhile (another createdAt), this one goes into a slot of its own,
+      // under its name and origin; when it was deleted, the save makes it
+      // again, with them.  (A page could still take the id between this
+      // read and the write: a save is a few ms, a takeover a user's doing.)
+      const stored = bound && !asName ? await store.meta(bound) : null;
+      const taken = !!stored && stored.createdAt !== boundSince;
+      if (asName || !bound || taken) {
+        name = await uniqueName(asName || (taken && boundName) || initName || (wasUpload && uploadName) ||
+                                (freshEntry && freshEntry.label) || (taken && PharoCatalog.labelOf(pharo)) ||
+                                'Saved image');
+        origin = taken ? boundOrigin : asName && bound ? 'save-as:' + bound : wasUpload ? 'upload:' + (uploadName || name)
           : freshEntry ? 'fresh:' + freshEntry.id : undefined;
         target = { slot: null, name };
       } else {
+        recreated = !stored;
+        if (recreated) origin = boundOrigin;
         target = { slot: bound };
       }
       // (a .sources that the slot of this VM has stays as stored; a new slot
       // gets the one of this VM written)
       const meta = await store.save(image, changes, extraOf(prepared, webPackage, origin, tree.tree), ownSources, owned,
                                     target);
+      if (recreated && boundName) {
+        try { await store.rename(meta.slot || MAIN, boundName); } catch (e) { /* the one known */ }
+      }
       if (!name) {
         try { name = await store.name(meta.slot || MAIN); } catch (e) { /* the one known */ }
       }
@@ -922,6 +956,9 @@ async function load(m) {
         bound = slotId;
         boundName = saved.name;
         owned = saved.meta;
+        boundSince = saved.meta.createdAt;
+        boundOrigin = saved.meta.origin;
+        intended = null;
       }
     } else {
       entry = entry || PharoCatalog.defaultEntry(manifest);
@@ -959,8 +996,9 @@ async function load(m) {
       served = chosen ? chosen.path : null;
       wanted = chosen ? [chosen] : [];
     }
-    const of = PharoCatalog.entryOfFile(manifest, chosen);
-    imageId = (saved && saved.meta.imageId) || (of && known === chosen.path ? of.id : null);
+    // (the entry whose .sources it reads: none when it reads its own)
+    const of = ownSources ? null : PharoCatalog.entryOfFile(manifest, chosen);
+    imageId = (saved && saved.meta.imageId) || (of ? of.id : null);
   }
   sourcesName = known;
   pharo = (saved && saved.meta.pharo) || PharoCatalog.pharoOf(known) || (entry && entry.pharo) || null;
@@ -1006,6 +1044,11 @@ async function boot(m) {
   // first: resetStorage needs it even when the rest fails
   if (m.persist) {
     try { store = PharoStorage.open(); } catch (e) { storageError = errorText(e); }
+  }
+  // (and the slot it deletes while this VM has none)
+  if (store && mode !== 'notebook' && !m.upload && !(typeof m.fresh === 'string' && m.fresh)) {
+    if (m.slot !== undefined && m.slot !== null) intended = typeof m.slot === 'string' && SLOT_ID.test(m.slot) ? m.slot : null;
+    else try { intended = await store.last(); } catch (e) { /* none known */ }
   }
   manifest = await fetchManifest(m.manifestUrl || 'manifest.json' + q);
   if (m.build && m.build !== manifest.build)
@@ -1210,8 +1253,11 @@ function handle(m) {
       post({ type: 'reset', id: m.id, error: 'not in notebook mode' });
       break;
     }
-    // every slot, that one, or the one of this VM (else the last one); a
-    // reset of this VM's keeps no upload either
+    // every slot, that one, or the one of this VM: the slot bound, else the
+    // one init told it to boot (its boot failed, or the slot could not be
+    // read), else none (a fresh image or an upload not kept: nothing of it
+    // is stored, and no other image is deleted); a reset of this VM's keeps
+    // no upload either
     if (m.all || m.slot === undefined || m.slot === null) upload = null;
     enqueue(async () => {
       let sid = null;
@@ -1220,12 +1266,14 @@ function handle(m) {
         if (m.all) {
           await store.reset();
         } else {
-          sid = m.slot !== undefined && m.slot !== null ? String(m.slot) : bound || await store.last();
+          sid = m.slot !== undefined && m.slot !== null ? String(m.slot) : bound || intended;
           if (sid) await store.remove(sid);
         }
+        if (m.all || (sid && sid === intended)) intended = null;
         if (m.all || (sid && sid === bound)) {
           stopSync();
           bound = owned = boundName = null;
+          boundSince = boundOrigin = undefined;
         }
         post({ type: 'reset', id: m.id, slot: sid });
       } catch (e) {

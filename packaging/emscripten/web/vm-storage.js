@@ -113,8 +113,11 @@
 // large (46 MB for Pharo 15) and never changes, so a save does not write it
 // again when kept, the meta of the slot that this page booted from or saved,
 // is still the slot written and has a .sources of that name and size: the
-// slot then keeps it as stored.  createdAt is kept's when it is that slot,
-// else now.
+// slot then keeps it as stored.  An overwrite keeps the createdAt and the
+// origin that the slot has (kept's when it is that slot, else the stored
+// meta's: a page superseded has no kept; a slot of before the origins has
+// no createdAt, and gets none); a new slot, or one that was deleted
+// meanwhile, is created now.
 //
 // Every method answers a promise, which is rejected when the browser
 // refuses (QuotaExceededError, a private window, a blocked database): the
@@ -420,14 +423,19 @@
         // the entries of the slot, and its meta
         const make = async (slot, created) => {
           const k = file => keyOf(slot, file);
-          // (kept is of this slot: what it has stays, unless the slot is new)
+          // (kept is of this slot: what it has stays, unless the slot is new;
+          // without kept, what the slot stored has: the page that saves may
+          // have been superseded)
           const same = !created && !!kept && slotOf(kept) === slot;
+          const was = created ? null : same ? kept : (await b.get(k(META))) || null;
           const meta = Object.assign({}, fields, {
             id: newId(now), slot, image: k(IMAGE), changes: k(CHANGES), imageSize: image.length,
             changesSize: changes.length, savedAt: now, syncedAt: now,
-            createdAt: same && kept.createdAt ? kept.createdAt : now,
+            createdAt: was ? was.createdAt : now,
           });
-          if (meta.origin === undefined && same && kept.origin) meta.origin = kept.origin;
+          // (a slot of before the origins has no createdAt either: it keeps none)
+          if (meta.createdAt === undefined) delete meta.createdAt;
+          if (meta.origin === undefined && was && was.origin) meta.origin = was.origin;
           const entries = [[k(IMAGE), new Blob([image])], [k(CHANGES), new Blob([changes])], [k(META), meta]];
           let keep = false;               // the .sources stored stays
           if (sources) {
@@ -446,7 +454,6 @@
             entries.push([k(TREE), undefined]);
           } else {
             // the tree of the slot stays, as its meta says
-            const was = same ? kept : await b.get(k(META));
             if (was && was.tree === k(TREE))
               Object.assign(meta, { tree: was.tree, treeSize: was.treeSize, treeFiles: was.treeFiles });
             else entries.push([k(TREE), undefined]);

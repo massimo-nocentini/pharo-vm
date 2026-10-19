@@ -22,10 +22,11 @@
 # remotes), and, when manifest.libraries has some, the placeholders of the
 # libraries of the FFI (24); a case whose build lacks what it needs says
 # '# skip' and why.  On sites of its own with a catalog of two images (C1-
-# C10) it checks init.fresh, init.slot and the slots: main if free, a slot
+# C11) it checks init.fresh, init.slot and the slots: main if free, a slot
 # per fresh image, saveAs, two workers on two slots, resetStorage of a
 # slot, a meta of before the slots, the tree of /pharo kept with the image,
-# the site's default git proxy, and the .sources a slot gets by name.  An
+# the site's default git proxy, the .sources a slot gets by name, and a
+# save that never overwrites another image that took the id of its slot.  An
 # engine-level failure on its stderr fails the lane too.  The harness is
 # stopped after 600 s.
 #

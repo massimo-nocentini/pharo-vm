@@ -42,7 +42,7 @@
 // st/web-notebook.st, its events (output {fd: 3, bytes}), a request posted
 // before ready, Stop, the credit of the events, and a worker that boots the
 // slot without ever storing anything.
-// The slots and the catalog (C1-C10) run on sites of their own, made in
+// The slots and the catalog (C1-C11) run on sites of their own, made in
 // TEST_DIR from WEB_DIR's files with a manifest.json whose catalog has a
 // second entry, px, of the same files under image/px/ (and, for the
 // .sources, one whose default entry has a .sources of another name and an
@@ -57,7 +57,10 @@
 // of them keep the tree of before (treeError); init.gitProxy null is the
 // site's default; a slot gets the .sources of its name from another entry
 // or manifest.extraSources, and none (sourcesMissing) when the site has
-// none of that name; an init.slot or init.fresh that is not there boots the
+// none of that name; a save never overwrites another image that took the
+// id of the slot of its VM (main, deleted and made again: C11), a slot
+// deleted comes back with its name, and a VM bound to no slot resets none;
+// an init.slot or init.fresh that is not there boots the
 // default entry.  An upload is kept in a slot of its own (18, 19), and
 // prepared.slot is the slot that the world page then boots (19).
 // Prints every case and their count, and exits with
@@ -416,7 +419,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     } finally { await X.close(); }
   });
 
-  await check('8 an upload of a truncated image: crash {message}, the slot as it was; resetStorage still answers', async () => {
+  await check('8 an upload of a truncated image: crash {message}, the slot as it was; resetStorage still answers, and deletes no other slot', async () => {
     const gz = fs.readFileSync(path.join(webDir, manifest.files.find(f => f.path === imageName).url));
     const image = zlib.gunzipSync(gz).subarray(0, 1 << 20);
     // a slot there, which the upload, that does not boot, leaves alone (an
@@ -432,16 +435,18 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       console.log('#   ' + (X.crash ? 'crash: ' + X.crash.message.split('\n')[0] : 'exit ' + X.exit) +
                   ' / ' + X.err.trim().split('\n').join(' / '));
       assert(!fetched(X, imageName) && fetched(X, sourcesName), 'the upload replaced the fetch of the image');
-      // persisted: a slot is there
-      assert(X.ready && X.ready.source === 'upload' && X.ready.persisted === true && X.ready.slot === null,
-             'ready ' + JSON.stringify(X.ready));
+      // persisted: a slot is there; (no .sources name in the bytes of the
+      // upload: the default entry's, and its id)
+      assert(X.ready && X.ready.source === 'upload' && X.ready.persisted === true && X.ready.slot === null &&
+             X.ready.imageId === defaultEntry.id, 'ready ' + JSON.stringify(X.ready));
       assert(!X.saved.length, 'saved ' + JSON.stringify(X.saved));
       assert(memory.map.get('meta').id === slot.id && memory.map.get('Pharo.image').size === 7, 'the slot was replaced');
-      // (no slot of its own: the last one)
+      // (no slot of its own: none is deleted, the one there is another image)
       X.post({ type: 'resetStorage', id: 81 });
       const r = await X.reply('reset', 81);
-      assert(r.type === 'reset' && !r.error && r.slot === 'main', 'reset ' + JSON.stringify(r));
-      assert(memory.map.size === 0, 'the store is empty');
+      assert(r.type === 'reset' && !r.error && r.slot === null, 'reset ' + JSON.stringify(r));
+      assert(memory.map.get('meta').id === slot.id, 'the slot is there: ' + [...memory.map.keys()]);
+      memory.map.clear();
     } finally { await X.close(); }
   });
 
@@ -1787,6 +1792,53 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
         for (const f of catalogSite.manifest.files) assert(has(X, f.url), f.url + ' fetched');
       } finally { await X.close(); }
     }
+  });
+  await check('C11 a save never overwrites another image that took the id of its slot; a slot deleted comes back named; an unbound reset deletes nothing', async () => {
+    memory.map.clear();
+    const st = PharoStorage.open(memory);
+    const X = session({ fresh: 'px' }, on(C));
+    try {
+      current = X;
+      await X.started();
+      X.post({ type: 'save' });
+      await waitFor('saved', () => X.saved.length, 60000);
+      await X.prompt(60000);
+      assert(X.saved[0].slot.slot === 'main', 'saved ' + JSON.stringify(X.saved[0]));
+      // a page deletes main, and another image becomes main
+      await st.remove('main');
+      const other = await st.save(new Uint8Array(7), new Uint8Array(3), { origin: 'fresh:other', pharo: '13.1' }, null, null,
+                                  { slot: null, name: 'Other' });
+      assert(other.slot === 'main', 'the other is main');
+      X.post({ type: 'save' });
+      await waitFor('saved again', () => X.saved.length > 1, 60000);
+      await X.prompt(60000);
+      const m = X.saved[1], sid = m.slot.slot;
+      assert(!m.error && m.created && sid !== 'main' && m.slot.name === 'Pharo X', 'saved ' + JSON.stringify(m));
+      const main = memory.map.get('meta');
+      assert(main.id === other.id && main.imageSize === 7 && memory.map.get('Pharo.name') === 'Other', 'main is the other\'s');
+      const meta = memory.map.get(keyOf(sid, 'meta'));
+      assert(meta.origin === 'fresh:px' && memory.map.get(keyOf(sid, 'Pharo.name')) === 'Pharo X', 'meta ' + JSON.stringify(meta));
+      // its slot deleted by a page: the next save makes it again, with its name and origin
+      await st.remove(sid);
+      X.post({ type: 'save' });
+      await waitFor('saved a third time', () => X.saved.length > 2, 60000);
+      await X.prompt(60000);
+      const m3 = X.saved[2], again = memory.map.get(keyOf(sid, 'meta'));
+      assert(!m3.error && !m3.created && m3.slot.slot === sid && m3.slot.name === 'Pharo X' && again &&
+             again.origin === 'fresh:px' && memory.map.get(keyOf(sid, 'Pharo.name')) === 'Pharo X',
+             'saved ' + JSON.stringify(m3) + ', meta ' + JSON.stringify(again));
+    } finally { await X.close(); }
+    // a fresh VM is bound to no slot: resetStorage without a slot deletes none
+    const keys = [...memory.map.keys()].sort().join();
+    const F = session({ fresh: 'px' }, on(C));
+    try {
+      current = F;
+      await F.started();
+      F.post({ type: 'resetStorage', id: 1101 });
+      const r = await F.reply('reset', 1101);
+      assert(!r.error && r.slot === null && [...memory.map.keys()].sort().join() === keys,
+             'reset ' + JSON.stringify(r) + ': ' + [...memory.map.keys()]);
+    } finally { await F.close(); }
   });
   await C.close();
   await CS.close();

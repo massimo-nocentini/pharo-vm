@@ -12,7 +12,9 @@
 // the six keys of a slot and of 'last' when it names it; a meta of before
 // the slots (no slot) is main's; the tree of a slot (an empty directory, a
 // symbolic link, modes, times, a path in Unicode) and its paths
-// (checkPath refuses '..'); a save without a tree keeps the one stored,
+// (checkPath refuses '..'); an overwrite keeps the createdAt and origin of
+// its slot, without kept too (a page superseded), and gives a slot of
+// before none; a save without a tree keeps the one stored,
 // and with null deletes it; a backend without keys() lists main only.
 // Then the catalog of catalog.js (PharoCatalog) on a manifest with images
 // and on one of before them.  Prints every check and their count, and
@@ -150,6 +152,13 @@ await check('save, load and overwrite per slot; the latest save wins; createdAt 
   // an overwrite with a stale kept (another page saved meanwhile): written anyway
   const b3 = await st.save(bytes(7, 4), bytes(2), {}, null, lb.meta, { slot: b.slot });
   eq((await st.meta(b.slot)).id, b3.id, 'the latest wins');
+  // an overwrite without kept (a page superseded): the createdAt and origin stored stay
+  const b4 = await st.save(bytes(7, 5), bytes(2), {}, null, null, { slot: b.slot });
+  eq([b4.createdAt === b.createdAt, b4.origin], [true, 'fresh:p13'], 'without kept');
+  const a2 = await st.save(bytes(3), bytes(2), { pharo: '15.0' }, null, null, { slot: MAIN });
+  await st.rename(MAIN, '');
+  eq([a2.createdAt === a.createdAt, a2.origin, (await st.list()).find(x => x.slot === MAIN).name],
+     [true, 'fresh:p15', 'Pharo 15'], 'main keeps its origin: no Saved image');
   // an overwrite of a slot deleted meanwhile recreates it
   await st.remove(b.slot);
   await st.save(bytes(8), bytes(2), {}, null, b3, { slot: b.slot });
@@ -215,6 +224,11 @@ await check('a meta of before the slots (no slot, no origin) is main, listed as 
   // a new slot does not take main
   const b = await st.save(bytes(1), bytes(1), {}, null, null, { slot: null });
   assert(b.slot !== MAIN && m.map.get('meta').id === 'old', 'main stays: ' + b.slot);
+  // an overwrite of it, with kept or without, gives it no createdAt (nor origin)
+  const o1 = await st.save(bytes(2), bytes(1), {}, null, n, { slot: MAIN });
+  const o2 = await st.save(bytes(2), bytes(1), {}, null, null, { slot: MAIN });
+  eq([o1.createdAt, o1.origin, o2.createdAt, o2.origin, (await st.list()).find(x => x.slot === MAIN).name],
+     [undefined, undefined, undefined, undefined, 'Saved image'], 'overwritten as of before');
 });
 
 await check('the tree: an empty directory, a link, modes, times and a Unicode path round trip; checkPath', async () => {
