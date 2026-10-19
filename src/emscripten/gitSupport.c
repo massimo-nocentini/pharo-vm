@@ -35,9 +35,11 @@
  * The proxy is a URL prefix, put in place of the scheme of the remote's URLs
  * (https://github.com/o/r.git with the proxy https://proxy.example/ is
  * requested as https://proxy.example/github.com/o/r.git/info/refs?...), as
- * the CORS proxy of isomorphic-git takes them; a '/' is put after the prefix
- * when it has none, and a prefix that is not an http:// or https:// URL
- * fails the request.  It is Module.gitHttpProxy, which the Web Worker sets
+ * the CORS proxy of isomorphic-git takes them; the prefix is the proxy's
+ * URL as the browser writes it (new URL(proxy).href: no default port, the
+ * scheme and the host in lower case, as XMLHttpRequest's responseURL has
+ * them, see Redirects), with a '/' after it when it has none, and a prefix
+ * that is not an http:// or https:// URL fails the request.  It is Module.gitHttpProxy, which the Web Worker sets
  * from what the page gives it (packaging/emscripten/web/vm-worker.js) and
  * this file reads at each request, or else the environment variable
  * PHARO_WASM_GIT_PROXY (node).  The pages give the site's default
@@ -51,8 +53,9 @@
  * Redirects.  The browser (or curl -L) follows them, and the request
  * remembers where its response came from: XMLHttpRequest's responseURL, or
  * curl's url_effective, less the proxy's prefix (with the remote's scheme
- * put back; a final URL outside the prefix is not the remote's, and is left
- * alone).  When the advertisement of the refs (GET .../info/refs?service=)
+ * put back; a final URL is compared with the prefix as it is, then as the
+ * browser writes it, and one outside the prefix is not the remote's, and is
+ * left alone).  When the advertisement of the refs (GET .../info/refs?service=)
  * answered 200 from another URL than it asked, one that ends with the same
  * path, and not an https:// remote gone to http://, the subtransport keeps
  * that URL, less the path, as the remote's (from, to), and the next requests
@@ -79,7 +82,8 @@
  *
  * Module.onGitHttp, when the page's worker set it, is called at the end of
  * every request with {method, host, proxy, status, error}: the remote's
- * host (and port), the proxy's origin or '', the status (-1 or -2 without a
+ * host (and port), the proxy's origin (new URL(proxy).origin, as the pages
+ * write it) or '', the status (-1 or -2 without a
  * response) and the error ('' with a response).  The worker turns it into
  * its 'git' messages, which the pages show as notices; what it throws is
  * ignored.
@@ -160,24 +164,39 @@ EM_JS(int, gitHttpRequest, (const char *method, const char *url, const char *con
 				+ ". A web page cannot read git servers without a CORS proxy: choose one in Settings (Git HTTP proxy)";
 			return -1;
 		};
-		/* the URL a response came from, the remote's: without the proxy */
+		/* whether u starts with the proxy's prefix */
+		var within = function (u) {
+			return u.slice(0, prefix.length).toLowerCase() == prefix.toLowerCase();
+		};
+		/* the URL a response came from, the remote's: without the proxy
+		 * (curl may write it as it was asked, the browser as it writes
+		 * URLs: the prefix is the latter, see above) */
 		var landed = function (final) {
 			if (!final)
 				return url;
 			if (!prefix)
 				return final;
-			if (final.slice(0, prefix.length).toLowerCase() != prefix.toLowerCase())
+			if (!within(final))
+				try {
+					final = new URL(final).href;
+				} catch (e) {
+				}
+			if (!within(final))
 				return url;
 			return (remote ? remote.scheme : "https:") + "//" + final.slice(prefix.length);
 		};
 		if (proxy) {
-			var origin = parts(proxy);
-			if (!origin || !origin.host) {
+			var normal = null;
+			try {
+				normal = parts(proxy) && new URL(proxy);
+			} catch (e) {
+			}
+			if (!normal || !/^https?:$/.test(normal.protocol) || !normal.host) {
 				state.error = "git http: the proxy '" + proxy + "' is not an http:// or https:// URL";
 				return -1;
 			}
-			state.proxyOrigin = origin.scheme + "//" + origin.host;
-			prefix = proxy + (proxy.endsWith("/") ? "" : "/");
+			state.proxyOrigin = normal.origin;
+			prefix = normal.href + (normal.href.endsWith("/") ? "" : "/");
 			requested = prefix + url.replace(/^https?:[/][/]/i, "");
 		}
 		try {
