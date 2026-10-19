@@ -22,7 +22,8 @@
 #     sources, of an id given twice or of a zip that does not exist, an extra
 #     .sources that does not exist, and a default proxy of git that stage.mjs
 #     would refuse: not http:// or https://, with a user name or a
-#     #fragment);
+#     #fragment, and, as stage.mjs --check-git-proxy says, with a port or a
+#     host that is none);
 #   - wasm-check-browser fails without Playwright, runs page.spec.mjs and
 #     then notebook.spec.mjs on every build, world.spec.mjs only for a build
 #     with the image of the world, ffi.spec.mjs only for one with the FFI,
@@ -47,7 +48,8 @@
 #     download.cmake unpacked) under image/<id>/, with the paths, labels,
 #     builds and order of manifest.images, an --extra-sources file under
 #     image/sources/ (not when an image has it already), and the default
-#     proxy of git, checked; an extra image named default is listed apart
+#     proxy of git, checked, and written as the browser writes it; an extra
+#     image named default is listed apart
 #     from the default image; the build id follows the build of an image; it
 #     refuses an id given twice, a bad one, the default's, sources, two
 #     .sources of one name that differ, an extra world image
@@ -192,11 +194,12 @@ esac
 EOF
 chmod +x "$T/bin/"*
 
-# A source tree: the GNUmakefile, smalltalksrc, the initial cache and the
-# specs
+# A source tree: the GNUmakefile, smalltalksrc, the initial cache, the
+# specs and stage.mjs (which checks WASM_GIT_PROXY)
 src=$T/src
-mkdir -p "$src/smalltalksrc/VMMaker" "$src/scripts" "$src/cmake" "$src/tests/wasm/lib"
+mkdir -p "$src/smalltalksrc/VMMaker" "$src/scripts" "$src/cmake" "$src/tests/wasm/lib" "$src/packaging/emscripten/tools"
 cp "$SRCDIR/GNUmakefile" "$src/"
+cp "$SRCDIR/packaging/emscripten/tools/stage.mjs" "$src/packaging/emscripten/tools/"
 echo '"A"' >"$src/smalltalksrc/VMMaker/A.class.st"
 echo '"B"' >"$src/smalltalksrc/VMMaker/B.class.st"
 : >"$src/scripts/refreshVMMaker.st"
@@ -450,6 +453,13 @@ refused "a proxy with a user" "WASM_GIT_PROXY (https://me:pw@proxy.example/) is 
     "WASM_GIT_PROXY=https://me:pw@proxy.example/"
 refused "a proxy with a fragment" "WASM_GIT_PROXY (https://proxy.example/#x) is not" \
     "WASM_GIT_PROXY=https://proxy.example/#x"
+refused "a proxy with a port that is none" \
+    "WASM_GIT_PROXY (https://proxy:abc/) is refused: stage.mjs: WASM_GIT_PROXY https://proxy:abc/ is not a URL" \
+    "WASM_GIT_PROXY=https://proxy:abc/"
+refused "a proxy with a port too large" "WASM_GIT_PROXY (http://host:99999/) is refused" \
+    "WASM_GIT_PROXY=http://host:99999/"
+refused "a proxy with a bad escape in its host" "WASM_GIT_PROXY (https://%zz/) is refused" \
+    "WASM_GIT_PROXY=https://%zz/"
 step="a proxy with a port and an @ in its path"
 wmake "$W/cmake/.configured" "WASM_GIT_PROXY=HTTPS://proxy.example:8443/a@b/?c=d"
 calls "emcmake" "configure cmake"
@@ -826,6 +836,9 @@ echo "e3b0 /zips/Pharo15.0-SNAPSHOT.build.51.sha.b85960fcc6.arch.64bit.zip" >"$s
 stage ok --extra-image "p99=$sg/stock-p99" --git-proxy-default=
 manifest 'm.images[1].pharoBuild === 51 && m.build !== process.argv[4]' "$build_before"
 cp "$sg/stock.stamp" "$sg/stock-p99.stamp"
+step="stage.mjs, a proxy written as the browser would not"
+stage ok --git-proxy-default=HTTPS:Proxy.Example:443/git
+manifest 'm.gitProxyDefault === "https://proxy.example/git"'
 step="stage.mjs, a proxy with a path, and no extra image any more"
 stage ok --git-proxy-default=https://proxy.example/git/
 manifest 'm.gitProxyDefault === "https://proxy.example/git/" && m.images.length === 1'

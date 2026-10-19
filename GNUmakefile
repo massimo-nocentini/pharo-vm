@@ -292,6 +292,14 @@ ifneq ($(WASM_GIT_PROXY),)
 ifeq ($(shell printf '%s\n' '$(WASM_GIT_PROXY)' | grep -Eix 'https?://[^/?\#@]+([/?][^\#]*)?'),)
 $(error WASM_GIT_PROXY ($(WASM_GIT_PROXY)) is not an http:// or https:// URL without a user name or password or a \#fragment)
 endif
+# (and stage.mjs itself, which parses it as a URL, when node runs: a port
+# or a host that is none, such as https://proxy:abc/ or https://%zz/)
+WASM_PROXY_REFUSED := $(if $(wildcard $(SRCDIR)/packaging/emscripten/tools/stage.mjs),$(shell \
+  if command -v '$(NODE)' >/dev/null 2>&1; then \
+    '$(NODE)' '$(SRCDIR)/packaging/emscripten/tools/stage.mjs' --check-git-proxy '$(WASM_GIT_PROXY)' 2>&1 >/dev/null; fi))
+ifneq ($(WASM_PROXY_REFUSED),)
+$(error WASM_GIT_PROXY ($(WASM_GIT_PROXY)) is refused: $(WASM_PROXY_REFUSED))
+endif
 endif
 
 # The VMMaker image and the VM running it: downloaded and bootstrapped in

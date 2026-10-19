@@ -9,6 +9,12 @@
 //        [--image-id <id>] [--extra-image <id>=<dir>]...
 //        [--extra-world-image <id>=<dir>]... [--extra-sources <file>]...
 //        [--git-proxy-default <url>]
+//   node stage.mjs --check-git-proxy <url>
+//
+// The second form only checks a default proxy of git as the first takes it,
+// and prints it as the manifest would have it (the GNUmakefile checks
+// WASM_GIT_PROXY so, before it builds anything); it fails as the first
+// would, naming WASM_GIT_PROXY.
 //
 // Every option also takes the form --name=value, which is the only way to
 // give an empty value from a list of CMake (--git-proxy-default= for none).
@@ -156,19 +162,20 @@ const ID = /^[a-z0-9][a-z0-9-]{0,15}$/;
 // The name of the .sources of a Pharo release: Pharo13.1-64bit-d7c6f76.sources
 const SOURCES_NAME = /^Pharo(\d+)\.(\d+)-(?:32|64)bit-([0-9a-f]+)\.sources$/;
 
-// The default proxy of git, checked as page.js checks what the user types
-// (parseGitProxy): http: or https:, no user name or password, no fragment;
-// a bare origin gets its /, which the host of the repository follows.  ''
-// is none
-const gitProxyOf = (text) => {
+// The default proxy of git, checked as git-proxy.js checks what the user
+// types (parse): http: or https:, no user name or password, no fragment; as
+// the browser writes it (https:proxy.example/git is
+// https://proxy.example/git), a bare origin with its /, which the host of
+// the repository follows.  '' is none.  what names it in a failure
+const gitProxyOf = (text, what = '--git-proxy-default') => {
   const s = String(text || '').trim();
   if (!s) return '';
   let u;
-  try { u = new URL(s); } catch (e) { fail(`--git-proxy-default ${s} is not a URL`); }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') fail(`--git-proxy-default ${s} is not an http:// or https:// URL`);
-  if (u.username || u.password) fail(`--git-proxy-default ${s} has a user name or password`);
-  if (u.hash || s.indexOf('#') >= 0) fail(`--git-proxy-default ${s} has a #fragment`);
-  return u.pathname === '/' && !u.search ? u.origin + '/' : s;
+  try { u = new URL(s); } catch (e) { fail(`${what} ${s} is not a URL`); }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') fail(`${what} ${s} is not an http:// or https:// URL`);
+  if (u.username || u.password) fail(`${what} ${s} has a user name or password`);
+  if (u.hash || s.indexOf('#') >= 0) fail(`${what} ${s} has a #fragment`);
+  return u.pathname === '/' && !u.search ? u.origin + '/' : u.href;
 };
 
 // <id>=<dir> of --extra-image and --extra-world-image
@@ -564,4 +571,5 @@ const main = async () => {
     process.stdout.write(`stage.mjs: ${out}: ${written} file(s) written, ${removed} removed, build ${build}\n`);
 };
 
-main().catch((e) => fail((e && e.stack) || e));
+if (process.argv[2] === '--check-git-proxy') process.stdout.write(gitProxyOf(process.argv[3], 'WASM_GIT_PROXY') + '\n');
+else main().catch((e) => fail((e && e.stack) || e));
