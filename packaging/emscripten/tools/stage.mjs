@@ -6,7 +6,12 @@
 //        [--fonts freetype|bitmap] [--libgit2 0|1] [--libgit2-http 0|1]
 //        [--sdl2 0|1] [--notices <file>] [--st <file>]... [--library-file <name>]...
 //        [--world-image <dir> [--world-st <file>]...]
+//        [--image-id <id>] [--extra-image <id>=<dir>]...
+//        [--extra-world-image <id>=<dir>]... [--extra-sources <file>]...
+//        [--git-proxy-default <url>]
 //
+// Every option also takes the form --name=value, which is the only way to
+// give an empty value from a list of CMake (--git-proxy-default= for none).
 // cmake/emscripten/stage.cmake runs it on every build.  It writes
 //
 //   <web files>                the files of --web (packaging/emscripten/web),
@@ -19,14 +24,26 @@
 //                              (--notices, which stage.cmake assembles),
 //                              copied unchanged; index.html and world.html
 //                              link it
-//   image/Pharo.image.gz       the image, its changes and its .sources,
-//   image/Pharo.changes.gz     gzipped (zlib level 9, deterministic); the
-//   image/<name>.sources.gz    image of the world from --world-image when
-//                              it has one, the stock one otherwise
+//   image/Pharo.image.gz       the default image, its changes and its
+//   image/Pharo.changes.gz     .sources, gzipped (zlib level 9,
+//   image/<name>.sources.gz    deterministic); the image of the world from
+//                              --world-image when it has one, the stock one
+//                              otherwise
+//   image/<id>/...             the same three files of each extra image
+//                              (--extra-image <id>=<stock dir>): of its world
+//                              image (--extra-world-image <id>=<dir>) when it
+//                              has one, of the stock one otherwise
+//   image/sources/<name>.gz    each --extra-sources file, a .sources that no
+//                              image of the site has: an image saved in the
+//                              browser from an image that the site served
+//                              before finds the source of its methods there
+//                              (one that an image has already is not staged
+//                              again)
 //   st/<file>                  the --st files, and with the world image its
 //                              OSWindow-Web.st and the --world-st files
-//   manifest.json              {build, ffi, files, fonts, git, gitHttp,
-//                              image, libraries, memory64, sdl2, st,
+//   manifest.json              {build, extraSources, ffi, files, fonts, git,
+//                              gitHttp, gitProxyDefault, image, imageId,
+//                              images, libraries, memory64, sdl2, st,
 //                              webPackage, world}
 //
 // The build id is the git sha, a dash and the first 12 hex digits of a
@@ -34,12 +51,14 @@
 // manifest.json describes the build, and lists what the worker writes into
 // /pharo:
 //
+//   extraSources  [{gzSize, path, sha256, size, url}] of the --extra-sources
+//          files (as files), sorted by path; no key when there is none
 //   ffi    true when the VM has the FFI (--ffi 1, from FEATURE_FFI, that is
 //          WASM_FFI): make wasm-check-browser runs ffi.spec.mjs only then
-//   files  [{gzSize, path, sha256, size, url}], sorted by path: path is the
-//          name under /pharo, url the gzipped file relative to web/ (the
-//          worker adds ?v=<build>), size and sha256 those of the file, and
-//          gzSize the size of the download
+//   files  [{gzSize, path, sha256, size, url}] of the default image, sorted
+//          by path: path is the name under /pharo, url the gzipped file
+//          relative to web/ (the worker adds ?v=<build>), size and sha256
+//          those of the file, and gzSize the size of the download
 //   fonts  "freetype" or "bitmap" (--fonts, from PHARO_WASM_HAS_FREETYPE):
 //          the fonts that the preparation of an image for the world sets
 //          up, the build's (webimage.cmake) and the page's
@@ -49,9 +68,29 @@
 //          wasm-check-browser runs git.spec.mjs only then
 //   gitHttp  true when it also has the smart-HTTP transport of libgit2
 //          (--libgit2-http 1, from PHARO_WASM_HAS_LIBGIT2_HTTP, that is
-//          WASM_LIBGIT2_HTTP), whose CORS proxy the Console's Settings hold;
+//          WASM_LIBGIT2_HTTP), whose CORS proxy the pages' Settings hold;
 //          never true without git
+//   gitProxyDefault  the site's default CORS proxy of git, which the pages
+//          use unless the user chose another or none (--git-proxy-default,
+//          from WASM_GIT_PROXY: an http: or https: URL without credentials
+//          or fragment, a bare origin with its /), "" for none; only with
+//          gitHttp
 //   image  the name of the image to boot, "Pharo.image"
+//   imageId  the id of the default image in images: --image-id, else
+//          p<major> of the name of its .sources (p15 for
+//          Pharo15.0-64bit-b85960f.sources), else "default"
+//   images  the catalog, one entry per image, also when there is one:
+//          {files, id, label, pharo, pharoBuild, webPackage, world}, and
+//          default: true on the default one, whose files are those of the
+//          key files.  An id is 1 to 16 lower-case letters, digits and
+//          dashes (not first); pharo is "13.1" for the .sources
+//          Pharo13.1-64bit-d7c6f76.sources, null for a .sources of another
+//          name; label "Pharo 13.1", "Pharo 14" (for 14.0), or the id;
+//          pharoBuild the build of the stock image, from the name of the zip
+//          that download.cmake unpacked (<stock dir>.stamp), null when
+//          unknown; world and webPackage as the keys below, for that image
+//          (webPackage 0 for a stock image).  Sorted by pharo, numerically,
+//          those without one last, then by id
 //   libraries  ["libcairo.so.2", ...], sorted: the --library-file names, the
 //          placeholders of the libraries of the FFI (the FILES of
 //          pharo_wasm_ffi_library, which stage.cmake passes).  The worker
@@ -72,11 +111,19 @@
 //          as the symbol of OSWebDriver class>>packageMarker, which must be
 //          #OSWindowWebPackage<version>).  The source is the single place
 //          where the version is written
-//   world  true when the image is the image of the world
+//   world  true when the default image is the image of the world
+//
+// The checks: the ids are unique, and differ from the default one; two
+// images whose .sources have one name have the same file; an --extra-sources
+// file of the name of a .sources of an image is that file; and the
+// OSWindow-Web.st of each extra world image is the default world's, the only
+// one staged (st/OSWindow-Web.st, which the pages file in to prepare a stock
+// image), so there is no extra world image without a default one.
 //
 // Only files whose contents change are rewritten, and a file is gzipped
-// again only when its SHA256 changes.  Files of an earlier staging that are
-// not staged any more are removed.
+// again only when its SHA256 changes (the gzipped files of every group of
+// the manifest before count).  Files of an earlier staging that are not
+// staged any more are removed.
 
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync,
@@ -99,18 +146,58 @@ const fail = (message) => {
   process.exit(1);
 };
 
+// The id of an image of the catalog, a name in its URLs (image/<id>/)
+const ID = /^[a-z0-9][a-z0-9-]{0,15}$/;
+// The name of the .sources of a Pharo release: Pharo13.1-64bit-d7c6f76.sources
+const SOURCES_NAME = /^Pharo(\d+)\.(\d+)-(?:32|64)bit-([0-9a-f]+)\.sources$/;
+
+// The default proxy of git, checked as page.js checks what the user types
+// (parseGitProxy): http: or https:, no user name or password, no fragment;
+// a bare origin gets its /, which the host of the repository follows.  ''
+// is none
+const gitProxyOf = (text) => {
+  const s = String(text || '').trim();
+  if (!s) return '';
+  let u;
+  try { u = new URL(s); } catch (e) { fail(`--git-proxy-default ${s} is not a URL`); }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') fail(`--git-proxy-default ${s} is not an http:// or https:// URL`);
+  if (u.username || u.password) fail(`--git-proxy-default ${s} has a user name or password`);
+  if (u.hash || s.indexOf('#') >= 0) fail(`--git-proxy-default ${s} has a #fragment`);
+  return u.pathname === '/' && !u.search ? u.origin + '/' : s;
+};
+
+// <id>=<dir> of --extra-image and --extra-world-image
+const idAndDir = (name, value) => {
+  const m = /^([^=]*)=(.+)$/.exec(value);
+  if (!m) fail(`${name} ${value} is not <id>=<dir>`);
+  if (!ID.test(m[1])) fail(`${name} ${value}: the id ${m[1]} is not 1 to 16 lower-case letters, digits and dashes (not first)`);
+  return [m[1], m[2]];
+};
+
 const parseArguments = (argv) => {
   const options = { st: [], worldSt: [], libraries: [], memory64: '2', git: '', ffi: '0', fonts: 'bitmap',
-                    libgit2: '0', libgit2Http: '0', sdl2: '0' };
+                    libgit2: '0', libgit2Http: '0', sdl2: '0', imageId: '', gitProxyDefault: '',
+                    extraImages: [], extraWorldImages: [], extraSources: [] };
   const single = { '--out': 'out', '--web': 'web', '--module': 'module', '--memory64': 'memory64',
                    '--git': 'git', '--ffi': 'ffi', '--fonts': 'fonts', '--notices': 'notices',
                    '--libgit2': 'libgit2', '--libgit2-http': 'libgit2Http', '--sdl2': 'sdl2',
-                   '--stock-image': 'stockImage', '--web-package': 'webPackage', '--world-image': 'worldImage' };
-  const many = { '--st': 'st', '--world-st': 'worldSt', '--library-file': 'libraries' };
+                   '--stock-image': 'stockImage', '--web-package': 'webPackage', '--world-image': 'worldImage',
+                   '--image-id': 'imageId', '--git-proxy-default': 'gitProxyDefault' };
+  const many = { '--st': 'st', '--world-st': 'worldSt', '--library-file': 'libraries',
+                 '--extra-image': 'extraImages', '--extra-world-image': 'extraWorldImages',
+                 '--extra-sources': 'extraSources' };
   for (let i = 0; i < argv.length; i++) {
-    const name = argv[i];
-    if (i + 1 >= argv.length || !(name in single || name in many)) fail(`bad argument ${name}`);
-    const value = argv[++i];
+    // (--name value, or --name=value, which can be empty)
+    let name = argv[i], value;
+    const eq = name.indexOf('=');
+    if (name.startsWith('--') && eq > 0) {
+      value = name.slice(eq + 1);
+      name = name.slice(0, eq);
+    } else {
+      if (i + 1 >= argv.length) fail(`bad argument ${name}`);
+      value = argv[++i];
+    }
+    if (!(name in single || name in many)) fail(`bad argument ${name}`);
     if (name in single) options[single[name]] = value;
     else options[many[name]].push(value);
   }
@@ -128,6 +215,27 @@ const parseArguments = (argv) => {
   for (const name of options.libraries)
     if (!/^[A-Za-z0-9_+-][A-Za-z0-9._+-]*$/.test(name)) fail(`--library-file ${name} is not the name of a file`);
   options.libraries = [...new Set(options.libraries)].sort();
+  if (options.imageId && !ID.test(options.imageId))
+    fail(`--image-id ${options.imageId} is not 1 to 16 lower-case letters, digits and dashes (not first)`);
+  options.gitProxyDefault = gitProxyOf(options.gitProxyDefault);
+  // The extra images, in their order, each with its world image or null
+  const extras = new Map();
+  for (const value of options.extraImages) {
+    const [id, dir] = idAndDir('--extra-image', value);
+    if (extras.has(id)) fail(`--extra-image ${id} is given twice`);
+    if (id == 'sources') fail(`--extra-image ${id}: image/sources/ holds the --extra-sources files, name it otherwise`);
+    extras.set(id, { id, stockDir: dir, worldDir: null });
+  }
+  for (const value of options.extraWorldImages) {
+    const [id, dir] = idAndDir('--extra-world-image', value);
+    if (!extras.has(id)) fail(`--extra-world-image ${id} has no --extra-image ${id}`);
+    if (extras.get(id).worldDir) fail(`--extra-world-image ${id} is given twice`);
+    extras.get(id).worldDir = dir;
+  }
+  options.extras = [...extras.values()];
+  for (const file of options.extraSources)
+    if (!/^[^/]+\.sources$/.test(basename(file)) || !existsSync(file))
+      fail(`--extra-sources ${file} does not exist, or is no .sources`);
   return options;
 };
 
@@ -190,16 +298,100 @@ const sortKeys = (value) => {
   return value;
 };
 
+// "13.1" for Pharo13.1-64bit-d7c6f76.sources, null for a name of no release
+const pharoOf = (sourcesName) => {
+  const m = SOURCES_NAME.exec(sourcesName);
+  return m ? `${m[1]}.${m[2]}` : null;
+};
+// "Pharo 14" for 14.0, "Pharo 13.1" for 13.1
+const labelOf = (pharo, id) => {
+  if (!pharo) return id;
+  const [major, minor] = pharo.split('.');
+  return Number(minor) == 0 ? `Pharo ${major}` : `Pharo ${pharo}`;
+};
+// The build of the stock image of dir, from the name of the zip that
+// download.cmake unpacked there, which <dir>.stamp records ("<sha256>
+// <zip>"): 50 for Pharo15.0-SNAPSHOT.build.50.sha.b85960fcc6.arch.64bit.zip,
+// else null
+const pharoBuildOf = (dir) => {
+  const stamp = resolve(dir) + '.stamp';
+  if (!existsSync(stamp)) return null;
+  const m = /^[0-9a-f]* (.+?)\n?$/.exec(readFileSync(stamp, 'utf8'));
+  const build = m && /\.build\.(\d+)\.sha\./.exec(basename(m[1]));
+  return build ? Number(build[1]) : null;
+};
+// The order of the catalog: by release, numerically, those of no release
+// last, then by id
+const catalogOrder = (a, b) => {
+  const va = a.pharo && a.pharo.split('.').map(Number), vb = b.pharo && b.pharo.split('.').map(Number);
+  if (va && vb) {
+    if (va[0] != vb[0]) return va[0] - vb[0];
+    if (va[1] != vb[1]) return va[1] - vb[1];
+  } else if (va || vb) {
+    return va ? -1 : 1;
+  }
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+};
+
 const main = async () => {
   const options = parseArguments(process.argv.slice(2));
   const out = resolve(options.out);
+  const webPackage = webPackageOf(options.webPackage);
 
-  // Which image: the world's when there is one
+  // Each file is read once, when first asked for
+  const contents = new Map();
+  const read = (source) => {
+    if (!contents.has(source)) {
+      const data = readFileSync(source);
+      contents.set(source, { data, sha256: sha256(data) });
+    }
+    return contents.get(source);
+  };
+
+  // The images of the catalog, the default one first: the world's of each
+  // when there is one
   const world = !!options.worldImage && existsSync(join(options.worldImage, WORLD_IMAGE));
-  const image = imageFiles(world ? options.worldImage : options.stockImage);
+  const catalog = [{ id: null, group: 'default', prefix: 'image/', stockDir: options.stockImage, world,
+                     files: imageFiles(world ? options.worldImage : options.stockImage) }];
+  for (const extra of options.extras) {
+    const extraWorld = !!extra.worldDir && existsSync(join(extra.worldDir, WORLD_IMAGE));
+    if (extraWorld) {
+      // (the pages file in st/OSWindow-Web.st, the default world's, into any
+      // stock image they prepare)
+      if (!world) fail(`--extra-world-image ${extra.id}: there is no world image of the default image (--world-image)`);
+      const own = join(extra.worldDir, 'OSWindow-Web.st'), staged = join(options.worldImage, 'OSWindow-Web.st');
+      if (!existsSync(own) || !existsSync(staged) || !readFileSync(own).equals(readFileSync(staged)))
+        fail(`${own} is not ${staged}: the images of the world must be prepared with the same OSWindow-Web`);
+    }
+    catalog.push({ id: extra.id, group: extra.id, prefix: `image/${extra.id}/`, stockDir: extra.stockDir,
+                   world: extraWorld, files: imageFiles(extraWorld ? extra.worldDir : extra.stockDir) });
+  }
+  for (const image of catalog) {
+    image.sourcesName = basename(image.files.sources);
+    image.pharo = pharoOf(image.sourcesName);
+    image.pharoBuild = pharoBuildOf(image.stockDir);
+  }
+  // The id of the default image: --image-id, else p<major> of its .sources
+  const [first] = catalog;
+  first.id = options.imageId || (first.pharo ? `p${first.pharo.split('.')[0]}` : 'default');
+  for (const image of catalog) {
+    if (image != first && image.id == first.id)
+      fail(`--extra-image ${image.id} has the id of the default image (--image-id)`);
+    image.label = labelOf(image.pharo, image.id);
+  }
+  // Two .sources of one name are the same file
+  const sourcesByName = new Map();
+  for (const image of catalog) {
+    const known = sourcesByName.get(image.sourcesName);
+    if (known && read(known.files.sources).sha256 != read(image.files.sources).sha256)
+      fail(`the images ${known.id} and ${image.id} have two different ${image.sourcesName}`);
+    if (!known) sourcesByName.set(image.sourcesName, image);
+  }
 
-  // What is staged: [path in web/, source, kind], kind being text (@BUILD@
-  // replaced), copy or gzip
+  // What is staged: [path in web/, source, kind, file], kind being text
+  // (@BUILD@ replaced), copy or gzip, and file, for gzip, {path, group}:
+  // its name in /pharo and the group of the manifest that lists it (default,
+  // the id of an extra image, or sources)
   const entries = [];
   const sdl2 = options.sdl2 == '1';
   if (options.web) {
@@ -217,10 +409,26 @@ const main = async () => {
   // (copied: the licence texts are staged as they are, without @BUILD@)
   if (options.notices) entries.push([NOTICES, resolve(options.notices), 'copy']);
   else process.stderr.write(`stage.mjs: warning: no --notices, web/ goes without the ${NOTICES} that the pages link\n`);
-  const files = [[IMAGE, image.image], [CHANGES, image.changes], [basename(image.sources), image.sources]];
-  for (const [name, source] of files) entries.push([`image/${name}.gz`, source, 'gzip']);
+  for (const image of catalog) {
+    const files = [[IMAGE, image.files.image], [CHANGES, image.files.changes], [image.sourcesName, image.files.sources]];
+    for (const [name, source] of files)
+      entries.push([`${image.prefix}${name}.gz`, source, 'gzip', { path: name, group: image.group }]);
+  }
   for (const name of options.libraries)
-    if (files.some(([file]) => file == name)) fail(`--library-file ${name} is the name of a file of the image`);
+    if (name == IMAGE || name == CHANGES || sourcesByName.has(name))
+      fail(`--library-file ${name} is the name of a file of an image`);
+  // The other .sources, but those the catalog serves already
+  const extraSources = new Map();
+  for (const file of options.extraSources) {
+    const name = basename(file);
+    const known = sourcesByName.has(name) ? sourcesByName.get(name).files.sources : extraSources.get(name);
+    if (known) {
+      if (read(known).sha256 != read(file).sha256) fail(`--extra-sources ${file} is not the ${name} of the site`);
+      continue;
+    }
+    extraSources.set(name, file);
+    entries.push([`image/sources/${name}.gz`, file, 'gzip', { path: name, group: 'sources' }]);
+  }
   const st = [...options.st];
   if (world) st.push(join(options.worldImage, 'OSWindow-Web.st'), ...options.worldSt);
   for (const file of st) {
@@ -231,14 +439,15 @@ const main = async () => {
   const inputs = new Map();
   for (const [rel, source] of entries) {
     if (inputs.has(rel) || rel == 'manifest.json') fail(`${source} would be staged as ${rel} twice`);
-    const data = readFileSync(source);
-    inputs.set(rel, { data, sha256: sha256(data) });
+    inputs.set(rel, read(source));
   }
   const ffi = options.ffi == '1';
   // (the transport is a part of libgit2)
   const git = options.libgit2 == '1', gitHttp = git && options.libgit2Http == '1';
-  const webPackage = webPackageOf(options.webPackage);
   const digest = sha256([`ffi ${ffi}`, `fonts ${options.fonts}`, `git ${git}`, `gitHttp ${gitHttp}`,
+                         `gitProxyDefault ${options.gitProxyDefault}`, `imageId ${first.id}`,
+                         ...catalog.map((image) => `image ${image.id} ${image.label} ${image.world}`),
+                         `extraSources ${[...extraSources.keys()].sort().join(' ')}`,
                          `libraries ${options.libraries.join(' ')}`,
                          `memory64 ${options.memory64}`, ...(sdl2 ? ['sdl2 true'] : []),
                          `webPackage ${webPackage}`, `world ${world}`,
@@ -253,7 +462,9 @@ const main = async () => {
   } else if (existsSync(out) && readdirSync(out).length > 0) {
     fail(`${out} is not empty and has no manifest.json: not a directory to stage into`);
   }
-  const previousFiles = new Map(((previous && previous.files) || []).map((file) => [file.url, file]));
+  const previousFiles = new Map([...((previous && previous.files) || []),
+                                  ...((previous && previous.images) || []).flatMap((image) => image.files || []),
+                                  ...((previous && previous.extraSources) || [])].map((file) => [file.url, file]));
 
   let written = 0;
   const write = (rel, data) => {
@@ -265,18 +476,18 @@ const main = async () => {
     written++;
   };
 
-  const manifestFiles = [];
+  // The files of each group of the manifest
+  const groups = new Map([...catalog.map((image) => [image.group, []]), ['sources', []]]);
   const compressions = [];
-  for (const [rel, source, kind] of entries) {
+  for (const [rel, source, kind, meta] of entries) {
     const { data, sha256: hash } = inputs.get(rel);
     if (kind == 'text') {
       write(rel, Buffer.from(data.toString('utf8').replaceAll('@BUILD@', build), 'utf8'));
     } else if (kind == 'copy') {
       write(rel, data);
     } else {
-      const file = { path: rel.replace(/^image\//, '').replace(/\.gz$/, ''), url: rel, size: data.length,
-                     sha256: hash, gzSize: 0 };
-      manifestFiles.push(file);
+      const file = { path: meta.path, url: rel, size: data.length, sha256: hash, gzSize: 0 };
+      groups.get(meta.group).push(file);
       const old = previousFiles.get(rel);
       const path = join(out, rel);
       if (old && old.sha256 == hash && existsSync(path) && statSync(path).size == old.gzSize) {
@@ -291,14 +502,30 @@ const main = async () => {
   }
   await Promise.all(compressions);
 
+  const byPath = (a, b) => a.path < b.path ? -1 : 1;
+  for (const files of groups.values()) files.sort(byPath);
+  const images = catalog.map((image) => ({
+    ...(image == first ? { default: true } : {}),
+    files: groups.get(image.group),
+    id: image.id,
+    label: image.label,
+    pharo: image.pharo,
+    pharoBuild: image.pharoBuild,
+    webPackage: image.world ? webPackage : 0,
+    world: image.world,
+  })).sort(catalogOrder);
   const manifest = sortKeys({
     build,
+    ...(groups.get('sources').length ? { extraSources: groups.get('sources') } : {}),
     ffi,
-    files: manifestFiles.sort((a, b) => a.path < b.path ? -1 : 1),
+    files: groups.get('default'),
     fonts: options.fonts,
     git,
     gitHttp,
+    ...(gitHttp ? { gitProxyDefault: options.gitProxyDefault } : {}),
     image: IMAGE,
+    imageId: first.id,
+    images,
     libraries: options.libraries,
     memory64: Number(options.memory64),
     ...(sdl2 ? { sdl2 } : {}),

@@ -14,7 +14,7 @@
 #                        build id (but for the SDL page, sdl.html, sdl.js
 #                        and sdl-shim.js, which only a build with SDL2
 #                        stages), pharo-web.js and pharo-web.wasm,
-#                        THIRD-PARTY-NOTICES.txt, the image (gzipped) in
+#                        THIRD-PARTY-NOTICES.txt, the images (gzipped) in
 #                        image/, the st files in st/ (web-repl.st, the
 #                        Console's REPL, and web-notebook.st, the notebook
 #                        kernel, which starts only in a VM that has
@@ -30,14 +30,26 @@
 # packaging/emscripten/st/OSWindow-Web/OSWebDriver.class.st, whether the VM
 # has libgit2 (PHARO_WASM_HAS_LIBGIT2: make wasm-check-browser runs git.spec
 # only then) and its smart-HTTP transport (PHARO_WASM_HAS_LIBGIT2_HTTP: the
-# Console then shows the Settings of its CORS proxy), whether it has SDL2
+# pages then show the Settings of its CORS proxy, and the manifest has the
+# site's default proxy, below), whether it has SDL2
 # (PHARO_WASM_HAS_SDL2, WASM_SDL2 with the FFI: web/ then has the SDL page,
 # the world through the image's own OSSDL2Driver, and make
 # wasm-check-browser runs sdl.spec; the manifest of a build without it has
 # no sdl2 key), and the placeholders of the libraries of the FFI (below).
 #
 # web/ gets the image of the world when webimage.cmake defines its target
-# wasm-web-image, and the stock image otherwise.
+# wasm-web-image, and the stock image otherwise; and so for each extra image
+# of WASM_EXTRA_IMAGE_IDS (download.cmake), its world image when
+# wasm-web-image-<id> exists, which web/ serves from image/<id>/.  The
+# catalog of the manifest (images) lists them all, with the default one under
+# the id WASM_IMAGE_ID (when empty, stage.mjs names it after its .sources,
+# p15 for Pharo 15).  Each file of WASM_EXTRA_SOURCES, a .sources of no
+# image of the site, goes to image/sources/: a saved image that the site
+# served before finds the .sources of its methods there.  WASM_GIT_PROXY is
+# the site's default CORS proxy of git (manifest.gitProxyDefault), which the
+# pages use unless the user chose another or none; not set (a configuration
+# made without the GNUmakefile) it is https://cors.isomorphic-git.org/, and
+# empty there is none.
 #
 # The placeholders.  The libraries of the FFI are linked into the VMs
 # (cmake/emscripten/ffiLibraries.cmake), but the image looks for some of
@@ -301,6 +313,30 @@ if(TARGET wasm-web-image)
         --world-image "${WASM_WEB_IMAGE_DIR}"
         --world-st "${PHARO_WASM_ST_SOURCE_DIR}/web-bootstrap.st")
 endif()
+foreach(PHARO_WASM_EXTRA_ID IN LISTS WASM_EXTRA_IMAGE_IDS)
+    list(APPEND PHARO_WASM_STAGE_ARGUMENTS
+        --extra-image "${PHARO_WASM_EXTRA_ID}=${WASM_EXTRA_STOCK_DIR_${PHARO_WASM_EXTRA_ID}}")
+    if(TARGET wasm-web-image-${PHARO_WASM_EXTRA_ID})
+        list(APPEND PHARO_WASM_STAGE_ARGUMENTS
+            --extra-world-image "${PHARO_WASM_EXTRA_ID}=${WASM_EXTRA_WEB_DIR_${PHARO_WASM_EXTRA_ID}}")
+    endif()
+endforeach()
+if(WASM_IMAGE_ID)
+    list(APPEND PHARO_WASM_STAGE_ARGUMENTS --image-id "${WASM_IMAGE_ID}")
+endif()
+foreach(PHARO_WASM_EXTRA_SOURCES IN LISTS WASM_EXTRA_SOURCES)
+    get_filename_component(PHARO_WASM_EXTRA_SOURCES "${PHARO_WASM_EXTRA_SOURCES}" ABSOLUTE)
+    if(NOT EXISTS "${PHARO_WASM_EXTRA_SOURCES}" OR NOT PHARO_WASM_EXTRA_SOURCES MATCHES "\\.sources$")
+        message(FATAL_ERROR "WASM_EXTRA_SOURCES: ${PHARO_WASM_EXTRA_SOURCES} does not exist, or is no .sources")
+    endif()
+    list(APPEND PHARO_WASM_STAGE_ARGUMENTS --extra-sources "${PHARO_WASM_EXTRA_SOURCES}")
+endforeach()
+if(NOT DEFINED WASM_GIT_PROXY)
+    set(WASM_GIT_PROXY "https://cors.isomorphic-git.org/")
+endif()
+# (one argument, which an empty proxy would not be as two: CMake drops the
+# empty items of a list)
+list(APPEND PHARO_WASM_STAGE_ARGUMENTS "--git-proxy-default=${WASM_GIT_PROXY}")
 
 add_custom_target(wasm-web-stage ALL
     COMMAND "${NODE_JS_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/tools/stage.mjs"
@@ -311,3 +347,9 @@ add_dependencies(wasm-web-stage pharo-web wasm-stock-image)
 if(TARGET wasm-web-image)
     add_dependencies(wasm-web-stage wasm-web-image)
 endif()
+foreach(PHARO_WASM_EXTRA_ID IN LISTS WASM_EXTRA_IMAGE_IDS)
+    add_dependencies(wasm-web-stage wasm-stock-image-${PHARO_WASM_EXTRA_ID})
+    if(TARGET wasm-web-image-${PHARO_WASM_EXTRA_ID})
+        add_dependencies(wasm-web-stage wasm-web-image-${PHARO_WASM_EXTRA_ID})
+    endif()
+endforeach()

@@ -1,24 +1,30 @@
-# Image of the Pharo world in the browser
+# Images of the Pharo world in the browser
 #
 # The browser world needs the OSWindow-Web package in the image, and fonts
 # that the web VM can draw: the FreeType fonts of the stock image when the VM
 # has FreeType, else bitmap fonts.  A native Pharo VM prepares that image at
 # build time: it runs packaging/emscripten/st/prepare-web-image.st on a copy
-# of the stock image, Pharo 12 or Pharo 15.  That takes about a second, and
+# of the stock image, Pharo 12 to Pharo 15.  That takes about a second, and
 # keeps the world image independent of the web VM being built, but for the
 # fonts, which the build passes on: the FreeType of the native VM does not
-# matter.
+# matter.  Each image of the site is prepared so: the default one, and each
+# extra image of WASM_EXTRA_IMAGES (download.cmake), each with a work
+# directory of its own, since the script empties it first.
 #
 # Emscripten.cmake includes this file after download.cmake and before
 # stage.cmake, with
 #
-#     WASM_HOST_PHARO          - the native Pharo VM.  Without it the world
-#                                image is not prepared, and web/ gets the
-#                                stock image
+#     WASM_HOST_PHARO          - the native Pharo VM.  Without it no world
+#                                image is prepared, and web/ gets the stock
+#                                images
 #     WASM_STOCK_IMAGE_DIR     - the unpacked stock image: one .image, its
 #                                .changes and the .sources (download.cmake)
 #     WASM_STOCK_IMAGE_DEPENDS - the files and targets that produce the stock
 #                                image (download.cmake)
+#     WASM_EXTRA_IMAGE_IDS     - the ids of the extra images, and for each id
+#                                WASM_EXTRA_STOCK_DIR_<id> and
+#                                WASM_EXTRA_STOCK_DEPENDS_<id>, the same for
+#                                its stock image (download.cmake)
 #     WASM_WEB_IMAGE_DIR       - where the world image goes
 #                                (default ${WASM_STAGE_DIR}/image/web)
 #     WASM_WORLD               - OFF leaves the world out
@@ -26,20 +32,27 @@
 #                                (cmake/emscripten/deps/options.cmake):
 #                                FreeType fonts, else bitmap fonts
 #
-# and it defines the target
+# and it defines, with the function
+# pharo_wasm_web_image(target stockDir stockDepends webDir workDir), the
+# targets
 #
 #     wasm-web-image           - ${WASM_WEB_IMAGE_DIR}/Pharo-web.image,
 #                                Pharo-web.changes and OSWindow-Web.st (the
 #                                package filed out for web-bootstrap.st), next
-#                                to a copy of the stock .sources
+#                                to a copy of the stock .sources, prepared in
+#                                ${CMAKE_BINARY_DIR}/wasm/webimage
+#     wasm-web-image-<id>      - the same for each extra image, in
+#                                ${WASM_STAGE_DIR}/image/web-<id>, prepared in
+#                                ${CMAKE_BINARY_DIR}/wasm/webimage-<id>
 #
-# which wasm-web-stage depends on when it exists.  The files of the package
-# are listed at configure time, and their directory is a dependency of both
-# the configuration and the image: a class that comes or goes configures
-# again and prepares the image again.  The fonts go through a file,
+# which wasm-web-stage depends on when they exist, and sets
+# WASM_EXTRA_WEB_DIR_<id> for stage.cmake.  The files of the package are
+# listed at configure time, and their directory is a dependency of both the
+# configuration and the images: a class that comes or goes configures again
+# and prepares the images again.  The fonts go through a file,
 # ${CMAKE_BINARY_DIR}/wasm/webimage-fonts.txt, freetype or bitmap, which the
-# configuration writes only when they change, and which the image depends
-# on: other fonts prepare the image again (a changed argument would not run
+# configuration writes only when they change, and which every image depends
+# on: other fonts prepare the images again (a changed argument would not run
 # the command again with the Makefile generator).
 #
 # At build time the same file runs as a script, because the name of the stock
@@ -94,8 +107,7 @@ if(CMAKE_SCRIPT_MODE_FILE)
     file(COPY ${stockSources} DESTINATION "${WASM_WEB_IMAGE_DIR}")
 
     # The st command of Pharo 15 takes nothing but its file: the directories
-    # and the fonts go in the environment, which both Pharo 12 and Pharo 15
-    # read.
+    # and the fonts go in the environment, which Pharo 12 to Pharo 15 read.
     set(ENV{PHARO_WEB_ST_DIR} "${PHARO_WASM_ST_DIR}")
     set(ENV{PHARO_WEB_IMAGE_DIR} "${WASM_WEB_IMAGE_DIR}")
     set(ENV{PHARO_WEB_FONTS} "${fonts}")
@@ -113,7 +125,8 @@ if(CMAKE_SCRIPT_MODE_FILE)
             message(FATAL_ERROR "webimage.cmake: prepare-web-image.st did not write ${output}, see ${WORK_DIR}")
         endif()
     endforeach()
-    # pharo-local holds the Epicea log of the preparation.
+    # pharo-local holds the Epicea log of the preparation (and Pharo 13
+    # writes more there).
     file(REMOVE_RECURSE "${WORK_DIR}" "${WASM_WEB_IMAGE_DIR}/pharo-local")
     return()
 endif()
@@ -134,11 +147,6 @@ if(NOT WASM_WEB_IMAGE_DIR)
     set(WASM_WEB_IMAGE_DIR "${WASM_STAGE_DIR}/image/web")
 endif()
 
-set(PHARO_WASM_WEB_IMAGE_OUTPUTS
-    "${WASM_WEB_IMAGE_DIR}/Pharo-web.image"
-    "${WASM_WEB_IMAGE_DIR}/Pharo-web.changes"
-    "${WASM_WEB_IMAGE_DIR}/OSWindow-Web.st")
-
 # The fonts, written only when they change, as file(CONFIGURE) would (which
 # needs CMake 3.18)
 if(PHARO_WASM_HAS_FREETYPE)
@@ -158,31 +166,48 @@ message(STATUS "The image of the Pharo world gets ${PHARO_WASM_WEB_FONTS} fonts"
 
 file(GLOB PHARO_WASM_WEB_PACKAGE_FILES "${PHARO_WASM_ST_DIR}/OSWindow-Web/*.st")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PHARO_WASM_ST_DIR}/OSWindow-Web")
-set(PHARO_WASM_WEB_IMAGE_DEPENDS "")
-set(PHARO_WASM_WEB_IMAGE_TARGETS "")
-foreach(item IN LISTS WASM_STOCK_IMAGE_DEPENDS)
-    if(TARGET "${item}")
-        list(APPEND PHARO_WASM_WEB_IMAGE_TARGETS "${item}")
-    else()
-        list(APPEND PHARO_WASM_WEB_IMAGE_DEPENDS "${item}")
+# (CMAKE_CURRENT_LIST_FILE, in a function, is the file that calls it)
+set(PHARO_WASM_WEB_IMAGE_SCRIPT "${CMAKE_CURRENT_LIST_FILE}")
+
+# pharo_wasm_web_image(<target> <stockDir> <stockDepends> <webDir> <workDir>):
+# the target that prepares the stock image of <stockDir>, which the files and
+# targets of the list <stockDepends> produce, into <webDir>, working in
+# <workDir>
+function(pharo_wasm_web_image target stockDir stockDepends webDir workDir)
+    set(outputs "${webDir}/Pharo-web.image" "${webDir}/Pharo-web.changes" "${webDir}/OSWindow-Web.st")
+    set(depends "")
+    set(targets "")
+    foreach(item IN LISTS stockDepends)
+        if(TARGET "${item}")
+            list(APPEND targets "${item}")
+        else()
+            list(APPEND depends "${item}")
+        endif()
+    endforeach()
+    add_custom_command(
+        OUTPUT ${outputs}
+        COMMAND ${CMAKE_COMMAND} "-DWASM_HOST_PHARO=${WASM_HOST_PHARO}"
+                "-DWASM_STOCK_IMAGE_DIR=${stockDir}"
+                "-DWASM_WEB_IMAGE_DIR=${webDir}"
+                "-DWASM_WEB_FONTS_FILE=${PHARO_WASM_WEB_FONTS_FILE}"
+                "-DWORK_DIR=${workDir}"
+                -P "${PHARO_WASM_WEB_IMAGE_SCRIPT}"
+        DEPENDS ${PHARO_WASM_WEB_PACKAGE_FILES} "${PHARO_WASM_ST_DIR}/OSWindow-Web"
+                "${PHARO_WASM_ST_DIR}/prepare-web-image.st" "${PHARO_WASM_WEB_FONTS_FILE}"
+                "${PHARO_WASM_WEB_IMAGE_SCRIPT}" ${depends}
+        COMMENT "Preparing the image of the Pharo world in ${webDir} (${PHARO_WASM_WEB_FONTS} fonts) with ${WASM_HOST_PHARO}"
+        VERBATIM)
+    add_custom_target(${target} ALL DEPENDS ${outputs})
+    if(targets)
+        add_dependencies(${target} ${targets})
     endif()
+endfunction()
+
+pharo_wasm_web_image(wasm-web-image "${WASM_STOCK_IMAGE_DIR}" "${WASM_STOCK_IMAGE_DEPENDS}"
+    "${WASM_WEB_IMAGE_DIR}" "${CMAKE_BINARY_DIR}/wasm/webimage")
+foreach(PHARO_WASM_EXTRA_ID IN LISTS WASM_EXTRA_IMAGE_IDS)
+    set(WASM_EXTRA_WEB_DIR_${PHARO_WASM_EXTRA_ID} "${WASM_STAGE_DIR}/image/web-${PHARO_WASM_EXTRA_ID}")
+    pharo_wasm_web_image(wasm-web-image-${PHARO_WASM_EXTRA_ID}
+        "${WASM_EXTRA_STOCK_DIR_${PHARO_WASM_EXTRA_ID}}" "${WASM_EXTRA_STOCK_DEPENDS_${PHARO_WASM_EXTRA_ID}}"
+        "${WASM_EXTRA_WEB_DIR_${PHARO_WASM_EXTRA_ID}}" "${CMAKE_BINARY_DIR}/wasm/webimage-${PHARO_WASM_EXTRA_ID}")
 endforeach()
-
-add_custom_command(
-    OUTPUT ${PHARO_WASM_WEB_IMAGE_OUTPUTS}
-    COMMAND ${CMAKE_COMMAND} "-DWASM_HOST_PHARO=${WASM_HOST_PHARO}"
-            "-DWASM_STOCK_IMAGE_DIR=${WASM_STOCK_IMAGE_DIR}"
-            "-DWASM_WEB_IMAGE_DIR=${WASM_WEB_IMAGE_DIR}"
-            "-DWASM_WEB_FONTS_FILE=${PHARO_WASM_WEB_FONTS_FILE}"
-            "-DWORK_DIR=${CMAKE_BINARY_DIR}/wasm/webimage"
-            -P "${CMAKE_CURRENT_LIST_FILE}"
-    DEPENDS ${PHARO_WASM_WEB_PACKAGE_FILES} "${PHARO_WASM_ST_DIR}/OSWindow-Web"
-            "${PHARO_WASM_ST_DIR}/prepare-web-image.st" "${PHARO_WASM_WEB_FONTS_FILE}"
-            "${CMAKE_CURRENT_LIST_FILE}" ${PHARO_WASM_WEB_IMAGE_DEPENDS}
-    COMMENT "Preparing the image of the Pharo world (${PHARO_WASM_WEB_FONTS} fonts) with ${WASM_HOST_PHARO}"
-    VERBATIM)
-
-add_custom_target(wasm-web-image ALL DEPENDS ${PHARO_WASM_WEB_IMAGE_OUTPUTS})
-if(PHARO_WASM_WEB_IMAGE_TARGETS)
-    add_dependencies(wasm-web-image ${PHARO_WASM_WEB_IMAGE_TARGETS})
-endif()

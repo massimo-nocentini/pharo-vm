@@ -1,5 +1,5 @@
 #!/bin/sh
-# 05-build-rules - the rules of the GNUmakefile and of webimage.cmake
+# 05-build-rules - the rules of the GNUmakefile, of the images and of stage.mjs
 #
 # Builds nothing of the VM.  The GNUmakefile and cmake/emscripten/webimage.cmake
 # of SRCDIR are copied into small trees of TEST_DIR, where stand-ins log what
@@ -15,8 +15,12 @@
 #     VMMaker image and generates the sources again, and nothing else does;
 #   - an edit of cmake/Emscripten.cache.cmake configures the wasm build again,
 #     and so does a change of WASM_FFI, WASM_FREETYPE, WASM_LIBGIT2,
-#     WASM_LIBGIT2_HTTP, WASM_SDL2 or WASM_DEPS_DIR, which config.make
-#     records (a WASM_DEPS_DIR that does not exist is refused);
+#     WASM_LIBGIT2_HTTP, WASM_SDL2, WASM_DEPS_DIR, WASM_IMAGE_ID,
+#     WASM_EXTRA_IMAGES, WASM_EXTRA_SOURCES or WASM_GIT_PROXY, which
+#     config.make records (a WASM_DEPS_DIR that does not exist is refused, and
+#     so are an extra image that is not <id>=<zip>, of a bad id, of an id
+#     given twice or of a zip that does not exist, and an extra .sources that
+#     does not exist);
 #   - wasm-check-browser fails without Playwright, runs page.spec.mjs and
 #     then notebook.spec.mjs on every build, world.spec.mjs only for a build
 #     with the image of the world, ffi.spec.mjs only for one with the FFI,
@@ -30,6 +34,22 @@
 #   - the fonts of the world image follow PHARO_WASM_HAS_FREETYPE, freetype
 #     or bitmap, in PHARO_WEB_FONTS: other fonts prepare the image again, and
 #     a configuration with the same ones does not;
+#   - an extra image (WASM_EXTRA_IMAGE_IDS) is prepared into image/web-<id>,
+#     in a work directory of its own, once, and again only when its stock
+#     image changes, without preparing the default one again;
+#   - download.cmake, as a script, unpacks a zip given without URL and
+#     SHA256 (an extra image) once, recording it in its stamp, and wants a
+#     URL without a zip;
+#   - stage.mjs stages the catalog of images: the default one at its URLs of
+#     before, an extra one (a copy of it as p99, and the image that
+#     download.cmake unpacked) under image/<id>/, with the paths, labels,
+#     builds and order of manifest.images, an --extra-sources file under
+#     image/sources/ (not when an image has it already), and the default
+#     proxy of git, checked; it refuses an id given twice, a bad one, the
+#     default's, two .sources of one name that differ, an extra world image
+#     prepared with another OSWindow-Web, and an --extra-sources file that is
+#     not the .sources of its name; and a staging without the extra image
+#     removes its files;
 #   - pharo_wasm_dep_fetch (cmake/emscripten/deps/fetch.cmake) takes an
 #     archive from WASM_DEPS_DIR, or downloads it once (from a file:// URL
 #     here), unpacks it once, records its notice, and stops at an archive of
@@ -159,7 +179,12 @@ mkdir -p "$PHARO_WEB_IMAGE_DIR"
 cat "$PHARO_WEB_ST_DIR"/OSWindow-Web/*.st >"$PHARO_WEB_IMAGE_DIR/OSWindow-Web.st"
 echo "$PHARO_WEB_FONTS" >"$PHARO_WEB_IMAGE_DIR/Pharo-web.image"
 : >"$PHARO_WEB_IMAGE_DIR/Pharo-web.changes"
-echo "prepare" >>"$RULES_LOG"
+# (the default image in image/web; an extra one says where, and in which
+# work directory, the image it runs in being there)
+case $(basename "$PHARO_WEB_IMAGE_DIR") in
+web) echo "prepare" >>"$RULES_LOG" ;;
+*) echo "prepare $(basename "$PHARO_WEB_IMAGE_DIR") in $(basename "$(dirname "$2")")" >>"$RULES_LOG" ;;
+esac
 EOF
 chmod +x "$T/bin/"*
 
@@ -328,6 +353,92 @@ grep -qx "WASM_DEPS_DIR = $T/archives" "$W/config.make" || { cat "$W/config.make
 step="nothing changed with a WASM_DEPS_DIR"
 wmake "$W/cmake/.configured" "WASM_DEPS_DIR=$T/archives"
 calls
+# recorded VARIABLE VALUE: config.make records it, and cmake was given it
+recorded() {
+    grep -qxF "$1 = $2" "$W/config.make" || { cat "$W/config.make"; fail "$step: config.make does not record $1 = $2"; }
+}
+given() {
+    grep -qF -- " -D$1 " "$log.configure" || { cat "$log.configure"; fail "$step: cmake was not given -D$1"; }
+}
+step="the default proxy of git, by default"
+wmake "$W/cmake/.configured"
+calls "emcmake" "configure cmake"
+recorded WASM_GIT_PROXY https://cors.isomorphic-git.org/
+recorded WASM_EXTRA_IMAGES ""
+given WASM_GIT_PROXY=https://cors.isomorphic-git.org/
+given WASM_EXTRA_IMAGES=
+step="nothing changed with the default proxy"
+wmake "$W/cmake/.configured"
+calls
+mkdir -p "$T/zips"
+: >"$T/zips/p98.zip"
+: >"$T/zips/p99.zip"
+: >"$T/zips/Old.sources"
+step="extra images"
+wmake "$W/cmake/.configured" "WASM_EXTRA_IMAGES=p99=$T/zips/p99.zip" WASM_IMAGE_ID=p15 \
+    "WASM_EXTRA_SOURCES=$T/zips/Old.sources"
+calls "emcmake" "configure cmake"
+recorded WASM_EXTRA_IMAGES "p99=$T/zips/p99.zip"
+recorded WASM_IMAGE_ID p15
+recorded WASM_EXTRA_SOURCES "$T/zips/Old.sources"
+given "WASM_EXTRA_IMAGES=p99=$T/zips/p99.zip"
+given WASM_IMAGE_ID=p15
+given "WASM_EXTRA_SOURCES=$T/zips/Old.sources"
+step="nothing changed with extra images"
+wmake "$W/cmake/.configured" "WASM_EXTRA_IMAGES=p99=$T/zips/p99.zip" WASM_IMAGE_ID=p15 \
+    "WASM_EXTRA_SOURCES=$T/zips/Old.sources"
+calls
+step="a second extra image, relative"
+wmake "$W/cmake/.configured" "WASM_EXTRA_IMAGES=p99=$T/zips/p99.zip p98=../zips/p98.zip" WASM_IMAGE_ID=p15 \
+    "WASM_EXTRA_SOURCES=$T/zips/Old.sources"
+calls "emcmake" "configure cmake"
+recorded WASM_EXTRA_IMAGES "p99=$T/zips/p99.zip p98=$T/zips/p98.zip"
+given "WASM_EXTRA_IMAGES=p99=$T/zips/p99.zip;p98=$T/zips/p98.zip"
+step="another default proxy of git"
+wmake "$W/cmake/.configured" WASM_GIT_PROXY=https://proxy.example/git/
+calls "emcmake" "configure cmake"
+recorded WASM_GIT_PROXY https://proxy.example/git/
+recorded WASM_EXTRA_IMAGES ""
+recorded WASM_IMAGE_ID ""
+given WASM_GIT_PROXY=https://proxy.example/git/
+step="no default proxy of git"
+wmake "$W/cmake/.configured" WASM_GIT_PROXY=
+calls "emcmake" "configure cmake"
+recorded WASM_GIT_PROXY ""
+given WASM_GIT_PROXY=
+step="nothing changed without a default proxy"
+wmake "$W/cmake/.configured" WASM_GIT_PROXY=
+calls
+step="the default proxy of git again"
+wmake "$W/cmake/.configured"
+calls "emcmake" "configure cmake"
+recorded WASM_GIT_PROXY https://cors.isomorphic-git.org/
+# refused WHAT TEXT KNOB...: make refuses KNOB... with a message holding TEXT
+refused() {
+    refused_text=$2; shift 2
+    if HOME=$T/home "$make" -s --no-print-directory -f "$src/GNUmakefile" -C "$src" $knobs \
+        "$@" "$W/cmake/.configured" >"$T/make.out" 2>&1; then
+        cat "$T/make.out"
+        fail "$step: make accepted $*"
+    fi
+    grep -qF -- "$refused_text" "$T/make.out" || { cat "$T/make.out"; fail "$step: no refusal saying $refused_text"; }
+    calls
+}
+step="bad extra images"
+refused "an upper-case id" "the id of 'P99=$T/zips/p99.zip' is not" "WASM_EXTRA_IMAGES=P99=$T/zips/p99.zip"
+refused "a dash first" "the id of '-p=$T/zips/p99.zip' is not" "WASM_EXTRA_IMAGES=-p=$T/zips/p99.zip"
+refused "a long id" "the id of 'abcdefghijklmnopq=$T/zips/p99.zip' is not" \
+    "WASM_EXTRA_IMAGES=abcdefghijklmnopq=$T/zips/p99.zip"
+refused "no zip" "'p99' is not <id>=<zip>" "WASM_EXTRA_IMAGES=p99"
+refused "a blank in the path" "'p99=$T/my': $T/my does not exist (paths with blanks are not supported)" \
+    "WASM_EXTRA_IMAGES=p99=$T/my zips/p99.zip"
+refused "a zip that does not exist" "$T/zips/none.zip does not exist" "WASM_EXTRA_IMAGES=p99=$T/zips/none.zip"
+refused "an id twice" "an id is given twice" "WASM_EXTRA_IMAGES=p99=$T/zips/p99.zip p99=$T/zips/p98.zip"
+refused "a .sources that does not exist" "'$T/zips/none.sources' does not exist" \
+    "WASM_EXTRA_SOURCES=$T/zips/none.sources"
+refused "no .sources" "'$T/zips/p99.zip' does not exist or is no .sources" "WASM_EXTRA_SOURCES=$T/zips/p99.zip"
+refused "a bad image id" "WASM_IMAGE_ID (P15) is not" WASM_IMAGE_ID=P15
+refused "a proxy with a blank" "WASM_GIT_PROXY (http://a b/) is neither" "WASM_GIT_PROXY=http://a b/"
 
 # ---- wasm-check-browser (on a web/ of its own; wasm is taken as built)
 
@@ -431,6 +542,13 @@ set(WASM_STOCK_IMAGE_DEPENDS "\${WASM_STOCK_IMAGE_DIR}/Pharo.image")
 # the test: ON by default, as there)
 set(FONTS_FREETYPE ON CACHE BOOL "")
 set(PHARO_WASM_HAS_FREETYPE \${FONTS_FREETYPE})
+# (an extra image, as download.cmake sets it, with -DEXTRA=ON)
+set(EXTRA OFF CACHE BOOL "")
+if(EXTRA)
+    set(WASM_EXTRA_IMAGE_IDS p99)
+    set(WASM_EXTRA_STOCK_DIR_p99 "\${CMAKE_CURRENT_SOURCE_DIR}/stock-p99")
+    set(WASM_EXTRA_STOCK_DEPENDS_p99 "\${WASM_EXTRA_STOCK_DIR_p99}/Pharo.image")
+endif()
 include(cmake/emscripten/webimage.cmake)
 EOF
 wb=$T/webimage-build
@@ -512,11 +630,198 @@ wconfigure -DFONTS_FREETYPE=ON
 wbuild
 calls "prepare"
 prepared_with freetype
+step="webimage.cmake, an extra image"
+mkdir -p "$wi/stock-p99"
+for f in Pharo.image Pharo.changes Pharo.sources; do echo "p99" >"$wi/stock-p99/$f"; done
+wconfigure -DEXTRA=ON
+wbuild
+calls "prepare web-p99 in webimage-p99"
+for f in Pharo-web.image Pharo-web.changes OSWindow-Web.st Pharo.sources; do
+    test -f "$wb/image/web-p99/$f" || fail "$step: no $f in $wb/image/web-p99"
+done
+test "$(cat "$wb/image/web-p99/Pharo.sources")" = p99 || fail "$step: not the .sources of the extra image"
+prepared_with freetype
+if test -e "$wb/wasm/webimage-p99"; then fail "$step: the work directory is left"; fi
+step="webimage.cmake, nothing changed with an extra image"
+wbuild
+calls
+step="webimage.cmake, the extra stock image changes"
+sleep 1
+echo "p99, edited" >"$wi/stock-p99/Pharo.image"
+wbuild
+calls "prepare web-p99 in webimage-p99"
+step="webimage.cmake, the extra image goes"
+wconfigure -DEXTRA=OFF
+wbuild
+calls
 step="webimage.cmake, a fonts file that says something else"
 echo 'outline' >"$fonts"
 if "$cmake" --build "$wb" >"$T/build.out" 2>&1; then cat "$T/build.out"; fail "$step: the build accepted it"; fi
 grep -q "says 'outline', neither freetype nor bitmap" "$T/build.out" || { cat "$T/build.out"; fail "$step: no message"; }
 calls
+
+# ---- download.cmake, in script mode, on the zip of an extra image
+
+dl=$T/download
+mkdir -p "$dl/zip"
+pharo13=Pharo13.0-SNAPSHOT-64bit-d7c6f761d5
+echo "image 13" >"$dl/zip/$pharo13.image"
+echo "changes 13" >"$dl/zip/$pharo13.changes"
+echo "sources 13" >"$dl/zip/Pharo13.1-64bit-d7c6f76.sources"
+zip13=$dl/Pharo13.0-SNAPSHOT.build.749.sha.d7c6f761d5.arch.64bit.zip
+(cd "$dl/zip" && "$cmake" -E tar cf "$zip13" --format=zip "$pharo13.image" "$pharo13.changes" \
+    Pharo13.1-64bit-d7c6f76.sources) || fail "download: cannot make the zip"
+stock13=$dl/image/stock-p13
+# download WANT-STATUS ARG...: download.cmake with ARG..., into dl/download.out
+download() {
+    want=$1; shift
+    if "$cmake" "$@" -DDOWNLOAD_DIR="$dl/downloads" -DIMAGE_DIR="$stock13" -DSTAMP="$stock13.stamp" \
+        -P "$SRCDIR/cmake/emscripten/download.cmake" >"$dl/download.out" 2>&1; then
+        status=ok
+    else
+        status=failed
+    fi
+    test $status = "$want" || { cat "$dl/download.out"; fail "$step: download.cmake $status"; }
+}
+step="download.cmake, a zip without URL and SHA256"
+download ok -DURL= -DSHA256= -DZIP="$zip13"
+grep -q "^-- Unpacking $zip13" "$dl/download.out" || { cat "$dl/download.out"; fail "$step: not unpacked"; }
+if grep -q "not the pinned image" "$dl/download.out"; then cat "$dl/download.out"; fail "$step: compared with no pinned image"; fi
+for f in Pharo.image Pharo.changes Pharo13.1-64bit-d7c6f76.sources; do
+    test -f "$stock13/$f" || fail "$step: no $f in $stock13"
+done
+grep -qx "[0-9a-f]* $zip13" "$stock13.stamp" || { cat "$stock13.stamp"; fail "$step: the stamp does not record $zip13"; }
+step="download.cmake, the same zip again"
+download ok -DURL= -DSHA256= -DZIP="$zip13"
+if grep -q "Unpacking" "$dl/download.out"; then cat "$dl/download.out"; fail "$step: unpacked again"; fi
+step="download.cmake, neither a zip nor a URL"
+download failed -DSHA256=00
+grep -q "URL is not set, and no ZIP is given" "$dl/download.out" || { cat "$dl/download.out"; fail "$step: no message"; }
+
+# ---- stage.mjs: the catalog of images
+
+sg=$T/stage
+v15=Pharo15.0-64bit-b85960f.sources
+mkdir -p "$sg/stock" "$sg/web" "$sg/module" "$sg/legacy" "$sg/bad" "$sg/site"
+echo "image 15" >"$sg/stock/Pharo.image"
+echo "changes 15" >"$sg/stock/Pharo.changes"
+echo "sources 15" >"$sg/stock/$v15"
+echo "e3b0 /zips/Pharo15.0-SNAPSHOT.build.50.sha.b85960fcc6.arch.64bit.zip" >"$sg/stock.stamp"
+echo "world image 15" >"$sg/web/Pharo-web.image"
+echo "world changes 15" >"$sg/web/Pharo-web.changes"
+cp "$sg/stock/$v15" "$sg/web/"
+echo '"OSWindow-Web"' >"$sg/web/OSWindow-Web.st"
+# (the copy of the default image as p99, with its stamp, and its world)
+cp -R "$sg/stock" "$sg/stock-p99"
+cp "$sg/stock.stamp" "$sg/stock-p99.stamp"
+cp -R "$sg/web" "$sg/web-p99"
+echo "legacy sources" >"$sg/legacy/Pharo15.0-64bit-4e572fe.sources"
+echo "other sources 15" >"$sg/bad/$v15"
+echo "var createPharoVM;" >"$sg/module/pharo-web.js"
+echo "wasm" >"$sg/module/pharo-web.wasm"
+echo "<!-- @BUILD@ -->" >"$sg/site/index.html"
+# stage WANT-STATUS ARG...: stage.mjs into sg/out with the default image and
+# ARG..., its output into sg/stage.out
+stage() {
+    want=$1; shift
+    if "$NODE" "$SRCDIR/packaging/emscripten/tools/stage.mjs" --out "$sg/out" --web "$sg/site" \
+        --module "$sg/module/pharo-web.js" --git 0123456 --ffi 1 --libgit2 1 --libgit2-http 1 \
+        --web-package "$SRCDIR/packaging/emscripten/st/OSWindow-Web/OSWebDriver.class.st" \
+        --stock-image "$sg/stock" --world-image "$sg/web" "$@" >"$sg/stage.out" 2>&1; then
+        status=ok
+    else
+        status=failed
+    fi
+    test $status = "$want" || { cat "$sg/stage.out"; fail "$step: stage.mjs $status"; }
+}
+# stage_refused TEXT ARG...: stage.mjs with ARG... fails, saying TEXT
+stage_refused() {
+    refused_text=$1; shift
+    stage failed "$@"
+    grep -qF -- "$refused_text" "$sg/stage.out" || { cat "$sg/stage.out"; fail "$step: no message saying $refused_text"; }
+}
+# manifest JS: JS holds of m, the manifest of sg/out, with the helpers of
+# sg/check.cjs
+cat >"$sg/check.cjs" <<'CHECK'
+const fs = require('fs'), path = require('path'), zlib = require('zlib'), crypto = require('crypto');
+const out = process.argv[2];
+const m = JSON.parse(fs.readFileSync(path.join(out, 'manifest.json'), 'utf8'));
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+// the file is there, as large as the manifest says, and unzips to its sha256
+const served = (f) => {
+  const gz = fs.readFileSync(path.join(out, f.url));
+  const data = zlib.gunzipSync(gz);
+  return gz.length === f.gzSize && data.length === f.size &&
+    crypto.createHash('sha256').update(data).digest('hex') === f.sha256;
+};
+const urls = (files) => files.map((f) => f.url);
+const paths = (files) => files.map((f) => f.path);
+if (!eval(process.argv[3])) {
+  console.log(JSON.stringify(m, null, 1));
+  console.log('does not hold: ' + process.argv[3]);
+  process.exit(1);
+}
+CHECK
+manifest() {
+    "$NODE" "$sg/check.cjs" "$sg/out" "$1" >"$sg/check.out" 2>&1 || { cat "$sg/check.out"; fail "$step: $1"; }
+}
+
+step="stage.mjs, one image"
+stage ok --git-proxy-default=
+manifest 'm.imageId === "p15" && m.images.length === 1 && m.images[0].default === true'
+manifest 'same(m.images[0].files, m.files) && m.files.every(served)'
+manifest 'same(urls(m.files), ["image/Pharo.changes.gz", "image/Pharo.image.gz", "image/Pharo15.0-64bit-b85960f.sources.gz"])'
+manifest 'same(paths(m.files), ["Pharo.changes", "Pharo.image", "Pharo15.0-64bit-b85960f.sources"])'
+manifest 'm.images[0].id === "p15" && m.images[0].label === "Pharo 15" && m.images[0].pharo === "15.0"'
+manifest 'm.images[0].pharoBuild === 50 && m.images[0].world === true && m.images[0].webPackage === m.webPackage'
+manifest 'm.gitProxyDefault === "" && !("extraSources" in m) && m.world === true'
+step="stage.mjs, extra images, an extra .sources and a default proxy"
+stage ok --image-id p15 --extra-image "p99=$sg/stock-p99" --extra-world-image "p99=$sg/web-p99" \
+    --extra-image "p13=$stock13" --extra-sources "$sg/legacy/Pharo15.0-64bit-4e572fe.sources" \
+    --git-proxy-default https://proxy.example
+manifest 'same(m.images.map((i) => i.id), ["p13", "p15", "p99"])'
+manifest 'same(urls(m.files), ["image/Pharo.changes.gz", "image/Pharo.image.gz", "image/Pharo15.0-64bit-b85960f.sources.gz"])'
+manifest 'm.images.filter((i) => i.default).length === 1 && m.images[1].default && same(m.images[1].files, m.files)'
+manifest 'same(urls(m.images[2].files), ["image/p99/Pharo.changes.gz", "image/p99/Pharo.image.gz", "image/p99/Pharo15.0-64bit-b85960f.sources.gz"])'
+manifest 'same(paths(m.images[2].files), ["Pharo.changes", "Pharo.image", "Pharo15.0-64bit-b85960f.sources"])'
+manifest 'm.images[2].world === true && m.images[2].webPackage === m.webPackage && m.images[2].pharoBuild === 50'
+manifest 'm.images[2].label === "Pharo 15" && !("default" in m.images[2])'
+manifest 'm.images[0].label === "Pharo 13.1" && m.images[0].pharo === "13.1" && m.images[0].pharoBuild === 749'
+manifest 'm.images[0].world === false && m.images[0].webPackage === 0'
+manifest 'same(paths(m.images[0].files), ["Pharo.changes", "Pharo.image", "Pharo13.1-64bit-d7c6f76.sources"])'
+manifest 'm.images.every((i) => i.files.every(served))'
+manifest 'same(urls(m.extraSources), ["image/sources/Pharo15.0-64bit-4e572fe.sources.gz"]) && m.extraSources.every(served)'
+manifest 'same(paths(m.extraSources), ["Pharo15.0-64bit-4e572fe.sources"])'
+manifest 'm.gitProxyDefault === "https://proxy.example/" && m.imageId === "p15"'
+manifest 'fs.readFileSync(path.join(out, "index.html"), "utf8").includes(m.build)'
+step="stage.mjs, a proxy with a path, and no extra image any more"
+stage ok --git-proxy-default=https://proxy.example/git/
+manifest 'm.gitProxyDefault === "https://proxy.example/git/" && m.images.length === 1'
+for f in image/p99 image/p13 image/sources; do
+    if test -e "$sg/out/$f"; then fail "$step: $f is left from the staging before"; fi
+done
+step="stage.mjs, an --extra-sources that an image has"
+stage ok --extra-sources "$sg/stock/$v15" --git-proxy-default=
+manifest '!("extraSources" in m)'
+if test -e "$sg/out/image/sources"; then fail "$step: image/sources is staged"; fi
+step="stage.mjs, refusals"
+stage_refused "--extra-image p99 is given twice" \
+    --extra-image "p99=$sg/stock-p99" --extra-image "p99=$sg/stock-p99"
+stage_refused "the id P99 is not" --extra-image "P99=$sg/stock-p99"
+stage_refused "--extra-image p15 has the id of the default image" --extra-image "p15=$sg/stock-p99"
+stage_refused "--extra-world-image p98 has no --extra-image p98" --extra-world-image "p98=$sg/web-p99"
+cp -R "$sg/stock" "$sg/stock-p98"
+cp "$sg/bad/$v15" "$sg/stock-p98/"
+stage_refused "have two different $v15" --extra-image "p98=$sg/stock-p98"
+cp -R "$sg/web" "$sg/web-p98"
+echo '"another OSWindow-Web"' >"$sg/web-p98/OSWindow-Web.st"
+stage_refused "must be prepared with the same OSWindow-Web" \
+    --extra-image "p99=$sg/stock-p99" --extra-world-image "p99=$sg/web-p98"
+stage_refused "--extra-sources $sg/bad/$v15 is not the $v15 of the site" --extra-sources "$sg/bad/$v15"
+stage_refused "is not an http:// or https:// URL" --git-proxy-default ftp://proxy.example/
+stage_refused "has a user name or password" --git-proxy-default https://me:secret@proxy.example/
+stage_refused "has a #fragment" --git-proxy-default https://proxy.example/#x
+stage_refused "--image-id P15 is not" --image-id P15
 
 # ---- pharo_wasm_dep_fetch (fetch.cmake, in script mode)
 

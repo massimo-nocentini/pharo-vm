@@ -24,6 +24,18 @@
 # emcmake and the initial cache cmake/Emscripten.cache.cmake, and builds it,
 # which also stages build-wasm/node and build-wasm/web.
 #
+# The site has a default image, the pinned Pharo 12 or WASM_IMAGE_ZIP, and
+# may have extra images, which its pages offer too: WASM_EXTRA_IMAGES, words
+# <id>=<zip> (p13=Pharo13.zip p14=Pharo14.zip), each prepared for the world
+# as the default one and staged under web/image/<id>/; WASM_IMAGE_ID is the
+# id of the default one (empty: p<major> of its .sources, p15 for Pharo 15).
+# WASM_EXTRA_SOURCES names .sources files that no image of the site has,
+# staged for the images saved in a browser from an image the site served
+# before.  WASM_GIT_PROXY is the site's default CORS proxy of git, which the
+# pages use unless the user chose another or none (WASM_GIT_PROXY= for
+# none).  An id is 1 to 16 lower-case letters, digits and dashes (not
+# first); a blank separates the words, so these paths cannot hold one.
+#
 # Settings given on the command line (the WASM_* variables below) are
 # recorded in build-wasm/config.make, which changes, and so configures the
 # wasm build again, only when a setting does.  They are recorded, not
@@ -87,15 +99,22 @@ WASM_LIBGIT2 ?= OFF
 WASM_LIBGIT2_HTTP ?= ON
 # SDL2, for the image's own OSSDL2Driver in the page sdl.html (opt-in)
 WASM_SDL2 ?= OFF
-# offline builds: the Pharo 12 image zip, a directory holding the pinned
-# archives of the libraries (cmake/emscripten/deps/fetch.cmake), the
-# generated sources (a directory holding generated/64), or the VMMaker image
-# and the Pharo VM that runs it
+# offline builds: the image zip (the pinned Pharo 12 when empty, or another
+# image), a directory holding the pinned archives of the libraries
+# (cmake/emscripten/deps/fetch.cmake), the generated sources (a directory
+# holding generated/64), or the VMMaker image and the Pharo VM that runs it
 WASM_IMAGE_ZIP ?=
 WASM_DEPS_DIR ?=
 WASM_GENERATED ?=
 WASM_VMMAKER_IMAGE ?=
 WASM_VMMAKER_VM ?=
+# the images of the site (above): the id of the default image, the extra
+# images (<id>=<zip> ...), the extra .sources files, and the default proxy of
+# git
+WASM_IMAGE_ID ?=
+WASM_EXTRA_IMAGES ?=
+WASM_EXTRA_SOURCES ?=
+WASM_GIT_PROXY ?= https://cors.isomorphic-git.org/
 # not recorded
 WASM_PORT ?= 8080
 WASM_JOBS ?= $(shell nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
@@ -219,6 +238,49 @@ $(foreach v,WASM_IMAGE_ZIP WASM_DEPS_DIR WASM_GENERATED WASM_VMMAKER_IMAGE WASM_
   $(if $(and $($v),$(filter command line environment,$(origin $v))),\
     $(if $(wildcard $(abspath $($v))),,$(error $v: $(abspath $($v)) does not exist))))
 
+# The images of the site.  Each word of WASM_EXTRA_IMAGES is <id>=<zip>, with
+# one = and none of the characters of WASM_SPECIAL_CHARACTERS, an id of 1 to
+# 16 lower-case letters, digits and dashes (not first), given once, and a
+# zip that exists; each file of WASM_EXTRA_SOURCES exists and is a .sources.
+# (The messages hold no comma, which would end the argument of the if.)
+WASM_EMPTY :=
+WASM_SPACE := $(WASM_EMPTY) $(WASM_EMPTY)
+# $(call wasm_id,ID): ID when it is an id of an image, nothing otherwise (ID
+# holds no character of WASM_SPECIAL_CHARACTERS)
+wasm_id = $(shell printf '%s\n' '$(1)' | grep -Ex '[a-z0-9][a-z0-9-]{0,15}')
+wasm_extra_id = $(word 1,$(subst =, ,$(1)))
+wasm_extra_zip = $(abspath $(word 2,$(subst =, ,$(1))))
+WASM_ID_RULE := 1 to 16 lower-case letters or digits or dashes (not first)
+$(foreach w,$(WASM_EXTRA_IMAGES),\
+  $(if $(and $(filter 3,$(words $(subst =, = ,$w))),$(if $(call special,$w),,ok)),,\
+    $(error WASM_EXTRA_IMAGES: '$w' is not <id>=<zip> (a blank separates the images: paths with blanks are not supported; nor are the characters $(WASM_SPECIAL_CHARACTERS))))\
+  $(if $(call wasm_id,$(call wasm_extra_id,$w)),,\
+    $(error WASM_EXTRA_IMAGES: the id of '$w' is not $(WASM_ID_RULE)))\
+  $(if $(wildcard $(call wasm_extra_zip,$w)),,\
+    $(error WASM_EXTRA_IMAGES: '$w': $(call wasm_extra_zip,$w) does not exist (paths with blanks are not supported))))
+EXTRA_IMAGE_IDS := $(foreach w,$(WASM_EXTRA_IMAGES),$(call wasm_extra_id,$w))
+ifneq ($(words $(EXTRA_IMAGE_IDS)),$(words $(sort $(EXTRA_IMAGE_IDS))))
+$(error WASM_EXTRA_IMAGES: an id is given twice ($(EXTRA_IMAGE_IDS)))
+endif
+EXTRA_IMAGES := $(foreach w,$(WASM_EXTRA_IMAGES),$(call wasm_extra_id,$w)=$(call wasm_extra_zip,$w))
+$(foreach f,$(WASM_EXTRA_SOURCES),\
+  $(if $(and $(filter %.sources,$(notdir $f)),$(wildcard $(abspath $f)),$(if $(call special,$f),,ok)),,\
+    $(error WASM_EXTRA_SOURCES: '$f' does not exist or is no .sources file (a blank separates the files: paths with blanks are not supported))))
+EXTRA_SOURCES := $(foreach f,$(WASM_EXTRA_SOURCES),$(abspath $f))
+ifneq ($(WASM_IMAGE_ID),)
+ifneq ($(words $(WASM_IMAGE_ID))$(call special,$(WASM_IMAGE_ID)),1)
+$(error WASM_IMAGE_ID ($(WASM_IMAGE_ID)) is not $(WASM_ID_RULE))
+endif
+ifeq ($(call wasm_id,$(WASM_IMAGE_ID)),)
+$(error WASM_IMAGE_ID ($(WASM_IMAGE_ID)) is not $(WASM_ID_RULE))
+endif
+endif
+# (stage.mjs checks the URL; the shell must take it literally)
+WASM_PROXY_UNSAFE := $(strip $(foreach c,' " ` \ $$ ; & | < > ( ) { } [ ] *,$(findstring $c,$(WASM_GIT_PROXY))))
+ifneq ($(WASM_PROXY_UNSAFE)$(filter-out 0 1,$(words $(WASM_GIT_PROXY))),)
+$(error WASM_GIT_PROXY ($(WASM_GIT_PROXY)) is neither empty nor a URL without blanks or quotes)
+endif
+
 # The VMMaker image and the VM running it: downloaded and bootstrapped in
 # build-wasm/host (network needed), or a copy of WASM_VMMAKER_IMAGE and the
 # directory holding it, and WASM_VMMAKER_VM.
@@ -272,6 +334,10 @@ WASM_CMAKE_FLAGS = \
   -DWASM_LIBGIT2_HTTP=$(WASM_LIBGIT2_HTTP) \
   -DWASM_SDL2=$(WASM_SDL2) \
   "-DWASM_IMAGE_ZIP=$(IMAGE_ZIP)" \
+  "-DWASM_IMAGE_ID=$(WASM_IMAGE_ID)" \
+  "-DWASM_EXTRA_IMAGES=$(subst $(WASM_SPACE),;,$(EXTRA_IMAGES))" \
+  "-DWASM_EXTRA_SOURCES=$(subst $(WASM_SPACE),;,$(EXTRA_SOURCES))" \
+  "-DWASM_GIT_PROXY=$(WASM_GIT_PROXY)" \
   "-DWASM_DEPS_DIR=$(DEPS_DIR)" \
   "-DWASM_HOST_PHARO=$(HOST_PHARO)" \
   -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
@@ -321,6 +387,10 @@ $(W)/config.make: FORCE | $(W)/.make-wasm
 	  echo "WASM_LIBGIT2_HTTP = $(WASM_LIBGIT2_HTTP)"; \
 	  echo "WASM_SDL2 = $(WASM_SDL2)"; \
 	  echo "WASM_IMAGE_ZIP = $(IMAGE_ZIP)"; \
+	  echo "WASM_IMAGE_ID = $(WASM_IMAGE_ID)"; \
+	  echo "WASM_EXTRA_IMAGES = $(EXTRA_IMAGES)"; \
+	  echo "WASM_EXTRA_SOURCES = $(EXTRA_SOURCES)"; \
+	  echo "WASM_GIT_PROXY = $(WASM_GIT_PROXY)"; \
 	  echo "WASM_DEPS_DIR = $(DEPS_DIR)"; \
 	  echo "WASM_GENERATED = $(if $(WASM_GENERATED),$(GEN))"; \
 	  echo "WASM_HOST_PHARO = $(HOST_PHARO)"; } >$@.tmp
