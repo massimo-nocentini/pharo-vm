@@ -18,9 +18,11 @@
 #     WASM_LIBGIT2_HTTP, WASM_SDL2, WASM_DEPS_DIR, WASM_IMAGE_ID,
 #     WASM_EXTRA_IMAGES, WASM_EXTRA_SOURCES or WASM_GIT_PROXY, which
 #     config.make records (a WASM_DEPS_DIR that does not exist is refused, and
-#     so are an extra image that is not <id>=<zip>, of a bad id, of an id
-#     given twice or of a zip that does not exist, and an extra .sources that
-#     does not exist);
+#     so are an extra image that is not <id>=<zip>, of a bad id, of the id
+#     sources, of an id given twice or of a zip that does not exist, an extra
+#     .sources that does not exist, and a default proxy of git that stage.mjs
+#     would refuse: not http:// or https://, with a user name or a
+#     #fragment);
 #   - wasm-check-browser fails without Playwright, runs page.spec.mjs and
 #     then notebook.spec.mjs on every build, world.spec.mjs only for a build
 #     with the image of the world, ffi.spec.mjs only for one with the FFI,
@@ -45,8 +47,10 @@
 #     download.cmake unpacked) under image/<id>/, with the paths, labels,
 #     builds and order of manifest.images, an --extra-sources file under
 #     image/sources/ (not when an image has it already), and the default
-#     proxy of git, checked; it refuses an id given twice, a bad one, the
-#     default's, two .sources of one name that differ, an extra world image
+#     proxy of git, checked; an extra image named default is listed apart
+#     from the default image; the build id follows the build of an image; it
+#     refuses an id given twice, a bad one, the default's, sources, two
+#     .sources of one name that differ, an extra world image
 #     prepared with another OSWindow-Web, and an --extra-sources file that is
 #     not the .sources of its name; and a staging without the extra image
 #     removes its files;
@@ -439,6 +443,21 @@ refused "a .sources that does not exist" "'$T/zips/none.sources' does not exist"
 refused "no .sources" "'$T/zips/p99.zip' does not exist or is no .sources" "WASM_EXTRA_SOURCES=$T/zips/p99.zip"
 refused "a bad image id" "WASM_IMAGE_ID (P15) is not" WASM_IMAGE_ID=P15
 refused "a proxy with a blank" "WASM_GIT_PROXY (http://a b/) is neither" "WASM_GIT_PROXY=http://a b/"
+refused "the id sources" "the id of 'sources=$T/zips/p99.zip' is sources" "WASM_EXTRA_IMAGES=sources=$T/zips/p99.zip"
+refused "a proxy of ftp" "WASM_GIT_PROXY (ftp://proxy.example/) is not an http:// or https:// URL" \
+    "WASM_GIT_PROXY=ftp://proxy.example/"
+refused "a proxy with a user" "WASM_GIT_PROXY (https://me:pw@proxy.example/) is not" \
+    "WASM_GIT_PROXY=https://me:pw@proxy.example/"
+refused "a proxy with a fragment" "WASM_GIT_PROXY (https://proxy.example/#x) is not" \
+    "WASM_GIT_PROXY=https://proxy.example/#x"
+step="a proxy with a port and an @ in its path"
+wmake "$W/cmake/.configured" "WASM_GIT_PROXY=HTTPS://proxy.example:8443/a@b/?c=d"
+calls "emcmake" "configure cmake"
+recorded WASM_GIT_PROXY "HTTPS://proxy.example:8443/a@b/?c=d"
+step="the default proxy of git, last"
+wmake "$W/cmake/.configured"
+calls "emcmake" "configure cmake"
+recorded WASM_GIT_PROXY https://cors.isomorphic-git.org/
 
 # ---- wasm-check-browser (on a web/ of its own; wasm is taken as built)
 
@@ -740,8 +759,8 @@ stage_refused() {
     stage failed "$@"
     grep -qF -- "$refused_text" "$sg/stage.out" || { cat "$sg/stage.out"; fail "$step: no message saying $refused_text"; }
 }
-# manifest JS: JS holds of m, the manifest of sg/out, with the helpers of
-# sg/check.cjs
+# manifest JS [ARG]: JS holds of m, the manifest of sg/out, with the helpers
+# of sg/check.cjs (and ARG as process.argv[4])
 cat >"$sg/check.cjs" <<'CHECK'
 const fs = require('fs'), path = require('path'), zlib = require('zlib'), crypto = require('crypto');
 const out = process.argv[2];
@@ -763,7 +782,7 @@ if (!eval(process.argv[3])) {
 }
 CHECK
 manifest() {
-    "$NODE" "$sg/check.cjs" "$sg/out" "$1" >"$sg/check.out" 2>&1 || { cat "$sg/check.out"; fail "$step: $1"; }
+    "$NODE" "$sg/check.cjs" "$sg/out" "$@" >"$sg/check.out" 2>&1 || { cat "$sg/check.out"; fail "$step: $1"; }
 }
 
 step="stage.mjs, one image"
@@ -794,6 +813,19 @@ manifest 'same(urls(m.extraSources), ["image/sources/Pharo15.0-64bit-4e572fe.sou
 manifest 'same(paths(m.extraSources), ["Pharo15.0-64bit-4e572fe.sources"])'
 manifest 'm.gitProxyDefault === "https://proxy.example/" && m.imageId === "p15"'
 manifest 'fs.readFileSync(path.join(out, "index.html"), "utf8").includes(m.build)'
+step="stage.mjs, an extra image named default"
+stage ok --extra-image "default=$sg/stock-p99" --git-proxy-default=
+manifest 'm.imageId === "p15" && same(m.images.map((i) => i.id), ["default", "p15"])'
+manifest 'same(urls(m.files), ["image/Pharo.changes.gz", "image/Pharo.image.gz", "image/Pharo15.0-64bit-b85960f.sources.gz"])'
+manifest 'm.images.filter((i) => i.default).length === 1 && same(m.images[1].files, m.files)'
+manifest 'same(urls(m.images[0].files), ["image/default/Pharo.changes.gz", "image/default/Pharo.image.gz", "image/default/Pharo15.0-64bit-b85960f.sources.gz"])'
+step="stage.mjs, the build id follows the build of an image"
+stage ok --extra-image "p99=$sg/stock-p99" --git-proxy-default=
+build_before=$("$NODE" -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).build)' "$sg/out/manifest.json")
+echo "e3b0 /zips/Pharo15.0-SNAPSHOT.build.51.sha.b85960fcc6.arch.64bit.zip" >"$sg/stock-p99.stamp"
+stage ok --extra-image "p99=$sg/stock-p99" --git-proxy-default=
+manifest 'm.images[1].pharoBuild === 51 && m.build !== process.argv[4]' "$build_before"
+cp "$sg/stock.stamp" "$sg/stock-p99.stamp"
 step="stage.mjs, a proxy with a path, and no extra image any more"
 stage ok --git-proxy-default=https://proxy.example/git/
 manifest 'm.gitProxyDefault === "https://proxy.example/git/" && m.images.length === 1'
@@ -822,6 +854,8 @@ stage_refused "is not an http:// or https:// URL" --git-proxy-default ftp://prox
 stage_refused "has a user name or password" --git-proxy-default https://me:secret@proxy.example/
 stage_refused "has a #fragment" --git-proxy-default https://proxy.example/#x
 stage_refused "--image-id P15 is not" --image-id P15
+stage_refused "--extra-image sources: image/sources/ holds the --extra-sources files" \
+    --extra-image "sources=$sg/stock-p99"
 
 # ---- pharo_wasm_dep_fetch (fetch.cmake, in script mode)
 

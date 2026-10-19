@@ -47,7 +47,9 @@
 //                              webPackage, world}
 //
 // The build id is the git sha, a dash and the first 12 hex digits of a
-// SHA256 over everything staged, so it changes whenever a staged file does.
+// SHA256 over everything staged and every key of the manifest (the build
+// of each image too), so it changes whenever a staged file or the manifest
+// does: the pages and the worker fetch manifest.json?v=<build>.
 // manifest.json describes the build, and lists what the worker writes into
 // /pharo:
 //
@@ -113,15 +115,18 @@
 //          where the version is written
 //   world  true when the default image is the image of the world
 //
-// The checks: the ids are unique, and differ from the default one; two
-// images whose .sources have one name have the same file; an --extra-sources
-// file of the name of a .sources of an image is that file; and the
-// OSWindow-Web.st of each extra world image is the default world's, the only
-// one staged (st/OSWindow-Web.st, which the pages file in to prepare a stock
-// image), so there is no extra world image without a default one.
+// The checks: the ids are unique, differ from the default one, and none is
+// sources, the directory of the --extra-sources files (an extra image may be
+// named default: each image lists its files in a list of its own, never
+// looked up by id); two images whose .sources have one name have the same
+// file; an --extra-sources file of the name of a .sources of an image is
+// that file; and the OSWindow-Web.st of each extra world image is the
+// default world's, the only one staged (st/OSWindow-Web.st, which the pages
+// file in to prepare a stock image), so there is no extra world image
+// without a default one.
 //
 // Only files whose contents change are rewritten, and a file is gzipped
-// again only when its SHA256 changes (the gzipped files of every group of
+// again only when its SHA256 changes (the gzipped files of every list of
 // the manifest before count).  Files of an earlier staging that are not
 // staged any more are removed.
 
@@ -351,7 +356,9 @@ const main = async () => {
   // The images of the catalog, the default one first: the world's of each
   // when there is one
   const world = !!options.worldImage && existsSync(join(options.worldImage, WORLD_IMAGE));
-  const catalog = [{ id: null, group: 'default', prefix: 'image/', stockDir: options.stockImage, world,
+  // (each with the list of its files in the manifest, listed: the list
+  // belongs to the image, so no id, not even "default", shares the default's)
+  const catalog = [{ id: null, prefix: 'image/', stockDir: options.stockImage, world, listed: [],
                      files: imageFiles(world ? options.worldImage : options.stockImage) }];
   for (const extra of options.extras) {
     const extraWorld = !!extra.worldDir && existsSync(join(extra.worldDir, WORLD_IMAGE));
@@ -363,7 +370,7 @@ const main = async () => {
       if (!existsSync(own) || !existsSync(staged) || !readFileSync(own).equals(readFileSync(staged)))
         fail(`${own} is not ${staged}: the images of the world must be prepared with the same OSWindow-Web`);
     }
-    catalog.push({ id: extra.id, group: extra.id, prefix: `image/${extra.id}/`, stockDir: extra.stockDir,
+    catalog.push({ id: extra.id, prefix: `image/${extra.id}/`, stockDir: extra.stockDir, listed: [],
                    world: extraWorld, files: imageFiles(extraWorld ? extra.worldDir : extra.stockDir) });
   }
   for (const image of catalog) {
@@ -389,10 +396,11 @@ const main = async () => {
   }
 
   // What is staged: [path in web/, source, kind, file], kind being text
-  // (@BUILD@ replaced), copy or gzip, and file, for gzip, {path, group}:
-  // its name in /pharo and the group of the manifest that lists it (default,
-  // the id of an extra image, or sources)
+  // (@BUILD@ replaced), copy or gzip, and file, for gzip, {path, listed}:
+  // its name in /pharo and the list of the manifest that lists it (the
+  // listed of its image, or extraSourcesListed)
   const entries = [];
+  const extraSourcesListed = [];
   const sdl2 = options.sdl2 == '1';
   if (options.web) {
     const web = walk(options.web);
@@ -412,7 +420,7 @@ const main = async () => {
   for (const image of catalog) {
     const files = [[IMAGE, image.files.image], [CHANGES, image.files.changes], [image.sourcesName, image.files.sources]];
     for (const [name, source] of files)
-      entries.push([`${image.prefix}${name}.gz`, source, 'gzip', { path: name, group: image.group }]);
+      entries.push([`${image.prefix}${name}.gz`, source, 'gzip', { path: name, listed: image.listed }]);
   }
   for (const name of options.libraries)
     if (name == IMAGE || name == CHANGES || sourcesByName.has(name))
@@ -427,7 +435,7 @@ const main = async () => {
       continue;
     }
     extraSources.set(name, file);
-    entries.push([`image/sources/${name}.gz`, file, 'gzip', { path: name, group: 'sources' }]);
+    entries.push([`image/sources/${name}.gz`, file, 'gzip', { path: name, listed: extraSourcesListed }]);
   }
   const st = [...options.st];
   if (world) st.push(join(options.worldImage, 'OSWindow-Web.st'), ...options.worldSt);
@@ -446,7 +454,8 @@ const main = async () => {
   const git = options.libgit2 == '1', gitHttp = git && options.libgit2Http == '1';
   const digest = sha256([`ffi ${ffi}`, `fonts ${options.fonts}`, `git ${git}`, `gitHttp ${gitHttp}`,
                          `gitProxyDefault ${options.gitProxyDefault}`, `imageId ${first.id}`,
-                         ...catalog.map((image) => `image ${image.id} ${image.label} ${image.world}`),
+                         ...catalog.map((image) => `image ${image.id} ${image.label} ${image.pharo} ` +
+                                        `${image.pharoBuild} ${image.world}`),
                          `extraSources ${[...extraSources.keys()].sort().join(' ')}`,
                          `libraries ${options.libraries.join(' ')}`,
                          `memory64 ${options.memory64}`, ...(sdl2 ? ['sdl2 true'] : []),
@@ -476,8 +485,7 @@ const main = async () => {
     written++;
   };
 
-  // The files of each group of the manifest
-  const groups = new Map([...catalog.map((image) => [image.group, []]), ['sources', []]]);
+  // The files of each list of the manifest
   const compressions = [];
   for (const [rel, source, kind, meta] of entries) {
     const { data, sha256: hash } = inputs.get(rel);
@@ -487,7 +495,7 @@ const main = async () => {
       write(rel, data);
     } else {
       const file = { path: meta.path, url: rel, size: data.length, sha256: hash, gzSize: 0 };
-      groups.get(meta.group).push(file);
+      meta.listed.push(file);
       const old = previousFiles.get(rel);
       const path = join(out, rel);
       if (old && old.sha256 == hash && existsSync(path) && statSync(path).size == old.gzSize) {
@@ -503,10 +511,10 @@ const main = async () => {
   await Promise.all(compressions);
 
   const byPath = (a, b) => a.path < b.path ? -1 : 1;
-  for (const files of groups.values()) files.sort(byPath);
+  for (const files of [...catalog.map((image) => image.listed), extraSourcesListed]) files.sort(byPath);
   const images = catalog.map((image) => ({
     ...(image == first ? { default: true } : {}),
-    files: groups.get(image.group),
+    files: image.listed,
     id: image.id,
     label: image.label,
     pharo: image.pharo,
@@ -516,9 +524,9 @@ const main = async () => {
   })).sort(catalogOrder);
   const manifest = sortKeys({
     build,
-    ...(groups.get('sources').length ? { extraSources: groups.get('sources') } : {}),
+    ...(extraSourcesListed.length ? { extraSources: extraSourcesListed } : {}),
     ffi,
-    files: groups.get('default'),
+    files: first.listed,
     fonts: options.fonts,
     git,
     gitHttp,

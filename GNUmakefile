@@ -33,8 +33,10 @@
 # staged for the images saved in a browser from an image the site served
 # before.  WASM_GIT_PROXY is the site's default CORS proxy of git, which the
 # pages use unless the user chose another or none (WASM_GIT_PROXY= for
-# none).  An id is 1 to 16 lower-case letters, digits and dashes (not
-# first); a blank separates the words, so these paths cannot hold one.
+# none), an http:// or https:// URL without credentials or #fragment.  An id
+# is 1 to 16 lower-case letters, digits and dashes (not first), and an extra
+# one is not sources; a blank separates the words, so these paths cannot
+# hold one.  All of these are checked here, before anything is built.
 #
 # Settings given on the command line (the WASM_* variables below) are
 # recorded in build-wasm/config.make, which changes, and so configures the
@@ -240,8 +242,9 @@ $(foreach v,WASM_IMAGE_ZIP WASM_DEPS_DIR WASM_GENERATED WASM_VMMAKER_IMAGE WASM_
 
 # The images of the site.  Each word of WASM_EXTRA_IMAGES is <id>=<zip>, with
 # one = and none of the characters of WASM_SPECIAL_CHARACTERS, an id of 1 to
-# 16 lower-case letters, digits and dashes (not first), given once, and a
-# zip that exists; each file of WASM_EXTRA_SOURCES exists and is a .sources.
+# 16 lower-case letters, digits and dashes (not first), given once, and not
+# sources (web/image/sources/ holds the WASM_EXTRA_SOURCES files), and a zip
+# that exists; each file of WASM_EXTRA_SOURCES exists and is a .sources.
 # (The messages hold no comma, which would end the argument of the if.)
 WASM_EMPTY :=
 WASM_SPACE := $(WASM_EMPTY) $(WASM_EMPTY)
@@ -256,6 +259,8 @@ $(foreach w,$(WASM_EXTRA_IMAGES),\
     $(error WASM_EXTRA_IMAGES: '$w' is not <id>=<zip> (a blank separates the images: paths with blanks are not supported; nor are the characters $(WASM_SPECIAL_CHARACTERS))))\
   $(if $(call wasm_id,$(call wasm_extra_id,$w)),,\
     $(error WASM_EXTRA_IMAGES: the id of '$w' is not $(WASM_ID_RULE)))\
+  $(if $(filter sources,$(call wasm_extra_id,$w)),\
+    $(error WASM_EXTRA_IMAGES: the id of '$w' is sources: the directory of the WASM_EXTRA_SOURCES files (web/image/sources/). Name the image otherwise))\
   $(if $(wildcard $(call wasm_extra_zip,$w)),,\
     $(error WASM_EXTRA_IMAGES: '$w': $(call wasm_extra_zip,$w) does not exist (paths with blanks are not supported))))
 EXTRA_IMAGE_IDS := $(foreach w,$(WASM_EXTRA_IMAGES),$(call wasm_extra_id,$w))
@@ -275,10 +280,18 @@ ifeq ($(call wasm_id,$(WASM_IMAGE_ID)),)
 $(error WASM_IMAGE_ID ($(WASM_IMAGE_ID)) is not $(WASM_ID_RULE))
 endif
 endif
-# (stage.mjs checks the URL; the shell must take it literally)
+# (the shell must take it literally; and stage.mjs, which parses the URL,
+# would refuse the rest only after the VM and the images are built: an
+# http:// or https:// URL with a host, without a user name or password in it
+# nor a #fragment)
 WASM_PROXY_UNSAFE := $(strip $(foreach c,' " ` \ $$ ; & | < > ( ) { } [ ] *,$(findstring $c,$(WASM_GIT_PROXY))))
 ifneq ($(WASM_PROXY_UNSAFE)$(filter-out 0 1,$(words $(WASM_GIT_PROXY))),)
 $(error WASM_GIT_PROXY ($(WASM_GIT_PROXY)) is neither empty nor a URL without blanks or quotes)
+endif
+ifneq ($(WASM_GIT_PROXY),)
+ifeq ($(shell printf '%s\n' '$(WASM_GIT_PROXY)' | grep -Eix 'https?://[^/?\#@]+([/?][^\#]*)?'),)
+$(error WASM_GIT_PROXY ($(WASM_GIT_PROXY)) is not an http:// or https:// URL without a user name or password or a \#fragment)
+endif
 endif
 
 # The VMMaker image and the VM running it: downloaded and bootstrapped in
