@@ -48,7 +48,11 @@
 //   the Console or of the world keep in this browser (git-proxy.js: the
 //   site's default, null, none, '', or a URL), given in init.gitProxy, and
 //   to the running VM when another page changes it (a storage event).
-//   Never taken from the URL.
+//   Never taken from the URL.  This page has no Settings: what the worker
+//   says of git's requests (git {event}) is told as the other pages tell
+//   it (git-proxy.js describe: the first one through the site's public
+//   default, once, and why one failed), with a link to the Console, whose
+//   Settings change the proxy.
 //
 // window.PharoSDL tells tests and the curious how it goes: stats (the
 // workers started, when this one started and painted first, the sizes of
@@ -356,6 +360,11 @@
       if (state === SLEEPING || state === WAITING || state === RUNNING) idleAt = lastMsgAt;
       updateStatus();
       break;
+    case 'git': {
+      const text = GitProxy.describe(m);
+      if (text) showNotice(text + " The Console's Settings choose the proxy.", 'Console', 'index.html', 15000);
+      break;
+    }
     case 'saved':
       // no storage here: the worker says that the image is kept nowhere
       showNotice('The image saved itself (' + mb(m.bytes) + '), in the memory of this page only: Download keeps it.',

@@ -645,6 +645,7 @@ await run(async t => {
     assert(!(await page.evaluate(() => window.PharoWorld.unsaved)) && !(await asksBeforeUnload()), 'saved: beforeunload lets the page go');
   });
 
+  let first = null;                     // the slot of the first save
   await check('Save, reload: the world boots from IndexedDB, as it was saved', async () => {
     await openPlayground();
     await click(center(p.playground.bounds));
@@ -654,11 +655,12 @@ await run(async t => {
     await page.waitForFunction(() => /saved in this browser/.test(document.getElementById('notice-text').textContent) &&
                                !document.getElementById('notice').hidden, null, { timeout: 120000 });
     await waitState('running');
-    // the slot that the first save made (main), which the URL and the link
-    // to the Console say
-    assert(JSON.stringify(await choice()) === '{"slot":"main"}' && page.url().endsWith('/world.html?slot=main'),
-           'the image is main: ' + page.url());
-    assert(await page.getAttribute('#console', 'href') === 'index.html?slot=main', 'the Console link ' +
+    // the slot that the first save made (a slot of its own, never main: a
+    // tab of an earlier build would save over main), which the URL and the
+    // link to the Console say
+    first = (await choice()).slot;
+    assert(first && first !== 'main' && page.url().endsWith('/world.html?slot=' + first), 'the image is a slot: ' + page.url());
+    assert(await page.getAttribute('#console', 'href') === 'index.html?slot=' + first, 'the Console link ' +
            await page.getAttribute('#console', 'href'));
     const n = t.requests.length, dialogs = [];
     const dialog = d => { dialogs.push(d.type()); d.accept(); };
@@ -722,9 +724,9 @@ await run(async t => {
     console.log('  # unpacked, prepared, and painted in ' + (Date.now() - t1) + ' ms');
     assert(dialogs.length === 1 && dialogs[0] === 'Open ' + z.name + ' as a new image? What the world did since it was last saved is lost.',
            'asked ' + dialogs);
-    // a slot of its own, which the world runs now; main is still there
+    // a slot of its own, which the world runs now; the first is still there
     const now = await choice(), all = await slotsOf();
-    assert(now.slot && now.slot !== 'main' && all.some(s => s.slot === 'main') && all.some(s => s.slot === now.slot),
+    assert(now.slot && now.slot !== first && all.some(s => s.slot === first) && all.some(s => s.slot === now.slot),
            'the slots ' + JSON.stringify([now, all.map(s => [s.slot, s.name])]));
     assert(page.url().endsWith('?slot=' + now.slot), 'the URL ' + page.url());
     await waitState('running');
@@ -885,6 +887,58 @@ await run(async t => {
     await closeImages();
   });
 
+  await check('Images, closed by Escape, Close or the backdrop, gives the keyboard back to the world; a fresh image keeps the focus', async () => {
+    p = await probe('the world', p => p.driver === 'OSWebDriver' && p.menubar.length);
+    const active = () => page.evaluate(() => (document.activeElement || {}).id || document.activeElement.tagName);
+    for (const how of ['Escape', 'Close', 'backdrop']) {
+      await click(desktop(p));
+      assert(await sinkFocused(), how + ': the world has the keyboard');
+      await page.click('#images');
+      await page.waitForSelector('#images-dialog[open]');
+      if (how === 'Escape') await page.keyboard.press('Escape');
+      else if (how === 'Close') await page.click('#images-close');
+      else await page.mouse.click(4, 4);
+      await page.waitForFunction(() => !document.getElementById('images-dialog').open);
+      // (the close event, which gives it back, follows the close)
+      await page.waitForFunction(() => document.activeElement === document.getElementById('sink'), null, { timeout: 2000 })
+        .catch(() => {});
+      assert(await active() === 'sink', how + ': the focus is on ' + await active());
+    }
+    // the list is made again when the window gets the focus back: a fresh
+    // image that had the focus has it again (Enter would start another)
+    await page.click('#images');
+    await page.waitForSelector('#images-dialog[open] #images-fresh [data-fresh]');
+    const ids = await page.$$eval('#images-fresh [data-fresh]', l => l.map(b => b.dataset.fresh));
+    const id = ids[ids.length - 1];
+    await page.focus(`#images-fresh [data-fresh="${id}"]`);
+    const before = await page.$('#images-fresh [data-fresh="' + id + '"]');
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await page.waitForFunction(b => !b.isConnected, before);
+    await page.waitForTimeout(300);
+    assert(await page.evaluate(() => document.activeElement && document.activeElement.dataset.fresh) === id,
+           'the focus is on ' + await page.evaluate(() => document.activeElement.outerHTML.slice(0, 60)));
+    await page.keyboard.press('Escape');
+    await waitState('running');
+  });
+
+  await check('a VM that ended runs no slot: Images opens its slot again', async () => {
+    const now = (await choice()).slot;
+    assert(now, 'the world runs a slot');
+    await openPlayground();
+    await doIt('Smalltalk exit: 3');
+    await waitState('exited');
+    await page.click('#notice-close');
+    const rows = await imageRows();
+    const row = rows.find(r => r[0] === now);
+    assert(row && !row[2], 'the slot does not run: ' + JSON.stringify(rows));
+    const starts = (await stats()).starts;
+    await page.click(`#images-saved li[data-slot="${now}"] [data-act="open"]`);
+    await restarted(starts);
+    await waitState('running');
+    assert((await choice()).slot === now, 'the slot again: ' + JSON.stringify(await choice()));
+    p = await probe('the world again', p => p.driver === 'OSWebDriver' && p.menubar.length);
+  });
+
   // Settings: the git proxy of the world page (git-proxy.js), and what the
   // worker says of git's requests (its "git" messages, here posted to the
   // page as it would)
@@ -944,6 +998,38 @@ await run(async t => {
            'CORS: ' + await notice());
     await page.click('#notice-close');
     await waitState('running');
+  });
+
+  await check('Delete all lets a fresh world that was not saved go on, with what was done in it', async () => {
+    const n = (await slotsOf()).length;
+    assert(n > 0, 'saved images to delete');
+    let starts = (await stats()).starts;
+    await accepting(async () => {
+      await page.click('#images');
+      await page.waitForSelector('#images-dialog[open] #images-fresh [data-fresh]');
+      await page.click(`#images-fresh [data-fresh="${defaultId}"]`);
+      await restarted(starts);
+    });
+    await waitState('running');
+    assert((await choice()).fresh === defaultId, 'fresh: ' + JSON.stringify(await choice()));
+    p = await probe('the fresh world', p => p.driver === 'OSWebDriver' && p.menubar.length);
+    await click(desktop(p));
+    await page.waitForFunction(() => window.PharoWorld.unsaved);
+    starts = (await stats()).starts;
+    const dialogs = await accepting(async () => {
+      await page.click('#images');
+      await page.waitForSelector('#images-dialog[open] #images-delete-all:not([hidden])');
+      await page.click('#images-delete-all');
+      await noticeSays(/^Deleted every image saved in this browser; the image that runs here was not saved, and goes on\.$/);
+    });
+    assert(JSON.stringify(dialogs) === JSON.stringify(['Delete every image saved in this browser (' + n + ')?']),
+           'asked ' + JSON.stringify(dialogs));
+    assert((await stats()).starts === starts && await page.evaluate(() => window.PharoWorld.unsaved) &&
+           (await choice()).fresh === defaultId, 'the world goes on: ' + JSON.stringify(await choice()));
+    assert(!(await slotsOf()).length, 'nothing saved any more');
+    await closeImages();
+    await waitState('running');
+    p = await probe('the world still', p => p.driver === 'OSWebDriver');
   });
 
   if (t.shots) {
@@ -1088,6 +1174,29 @@ await run(async t => {
         console.log(`  # ${e.label} (${e.id}) paints`);
       }
       assert(!(await slotsOf(f)).length, 'nothing saved');
+      await f.close();
+    } finally { await context.close(); }
+  });
+
+  if (multi) await check('the launcher: a file opened there that does not start shows the launcher again, saying why', async () => {
+    assert(downloaded, 'nothing downloaded');
+    const broken = path.join(tmp, 'broken-' + t.name + '.image');
+    fs.writeFileSync(broken, fs.readFileSync(downloaded.image).subarray(0, 1 << 20));
+    const context = await t.browser.newContext({ viewport: { width: 1280, height: 800 } });
+    try {
+      const f = await context.newPage();
+      await gotoWorld(f, null);
+      await f.waitForSelector('#images-dialog[open]', { timeout: 30000 });
+      await f.waitForFunction(() => document.getElementById('status').dataset.state === 'choosing');
+      await f.setInputFiles('#open-file', broken);
+      await f.waitForFunction(() => window.PharoWorld.stats.starts > 0, null, { timeout: 30000 });
+      await f.waitForFunction(() => document.getElementById('status').dataset.state === 'choosing' &&
+                              document.getElementById('images-dialog').open, null, { timeout: 90000 });
+      const note = await f.textContent('#images-note');
+      assert(/^The opened image did not start; it was not kept\. /.test(note), 'the launcher says ' + JSON.stringify(note));
+      assert(await f.isHidden('#images-close') && JSON.stringify(await choice(f)) === '{}' && f.url().endsWith('/world.html'),
+             'the launcher, no image: ' + f.url());
+      assert(!(await slotsOf(f)).length, 'nothing kept');
       await f.close();
     } finally { await context.close(); }
   });

@@ -22,6 +22,11 @@
 // main is the slot of before there were several: the keys of the one image
 // that the pages kept then are those of main, unchanged (a meta without
 // slot is main's), so nothing moves and the database stays at version 1.
+// No new slot is ever main: a page of a build of before, still open in
+// another tab, saves into the keys of main without a guard, and would
+// overwrite another image made there (and leave its name to the one it
+// writes).  main is only ever the image of before, which such a page
+// overwrites as it always did.
 // One more key is global: 'last', {slot, at}, the slot that a page booted
 // or saved last, which a page boots when it is told none.
 //
@@ -100,10 +105,8 @@
 // save(image, changes, extra, sources, kept, target) writes the slot that
 // target says: {slot} overwrites that slot as it is (recreating it if it
 // was deleted meanwhile), the latest save wins; {slot: null, name} makes a
-// new one: main when there is no main (a guarded write that only an absent
-// meta passes, so that of two pages saving at once one gets main), else a
-// new sid; name is then stored as its name.  Without target: kept's slot,
-// or a new one without kept, as before there were several.  image and
+// new one, of a new sid (never main, above); name is then stored as its
+// name.  Without target: kept's slot, or a new one without kept.  image and
 // changes are Uint8Arrays.  extra is merged into the meta, except
 // extra.tree: {entries, data (a Blob or a Uint8Array), size, files} is
 // stored as its tree, null deletes its tree, and undefined keeps the tree
@@ -462,21 +465,22 @@
             entries.push([k(NAME), typeof target.name === 'string' && target.name ? target.name : undefined]);
           return { meta, entries, keep };
         };
-        const written = async (slot, created, guard) => {
+        const written = async (slot, created) => {
           const { meta, entries, keep } = await make(slot, created);
           // the .sources kept is still stored: only while kept is the slot
           if (keep && await b.write(entries, { key: keyOf(slot, META), id: kept.id })) return meta;
           if (keep) {
             const again = await make(slot, created);
             again.entries.push([keyOf(slot, SOURCES), blobOf(sources.data)]);
-            return await b.write(again.entries, guard) ? again.meta : null;
+            await b.write(again.entries);
+            return again.meta;
           }
-          return await b.write(entries, guard) ? meta : null;
+          await b.write(entries);
+          return meta;
         };
-        if (target.slot) return written(checkSlot(target.slot), false, undefined);
-        // a new slot: main when there is none, else a sid of its own
-        return (await written(MAIN, true, { key: META, id: null })) ||
-          written(newId(now), true, undefined);
+        if (target.slot) return written(checkSlot(target.slot), false);
+        // a new slot: a sid of its own, never main
+        return written(newId(now), true);
       },
       async syncChanges(changes, meta) {
         const updated = Object.assign({}, meta, { changesSize: changes.length, syncedAt: Date.now() });

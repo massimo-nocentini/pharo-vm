@@ -103,19 +103,19 @@
 // booted from, else none (a fresh image, an upload) until its first save
 // makes it one, named init.name, else the label of its catalog entry (Pharo
 // 14), else the name of the upload (a name a slot has gets " (2)", " (3)",
-// ...); the first slot made is 'main' (vm-storage.js).  When the VM has
-// written an image (HOST_IMAGE_SAVED, which comes after the slice that
-// saved it), the worker reads it, its .changes and the tree of /pharo from
-// MEMFS, says "storing", stores them into the slot bound, with the .sources
-// of the image when it has its own, and says "saved {slot: {slot, name,
-// pharo}, created}": created when the save made a new slot.  After
-// "saveAs {name}" the next save makes a new slot of that name, which the VM
-// is then bound to (the Console types the save itself; the world page asks
-// its image).  A slot says what the image is: sourcesName, pharo and
-// imageId, and its origin (fresh:<id>, upload:<name>, save-as:<slot>); the
-// worker says them for a slot of before (annotate) when it boots it.  The
-// slot booted or saved is the last one (setLast), which a page told no slot
-// boots.
+// ...); a new slot has an id of its own, never 'main' (vm-storage.js).
+// When the VM has written an image (HOST_IMAGE_SAVED, which comes after the
+// slice that saved it), the worker reads it, its .changes and the tree of
+// /pharo from MEMFS, says "storing", stores them into the slot bound, with
+// the .sources of the image when it has its own, and says "saved {slot:
+// {slot, name, pharo}, created}": created when the save made a new slot.
+// After "saveAs {name}" the next save makes a new slot of that name, which
+// the VM is then bound to (the Console types the save itself; the world
+// page asks its image).  A slot says what the image is: sourcesName, pharo
+// and imageId, and its origin (fresh:<id>, upload:<name>, save-as:<slot>);
+// the worker says them for a slot of before (annotate) when it boots it.
+// The slot booted or saved is the last one (setLast), which a page told no
+// slot boots.
 // The slot says which version of OSWindow-Web its image has (webPackage, 0
 // without the package), and so whether it can open the world (prepared):
 // the version must be at least manifest.webPackage, the one of this site
@@ -144,11 +144,11 @@
 // .changes of this VM would not match the image stored, so the worker stops
 // and says "superseded {slot}", until its VM saves again (into that slot:
 // the latest save wins; a slot deleted is made again, with its name and
-// origin).  Unless the id of the slot is another image's now (main,
-// deleted and made again by another page: a createdAt that is not the one
-// of the slot bound): the save then makes a slot of its own, under the name
-// and origin of the one bound, and never overwrites the other image.  Pages
-// on other slots never supersede each other.
+// origin).  Unless the id of the slot is another image's now (a createdAt
+// that is not the one of the slot bound: no page makes a slot under an id
+// that was another's, but a store may be written by others): the save then
+// makes a slot of its own, under the name and origin of the one bound, and
+// never overwrites the other image.  Pages on other slots never supersede each other.
 // A failure of the storage is reported in "saved", never fatal.  "save"
 // types Smalltalk snapshot: true andQuit: false into the REPL; the image
 // itself may save at any time too.  In the Console, "edited" says whether
@@ -170,7 +170,10 @@
 // symbolic links, with their modes and times.  They are read in the same
 // pause between slices as the image, so they are what the image knew.  At
 // most TREE_MAX_BYTES and TREE_MAX_ENTRIES: beyond, the slot keeps the
-// tree it had, and "saved {treeError}" says what is lost on a reload.  A
+// tree it had, and "saved {treeError}" says what is lost on a reload.  So
+// it does when the browser refuses the save with the tree (it has no room
+// for it: the tree is written in the transaction of the image): the image
+// is then saved again without it, so that the files never cost the image.  A
 // boot of the slot writes them back into /pharo before anything else (a
 // path with '', '.' or '..' in it is skipped); saved {treeFiles, treeSize}
 // says what the slot keeps.
@@ -295,8 +298,8 @@ let store = null, storageError = null;
 // (a fresh image or an upload, until its first save), and its name; only
 // resetStorage of it unbinds it.  boundSince and boundOrigin are the
 // createdAt and the origin of that slot: a slot whose meta has another
-// createdAt is another image under the same id (main, deleted by a page and
-// made again by another), which a save never overwrites
+// createdAt is another image under the same id, which a save never
+// overwrites
 let bound = null, boundName = null, boundSince, boundOrigin;
 // the slot that init told this VM to boot (init.slot, else, without
 // init.upload or init.fresh, the last one), while it is bound to none: the
@@ -771,8 +774,22 @@ function imageSaved(path) {
       }
       // (a .sources that the slot of this VM has stays as stored; a new slot
       // gets the one of this VM written)
-      const meta = await store.save(image, changes, extraOf(prepared, webPackage, origin, tree.tree), ownSources, owned,
-                                    target);
+      let meta;
+      try {
+        meta = await store.save(image, changes, extraOf(prepared, webPackage, origin, tree.tree), ownSources, owned,
+                                target);
+      } catch (e) {
+        // the files may be what the browser has no room for: the image is
+        // kept without them (the slot keeps the tree it had), as when they
+        // are too large
+        if (!tree.tree || (e && e.unavailable)) throw e;
+        meta = await store.save(image, changes, extraOf(prepared, webPackage, origin, undefined), ownSources, owned,
+                                target);
+        said.treeError = 'the files of the image (' + Math.round(tree.tree.size / 1048576) + ' MB, ' +
+          tree.tree.files + ' files) could not be kept with it (' +
+          (e && e.name === 'QuotaExceededError' ? 'this browser has no room for them' : errorText(e)) +
+          '): clones made since the last save are lost on reload';
+      }
       if (recreated && boundName) {
         try { await store.rename(meta.slot || MAIN, boundName); } catch (e) { /* the one known */ }
       }
@@ -1257,8 +1274,9 @@ function handle(m) {
     // one init told it to boot (its boot failed, or the slot could not be
     // read), else none (a fresh image or an upload not kept: nothing of it
     // is stored, and no other image is deleted); a reset of this VM's keeps
-    // no upload either
-    if (m.all || m.slot === undefined || m.slot === null) upload = null;
+    // no upload either.  (Every slot deletes only what is stored: an upload
+    // not kept yet is still kept when it booted, and the page may go on.)
+    if (!m.all && (m.slot === undefined || m.slot === null)) upload = null;
     enqueue(async () => {
       let sid = null;
       try {

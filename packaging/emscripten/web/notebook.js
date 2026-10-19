@@ -166,6 +166,12 @@
       stopOnError: true,
       schedule: later,
       onCell, onState, onLog,
+      // the kernel's git requests, told as the Console tells its own: the
+      // first one through the site's public default, one that failed
+      onGit: m => {
+        const text = window.PharoGitProxy ? window.PharoGitProxy.describe(m) : '';
+        if (text) showNotice('git', text, ['Settings', () => P.openSettings()]);
+      },
     });
     return kernel;
   }

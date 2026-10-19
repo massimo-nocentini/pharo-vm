@@ -328,6 +328,8 @@ await run(async t => {
     await waitStatus('waiting');
   });
 
+  // the slot of the first save
+  let first = null;
   await check('Save, reload: the image comes from IndexedDB, with its marker', async () => {
     await evalTo('Smalltalk at: #PageMarker put: 777', /\n777\nst> $/);
     await mark();
@@ -335,9 +337,12 @@ await run(async t => {
     // the REPL answers in a slice after the one that saved
     await waitSince(/\na SnapshotOperation\nst> $/);
     assert(!(await page.isDisabled('#reset')), 'Reset enabled');
-    // the first save makes the slot main, which the URL and the world's link say
-    assert(/\/index\.html\?slot=main$/.test(page.url()), 'the URL ' + page.url());
-    assert(await page.getAttribute('#world', 'href') === 'world.html?slot=main', 'the world link ' + await page.getAttribute('#world', 'href'));
+    // the first save makes a slot of its own, never main (a tab of an
+    // earlier build would save over main), which the URL and the world's
+    // link say
+    first = (await choiceOf()).slot;
+    assert(first && first !== 'main' && page.url().endsWith('/index.html?slot=' + first), 'the URL ' + page.url());
+    assert(await page.getAttribute('#world', 'href') === 'world.html?slot=' + first, 'the world link ' + await page.getAttribute('#world', 'href'));
     const n = t.requests.length;
     await reload();
     const served = requestsSince(n);
@@ -454,7 +459,7 @@ await run(async t => {
   });
 
   await check('Save as makes a slot of its own; Images lists both and starts the other; ?slot= boots one; Delete deletes it alone', async () => {
-    assert((await choiceOf()).slot === 'main', 'the Console runs main: ' + JSON.stringify(await choiceOf()));
+    assert((await choiceOf()).slot === first, 'the Console runs the first slot: ' + JSON.stringify(await choiceOf()));
     await evalTo('Smalltalk at: #CopyMarker put: 5', /\n5\nst> $/);
     let asked = null;
     onDialog(d => { asked = [d.type(), d.message(), d.defaultValue()]; d.accept('Spec copy'); });
@@ -465,9 +470,9 @@ await run(async t => {
     assert(asked && asked[0] === 'prompt' && asked[1] === 'Save as a new image named', 'asked ' + JSON.stringify(asked));
     assert(await page.textContent('#notice-action') === 'Rename', 'Rename offered');
     const copy = (await choiceOf()).slot;
-    assert(copy && copy !== 'main' && page.url().endsWith('?slot=' + copy), 'bound to a new slot: ' + copy + ' ' + page.url());
+    assert(copy && copy !== first && page.url().endsWith('?slot=' + copy), 'bound to a new slot: ' + copy + ' ' + page.url());
     let all = await slotsOf();
-    assert(all.length === 2 && all.some(s => s.slot === 'main') && all.some(s => s.slot === copy && s.name === 'Spec copy'),
+    assert(all.length === 2 && all.some(s => s.slot === first) && all.some(s => s.slot === copy && s.name === 'Spec copy'),
            'two slots: ' + JSON.stringify(all.map(s => [s.slot, s.name])));
 
     // Images: both, the one that runs said so; Open starts the other
@@ -476,15 +481,15 @@ await run(async t => {
     const rows = await page.$$eval('#images-saved li[data-slot]', l => l.map(li => [li.dataset.slot,
       li.querySelector('.name').textContent, !!li.querySelector('.badge'), li.querySelector('[data-act="other"]').getAttribute('href')]));
     assert(rows.length === 2 && rows.some(r => r[0] === copy && r[2] && r[3] === 'world.html?slot=' + copy) &&
-           rows.some(r => r[0] === 'main' && !r[2]), 'rows ' + JSON.stringify(rows));
+           rows.some(r => r[0] === first && !r[2]), 'rows ' + JSON.stringify(rows));
     const fresh = await page.$$eval('#images-fresh [data-fresh]', l => l.map(b => b.dataset.fresh));
     assert(fresh.length === (manifest.images || [1]).length, 'the fresh images ' + JSON.stringify(fresh));
     await mark();
-    await page.click('#images-saved li[data-slot="main"] [data-act="open"]');
+    await page.click('#images-saved li[data-slot="' + first + '"] [data-act="open"]');
     await waitSince(/Started the image saved in this browser[^\n]*\n[\s\S]*st> $/, 90000);
     await waitStatus('waiting');
     assert(await page.$eval('#images-dialog', d => !d.open), 'the dialog closed');
-    assert((await choiceOf()).slot === 'main' && page.url().endsWith('?slot=main'), 'main again: ' + page.url());
+    assert((await choiceOf()).slot === first && page.url().endsWith('?slot=' + first), 'the first again: ' + page.url());
     await evalTo('Smalltalk at: #CopyMarker ifAbsent: [ #none ]', /\n#none\nst> $/);
 
     // ?slot= of another tab boots that one; its Delete deletes it alone
@@ -503,9 +508,9 @@ await run(async t => {
         document.getElementById('term').textContent), null, { timeout: 90000 });
       assert(asked === "Delete 'Spec copy' from this browser, and start again?", 'asked ' + asked);
       all = await slotsOf();
-      assert(all.length === 1 && all[0].slot === 'main', 'main is left: ' + JSON.stringify(all.map(s => s.slot)));
+      assert(all.length === 1 && all[0].slot === first, 'the first is left: ' + JSON.stringify(all.map(s => s.slot)));
       await b.waitForFunction(() => document.getElementById('status').dataset.state === 'waiting', null, { timeout: 30000 });
-      assert(!/[?&]slot=/.test(b.url()) || b.url().endsWith('?slot=main'), 'the URL ' + b.url());
+      assert(!/[?&]slot=/.test(b.url()) || b.url().endsWith('?slot=' + first), 'the URL ' + b.url());
       await evalIn(b, 'Smalltalk at: #PageMarker', /\n777\nst> $/);
     } finally { await b.close(); }
   });
@@ -542,6 +547,8 @@ await run(async t => {
     assert(downloaded, 'nothing downloaded');
     const broken = path.join(tmp, t.name + '-broken.image');
     fs.writeFileSync(broken, fs.readFileSync(downloaded.image).subarray(0, 1 << 20));
+    const was = (await choiceOf()).slot, kept = (await slotsOf()).find(s => s.slot === was);
+    assert(kept && kept.name, 'the Console runs a slot: ' + JSON.stringify(await choiceOf()));
     crashing = true;
     try {
       await mark();
@@ -550,10 +557,16 @@ await run(async t => {
       await waitStatus('crashed', 90000);
       await noticeSays(page, /^The opened image did not start; it was not kept\.$/, 5000);
       assert(JSON.stringify(await buttons(page)) === '["Restart"]', 'buttons ' + JSON.stringify(await buttons(page)));
-      // the saved image is still there: Delete may delete it; another upload
-      // asks nothing (no VM runs, nothing is lost), and fails the same way
+      // the saved image is still there: Delete may delete it, and says
+      // which; another upload asks nothing (no VM runs, nothing is lost),
+      // and fails the same way
       assert(!(await page.isDisabled('#reset')), 'Delete is disabled');
       let asked = null;
+      onDialog(d => { asked = d.message(); d.dismiss(); });
+      await page.click('#reset');
+      assert(asked === "Delete '" + kept.name + "' from this browser, and start again?", 'Delete asked ' + JSON.stringify(asked));
+      assert((await slotsOf()).some(s => s.slot === kept.slot), 'nothing deleted');
+      asked = null;
       onDialog(d => { asked = d.message(); d.dismiss(); });
       const at = await page.evaluate(() => window.statusLog.length);
       await page.setInputFiles('#open-file', [broken]);
@@ -712,6 +725,51 @@ await run(async t => {
     assert((await choiceOf()).slot === left[0].slot, 'the Console runs ' + JSON.stringify(await choiceOf()));
     assert(/Started the image saved in this browser/.test(await since()), 'from a slot: ' + JSON.stringify(await since()));
     await evalTo('3 + 4', /\n7\nst> $/);
+  });
+
+  await check('Delete all: a fresh image not saved goes on; with the image that runs among them, the question says so', async () => {
+    const id = manifest.imageId || (manifest.images && manifest.images[0].id) || 'default';
+    let asked = null;
+    onDialog(d => { asked = d.message(); d.accept(); });
+    await mark();
+    await page.click('#images');
+    await page.waitForSelector('#images-dialog[open] #images-fresh [data-fresh]', { timeout: 10000 });
+    await page.click('#images-fresh [data-fresh="' + id + '"]');
+    await waitSince(/Restarting…"\n[\s\S]*st> $/, 90000);
+    await waitStatus('waiting');
+    assert((await choiceOf()).fresh === id, 'a fresh image: ' + JSON.stringify(await choiceOf()));
+    await evalTo('Smalltalk at: #DeleteAllMarker put: 9', /\n9\nst> $/);
+    const n = (await slotsOf()).length;
+    assert(n > 0, 'slots to delete');
+    asked = null;
+    onDialog(d => { asked = d.message(); d.accept(); });
+    await mark();
+    await page.click('#images');
+    await page.waitForSelector('#images-dialog[open] #images-delete-all:not([hidden])', { timeout: 10000 });
+    await page.click('#images-delete-all');
+    await waitSince(/"Deleted every image saved in this browser; the image that runs here was not saved, and goes on\."/, 30000);
+    assert(asked === 'Delete every image saved in this browser (' + n + ')?', 'asked ' + JSON.stringify(asked));
+    assert(!(await since()).includes('Restarting'), 'not restarted: ' + JSON.stringify(await since()));
+    assert((await slotsOf()).length === 0, 'every slot deleted');
+    assert((await choiceOf()).fresh === id, 'still the fresh image: ' + JSON.stringify(await choiceOf()));
+    if (await page.$eval('#images-dialog', d => d.open)) await page.click('#images-close');
+    await waitStatus('waiting');
+    await evalTo('Smalltalk at: #DeleteAllMarker', /\n9\nst> $/);
+    // saved, it runs a slot: Delete all names it (and is dismissed here)
+    await saveAndWait();
+    await waitStatus('waiting');
+    const now = await choiceOf(), name = (await slotsOf()).find(s => s.slot === now.slot).name;
+    asked = null;
+    onDialog(d => { asked = d.message(); d.dismiss(); });
+    await page.click('#images');
+    await page.waitForSelector('#images-dialog[open] #images-delete-all:not([hidden])', { timeout: 10000 });
+    await page.click('#images-delete-all');
+    assert(asked === "Delete every image saved in this browser (1)? '" + name + "', which runs here, is one of them: " +
+           'it starts again, and what it did since it was last saved is lost.', 'asked ' + JSON.stringify(asked));
+    assert((await slotsOf()).length === 1, 'nothing deleted');
+    await page.click('#images-close');
+    onDialog(null);
+    await evalTo('Smalltalk at: #DeleteAllMarker', /\n9\nst> $/);
   });
 
   if (t.shots) {
@@ -1111,7 +1169,7 @@ await run(async t => {
     } finally { await context.close(); }
   });
 
-  await check('git\'s requests: the first one through the site\'s default says so once; one that failed says why, with Settings', async () => {
+  await check('git\'s requests: the first one through the site\'s default says so once; one that failed says why, with Settings, in the Notebook too', async () => {
     // as the worker says them (vm-worker.js "git"), from Module.onGitHttp
     const context = await gitContext(false);
     try {
@@ -1145,6 +1203,19 @@ await run(async t => {
              'CORS: ' + await notice());
       assert((await termOf(p)).includes('"The browser blocked git\'s request to github.com (CORS): git over HTTPS needs a proxy here. (Settings)"'),
              'a note too');
+      // the Notebook's kernel, a VM of its own: its notice says it, with Settings
+      const consoleWorker = await p.evaluateHandle(() => window.__worker);
+      await p.click('#tab-notebook');
+      await p.waitForFunction(w => window.__worker && window.__worker !== w, consoleWorker, { timeout: 30000 });
+      await git({ event: 'failed', method: 'GET', host: 'github.com', proxy: origin, status: 403, error: 'x' });
+      const nb = await p.evaluate(() => [document.getElementById('nb-notice').hidden,
+                                         document.getElementById('nb-notice-text').textContent,
+                                         document.getElementById('nb-notice-action').textContent]);
+      assert(JSON.stringify(nb) === JSON.stringify([false, 'The git proxy http://127.0.0.1:9 refused the request to github.com.',
+                                                    'Settings']), 'the Notebook says: ' + JSON.stringify(nb));
+      await p.click('#nb-notice-action');
+      assert(await p.$eval('#settings-dialog', d => d.open), 'the Notebook\'s notice opens Settings');
+      await p.keyboard.press('Escape');
       await p.close();
     } finally { await context.close(); }
   });

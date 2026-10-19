@@ -99,15 +99,21 @@ await run(async t => {
     await waitState(p, 'waiting');
     return text;
   }
-  // the meta of the slot in the database name, from page p
+  // the meta of the slot booted or saved last (the slot of 'last', else
+  // main) in the database name, from page p
   const meta = (p, name = 'pharo-wasm') => p.evaluate(name => new Promise((resolve, reject) => {
     const r = indexedDB.open(name, 1);
     r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains('files')) r.result.createObjectStore('files'); };
     r.onerror = () => reject(r.error);
     r.onsuccess = () => {
-      const db = r.result, g = db.transaction('files').objectStore('files').get('meta');
-      g.onsuccess = () => { db.close(); resolve(g.result || null); };
-      g.onerror = () => { db.close(); reject(g.error); };
+      const db = r.result, s = db.transaction('files').objectStore('files'), l = s.get('last');
+      l.onsuccess = () => {
+        const slot = (l.result && l.result.slot) || 'main';
+        const g = s.get(slot === 'main' ? 'meta' : 'slot/' + slot + '/meta');
+        g.onsuccess = () => { db.close(); resolve(g.result || null); };
+        g.onerror = () => { db.close(); reject(g.error); };
+      };
+      l.onerror = () => { db.close(); reject(l.error); };
     };
   }), name);
   // a context of its own, whose errors do not count.  Its route turns the
@@ -236,7 +242,8 @@ await run(async t => {
     assert(/index\.html(\?.*)?$/.test(page.url()), 'still on the Console');
     await page.click('#notice-action');
     await page.waitForURL(/world\.html(\?.*)?$/, { timeout: 120000 });
-    assert(/world\.html\?slot=main$/.test(page.url()), 'the world of the image of the Console: ' + page.url());
+    // (the slot of its first save, of its own: never main)
+    assert(/world\.html\?slot=[0-9a-z]+-[0-9a-z]+-[0-9a-z]+$/.test(page.url()), 'the world of the image of the Console: ' + page.url());
     await page.waitForFunction(() => window.PharoWorld && window.PharoWorld.stats.frames > 0, null, { timeout: 120000 });
     await page.goto(base + 'index.html');
     await started(page);

@@ -26,7 +26,8 @@
 // credentials, to a proxy of its choosing.
 //
 //   PharoGitProxy.KEY, NOTED_KEY       'pharo-wasm.gitProxy', 'pharo-wasm.gitProxyNoted'
-//   PharoGitProxy.parse(text)          {value: ''} (empty), {value, origin} or {error}
+//   PharoGitProxy.parse(text)          {value: ''} (empty), {value, origin} or {error};
+//                                      value is the URL as the browser writes it
 //   PharoGitProxy.read()               {mode: 'default'|'none'|'custom', value: ''|url}
 //   PharoGitProxy.initValue()          null (the default), '' (none) or the url: what
 //                                      the worker gets in init.gitProxy and "gitProxy"
@@ -41,6 +42,11 @@
 //                                      storage, for the page)
 //   PharoGitProxy.onChange(cb)         cb(initValue()) when another page changed it
 //                                      (storage events)
+//   PharoGitProxy.describe(m)          what a page tells of the worker's message
+//                                      git {event, host, proxy, status}, or '': the
+//                                      first request through the site's default,
+//                                      once per proxy (then noted), or why a
+//                                      request failed
 //   PharoGitProxy.wireDialog({defaultProxy, onSaved, refocus})
 //                                      -> {open()}: the Settings dialog of the
 //                                      document, which has the ids below
@@ -72,8 +78,10 @@
   const NONE = 'none';
 
   // The proxy as typed: {value: ''} for none, else {value, origin} for an
-  // http: or https: URL without credentials or fragment (a bare origin gets
-  // its /, which the host of the repository follows), else {error}
+  // http: or https: URL without credentials or fragment, as the browser
+  // writes it (https:proxy.example/git is https://proxy.example/git, which
+  // the worker and the VM take; a bare origin gets its /, which the host of
+  // the repository follows), else {error}
   function parse(text) {
     const s = String(text || '').trim();
     if (!s) return { value: '' };
@@ -82,7 +90,7 @@
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return { error: 'The proxy must be an http:// or https:// URL.' };
     if (u.username || u.password) return { error: 'Give the URL of the proxy without a user name or password.' };
     if (u.hash || s.indexOf('#') >= 0) return { error: 'The URL of the proxy cannot have a #fragment.' };
-    return { value: u.pathname === '/' && !u.search ? u.origin + '/' : s, origin: u.origin };
+    return { value: u.pathname === '/' && !u.search ? u.origin + '/' : u.href, origin: u.origin };
   }
 
   function originOf(url) {
@@ -168,6 +176,25 @@
       unkept = false;
       cb(initValue());
     });
+  }
+
+  // What a page tells of git {event, host, proxy, status}, which the worker
+  // posts at the first request of git and when one failed (proxy is the
+  // origin of the proxy, or ''; status -1 or -2 without a response), or ''
+  function describe(m) {
+    if (!m) return '';
+    const proxy = m.proxy || '';
+    if (m.event === 'request') {
+      if (read().mode !== 'default' || !proxy || noted(proxy)) return '';
+      markNoted(proxy);
+      return 'Git requests (Iceberg clones, Metacello github://) go through the public CORS proxy ' + proxy +
+        ', which sees what you clone.';
+    }
+    if (m.event !== 'failed') return '';
+    if (!proxy && m.status < 0) return "The browser blocked git's request to " + m.host + ' (CORS): git over HTTPS needs a proxy here.';
+    if (proxy && m.status < 0) return 'The git proxy ' + proxy + ' did not answer.';
+    if (proxy && m.status === 403) return 'The git proxy ' + proxy + ' refused the request to ' + m.host + '.';
+    return '';
   }
 
   // ---- the Settings dialog
@@ -267,5 +294,5 @@
     return { open };
   }
 
-  return { KEY, NOTED_KEY, parse, read, initValue, write, originOf, noted, markNoted, onChange, wireDialog };
+  return { KEY, NOTED_KEY, parse, read, initValue, write, originOf, noted, markNoted, onChange, describe, wireDialog };
 });

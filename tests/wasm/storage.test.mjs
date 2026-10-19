@@ -4,9 +4,10 @@
 //
 // Runs the slots of vm-storage.js (PharoStorage) on its in-memory backend
 // (PharoStorage.memory, the store of the worker harness): list, last and
-// setLast; a new slot is main while there is no main, under the guard that
-// only an absent meta passes, so that two pages saving at once make main
-// and a slot of their own; a save, a load and a sync per slot, the guards
+// setLast; a new slot is never main, not even in an empty store, so that a
+// page of a build of before, which saves into the keys of main without a
+// guard, overwrites no image made since; two pages saving at once make a
+// slot each; a save, a load and a sync per slot, the guards
 // of syncChanges and annotate per slot (a save of one slot leaves the
 // other's sync alone); rename, which leaves the meta as it is; remove, of
 // the six keys of a slot and of 'last' when it names it; a meta of before
@@ -16,6 +17,9 @@
 // its slot, without kept too (a page superseded), and gives a slot of
 // before none; a save without a tree keeps the one stored,
 // and with null deletes it; a backend without keys() lists main only.
+// Then the choice of a git proxy (git-proxy.js, PharoGitProxy.parse and
+// describe): a proxy typed without its // is written as the browser writes
+// it, which the worker takes.
 // Then the catalog of catalog.js (PharoCatalog) on a manifest with images
 // and on one of before them.  Prints every check and their count, and
 // exits with status 1 if any fails.  Lane 70
@@ -71,22 +75,24 @@ await check('an empty store: no slot, no last, no meta, load answers null', asyn
   eq(await st.load(), null, 'load');
 });
 
-await check('the first new slot is main, the next ones slots of their own; list newest first; names', async () => {
+await check('a new slot is never main, not in an empty store either; list newest first; names', async () => {
   const { m, st } = fresh();
   const a = await st.save(bytes(3), bytes(2), { build: 'x', pharo: '14.0', origin: 'fresh:p14' }, null, null,
                           { slot: null, name: 'Pharo 14' });
-  eq([a.slot, a.image, a.changes], [MAIN, 'Pharo.image', 'Pharo.changes'], 'main');
-  eq(m.map.get('Pharo.name'), 'Pharo 14', 'the name of main');
+  assert(a.slot !== MAIN && SLOT_ID.test(a.slot) && a.image === 'slot/' + a.slot + '/Pharo.image' &&
+         a.changes === 'slot/' + a.slot + '/Pharo.changes', 'a slot of its own: ' + a.slot);
+  eq([...m.map.keys()].filter(k => !k.startsWith('slot/')), [], 'no key of main');
+  eq(m.map.get(keyOf(a.slot, 'Pharo.name')), 'Pharo 14', 'its name');
   await new Promise(r => setTimeout(r, 3));
   const b = await st.save(bytes(4), bytes(2), { build: 'x', pharo: '13.1', origin: 'fresh:p13' }, null, null,
                           { slot: null, name: 'Mine' });
   assert(b.slot !== MAIN && SLOT_ID.test(b.slot) && b.image === 'slot/' + b.slot + '/Pharo.image', 'a slot: ' + b.slot);
-  // without target or kept: a new slot too (old callers: the first is main)
+  // without target or kept: a new slot too
   await new Promise(r => setTimeout(r, 3));
   const c = await st.save(bytes(5), bytes(2), { build: 'x' });
-  assert(c.slot !== MAIN && c.slot !== b.slot, 'another slot: ' + c.slot);
+  assert(c.slot !== MAIN && c.slot !== b.slot && c.slot !== a.slot, 'another slot: ' + c.slot);
   const l = await st.list();
-  eq(l.map(s => s.slot), [c.slot, b.slot, MAIN], 'newest first');
+  eq(l.map(s => s.slot), [c.slot, b.slot, a.slot], 'newest first');
   eq(l.map(s => s.name), ['Saved image', 'Mine', 'Pharo 14'], 'names');
   eq([l[1].pharo, l[1].origin, l[1].imageSize, l[1].changesSize, l[1].sourcesSize, l[1].treeFiles],
      ['13.1', 'fresh:p13', 4, 2, 0, 0], 'info');
@@ -95,25 +101,40 @@ await check('the first new slot is main, the next ones slots of their own; list 
 
 await check('a new slot without a name: the label of its version, else Saved image', async () => {
   const { st } = fresh();
-  await st.save(bytes(1), bytes(1), { pharo: null }, null, null, { slot: null });
+  const r = await st.save(bytes(1), bytes(1), { pharo: null }, null, null, { slot: null });
   const s = await st.save(bytes(1), bytes(1), { pharo: '15.0', origin: 'fresh:p15' }, null, null, { slot: null });
   const t = await st.save(bytes(1), bytes(1), { pharo: '13.1', origin: 'fresh:p13' }, null, null, { slot: null });
   const names = Object.fromEntries((await st.list()).map(i => [i.slot, i.name]));
-  eq([names[MAIN], names[s.slot], names[t.slot]], ['Saved image', 'Pharo 15', 'Pharo 13.1'], 'names');
+  eq([names[r.slot], names[s.slot], names[t.slot]], ['Saved image', 'Pharo 15', 'Pharo 13.1'], 'names');
 });
 
-await check('two pages make a new slot at once: one gets main, the other a slot of its own (the absent guard)', async () => {
+await check('two pages make a new slot at once: a slot each, neither main', async () => {
   const { m, st } = fresh();
   const other = PharoStorage.open(m);
   const [x, y] = await Promise.all([st.save(bytes(3), bytes(1), {}, null, null, { slot: null, name: 'X' }),
                                     other.save(bytes(4), bytes(1), {}, null, null, { slot: null, name: 'Y' })]);
-  eq([x.slot === MAIN, y.slot === MAIN].sort(), [false, true], 'one is main');
-  eq((await st.list()).length, 2, 'two slots');
-  eq(m.map.get('Pharo.image').size + m.map.get(keyOf(x.slot === MAIN ? y.slot : x.slot, 'Pharo.image')).size, 7,
+  assert(x.slot !== y.slot && x.slot !== MAIN && y.slot !== MAIN, 'two slots: ' + x.slot + ' ' + y.slot);
+  eq((await st.list()).map(s => s.name).sort(), ['X', 'Y'], 'both listed');
+  eq(m.map.get(keyOf(x.slot, 'Pharo.image')).size + m.map.get(keyOf(y.slot, 'Pharo.image')).size, 7,
      'both images there');
-  // the guard itself
-  assert(!(await m.write([['meta', { id: 'q' }]], { key: 'meta', id: null })), 'refused while there is a meta');
+  // the guard of the backend (syncChanges, annotate and the kept .sources use it)
+  const xm = keyOf(x.slot, 'meta');
+  assert(!(await m.write([[xm, { id: 'q' }]], { key: xm, id: null })), 'refused while there is a meta');
   assert(await m.write([['nothing', 1]], { key: 'absent', id: null }), 'passes while there is none');
+});
+
+await check('a page of a build of before saves into main: no image made here is overwritten', async () => {
+  const { m, st } = fresh();
+  const a = await st.save(bytes(3, 1), bytes(2), { pharo: '14.0', origin: 'fresh:p14' }, null, null,
+                          { slot: null, name: 'Pharo 14' });
+  // what store.save of the build of before writes: the keys of main, no guard
+  await m.write([['Pharo.image', new Blob([bytes(5, 9)])], ['Pharo.changes', new Blob([bytes(1)])],
+                 ['meta', { id: 'old', image: 'Pharo.image', changes: 'Pharo.changes', imageSize: 5, changesSize: 1,
+                            savedAt: Date.now() + 10, build: 'old' }], ['Pharo.sources', undefined]]);
+  const l = await st.load(null, a.slot);
+  eq([l.name, l.image[0], l.image.length], ['Pharo 14', 1, 3], 'the image made here is intact');
+  const all = await st.list();
+  eq(all.map(s => [s.slot, s.name]), [[MAIN, 'Saved image'], [a.slot, 'Pharo 14']], 'main is the old page\'s');
 });
 
 await check('last: setLast while its slot is there, else the newest slot; load(undefined) boots it', async () => {
@@ -122,15 +143,15 @@ await check('last: setLast while its slot is there, else the newest slot; load(u
   await new Promise(r => setTimeout(r, 3));
   const b = await st.save(bytes(4), bytes(1), {}, null, null, { slot: null });
   eq(await st.last(), b.slot, 'the newest');
-  await st.setLast(MAIN);
-  eq(m.map.get('last').slot, MAIN, 'stored');
-  eq(await st.last(), MAIN, 'the one set');
+  await st.setLast(a.slot);
+  eq(m.map.get('last').slot, a.slot, 'stored');
+  eq(await st.last(), a.slot, 'the one set');
   eq((await st.load()).image.length, 3, 'load boots it');
-  await st.remove(MAIN);
+  await st.remove(a.slot);
   assert(!m.map.has('last'), 'remove deletes the last that names it');
   eq(await st.last(), b.slot, 'then the newest');
   await st.setLast(b.slot);
-  await st.remove(a.slot);                // (main, already gone)
+  await st.remove(a.slot);                // (already gone)
   eq(m.map.get('last').slot, b.slot, 'last stays when another slot goes');
   let e = null;
   try { await st.setLast('../x'); } catch (x) { e = x; }
@@ -141,13 +162,13 @@ await check('save, load and overwrite per slot; the latest save wins; createdAt 
   const { m, st } = fresh();
   const a = await st.save(bytes(3, 1), bytes(2, 1), { origin: 'fresh:p15' }, null, null, { slot: null, name: 'A' });
   const b = await st.save(bytes(4, 2), bytes(2, 2), { origin: 'fresh:p13' }, null, null, { slot: null, name: 'B' });
-  const la = await st.load(null, MAIN), lb = await st.load(null, b.slot);
+  const la = await st.load(null, a.slot), lb = await st.load(null, b.slot);
   eq([la.image[0], la.image.length, la.name, lb.image[0], lb.image.length, lb.name], [1, 3, 'A', 2, 4, 'B'], 'loaded');
   await new Promise(r => setTimeout(r, 3));
   const b2 = await st.save(bytes(6, 3), bytes(2), {}, null, lb.meta, { slot: b.slot });
   eq([b2.slot, b2.createdAt === b.createdAt, b2.origin, b2.id !== b.id], [b.slot, true, 'fresh:p13', true], 'overwritten');
   eq((await st.load(null, b.slot)).image[0], 3, 'its image');
-  eq((await st.load(null, MAIN)).image[0], 1, 'main untouched');
+  eq((await st.load(null, a.slot)).image[0], 1, 'A untouched');
   eq(m.map.get(keyOf(b.slot, 'Pharo.name')), 'B', 'the name stays');
   // an overwrite with a stale kept (another page saved meanwhile): written anyway
   const b3 = await st.save(bytes(7, 4), bytes(2), {}, null, lb.meta, { slot: b.slot });
@@ -155,10 +176,10 @@ await check('save, load and overwrite per slot; the latest save wins; createdAt 
   // an overwrite without kept (a page superseded): the createdAt and origin stored stay
   const b4 = await st.save(bytes(7, 5), bytes(2), {}, null, null, { slot: b.slot });
   eq([b4.createdAt === b.createdAt, b4.origin], [true, 'fresh:p13'], 'without kept');
-  const a2 = await st.save(bytes(3), bytes(2), { pharo: '15.0' }, null, null, { slot: MAIN });
-  await st.rename(MAIN, '');
-  eq([a2.createdAt === a.createdAt, a2.origin, (await st.list()).find(x => x.slot === MAIN).name],
-     [true, 'fresh:p15', 'Pharo 15'], 'main keeps its origin: no Saved image');
+  const a2 = await st.save(bytes(3), bytes(2), { pharo: '15.0' }, null, null, { slot: a.slot });
+  await st.rename(a.slot, '');
+  eq([a2.createdAt === a.createdAt, a2.origin, (await st.list()).find(x => x.slot === a.slot).name],
+     [true, 'fresh:p15', 'Pharo 15'], 'A keeps its origin: no Saved image');
   // an overwrite of a slot deleted meanwhile recreates it
   await st.remove(b.slot);
   await st.save(bytes(8), bytes(2), {}, null, b3, { slot: b.slot });
@@ -170,7 +191,7 @@ await check('syncChanges and annotate are guarded per slot: a save of one slot l
   const { m, st } = fresh();
   const a = await st.save(bytes(3), bytes(2), {}, null, null, { slot: null });
   const b = await st.save(bytes(3), bytes(2), {}, null, null, { slot: null });
-  await st.save(bytes(3), bytes(2), {}, null, a, { slot: MAIN });         // another page saves A
+  await st.save(bytes(3), bytes(2), {}, null, a, { slot: a.slot });       // another page saves A
   const sb = await st.syncChanges(bytes(9), b);
   assert(sb && sb.changesSize === 9 && m.map.get(keyOf(b.slot, 'Pharo.changes')).size === 9, 'B synced');
   eq(await st.syncChanges(bytes(5), a), null, 'A superseded');
@@ -195,13 +216,13 @@ await check('rename writes the name only; remove deletes the six keys of a slot'
   eq(await st.name(b.slot), null, 'no name');
   const keysOf = s => [...m.map.keys()].filter(k => s === MAIN ? !k.startsWith('slot/') : k.startsWith('slot/' + s + '/'));
   eq(keysOf(b.slot).length, 5, 'B has five keys (no name)');
-  eq(keysOf(MAIN).length, 6, 'A has six');
-  await st.setLast(MAIN);
-  await st.remove(MAIN);
-  eq(keysOf(MAIN), [], 'A gone: ' + keysOf(MAIN));
+  eq(keysOf(a.slot).length, 6, 'A has six');
+  await st.setLast(a.slot);
+  await st.remove(a.slot);
+  eq(keysOf(a.slot), [], 'A gone: ' + keysOf(a.slot));
   assert(!m.map.has('last'), 'and last');
   eq(keysOf(b.slot).length, 5, 'B stays');
-  assert(a.slot === MAIN, 'A was main');
+  eq(keysOf(MAIN), [], 'nothing of main');
   await st.reset();
   eq(m.map.size, 0, 'reset deletes everything');
 });
@@ -247,8 +268,8 @@ await check('the tree: an empty directory, a link, modes, times and a Unicode pa
   data.set(two, one.length);
   const s = await st.save(bytes(3), bytes(2), { tree: { entries, data, size: data.length, files: entries.length } },
                           null, null, { slot: null, name: 'T' });
-  eq([s.tree, s.treeSize, s.treeFiles], ['Pharo.tree', data.length, 5], 'meta');
-  const v = m.map.get('Pharo.tree');
+  eq([s.tree, s.treeSize, s.treeFiles], [keyOf(s.slot, 'Pharo.tree'), data.length, 5], 'meta');
+  const v = m.map.get(keyOf(s.slot, 'Pharo.tree'));
   assert(v.v === 1 && v.data instanceof Blob && v.data.size === data.length, 'stored as one Blob');
   const l = await st.load();
   eq(l.tree.entries, entries, 'entries');
@@ -263,27 +284,28 @@ await check('a save without a tree keeps the one stored; null deletes it; a new 
   const { m, st } = fresh();
   const tree = { entries: [['k', 'f', 0o100644, 1, 0, 2, null]], data: bytes(2, 7), size: 2, files: 1 };
   const a = await st.save(bytes(3), bytes(2), { tree }, null, null, { slot: null });
-  const a2 = await st.save(bytes(4), bytes(2), {}, null, a, { slot: MAIN });
-  eq([a2.tree, a2.treeSize, a2.treeFiles], ['Pharo.tree', 2, 1], 'kept, from kept');
-  const a3 = await st.save(bytes(4), bytes(2), { tree: undefined }, null, null, { slot: MAIN });
-  eq([a3.tree, a3.treeFiles], ['Pharo.tree', 1], 'kept, from the stored meta');
+  const T = keyOf(a.slot, 'Pharo.tree');
+  const a2 = await st.save(bytes(4), bytes(2), {}, null, a, { slot: a.slot });
+  eq([a2.tree, a2.treeSize, a2.treeFiles], [T, 2, 1], 'kept, from kept');
+  const a3 = await st.save(bytes(4), bytes(2), { tree: undefined }, null, null, { slot: a.slot });
+  eq([a3.tree, a3.treeFiles], [T, 1], 'kept, from the stored meta');
   eq((await st.load()).tree.data[0], 7, 'still loaded');
   const copy = await st.save(bytes(4), bytes(2), {}, null, a3, { slot: null, name: 'copy' });
   assert(!copy.tree && !m.map.has(keyOf(copy.slot, 'Pharo.tree')), 'a new slot without a tree has none');
-  const a4 = await st.save(bytes(4), bytes(2), { tree: null }, null, a3, { slot: MAIN });
-  assert(!a4.tree && !m.map.has('Pharo.tree'), 'null deletes it');
-  eq((await st.load(null, MAIN)).tree, null, 'no tree');
+  const a4 = await st.save(bytes(4), bytes(2), { tree: null }, null, a3, { slot: a.slot });
+  assert(!a4.tree && !m.map.has(T), 'null deletes it');
+  eq((await st.load(null, a.slot)).tree, null, 'no tree');
 });
 
 await check('the .sources of a slot: kept as stored by a save of that slot, written for a new slot', async () => {
   const { m, st } = fresh();
   const src = { name: 'Other.sources', data: new Blob([bytes(11)]) };
   const a = await st.save(bytes(3), bytes(2), {}, src, null, { slot: null });
-  const stored = m.map.get('Pharo.sources');
-  const a2 = await st.save(bytes(4), bytes(2), {}, src, a, { slot: MAIN });
-  assert(m.map.get('Pharo.sources') === stored && a2.sourcesSize === 11, 'kept as stored');
+  const stored = m.map.get(keyOf(a.slot, 'Pharo.sources'));
+  const a2 = await st.save(bytes(4), bytes(2), {}, src, a, { slot: a.slot });
+  assert(m.map.get(keyOf(a.slot, 'Pharo.sources')) === stored && a2.sourcesSize === 11, 'kept as stored');
   const b = await st.save(bytes(4), bytes(2), {}, src, a2, { slot: null, name: 'save as' });
-  assert(b.slot !== MAIN && m.map.get(keyOf(b.slot, 'Pharo.sources')).size === 11, 'written for the new slot');
+  assert(b.slot !== a.slot && m.map.get(keyOf(b.slot, 'Pharo.sources')).size === 11, 'written for the new slot');
   eq((await st.load(null, b.slot)).sources.name, 'Other.sources', 'loaded');
   eq((await st.list()).find(s => s.slot === b.slot).sourcesSize, 11, 'its own, listed');
   m.map.delete(keyOf(b.slot, 'Pharo.sources'));
@@ -296,9 +318,10 @@ await check('a backend without keys(): only main is listed', async () => {
   const { m } = fresh();
   const plain = { get: m.get, write: m.write, clear: m.clear };
   const st = PharoStorage.open(plain);
-  const a = await st.save(bytes(1), bytes(1), {}, null, null, { slot: null });
+  await m.write([['Pharo.image', new Blob([bytes(1)])], ['Pharo.changes', new Blob([bytes(1)])],
+                 ['meta', { id: 'old', image: 'Pharo.image', changes: 'Pharo.changes', imageSize: 1, changesSize: 1 }]]);
   const b = await st.save(bytes(1), bytes(1), {}, null, null, { slot: null });
-  eq([a.slot, b.slot === MAIN], [MAIN, false], 'saved');
+  assert(b.slot !== MAIN, 'saved: ' + b.slot);
   eq((await st.list()).map(s => s.slot), [MAIN], 'main only');
   eq((await PharoStorage.open(m).list()).length, 2, 'both with keys()');
 });
@@ -306,6 +329,42 @@ await check('a backend without keys(): only main is listed', async () => {
 await check('persist and persisted without navigator.storage: false', async () => {
   const { st } = fresh();
   eq([await st.persist(), await st.persisted()], [false, false], 'false');
+});
+
+// ---- git-proxy.js
+
+const PharoGitProxy = require(path.join(web, 'git-proxy.js'));
+
+await check('PharoGitProxy.parse: the URL as the browser writes it, which the worker takes', async () => {
+  const takes = p => /^https?:\/\//i.test(p);       // vm-worker.js proxyOf
+  for (const [typed, value, origin] of [
+    ['https:proxy.example/git', 'https://proxy.example/git', 'https://proxy.example'],
+    ['https:/proxy.example/p/', 'https://proxy.example/p/', 'https://proxy.example'],
+    ['HTTPS://Proxy.Example:443/a?b=c', 'https://proxy.example/a?b=c', 'https://proxy.example'],
+    ['https://cors.isomorphic-git.org', 'https://cors.isomorphic-git.org/', 'https://cors.isomorphic-git.org'],
+    [' http://127.0.0.1:9/ ', 'http://127.0.0.1:9/', 'http://127.0.0.1:9'],
+  ]) {
+    const p = PharoGitProxy.parse(typed);
+    eq([p.value, p.origin], [value, origin], typed);
+    assert(takes(p.value), 'the worker takes ' + p.value);
+  }
+  eq(PharoGitProxy.parse('').value, '', 'none');
+  for (const bad of ['ftp://x/', 'https://u:p@x/', 'https://x/#f', 'nope'])
+    assert(PharoGitProxy.parse(bad).error, 'refused: ' + bad);
+});
+
+await check('PharoGitProxy.describe: the first request through the default once, and failures', async () => {
+  const req = { event: 'request', host: 'github.com', proxy: 'https://cors.example', status: 200 };
+  assert(/public CORS proxy https:\/\/cors\.example, which sees what you clone/.test(PharoGitProxy.describe(req)), 'told');
+  eq(PharoGitProxy.describe(req), '', 'once');
+  eq(PharoGitProxy.describe({ event: 'request', host: 'h', proxy: '', status: 200 }), '', 'no proxy: nothing');
+  assert(/blocked git's request to github\.com \(CORS\)/.test(
+    PharoGitProxy.describe({ event: 'failed', host: 'github.com', proxy: '', status: -1 })), 'CORS');
+  assert(/did not answer/.test(PharoGitProxy.describe({ event: 'failed', host: 'h', proxy: 'https://p', status: -2 })),
+         'a proxy down');
+  assert(/refused the request to h\./.test(PharoGitProxy.describe({ event: 'failed', host: 'h', proxy: 'https://p',
+                                                                    status: 403 })), '403');
+  eq(PharoGitProxy.describe({ event: 'failed', host: 'h', proxy: 'https://p', status: 404 }), '', '404: the error says it');
 });
 
 // ---- catalog.js

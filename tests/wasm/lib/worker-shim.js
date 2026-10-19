@@ -15,9 +15,10 @@
 // vm-storage.js is `memory' (PharoStorage.memory() of the harness), which
 // outlives the workers as IndexedDB outlives a page: the shim makes it
 // PharoStorage.backend, through a port (get, write, clear and keys, which
-// lists the slots).  guard(op), when given, is called
+// lists the slots).  guard(op, args), when given, is called
 // before each operation of that store, and what it throws is the error of
-// the operation (a full disk, a database that cannot be opened).
+// the operation (a full disk, a database that cannot be opened, a write
+// with no room for what it writes).
 //
 //   shim.site({encodeGzip, override})  a URL prefix /s<n>/ of its own:
 //       {n, log, url}, where log lists the paths it was asked for (without
@@ -139,7 +140,7 @@ async function start(webDir, { memory, guard = null } = {}) {
       const store = new MessageChannel();
       store.port1.on('message', async ({ n: id, op, args }) => {
         try {
-          if (guard) guard(op);
+          if (guard) guard(op, args);
           store.port1.postMessage({ n: id, value: await memory[op](...args) });
         } catch (e) {
           store.port1.postMessage({ n: id, error: { name: e.name, message: e.message, unavailable: e.unavailable } });

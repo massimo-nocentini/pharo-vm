@@ -47,7 +47,8 @@
 //   (history.replaceState), and so does the link to the Console.  An image
 //   opened (Open) is none of them until the worker kept it in a slot: the
 //   URL then names no image, and Images shows no slot running; when it
-//   does not start, Restart boots the image of before again.
+//   does not start, Restart boots the image of before again (one opened
+//   from the launcher shows the launcher again).
 // - Save asks the image to save itself (a save request record); the worker
 //   keeps the saved image in this browser: in the slot it booted from, or
 //   in a new one for an image started fresh or opened, named after it.
@@ -57,8 +58,10 @@
 //   image too (Iceberg's clones: the worker's tree).
 // - Images lists the images of the site, to start fresh, and those saved
 //   in this browser, to start, rename or delete (the one that runs: its VM
-//   starts again); it starts one, after a question when the world has input
-//   that is not saved.
+//   starts again; Delete all lets a world that runs no saved image go on);
+//   it starts one, after a question when the world has input that is not
+//   saved.  A VM that ended runs no slot: Images opens its slot again.  When
+//   it closes, the keyboard goes back to the world.
 // - Open (or files dropped on the page) starts an image of your own, as in
 //   the Console: open-image.js chooses, unpacks and checks the files while
 //   the world goes on, the notice saying how far it got; it asks first when
@@ -145,7 +148,9 @@
   let heardAt = 0, pingAt = 0;          // when the worker last said anything, and was asked
   let restarted = '';                   // why the worker was replaced, said until the next one is ready
   let upload = null;                    // {name, image, changes, sources} to boot until the worker keeps it
-  let beforeUpload = {};                // the choice that ran before it, which Restart boots if it was not kept
+  // the choice that ran before it, which Restart boots if it was not kept
+  // (null: the launcher showed, and shows again), and the name of its slot
+  let beforeUpload = {}, beforeUploadName = '';
   let kept = false;                     // the worker kept the upload it booted (or failed to)
   let source = null, persisted = false; // where the image came from, and whether one is saved (ready)
   let preparing = false;                // the worker prepares the image for the world (ready.preparing)
@@ -409,14 +414,17 @@
   // The VM ended; the worker stays, for Download.  Before the world
   // painted, the image may be one that cannot open it: the Console can run
   // it, or reset it.  An upload that did not start is not kept, and Restart
-  // boots the saved image.
+  // boots the image of before; one opened from the launcher shows the
+  // launcher again, which says why.
   function ended(status, text, notice) {
     clearTimeout(watchdog);
     clearTimeout(startTimer);
     if (!framed && !kept && source === 'upload') {
       upload = null;
-      setChoice(beforeUpload);
       notice = 'The opened image did not start; it was not kept. ' + notice;
+      if (!beforeUpload) { launch(notice); return; }
+      setChoice(beforeUpload);
+      currentName = beforeUploadName;
     } else if (preparing) {
       notice = 'The image could not be prepared for the world: ' + notice;
     }
@@ -434,7 +442,9 @@
   function respawn() {
     if (!framed && !kept && source === 'upload') {   // it hung before it started
       upload = null;
+      if (!beforeUpload) { launch('The opened image did not start; it was not kept.'); return; }
       setChoice(beforeUpload);
+      currentName = beforeUploadName;
     }
     restarted = 'VM restarted (unsaved changes lost).';
     spawn();
@@ -1111,7 +1121,8 @@
     if (!opened) return;
     // the VM runs neither the slot nor the fresh image of before: until it
     // is kept, the URL, the link to the Console and Images name none
-    beforeUpload = current;
+    beforeUpload = choosing ? null : current;
+    beforeUploadName = currentName;
     upload = opened;
     restarted = '';
     currentName = '';
@@ -1128,11 +1139,18 @@
 
   // Delete the slot of the VM (sid), or every slot (null): the worker
   // forgets it, and the page starts again, on the image saved last, or,
-  // with none, as on a first visit
+  // with none, as on a first visit.  A VM that runs no slot (a fresh image,
+  // or an upload not kept yet) loses nothing to Delete all: it goes on.
   async function deleteRunning(sid) {
     const msg = sid ? { type: 'resetStorage', slot: sid } : { type: 'resetStorage', all: true };
     if (worker) await request(msg);
     else if (store) await (sid ? store.remove(sid) : store.reset());
+    if (!sid && worker && alive && !current.slot && (ready || current.fresh || upload)) {
+      persisted = false;
+      showNotice('Deleted every image saved in this browser; the image that runs here was not saved, and goes on.',
+                 null, null, 8000);
+      return;
+    }
     upload = null;
     restarted = sid ? "Deleted '" + (currentName || 'the image') + "' from this browser." : 'Deleted every image saved in this browser.';
     images.close();
@@ -1183,22 +1201,8 @@
   });
   const SETTINGS = 'Settings';
   function onGit(m) {
-    const chosen = GitProxy.read(), proxy = m.proxy || '';
-    if (m.event === 'request') {
-      if (chosen.mode === 'default' && proxy && !GitProxy.noted(proxy)) {
-        GitProxy.markNoted(proxy);
-        showNotice('Git requests (Iceberg clones, Metacello github://) go through the public CORS proxy ' + proxy +
-                   ', which sees what you clone.', SETTINGS, gitSettings.open, 15000);
-      }
-    } else if (m.event === 'failed') {
-      if (!proxy && m.status < 0)
-        showNotice("The browser blocked git's request to " + m.host + ' (CORS): git over HTTPS needs a proxy here.',
-                   SETTINGS, gitSettings.open, 15000);
-      else if (proxy && m.status < 0)
-        showNotice('The git proxy ' + proxy + ' did not answer.', SETTINGS, gitSettings.open, 15000);
-      else if (proxy && m.status === 403)
-        showNotice('The git proxy ' + proxy + ' refused the request to ' + m.host + '.', SETTINGS, gitSettings.open, 15000);
-    }
+    const text = GitProxy.describe(m);
+    if (text) showNotice(text, SETTINGS, gitSettings.open, 15000);
   }
 
   const refocus = () => { if (framed) focusSink(); };
@@ -1269,7 +1273,8 @@
       store: storageUnavailable ? null : store,
       manifest: () => manifest,
       current: () => current,
-      running: () => (worker && current.slot) || null,
+      // (a VM that ended is none: its slot can be opened again)
+      running: () => (worker && alive && current.slot) || null,
       onOpen: openChoice,
       onOpenFile: chooseFile,
       onDeleteRunning: deleteRunning,
@@ -1278,6 +1283,7 @@
         if (current.slot && store) store.name(current.slot).then(n => { if (n) currentName = n; }, () => {});
       },
       otherPage: { label: 'Console', href: c => 'index.html' + query(c) },
+      refocus: () => refocus(),
     });
     if (!manifest) spawn(want);           // (the worker says why it cannot start)
     else if (want.slot) {

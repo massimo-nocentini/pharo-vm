@@ -18,8 +18,13 @@
 //     onDeleteRunning(slot),
 //                       delete the slot that the page's VM runs (the page
 //                       resets its VM), or every slot when slot is null
-//                       (Delete all); answers a promise
+//                       (Delete all: the page resets a VM that runs one of
+//                       them, and lets one that runs none go on); answers a
+//                       promise
 //     onChange(),       optional: a slot was renamed or deleted here
+//     refocus(),        optional: the dialog closed, but for the launcher
+//                       (the world page gives the keyboard back to the
+//                       world, which takes no keys from the toolbar)
 //     otherPage: {label, href: choice => url},
 //                       the other page of the site (the Console from the
 //                       world, the world from the Console), with a link per
@@ -52,7 +57,8 @@
 //   #images-persist     asks the browser to keep the images from its cleanup
 //                       (navigator.storage.persist(), from this click), when
 //                       it can and does not yet
-//   #images-delete-all  confirm, then onDeleteRunning(null)
+//   #images-delete-all  confirm (which names the slot that runs, if any: its
+//                       VM starts again), then onDeleteRunning(null)
 //   #images-close
 //
 // The launcher is the dialog for a first visit to the world page of a site
@@ -64,8 +70,9 @@
 // at each open() and when the window gets the focus back (another tab may
 // have saved meanwhile).  Its rows are made again then, and after a rename
 // or a delete: the focus, which would fall to the body (where the world
-// page takes keys for the image), goes to the same button of the same row,
-// else to the first one of the list, or of the dialog.
+// page takes keys for the image), goes to the same button of the same row
+// (of the fresh images: the same image), else to the first one of the
+// list, or of the dialog.
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -197,10 +204,13 @@
       noteEl.hidden = !text;
     }
 
-    // the fresh images of the catalog
+    // the fresh images of the catalog; the one that had the focus has it
+    // again
     function renderFresh() {
       const m = manifest();
       const all = m && Catalog ? Catalog.images(m) : [];
+      const f = doc.activeElement, had = f && freshList.contains(f) ? f.closest('[data-fresh]') : null;
+      const hadId = had ? had.dataset.fresh : null;
       freshList.textContent = '';
       fresh.hidden = !all.length;
       for (const e of all) {
@@ -212,6 +222,7 @@
         if (e.default) b.setAttribute('data-default', '');
         b.addEventListener('click', () => choose({ fresh: e.id }));
         freshList.appendChild(b);
+        if (e.id === hadId) b.focus();
       }
     }
 
@@ -346,7 +357,10 @@
       refresh();
     });
     deleteAll.addEventListener('click', async () => {
-      if (!win.confirm('Delete every image saved in this browser (' + listed.length + ')?')) return;
+      const here = running(), runs = here ? listed.find(s => s.slot === here) : null;
+      if (!win.confirm('Delete every image saved in this browser (' + listed.length + ')?' +
+                       (runs ? " '" + runs.name + "', which runs here, is one of them: it starts again, and what it did" +
+                               ' since it was last saved is lost.' : ''))) return;
       try { if (o.onDeleteRunning) await o.onDeleteRunning(null); else await o.store.reset(); }
       catch (e) { note = 'Could not delete them: ' + ((e && e.message) || e); }
       if (o.onChange) o.onChange();
@@ -357,7 +371,8 @@
     // and when the browser closes it all the same, it shows again
     dialog.addEventListener('cancel', e => { if (launcher) e.preventDefault(); });
     dialog.addEventListener('close', () => {
-      if (!launcher || dialog.open) return;
+      if (dialog.open) return;
+      if (!launcher) { if (o.refocus) o.refocus(); return; }
       dialog.showModal();
       firstButton().focus();
     });

@@ -26,7 +26,9 @@
 //   image that runs (history.replaceState), and so does the link to the
 //   world.  Images (images.js) lists the images of the site, to start
 //   fresh, and those saved in this browser, to start, rename or delete;
-//   choosing one restarts the VM on it.
+//   choosing one restarts the VM on it.  Delete all restarts a VM that runs
+//   one of them, and lets one that runs none (a fresh image, an upload not
+//   kept yet) go on.
 // - The worker keeps the image in this browser whenever the image is saved,
 //   by Save or otherwise: in the slot it booted from, or in a new one for an
 //   image started fresh or opened; Save as names a new slot, which the VM
@@ -34,11 +36,11 @@
 //   starts again.  Another tab may save over that slot: this one says so,
 //   and Save keeps it again.  An opened image is kept, in a slot of its
 //   own, once it has started (its first prompt): one that crashes or quits
-//   before is not, and Restart boots the image of before again.  Until it
-//   is kept, the URL, the link to the world and Images name no image (the
-//   slot of before is not the one that runs: Delete or Reset must not
-//   touch it).  When the saved image itself does not start, the notice
-//   offers to delete it next to Restart.
+//   before is not, and Restart boots the image of before again (with its
+//   name, which Delete asks about).  Until it is kept, the URL, the link to
+//   the world and Images name no image (the slot of before is not the one
+//   that runs: Delete or Reset must not touch it).  When the saved image
+//   itself does not start, the notice offers to delete it next to Restart.
 // - Open (or files dropped on the page) starts an image of your own: a
 //   Pharo .zip, or an .image, its .changes and its .sources, which
 //   open-image.js chooses, unpacks and checks while the VM goes on, the
@@ -355,7 +357,8 @@
   let afterSave = null;                 // what to do once the next save is stored
   let leaving = false;                  // the page goes, and asked first
   let upload = null;                    // {name, image, changes, sources} to boot until the worker keeps it
-  let beforeUpload = {};                // the choice that ran before it, which Restart boots if it was not kept
+  let beforeUpload = {};                // the choice that ran before it, which Restart boots if it was not kept,
+  let beforeUploadName = '';            // and the name of its slot (Delete names it)
   let opening = false;                  // Open unpacks files
   let source = null;                    // where the image of the worker came from (ready)
   let gitHttp = false;                  // the VM has libgit2's smart-HTTP transport (ready)
@@ -550,7 +553,8 @@
     const dropped = !prompted && !eofSent && source === 'upload';
     if (dropped) {
       upload = null;
-      setChoice(beforeUpload);          // (first: Delete then has its slot again)
+      setChoice(beforeUpload);          // (first: Delete then has its slot again, and its name)
+      currentName = beforeUploadName;
     }
     setStatus(status, text);
     updateControls();
@@ -734,6 +738,7 @@
     if (!prompted && source === 'upload') {   // it hung before its first prompt
       upload = null;
       setChoice(beforeUpload);
+      currentName = beforeUploadName;
     }
     note('VM restarted (unsaved changes lost)');
     spawn();
@@ -844,6 +849,7 @@
     // the VM runs neither the slot nor the fresh image of before: until it
     // is kept, the URL, the link to the world and Images name none
     beforeUpload = current;
+    beforeUploadName = currentName;
     currentName = '';
     setChoice({});
     render();
@@ -930,6 +936,9 @@
   // The world page boots the saved image: offer to save first what this
   // VM did since
   const lacking = () => !!worker && alive && ready && (evaluated || edited || storing);
+  // Whether the VM runs, or boots, an image that no slot holds: a fresh one
+  // or an upload (before ready, the choice says; after, the slot it runs)
+  const runsNoSlot = () => !!worker && alive && !current.slot && (ready || !!current.fresh || !!upload);
   function openWorld() {
     leaving = true;
     location.assign($('world').href);
@@ -978,18 +987,7 @@
   // What the worker says of git's requests: the first one through the
   // site's public default, once; one that failed, why
   function onGit(m) {
-    const proxy = m.proxy || '';
-    let text = '';
-    if (m.event === 'request') {
-      if (GitProxy.read().mode !== 'default' || !proxy || GitProxy.noted(proxy)) return;
-      GitProxy.markNoted(proxy);
-      text = 'Git requests (Iceberg clones, Metacello github://) go through the public CORS proxy ' + proxy +
-        ', which sees what you clone.';
-    } else if (m.event === 'failed') {
-      if (!proxy && m.status < 0) text = "The browser blocked git's request to " + m.host + ' (CORS): git over HTTPS needs a proxy here.';
-      else if (proxy && m.status < 0) text = 'The git proxy ' + proxy + ' did not answer.';
-      else if (proxy && m.status === 403) text = 'The git proxy ' + proxy + ' refused the request to ' + m.host + '.';
-    }
+    const text = GitProxy.describe(m);
     if (!text) return;
     note(text + ' (Settings)');
     showNotice(text, 'Settings', openSettings, 15000);
@@ -1018,9 +1016,17 @@
       return true;
     },
     onOpenFile: () => chooseFile(),
-    // the slot of this VM, or every slot: deleted, and the VM starts again
+    // the slot of this VM, or every slot: deleted, and the VM starts again;
+    // but a VM that runs no slot (a fresh image or an upload, not saved)
+    // loses nothing of it to Delete all, and goes on
     onDeleteRunning: async sid => {
       const r = await request(sid ? { type: 'resetStorage', slot: sid } : { type: 'resetStorage', all: true });
+      if (!sid && runsNoSlot()) {
+        persisted = false;
+        note('Deleted every image saved in this browser; the image that runs here was not saved, and goes on.');
+        updateControls();
+        return r;
+      }
       upload = null;
       persisted = false;
       setChoice({});

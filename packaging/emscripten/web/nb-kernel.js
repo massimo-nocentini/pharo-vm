@@ -22,7 +22,8 @@
 //     schedule,       f => run f soon: acks are batched per call (default
 //                     requestAnimationFrame while the page is visible,
 //                     setTimeout 0 while it is hidden)
-//     onCell(cellId, ev), onState(state, info), onLog(kind, text) });
+//     onCell(cellId, ev), onState(state, info), onLog(kind, text),
+//     onGit(m) });
 //
 // Then k.start() (a promise of hello), run(cellId, source), runMany([{cellId,
 // source}]), cancel(cellId) (a queued cell), stop(), restart(),
@@ -87,6 +88,10 @@
 // and errors of no known cell), display (a display of no cell), kernel
 // (restarts and exits) and protocol (anything the kernel sent that makes no
 // sense).
+//
+// onGit(m) (optional): the worker's git {event, method, host, proxy, status,
+// error}, its first request of git and those that failed, which the page
+// tells as it does for its own VM (git-proxy.js describe).
 //
 // Stop is the worker's "interrupt" (the kernel's watcher stops the cell,
 // st/web-notebook.st), and arms a hard deadline: the cell must end within
@@ -593,6 +598,7 @@
       }
       case 'exit': gone('exited', m.code); break;
       case 'crash': if (ready) gone('crashed', m.message); else unavailable(String(m.message)); break;
+      case 'git': call(o.onGit, m); break;
       }
     }
 

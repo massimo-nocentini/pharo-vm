@@ -42,30 +42,30 @@
 // st/web-notebook.st, its events (output {fd: 3, bytes}), a request posted
 // before ready, Stop, the credit of the events, and a worker that boots the
 // slot without ever storing anything.
-// The slots and the catalog (C1-C11) run on sites of their own, made in
+// The slots and the catalog (C1-C11, C7b) run on sites of their own, made in
 // TEST_DIR from WEB_DIR's files with a manifest.json whose catalog has a
 // second entry, px, of the same files under image/px/ (and, for the
 // .sources, one whose default entry has a .sources of another name and an
-// extra one): init.fresh fetches the files of its entry only; the first
-// save of a fresh image makes main, with its origin and name, the next one a
-// slot of its own, which its saves then go into; two workers on two slots
-// never supersede each other; resetStorage of a slot, of the VM's and of
-// all; saveAs; a meta of before the slots boots as main and gets its
-// version; the files of /pharo (a file with its mode and time, an empty
-// directory, a link, a Unicode path) are kept with the image and come back
-// on a boot, but not st/, the placeholders or the REPL's file, and too many
-// of them keep the tree of before (treeError); init.gitProxy null is the
-// site's default; a slot gets the .sources of its name from another entry
-// or manifest.extraSources, and none (sourcesMissing) when the site has
-// none of that name; a save never overwrites another image that took the
-// id of the slot of its VM (main, deleted and made again: C11), a slot
-// deleted comes back with its name, and a VM bound to no slot resets none;
-// an init.slot or init.fresh that is not there boots the
-// default entry.  An upload is kept in a slot of its own (18, 19), and
-// prepared.slot is the slot that the world page then boots (19).
-// Prints every case and their count, and exits with
-// status 1 if any fails.  Lane 70 (tests/wasm/lanes/70-worker-harness.sh)
-// runs it.
+// extra one): init.fresh fetches the files of its entry only; the save of
+// a fresh image makes a slot of its own (never main), with its origin and
+// name, which its saves then go into; two workers on two slots never
+// supersede each other; resetStorage of a slot, of the VM's and of all;
+// saveAs; a meta of before the slots boots as main and gets its version;
+// the files of /pharo (a file with its mode and time, an empty directory,
+// a link, a Unicode path) are kept with the image and come back on a boot,
+// but not st/, the placeholders or the REPL's file, and too many of them
+// keep the tree of before (treeError), and so does a store without room
+// for them, which keeps the image all the same (C7b); init.gitProxy null
+// is the site's default; a slot gets the .sources of its name from another
+// entry or manifest.extraSources, and none (sourcesMissing) when the site
+// has none of that name; a save never overwrites another image under the
+// id of the slot of its VM (another createdAt: C11), a slot deleted comes
+// back with its name, and a VM bound to no slot resets none; an init.slot
+// or init.fresh that is not there boots the default entry.  An upload is
+// kept in a slot of its own (18, 19), and prepared.slot is the slot that
+// the world page then boots (19).  Prints every case and their count, and
+// exits with status 1 if any fails.  Lane 70
+// (tests/wasm/lanes/70-worker-harness.sh) runs it.
 
 'use strict';
 const crypto = require('crypto');
@@ -92,6 +92,13 @@ const sha256 = data => crypto.createHash('sha256').update(data).digest('hex');
 // opened (a private window).
 const memory = PharoStorage.memory();
 let storeFails = null, storeUnavailable = null;
+// The key of file in the slot that a worker booted or saved last (the
+// store's 'last'), else in main, and the value under it: the slot of a
+// case, which a save made (a slot of its own: no save makes main) or the
+// case wrote (main, as a page of before)
+const keyOf = PharoStorage.keyOf;
+const lastKey = file => keyOf((memory.map.get('last') || {}).slot || 'main', file);
+const ofLast = file => memory.map.get(lastKey(file));
 
 // A stand-in for display-worker.js (M2), which records what the worker does
 // with it in "display" messages
@@ -440,12 +447,13 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       assert(X.ready && X.ready.source === 'upload' && X.ready.persisted === true && X.ready.slot === null &&
              X.ready.imageId === defaultEntry.id, 'ready ' + JSON.stringify(X.ready));
       assert(!X.saved.length, 'saved ' + JSON.stringify(X.saved));
-      assert(memory.map.get('meta').id === slot.id && memory.map.get('Pharo.image').size === 7, 'the slot was replaced');
+      assert(memory.map.get(keyOf(slot.slot, 'meta')).id === slot.id &&
+             memory.map.get(keyOf(slot.slot, 'Pharo.image')).size === 7, 'the slot was replaced');
       // (no slot of its own: none is deleted, the one there is another image)
       X.post({ type: 'resetStorage', id: 81 });
       const r = await X.reply('reset', 81);
       assert(r.type === 'reset' && !r.error && r.slot === null, 'reset ' + JSON.stringify(r));
-      assert(memory.map.get('meta').id === slot.id, 'the slot is there: ' + [...memory.map.keys()]);
+      assert(memory.map.get(keyOf(slot.slot, 'meta')).id === slot.id, 'the slot is there: ' + [...memory.map.keys()]);
       memory.map.clear();
     } finally { await X.close(); }
   });
@@ -473,19 +481,21 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     const m = S.saved[0];
     assert(!m.error && m.bytes > 1e7 && m.prepared === !!manifest.world &&
            m.webPackage === (manifest.world ? webPackage : 0), 'saved ' + JSON.stringify(m));
-    // the first save of a fresh image makes main, named after its entry
-    assert(m.created === true && m.slot && m.slot.slot === 'main' && m.slot.name === defaultEntry.label,
-           'saved ' + JSON.stringify(m));
-    const meta = memory.map.get('meta');
-    assert(meta && meta.image === 'Pharo.image' && meta.imageSize === m.bytes && meta.build === manifest.build &&
+    // the first save of a fresh image makes a slot of its own (never main),
+    // named after its entry
+    assert(m.created === true && m.slot && m.slot.slot !== 'main' && PharoStorage.SLOT_ID.test(m.slot.slot) &&
+           m.slot.name === defaultEntry.label, 'saved ' + JSON.stringify(m));
+    assert(![...memory.map.keys()].some(k => !k.startsWith('slot/') && k !== 'last'), 'no key of main');
+    const meta = memory.map.get(keyOf(m.slot.slot, 'meta'));
+    assert(meta && meta.image === keyOf(m.slot.slot, 'Pharo.image') && meta.imageSize === m.bytes && meta.build === manifest.build &&
            meta.webPackage === m.webPackage && meta.prepared === m.prepared, 'meta ' + JSON.stringify(meta));
-    saved = new Uint8Array(await memory.map.get('Pharo.image').arrayBuffer());
+    saved = new Uint8Array(await ofLast('Pharo.image').arrayBuffer());
     assert(saved.length === m.bytes, 'the stored image');
     const R = session();
     try {
       await R.started();
       assert(R.ready.source === 'saved' && R.ready.persisted === true && R.ready.savedAt === meta.savedAt &&
-             R.ready.slot && R.ready.slot.slot === 'main' && R.ready.slot.name === defaultEntry.label,
+             R.ready.slot && R.ready.slot.slot === m.slot.slot && R.ready.slot.name === defaultEntry.label,
              'ready ' + JSON.stringify(R.ready));
       assert(R.progress.some(p => p.phase === 'restore'), 'restore progress');
       assert(!fetched(R, imageName) && !fetched(R, changesName), 'the image and its .changes were not fetched');
@@ -496,7 +506,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       current = R;
 
       // the .changes of the slot follows: after SYNC_MS, on flush, at the exit
-      const stored = () => memory.map.get('Pharo.changes').size;
+      const stored = () => ofLast('Pharo.changes').size;
       const before = stored();
       R.send("Object compile: 'harnessProbeA ^ 1' classified: 'harness'. #a\n");
       await R.expectOut(val('#a'));
@@ -517,7 +527,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       await waitFor('exit', () => R.exit !== null || R.crash, 30000);
       assert(R.exit === 0, 'exit ' + R.exit);
       assert(stored() > afterB, 'the .changes was stored before exit');
-      const changes = new TextDecoder().decode(new Uint8Array(await memory.map.get('Pharo.changes').arrayBuffer()));
+      const changes = new TextDecoder().decode(new Uint8Array(await ofLast('Pharo.changes').arrayBuffer()));
       assert(['harnessProbeA', 'harnessProbeB', 'harnessProbeC'].every(p => changes.includes(p)), 'the methods are in it');
     } finally { await R.close(); current = S; }
   });
@@ -538,7 +548,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     const done = await doneOf(N, 1);
     assert(done.status === 'ok' && JSON.stringify(done.values) === '["42"]', 'done ' + JSON.stringify(done));
     const r = N.ready;
-    assert(r.mode === 'notebook' && r.source === (memory.map.has('meta') ? 'saved' : 'download') &&
+    assert(r.mode === 'notebook' && r.source === (ofLast('meta') ? 'saved' : 'download') &&
            typeof r.gitHttp === 'boolean', 'ready ' + JSON.stringify(r));
     // the kernel says hello before it first waits for a request
     const iReady = N.msgs.indexOf(r);
@@ -639,7 +649,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
   });
 
   await check('W-NB4 the notebook worker stores nothing: save, upload, prepare and a snapshot are ignored, resetStorage is refused', async () => {
-    const before = new Map(memory.map), meta = JSON.stringify(memory.map.get('meta') || null);
+    const before = new Map(memory.map), meta = JSON.stringify(ofLast('meta') || null);
     const gz = fs.readFileSync(path.join(webDir, manifest.files.find(f => f.path === imageName).url));
     // an upload that would not boot, which the kernel does not take
     const X = nb({ upload: { image: zlib.gunzipSync(gz).subarray(0, 1 << 20), changes: new Uint8Array(0) }, prepare: true });
@@ -663,7 +673,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       for (const k of ['storing', 'saved', 'edited', 'superseded', 'prepared'])
         assert(!kinds.includes(k), k + ' posted');
       assert(memory.map.size === before.size && [...before].every(([k, v]) => memory.map.get(k) === v) &&
-             JSON.stringify(memory.map.get('meta') || null) === meta, 'the store changed: ' + [...memory.map.keys()]);
+             JSON.stringify(ofLast('meta') || null) === meta, 'the store changed: ' + [...memory.map.keys()]);
       assert(!X.msgs.some(m => m.type === 'output' && m.fd !== 3), 'no output on fds 1 and 2: ' + JSON.stringify(X.out));
       X.post(request(3, '6 * 7'));
       assert(JSON.stringify((await doneOf(X, 3)).values) === '["42"]', 'the kernel goes on');
@@ -706,23 +716,26 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       U.send('Smalltalk at: #HarnessMarker\n');
       await U.expectOut(val('4242'));
       await U.prompt();
-      assert(sha256(new Uint8Array(await memory.map.get('Pharo.image').arrayBuffer())) === sha256(saved),
+      assert(sha256(new Uint8Array(await ofLast('Pharo.image').arrayBuffer())) === sha256(saved),
              'the slot holds the upload');
       // and it is this VM's own: its .changes is stored again
-      const before = memory.map.get('Pharo.changes').size;
+      const before = ofLast('Pharo.changes').size;
       U.send("Object compile: 'harnessProbeU ^ 5' classified: 'harness'. #u\n");
       await U.expectOut(val('#u'));
       await U.prompt();
       U.post({ type: 'flush' });
-      await waitFor('the .changes stored', () => memory.map.get('Pharo.changes').size > before, 3000);
+      await waitFor('the .changes stored', () => ofLast('Pharo.changes').size > before, 3000);
     } finally { await U.close(); }
   });
 
   await check('13 resetStorage empties the store; the next worker downloads the image; a damaged slot is still persisted', async () => {
     S.post({ type: 'resetStorage', id: 131 });
     const r = await S.reply('reset', 131);
-    assert(r.type === 'reset' && !r.error, 'reset ' + JSON.stringify(r));
-    assert(memory.map.size === 0, 'store emptied: ' + [...memory.map.keys()]);
+    assert(r.type === 'reset' && !r.error && r.slot === S.saved[0].slot.slot, 'reset ' + JSON.stringify(r));
+    assert(![...memory.map.keys()].some(k => k.startsWith('slot/' + r.slot + '/')), 'the slot of S deleted: ' +
+           [...memory.map.keys()]);
+    // (and the slot of the upload of 12, for the next worker)
+    memory.map.clear();
     const D = session();
     try {
       await D.started();
@@ -776,7 +789,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     memory.map.clear();
     const P = session();
     let Q = null;
-    const stored = () => memory.map.get('Pharo.changes');
+    const stored = () => ofLast('Pharo.changes');
     const sourceOf = async (s, selector) => {
       s.send('(Object >> #' + selector + ') sourceCode\n');
       await s.prompt();
@@ -798,7 +811,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       await waitFor('saved again', () => P.saved.length > 1, 60000);
       await P.prompt(60000);
       assert(!P.saved[1].error, 'saved ' + JSON.stringify(P.saved[1]));
-      const slot = memory.map.get('meta'), changes = stored();
+      const slot = ofLast('meta'), changes = stored();
       // Q compiles a method at the offset where P's is, in its own .changes
       current = Q;
       Q.send("Object compile: 'tabProbeQ ^ ''Q wrote this, longer than the method of P, at the same offset''' " +
@@ -810,7 +823,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       console.log(`#   Q superseded after ${(now() - t).toFixed(0)} ms`);
       Q.post({ type: 'flush' });
       await sleep(500);
-      assert(memory.map.get('meta').id === slot.id && stored() === changes, 'the slot is still the one of P');
+      assert(ofLast('meta').id === slot.id && stored() === changes, 'the slot is still the one of P');
       assert(!P.superseded, 'P was not superseded');
       // P still owns it
       current = P;
@@ -830,7 +843,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       Q.post({ type: 'save' });
       await waitFor('Q saved', () => Q.saved.length, 60000);
       await Q.prompt(60000);
-      assert(!Q.saved[0].error && memory.map.get('meta').id !== slot.id, 'the slot of Q');
+      assert(!Q.saved[0].error && ofLast('meta').id !== slot.id, 'the slot of Q');
       const ofQ = stored();
       current = P;
       P.send("Object compile: 'tabProbeP3 ^ 3' classified: 'harness'. #p3\n");
@@ -874,24 +887,28 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
   await check('17 vm-storage.js: guarded writes, a fresh id per save, meta, a load during a save, an IndexedDB that fails to open', async () => {
     const m = PharoStorage.memory(), st = PharoStorage.open(m), bytes = n => new Uint8Array(n);
     assert(await st.meta() === null, 'no meta in an empty store');
-    // (storage.test.mjs tests the slots: these are main's)
+    // (storage.test.mjs tests the slots: these are those of one slot)
     const a = await st.save(bytes(3), bytes(2), { build: 'x' });
     const b = await st.save(bytes(3), bytes(2), { build: 'x' }, null, a);
-    assert(a.id && b.id && a.id !== b.id, 'ids ' + a.id + ' ' + b.id);
-    assert(JSON.stringify(await st.meta()) === JSON.stringify(b), 'meta is that of the last save');
+    const k = f => keyOf(a.slot, f);
+    assert(a.id && b.id && a.id !== b.id && b.slot === a.slot, 'ids ' + a.id + ' ' + b.id);
+    assert(JSON.stringify(await st.meta(a.slot)) === JSON.stringify(b), 'meta is that of the last save');
     assert(await st.syncChanges(bytes(5), a) === null, 'the slot of a is gone');
-    assert(m.map.get('Pharo.changes').size === 2, 'nothing written');
+    assert(m.map.get(k('Pharo.changes')).size === 2, 'nothing written');
     const b2 = await st.syncChanges(bytes(7), b);
-    assert(b2 && b2.id === b.id && b2.changesSize === 7 && m.map.get('meta').changesSize === 7, 'b synced');
+    assert(b2 && b2.id === b.id && b2.changesSize === 7 && m.map.get(k('meta')).changesSize === 7, 'b synced');
     await st.reset();
     assert(await st.syncChanges(bytes(9), b2) === null && !m.map.size, 'nothing after a reset');
-    assert(await st.meta() === null, 'no meta after a reset');
+    assert(await st.meta(a.slot) === null, 'no meta after a reset');
     // another page saves between the reads of load: it reads that slot, whole
-    await st.save(bytes(1), bytes(1), {});
+    const r = await st.save(bytes(1), bytes(1), {});
     let raced = false;
     const racing = Object.assign({}, m, { get: async key => {
       const v = await m.get(key);
-      if (key === 'Pharo.image' && !raced) { raced = true; await st.save(bytes(4), bytes(4), {}, null, null, { slot: 'main' }); }
+      if (key === keyOf(r.slot, 'Pharo.image') && !raced) {
+        raced = true;
+        await st.save(bytes(4), bytes(4), {}, null, null, { slot: r.slot });
+      }
       return v;
     } });
     const got = await PharoStorage.open(racing).load();
@@ -911,21 +928,22 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     await st.reset();
     const src = { name: 'Other.sources', data: new Blob([bytes(11)]) };
     const s1 = await st.save(bytes(3), bytes(2), {}, src, null);
-    const stored = m.map.get('Pharo.sources');
-    assert(s1.sources === 'Pharo.sources' && s1.sourcesName === 'Other.sources' && s1.sourcesSize === 11 && stored.size === 11,
-           'saved with its .sources: ' + JSON.stringify(s1));
+    const ks = f => keyOf(s1.slot, f);
+    const stored = m.map.get(ks('Pharo.sources'));
+    assert(s1.sources === ks('Pharo.sources') && s1.sourcesName === 'Other.sources' && s1.sourcesSize === 11 &&
+           stored.size === 11, 'saved with its .sources: ' + JSON.stringify(s1));
     const l1 = await st.load();
     assert(l1.sources && l1.sources.name === 'Other.sources' && l1.sources.data.length === 11, 'loaded with it');
     const s2 = await st.save(bytes(4), bytes(2), {}, src, s1);
-    assert(m.map.get('Pharo.sources') === stored && m.map.get('meta').id === s2.id && s2.sourcesSize === 11,
+    assert(m.map.get(ks('Pharo.sources')) === stored && m.map.get(ks('meta')).id === s2.id && s2.sourcesSize === 11,
            'kept as stored when the slot had it');
-    const other = await st.save(bytes(5), bytes(2), {}, null, null, { slot: 'main' });
-    assert(!m.map.has('Pharo.sources') && !other.sources, 'deleted by a save without one');
+    const other = await st.save(bytes(5), bytes(2), {}, null, null, { slot: s1.slot });
+    assert(!m.map.has(ks('Pharo.sources')) && !other.sources, 'deleted by a save without one');
     const s3 = await st.save(bytes(4), bytes(2), {}, { name: 'Other.sources', data: bytes(11) }, s2);
-    assert(m.map.get('Pharo.sources').size === 11 && s3.sourcesName === 'Other.sources', 'written again once superseded');
+    assert(m.map.get(ks('Pharo.sources')).size === 11 && s3.sourcesName === 'Other.sources', 'written again once superseded');
     const l3 = await st.load();
     assert(l3.image.length === 4 && l3.sources.data.length === 11, 'the slot of s3');
-    m.map.delete('Pharo.sources');
+    m.map.delete(ks('Pharo.sources'));
     e = null;
     try { await st.load(); } catch (x) { e = x; }
     assert(e && /\.sources of the saved image is missing/.test(e.message), 'a missing .sources: ' + e);
@@ -943,6 +961,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     const own = Buffer.concat([site, Buffer.from('\r"harness: a .sources of its own"\r')]);
     const image = manifestFile(imageName), changes = manifestFile(changesName);
     const sizeOfSources = '(FileLocator imageDirectory / ' + JSON.stringify(sourcesName).replace(/"/g, "'") + ') size\n';
+    let ofU = null;                     // the slot of U, which R saves into too
     // Blobs, as open-image.js gives them
     const U = session({ upload: { image: new Blob([image]), changes: new Blob([changes]),
                                   sources: { name: sourcesName, data: new Blob([own]) } } });
@@ -958,9 +977,10 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       await U.prompt();
       await waitFor('saved {upload}', () => U.saved.length, 30000);
       assert(!U.saved[0].error, 'saved ' + JSON.stringify(U.saved[0]));
-      const meta = memory.map.get('meta');
+      ofU = U.saved[0].slot.slot;
+      const meta = ofLast('meta');
       assert(meta.sourcesName === sourcesName && meta.sourcesSize === own.length &&
-             memory.map.get('Pharo.sources').size === own.length, 'the slot keeps it: ' + JSON.stringify(meta));
+             ofLast('Pharo.sources').size === own.length, 'the slot keeps it: ' + JSON.stringify(meta));
     } finally { await U.close(); }
     const R = session();
     try {
@@ -971,13 +991,13 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       R.send(sizeOfSources);
       await R.expectOut(val(String(own.length)));
       await R.prompt();
-      const stored = memory.map.get('Pharo.sources');
+      const stored = ofLast('Pharo.sources');
       R.post({ type: 'save' });
       await waitFor('saved', () => R.saved.length, 60000);
       await R.prompt(60000);
-      const meta = memory.map.get('meta');
+      const meta = ofLast('meta');
       assert(!R.saved[0].error && meta.sourcesName === sourcesName, 'saved ' + JSON.stringify(R.saved[0]));
-      assert(memory.map.get('Pharo.sources') === stored, 'the .sources was written again');
+      assert(ofLast('Pharo.sources') === stored, 'the .sources was written again');
     } finally { await R.close(); current = S; }
     // the .sources of the site, given: not fetched, and not kept in the slot,
     // a new one (an upload never replaces a slot)
@@ -987,11 +1007,11 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       assert(M.ready.sources === sourcesName && !fetched(M, sourcesName), 'not fetched: ' + M.log.join(' '));
       await waitFor('saved {upload}', () => M.saved.length, 30000);
       const m = M.saved[0], k = f => PharoStorage.keyOf(m.slot.slot, f);
-      assert(m.created && m.slot.slot !== 'main' && m.slot.name === 'given.image', 'saved ' + JSON.stringify(m));
+      assert(m.created && m.slot.slot !== ofU && m.slot.name === 'given.image', 'saved ' + JSON.stringify(m));
       assert(!memory.map.get(k('meta')).sources && !memory.map.has(k('Pharo.sources')) &&
              memory.map.get(k('meta')).origin === 'upload:given.image', 'the slot has no .sources of its own');
-      assert(memory.map.get('meta').sourcesName === sourcesName && memory.map.get('Pharo.sources').size === own.length,
-             'main stays');
+      assert(memory.map.get(keyOf(ofU, 'meta')).sourcesName === sourcesName &&
+             memory.map.get(keyOf(ofU, 'Pharo.sources')).size === own.length, 'the slot of U stays');
     } finally { await M.close(); }
   });
 
@@ -1003,6 +1023,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
   if (!stock) console.log('# skip 19: no world image, or no stock image in ' + stockDir);
   else await check('19 init.prepare: a stock image in the world is prepared in the REPL, saved, and kept; or says why not', async () => {
     const world = { mode: 'world', prepare: true, display: { canvas: 'stub' } };
+    let ofF = null;                     // the slot of F
     // an OSWindow-Web.st that defines nothing: web-bootstrap.st fails, and
     // the image is not saved (but kept, as it booted)
     memory.map.clear();
@@ -1014,8 +1035,9 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       assert(F.prepared.saved === false && /OSWebDriver/.test(F.prepared.error || ''), 'prepared ' + JSON.stringify(F.prepared));
       await waitFor('saved {upload}', () => F.saved.length, 30000);
       await sleep(500);
-      assert(F.saved.length === 1 && F.saved[0].upload && !F.saved[0].prepared && memory.map.get('meta').prepared === false,
+      assert(F.saved.length === 1 && F.saved[0].upload && !F.saved[0].prepared && ofLast('meta').prepared === false,
              'only the upload was stored: ' + JSON.stringify(F.saved));
+      ofF = F.saved[0].slot.slot;
     } finally { await F.close(); }
     const t = now();
     const P = session(Object.assign({ upload: stock }, world), { display: true });
@@ -1030,15 +1052,15 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
              'saved ' + JSON.stringify(P.saved));
       assert(P.msgs.indexOf(P.prepared) > P.msgs.indexOf(P.saved[1]), 'prepared after saved');
       assert(P.prepared.webPackage === webPackage, 'prepared ' + JSON.stringify(P.prepared));
-      // (the upload is kept in a slot of its own, main being F's; the image
-      // that PREPARE saved goes into it, which prepared says)
+      // (the upload is kept in a slot of its own, not F's; the image that
+      // PREPARE saved goes into it, which prepared says)
       const slot = P.saved[0].slot.slot;
-      assert(slot !== 'main' && P.saved[1].slot.slot === slot && P.prepared.slot === slot,
+      assert(slot !== ofF && P.saved[1].slot.slot === slot && P.prepared.slot === slot,
              'prepared.slot ' + JSON.stringify(P.prepared) + ' ' + JSON.stringify(P.saved));
       prepared = slot;
       const meta = memory.map.get(PharoStorage.keyOf(slot, 'meta'));
       assert(meta.prepared === true && meta.webPackage === webPackage, 'the slot is prepared: ' + JSON.stringify(meta));
-      assert(memory.map.get('meta').prepared === false, 'main, F\'s, is not');
+      assert(memory.map.get(keyOf(ofF, 'meta')).prepared === false, 'F\'s is not');
     } finally { await P.close(); current = S; }
     // the page then boots prepared.slot (world.js onPrepared), as the last one does too
     for (const init of [{ slot: prepared }, {}]) {
@@ -1083,7 +1105,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       await C.prompt(60000);
       const m = C.saved[0];
       assert(!m.error && m.webPackage === 1 && m.prepared === false, 'saved ' + JSON.stringify(m));
-      const meta = memory.map.get('meta');
+      const meta = ofLast('meta');
       assert(meta.webPackage === 1 && meta.prepared === false, 'meta ' + JSON.stringify(meta));
       older = new Map(memory.map);
     } finally { await C.close(); current = S; }
@@ -1126,7 +1148,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       assert(F.saved.length === 1 && F.saved[0].webPackage === 1 && !F.saved[0].prepared, 'saved ' + JSON.stringify(F.saved));
       assert(!F.msgs.some(m => m.type === 'display'), 'no display');
       assert(F.states[F.states.length - 1] === WAITING, 'the REPL waits: ' + F.states.slice(-3));
-      const meta = memory.map.get('meta');
+      const meta = ofLast('meta');
       assert(meta.webPackage === 1 && meta.prepared === false, 'meta ' + JSON.stringify(meta));
       F.send('3 + 4\n');
       await F.expectOut(val('7'));
@@ -1138,9 +1160,9 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     memory.map.clear();
     for (const [k, v] of older) memory.map.set(k, v);
     // the meta that the site wrote before the versions
-    const meta = Object.assign({}, memory.map.get('meta'), { prepared: true });
+    const meta = Object.assign({}, ofLast('meta'), { prepared: true });
     delete meta.webPackage;
-    memory.map.set('meta', meta);
+    memory.map.set(lastKey('meta'), meta);
     const t = now();
     const P = session(world, { display: true });
     try {
@@ -1154,7 +1176,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
              'prepared ' + JSON.stringify(P.prepared));
       assert(P.saved.length === 1 && P.saved[0].prepared === true && P.saved[0].webPackage === webPackage,
              'saved ' + JSON.stringify(P.saved));
-      const now2 = memory.map.get('meta');
+      const now2 = ofLast('meta');
       assert(now2.prepared === true && now2.webPackage === webPackage, 'meta ' + JSON.stringify(now2));
     } finally { await P.close(); current = S; }
     // the image has the package of the site, and the fonts of the preparation
@@ -1312,7 +1334,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       await C.prompt(60000);
       const m = C.saved[0];
       assert(!m.error && m.webPackage === 2 && m.prepared === false, 'saved ' + JSON.stringify(m));
-      const meta = memory.map.get('meta');
+      const meta = ofLast('meta');
       assert(meta.webPackage === 2 && meta.prepared === false, 'meta ' + JSON.stringify(meta));
     } finally { await C.close(); current = S; }
     // the world boot prepares it
@@ -1329,7 +1351,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
              'prepared ' + JSON.stringify(P.prepared));
       assert(P.saved.length === 1 && P.saved[0].prepared === true && P.saved[0].webPackage === webPackage,
              'saved ' + JSON.stringify(P.saved));
-      const meta = memory.map.get('meta');
+      const meta = ofLast('meta');
       assert(meta.prepared === true && meta.webPackage === webPackage, 'meta ' + JSON.stringify(meta));
     } finally { await P.close(); current = S; }
     // the extension is back, and Athens and Roassal draw
@@ -1382,7 +1404,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       await C.prompt(60000);
       const m = C.saved[0];
       assert(!m.error && m.webPackage === 3 && m.prepared === false, 'saved ' + JSON.stringify(m));
-      const meta = memory.map.get('meta');
+      const meta = ofLast('meta');
       assert(meta.webPackage === 3 && meta.prepared === false, 'meta ' + JSON.stringify(meta));
     } finally { await C.close(); current = S; }
     // the world boot prepares it
@@ -1399,7 +1421,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
              'prepared ' + JSON.stringify(P.prepared));
       assert(P.saved.length === 1 && P.saved[0].prepared === true && P.saved[0].webPackage === webPackage,
              'saved ' + JSON.stringify(P.saved));
-      const meta = memory.map.get('meta');
+      const meta = ofLast('meta');
       assert(meta.prepared === true && meta.webPackage === webPackage, 'meta ' + JSON.stringify(meta));
     } finally { await P.close(); current = S; }
     // the image has the package of the site, and Iceberg's https:// remotes
@@ -1458,11 +1480,16 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     const legacy = Object.assign({}, src, { path: legacyName, url: src.url.replace(/^image\//, 'image/sources/') });
     m.extraSources = [legacy];
   });
-  const shimOf = async site => WorkerShim.start(site.dir, { memory });
+  // treeQuota: the writes of a tree fail, as a browser without room for it
+  let treeQuota = false;
+  const quota = Object.assign(new Error('the quota is exceeded'), { name: 'QuotaExceededError' });
+  const shimOf = async site => WorkerShim.start(site.dir, { memory, guard: (op, args) => {
+    if (treeQuota && op === 'write' && args[0].some(([k, v]) => /(^|\/)Pharo\.tree$/.test(k) && v !== undefined))
+      throw quota;
+  } });
   const C = await shimOf(catalogSite), CS = await shimOf(sourcesSite);
   const on = sh => ({ on: sh });
   const has = (s, url) => s.log.includes('/' + url);
-  const keyOf = PharoStorage.keyOf;
   const px = catalogSite.manifest.images[1];
   const slotIds = () => [...memory.map.keys()].map(k => /^slot\/([^/]+)\/meta$/.exec(k)).filter(Boolean).map(x => x[1]);
   let A = null, B = null;
@@ -1480,19 +1507,21 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
            r.gitProxy === 'http://127.0.0.1:9/' && r.gitProxyDefault === 'http://127.0.0.1:9/', 'ready ' + JSON.stringify(r));
   });
 
-  await check('C2 the first save of a fresh image makes main (origin fresh:px, its name); a second fresh one a slot', async () => {
+  let ofA = null;                       // the slot of A
+  await check('C2 the first save of a fresh image makes a slot (origin fresh:px, its name), never main; a second fresh one another', async () => {
     assert(A && A.ready, 'no session of C1');
     current = A;
     A.post({ type: 'save' });
     await waitFor('saved', () => A.saved.length, 60000);
     await A.prompt(60000);
     const m = A.saved[0];
-    assert(!m.error && m.created === true && m.slot.slot === 'main' && m.slot.name === 'Pharo X' && m.treeFiles >= 0,
-           'saved ' + JSON.stringify(m));
-    const meta = memory.map.get('meta');
-    assert(meta.slot === 'main' && meta.origin === 'fresh:px' && meta.imageId === 'px' && meta.sourcesName === realSources &&
-           meta.pharo === px.pharo && memory.map.get('Pharo.name') === 'Pharo X', 'meta ' + JSON.stringify(meta));
-    assert(memory.map.get('last').slot === 'main', 'last');
+    ofA = m.slot.slot;
+    assert(!m.error && m.created === true && ofA !== 'main' && PharoStorage.SLOT_ID.test(ofA) && m.slot.name === 'Pharo X' &&
+           m.treeFiles >= 0, 'saved ' + JSON.stringify(m));
+    const meta = memory.map.get(keyOf(ofA, 'meta'));
+    assert(meta.slot === ofA && meta.origin === 'fresh:px' && meta.imageId === 'px' && meta.sourcesName === realSources &&
+           meta.pharo === px.pharo && memory.map.get(keyOf(ofA, 'Pharo.name')) === 'Pharo X', 'meta ' + JSON.stringify(meta));
+    assert(!memory.map.has('meta') && memory.map.get('last').slot === ofA, 'last');
     B = session({ fresh: 'px', name: 'Pharo X' }, on(C));
     current = B;
     await B.started();
@@ -1500,19 +1529,19 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     await waitFor('saved', () => B.saved.length, 60000);
     await B.prompt(60000);
     const b = B.saved[0], sid = b.slot.slot;
-    assert(!b.error && b.created && sid !== 'main' && PharoStorage.SLOT_ID.test(sid) && b.slot.name === 'Pharo X (2)',
-           'saved ' + JSON.stringify(b));
+    assert(!b.error && b.created && sid !== 'main' && sid !== ofA && PharoStorage.SLOT_ID.test(sid) &&
+           b.slot.name === 'Pharo X (2)', 'saved ' + JSON.stringify(b));
     assert(memory.map.get(keyOf(sid, 'meta')).origin === 'fresh:px' && memory.map.get('last').slot === sid &&
            memory.map.get(keyOf(sid, 'Pharo.name')) === 'Pharo X (2)', 'slot ' + sid);
     // a save again goes into the same slot
     B.post({ type: 'save' });
     await waitFor('saved again', () => B.saved.length > 1, 60000);
     await B.prompt(60000);
-    assert(B.saved[1].slot.slot === sid && B.saved[1].created === false && slotIds().length === 1,
+    assert(B.saved[1].slot.slot === sid && B.saved[1].created === false && slotIds().length === 2,
            'saved ' + JSON.stringify(B.saved[1]));
   });
 
-  await check('C3 two workers on main and on a slot: their saves and .changes never supersede each other', async () => {
+  await check('C3 two workers on two slots: their saves and .changes never supersede each other', async () => {
     assert(A && B && B.saved.length > 1, 'no sessions of C2');
     const sid = B.saved[0].slot.slot;
     const changesOf = slot => memory.map.get(keyOf(slot, 'Pharo.changes'));
@@ -1531,20 +1560,20 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     B.post({ type: 'flush' });
     await waitFor('the .changes of B stored', () => changesOf(sid) !== before, 3000);
     current = A;
-    const mainBefore = changesOf('main');
+    const aBefore = changesOf(ofA);
     A.send("Object compile: 'slotProbeA2 ^ 3' classified: 'harness'. #a2\n");
     await A.expectOut(val('#a2'));
     await A.prompt();
     A.post({ type: 'flush' });
-    await waitFor('the .changes of A stored', () => changesOf('main') !== mainBefore, 3000);
+    await waitFor('the .changes of A stored', () => changesOf(ofA) !== aBefore, 3000);
     await sleep(600);
     assert(!A.superseded && !B.superseded, 'superseded: A ' + A.superseded + ', B ' + B.superseded);
-    // a third worker on init.slot main
-    const T = session({ slot: 'main' }, on(C));
+    // a third worker on init.slot, A's
+    const T = session({ slot: ofA }, on(C));
     try {
       current = T;
       await T.started();
-      assert(T.ready.source === 'saved' && T.ready.slot.slot === 'main' && T.ready.slot.name === 'Pharo X' &&
+      assert(T.ready.source === 'saved' && T.ready.slot.slot === ofA && T.ready.slot.name === 'Pharo X' &&
              T.ready.slot.origin === 'fresh:px' && T.ready.imageId === 'px', 'ready ' + JSON.stringify(T.ready));
       // (the image A saved, with the .changes A stored since)
       T.send('{ Object canUnderstand: #slotProbeA. Object canUnderstand: #slotProbeB }\n');
@@ -1559,7 +1588,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     A.post({ type: 'resetStorage', id: 401, slot: sid });
     const r1 = await A.reply('reset', 401);
     assert(r1.type === 'reset' && !r1.error && r1.slot === sid, 'reset ' + JSON.stringify(r1));
-    assert(!slotIds().length && ![...memory.map.keys()].some(k => k.startsWith('slot/')) && memory.map.get('meta'),
+    assert(slotIds().join() === ofA && ![...memory.map.keys()].some(k => k.startsWith('slot/' + sid + '/')),
            'only B\'s: ' + [...memory.map.keys()]);
     // B's VM saves again: its slot comes back
     current = B;
@@ -1570,13 +1599,13 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     current = A;
     A.post({ type: 'resetStorage', id: 402 });
     const r2 = await A.reply('reset', 402);
-    assert(!r2.error && r2.slot === 'main' && !memory.map.has('meta') && memory.map.get(keyOf(sid, 'meta')),
+    assert(!r2.error && r2.slot === ofA && !memory.map.has(keyOf(ofA, 'meta')) && memory.map.get(keyOf(sid, 'meta')),
            'reset ' + JSON.stringify(r2) + ': ' + [...memory.map.keys()]);
-    // A is bound to none now: its next save is a new slot, main (free again)
+    // A is bound to none now: its next save is a new slot
     A.post({ type: 'save' });
     await waitFor('A saved', () => A.saved.length > 2, 60000);
     await A.prompt(60000);
-    assert(A.saved[2].created && A.saved[2].slot.slot === 'main', 'saved ' + JSON.stringify(A.saved[2]));
+    assert(A.saved[2].created && ![ofA, sid, 'main'].includes(A.saved[2].slot.slot), 'saved ' + JSON.stringify(A.saved[2]));
     B.post({ type: 'resetStorage', id: 403, all: true });
     const r3 = await B.reply('reset', 403);
     assert(!r3.error && r3.slot === null && memory.map.size === 0, 'reset ' + JSON.stringify(r3) + ': ' + [...memory.map.keys()]);
@@ -1593,24 +1622,25 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       F.post({ type: 'save' });
       await waitFor('saved', () => F.saved.length, 60000);
       await F.prompt(60000);
-      const main = memory.map.get('meta');
+      const first = F.saved[0].slot.slot, firstMeta = memory.map.get(keyOf(first, 'meta'));
       F.post({ type: 'saveAs', name: 'My copy' });
       await waitFor('saved as', () => F.saved.length > 1, 60000);
       await F.prompt(60000);
       const m = F.saved[1], sid = m.slot.slot;
-      assert(!m.error && m.created && sid !== 'main' && m.slot.name === 'My copy', 'saved ' + JSON.stringify(m));
+      assert(!m.error && m.created && sid !== first && sid !== 'main' && m.slot.name === 'My copy', 'saved ' + JSON.stringify(m));
       const meta = memory.map.get(keyOf(sid, 'meta'));
-      assert(meta.origin === 'save-as:main' && memory.map.get('meta').id === main.id, 'meta ' + JSON.stringify(meta));
+      assert(meta.origin === 'save-as:' + first && memory.map.get(keyOf(first, 'meta')).id === firstMeta.id,
+             'meta ' + JSON.stringify(meta));
       F.post({ type: 'save' });
       await waitFor('saved again', () => F.saved.length > 2, 60000);
       await F.prompt(60000);
-      assert(F.saved[2].slot.slot === sid && !F.saved[2].created && memory.map.get('meta').id === main.id,
+      assert(F.saved[2].slot.slot === sid && !F.saved[2].created && memory.map.get(keyOf(first, 'meta')).id === firstMeta.id,
              'into the copy: ' + JSON.stringify(F.saved[2]));
       // a name taken: (2)
       F.post({ type: 'saveAs', name: 'My copy' });
       await waitFor('saved as again', () => F.saved.length > 3, 60000);
       await F.prompt(60000);
-      assert(F.saved[3].slot.name === 'My copy (2)' && slotIds().length === 2, 'saved ' + JSON.stringify(F.saved[3]));
+      assert(F.saved[3].slot.name === 'My copy (2)' && slotIds().length === 3, 'saved ' + JSON.stringify(F.saved[3]));
     } finally { await F.close(); }
   });
 
@@ -1661,14 +1691,14 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       const m = T.saved[0];
       assert(!m.error && !m.treeError && m.treeFiles >= 7 && m.treeSize > 0, 'saved ' + JSON.stringify(m));
       treeFiles = m.treeFiles;
-      const tree = memory.map.get('Pharo.tree'), paths = tree.entries.map(e => e[0]);
+      const tree = ofLast('Pharo.tree'), paths = tree.entries.map(e => e[0]);
       for (const p of ['pharo-local', 'pharo-local/x/y', 'pharo-local/iceberg/r/.git/refs', 'pharo-local/link', 'dir é/文件.txt'])
         assert(paths.includes(p), p + ' kept: ' + paths.join(' '));
       for (const p of paths) {
         assert(!/^st(\/|$)/.test(p) && !(manifest.libraries || []).includes(p) && p !== '.pharo-web-world' &&
                !/^[^/]*\.(image|changes|sources)$/.test(p), p + ' is not kept');
       }
-      assert(memory.map.get('meta').treeFiles === paths.length, 'treeFiles');
+      assert(ofLast('meta').treeFiles === paths.length, 'treeFiles');
     } finally { await T.close(); }
     const R = session({}, on(C));
     try {
@@ -1698,9 +1728,67 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       const m = R.saved[0];
       assert(!m.error && /^the files of the image \(\d+ MB, \d+ files\) are too large to keep: clones made since the last save are lost on reload$/
                .test(m.treeError || '') && m.treeFiles === treeFiles, 'saved ' + JSON.stringify(m));
-      assert(memory.map.get('meta').treeFiles === treeFiles && memory.map.get('Pharo.tree').entries.length === treeFiles,
+      assert(ofLast('meta').treeFiles === treeFiles && ofLast('Pharo.tree').entries.length === treeFiles,
              'the tree of before stays');
     } finally { await R.close(); }
+  });
+
+  await check('C7b a store with no room for the files: the image is saved without them, the slot keeps its tree (treeError)', async () => {
+    memory.map.clear();
+    const T = session({ fresh: 'px' }, on(C));
+    let ofT = null;
+    try {
+      current = T;
+      await T.started();
+      await T.fs('writeFile', '/pharo/pharo-local/one', { data: 'first' });
+      T.post({ type: 'save' });
+      await waitFor('saved', () => T.saved.length, 60000);
+      await T.prompt(60000);
+      const m = T.saved[0], slot = ofT = m.slot.slot;
+      assert(!m.error && !m.treeError && m.treeFiles >= 2, 'saved ' + JSON.stringify(m));
+      const before = memory.map.get(keyOf(slot, 'meta'));
+      // a large clone: the browser has room for the image, not for the files with it
+      await T.fs('writeFile', '/pharo/pharo-local/two', { data: 'second' });
+      treeQuota = true;
+      T.send('Smalltalk at: #NoRoomMarker put: 77\n');
+      await T.prompt();
+      T.post({ type: 'save' });
+      await waitFor('saved again', () => T.saved.length > 1, 60000);
+      await T.prompt(60000);
+      const m2 = T.saved[1], meta = memory.map.get(keyOf(slot, 'meta'));
+      assert(!m2.error && m2.slot.slot === slot && !m2.created && m2.treeFiles === m.treeFiles &&
+             /^the files of the image \(\d+ MB, \d+ files\) could not be kept with it \(this browser has no room for them\): clones made since the last save are lost on reload$/
+               .test(m2.treeError || ''), 'saved ' + JSON.stringify(m2));
+      assert(meta.id !== before.id && meta.savedAt >= before.savedAt && meta.treeFiles === m.treeFiles &&
+             !memory.map.get(keyOf(slot, 'Pharo.tree')).entries.some(e => e[0] === 'pharo-local/two'),
+             'the image saved, the tree of before kept: ' + JSON.stringify(meta));
+    } finally { treeQuota = false; await T.close(); }
+    // the image saved boots, with the files of the first save
+    const R = session({ slot: ofT }, on(C));
+    try {
+      current = R;
+      await R.started();
+      R.send('Smalltalk at: #NoRoomMarker ifAbsent: [ 0 ]\n');
+      await R.expectOut(val('77'));
+      await R.prompt();
+      const one = await R.fs('readFile', '/pharo/pharo-local/one');
+      assert(new TextDecoder().decode(one.data) === 'first', 'the file of the first save');
+    } finally { await R.close(); }
+    // a new slot, with no room for its files: made without them
+    const N = session({ fresh: 'px' }, on(C));
+    try {
+      current = N;
+      await N.started();
+      await N.fs('writeFile', '/pharo/pharo-local/big', { data: 'big' });
+      treeQuota = true;
+      N.post({ type: 'save' });
+      await waitFor('saved', () => N.saved.length, 60000);
+      await N.prompt(60000);
+      const m = N.saved[0];
+      assert(!m.error && m.created && m.treeFiles === 0 && /no room for them/.test(m.treeError || '') &&
+             memory.map.get(keyOf(m.slot.slot, 'meta')) && !memory.map.has(keyOf(m.slot.slot, 'Pharo.tree')),
+             'saved ' + JSON.stringify(m));
+    } finally { treeQuota = false; await N.close(); }
   });
 
   await check('C8 init.gitProxy: null or absent is the site\'s default, \'\' none, a URL that one', async () => {
@@ -1793,7 +1881,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       } finally { await X.close(); }
     }
   });
-  await check('C11 a save never overwrites another image that took the id of its slot; a slot deleted comes back named; an unbound reset deletes nothing', async () => {
+  await check('C11 a save never overwrites another image under the id of its slot; a slot deleted comes back named; an unbound reset deletes nothing', async () => {
     memory.map.clear();
     const st = PharoStorage.open(memory);
     const X = session({ fresh: 'px' }, on(C));
@@ -1803,19 +1891,26 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       X.post({ type: 'save' });
       await waitFor('saved', () => X.saved.length, 60000);
       await X.prompt(60000);
-      assert(X.saved[0].slot.slot === 'main', 'saved ' + JSON.stringify(X.saved[0]));
-      // a page deletes main, and another image becomes main
-      await st.remove('main');
-      const other = await st.save(new Uint8Array(7), new Uint8Array(3), { origin: 'fresh:other', pharo: '13.1' }, null, null,
-                                  { slot: null, name: 'Other' });
-      assert(other.slot === 'main', 'the other is main');
+      const ofX = X.saved[0].slot.slot;
+      assert(ofX !== 'main', 'saved ' + JSON.stringify(X.saved[0]));
+      // another image under that id (no page of this build does it: a
+      // store written by others), with a createdAt of its own
+      await st.remove(ofX);
+      const at = Date.now() - 1000;
+      await memory.write([[keyOf(ofX, 'Pharo.image'), new Blob([new Uint8Array(7)])],
+                          [keyOf(ofX, 'Pharo.changes'), new Blob([new Uint8Array(3)])],
+                          [keyOf(ofX, 'meta'), { id: 'other', slot: ofX, image: keyOf(ofX, 'Pharo.image'),
+                                                 changes: keyOf(ofX, 'Pharo.changes'), imageSize: 7, changesSize: 3,
+                                                 savedAt: at, createdAt: at, origin: 'fresh:other', pharo: '13.1' }],
+                          [keyOf(ofX, 'Pharo.name'), 'Other']]);
       X.post({ type: 'save' });
       await waitFor('saved again', () => X.saved.length > 1, 60000);
       await X.prompt(60000);
       const m = X.saved[1], sid = m.slot.slot;
-      assert(!m.error && m.created && sid !== 'main' && m.slot.name === 'Pharo X', 'saved ' + JSON.stringify(m));
-      const main = memory.map.get('meta');
-      assert(main.id === other.id && main.imageSize === 7 && memory.map.get('Pharo.name') === 'Other', 'main is the other\'s');
+      assert(!m.error && m.created && sid !== ofX && sid !== 'main' && m.slot.name === 'Pharo X', 'saved ' + JSON.stringify(m));
+      const main = memory.map.get(keyOf(ofX, 'meta'));
+      assert(main.id === 'other' && main.imageSize === 7 && memory.map.get(keyOf(ofX, 'Pharo.name')) === 'Other',
+             'the other image stays');
       const meta = memory.map.get(keyOf(sid, 'meta'));
       assert(meta.origin === 'fresh:px' && memory.map.get(keyOf(sid, 'Pharo.name')) === 'Pharo X', 'meta ' + JSON.stringify(meta));
       // its slot deleted by a page: the next save makes it again, with its name and origin

@@ -141,15 +141,21 @@ await run(async t => {
   const noticeSays = (re, p = page, timeout = 90000) =>
     p.waitForFunction(src => !document.getElementById('notice').hidden &&
                       new RegExp(src).test(document.getElementById('notice-text').textContent), re.source, { timeout });
-  // the meta of the image saved in this browser (vm-storage.js), or null
+  // the meta of the image saved in this browser that was booted or saved
+  // last (vm-storage.js: the slot of 'last', else main), or null
   const slotMeta = (p = page) => p.evaluate(() => new Promise((resolve, reject) => {
     const r = indexedDB.open('pharo-wasm', 1);
     r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains('files')) r.result.createObjectStore('files'); };
     r.onerror = () => reject(r.error);
     r.onsuccess = () => {
-      const db = r.result, g = db.transaction('files').objectStore('files').get('meta');
-      g.onsuccess = () => { db.close(); resolve(g.result || null); };
-      g.onerror = () => { db.close(); reject(g.error); };
+      const db = r.result, s = db.transaction('files').objectStore('files'), l = s.get('last');
+      l.onsuccess = () => {
+        const slot = (l.result && l.result.slot) || 'main';
+        const g = s.get(slot === 'main' ? 'meta' : 'slot/' + slot + '/meta');
+        g.onsuccess = () => { db.close(); resolve(g.result || null); };
+        g.onerror = () => { db.close(); reject(g.error); };
+      };
+      l.onerror = () => { db.close(); reject(l.error); };
     };
   }));
   const vmWorkers = (p = page) => p.workers().filter(w => /vm-worker\.js/.test(w.url())).length;

@@ -1350,13 +1350,16 @@ async function partC() {
       w.postMessage({ type: 'save' });
       const saved = await waitFor('saved', () => msgs.find(m => m.type === 'saved'), 120000);
       assert(!saved.error && msgs.some(m => m.type === 'storing'), 'saved ' + J(saved));
-      assert(memory.map.get('meta') && memory.map.get('meta').imageSize === saved.bytes, 'the slot');
+      const meta = memory.map.get(PharoStorage.keyOf(saved.slot.slot, 'meta'));
+      assert(meta && meta.imageSize === saved.bytes, 'the slot');
       consoleSaved = true;
     } finally { w.terminate(); }
   });
 
   await check('C21 the kernel never stores: no storing or saved, the slot unchanged after a snapshot in a cell and a save', async () => {
-    const before = new Map(memory.map), meta = J(memory.map.get('meta') || null);
+    const metaKey = PharoStorage.keyOf((memory.map.get('last') || {}).slot || 'main', 'meta');
+    const before = new Map(memory.map), meta = J(memory.map.get(metaKey) || null);
+    assert(memory.map.get(metaKey), 'a slot (C20)');
     const N = client();
     try {
       eq(fields(await N.k.run('snap', 'Smalltalk snapshot: true andQuit: false. 1')), ['ok', ['1']], 'the snapshot');
@@ -1367,7 +1370,7 @@ async function partC() {
       const kinds = N.worker().tap;
       for (const k of ['storing', 'saved', 'edited', 'superseded']) assert(!kinds.includes(k), k + ' posted');
       assert(memory.map.size === before.size && [...before].every(([k, v]) => memory.map.get(k) === v) &&
-             J(memory.map.get('meta') || null) === meta, 'the slot changed');
+             J(memory.map.get(metaKey) || null) === meta, 'the slot changed');
     } finally { N.k.dispose(); }
   });
 
@@ -1395,11 +1398,10 @@ async function partC() {
     assert(consoleSaved, 'no slot (C21)');
     memory.map.clear();
     const st = PharoStorage.open(memory);
-    // two slots: main, of another image, and the Console's (PageMarker 777)
-    // as a slot of its own
+    // two slots: one of another image, and the Console's (PageMarker 778)
     const image = zlib.gunzipSync(fs.readFileSync(path.join(webDir, manifest.files.find(f => f.path === manifest.image).url)));
     const changes = zlib.gunzipSync(fs.readFileSync(path.join(webDir, manifest.files.find(f => /\.changes$/.test(f.path)).url)));
-    await st.save(image, changes, { build: manifest.build }, null, null, { slot: null, name: 'plain' });
+    const plain = await st.save(image, changes, { build: manifest.build }, null, null, { slot: null, name: 'plain' });
     const w = newWorker();
     let sid = null;
     try {
@@ -1413,15 +1415,15 @@ async function partC() {
       await waitFor('778', () => /778\nst> $/.test(out), 30000);
       w.postMessage({ type: 'save' });
       const saved = await waitFor('saved', () => msgs.find(m => m.type === 'saved'), 120000);
-      assert(!saved.error && saved.slot && saved.slot.slot !== 'main', 'saved ' + J(saved));
+      assert(!saved.error && saved.slot && saved.slot.slot !== plain.slot, 'saved ' + J(saved));
       sid = saved.slot.slot;
     } finally { w.terminate(); }
-    let choice = { slot: 'main' };
+    let choice = { slot: plain.slot };
     const base = { manifestUrl: 'manifest.json?v=' + encodeURIComponent(manifest.build), build: manifest.build,
                    persist: true, gitProxy: '' };
     const N = client({ init: () => Object.assign({}, base, choice) });
     try {
-      eq((await N.k.run('m', 'Smalltalk at: #PageMarker ifAbsent: [ #none ]')).values, ['#none'], 'main');
+      eq((await N.k.run('m', 'Smalltalk at: #PageMarker ifAbsent: [ #none ]')).values, ['#none'], 'plain');
       eq(N.k.info.source, 'saved', 'source');
       choice = { slot: sid };
       await N.k.restart();
