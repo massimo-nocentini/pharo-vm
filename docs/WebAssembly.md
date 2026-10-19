@@ -2,12 +2,13 @@
 
 The VM can be cross-built to WebAssembly with Emscripten.
 The build runs from the root of this repository, out of tree, by default in `build-wasm/`.
-It builds the StackVM, the interpreter (a JIT needs executable memory), for 64-bit images, with the FFI on libffi but no threads, and runs the stock Pharo 12 image.
-Pharo 15 images run too, in a site built with one (`WASM_IMAGE_ZIP`) or opened from disk in the pages: the Smalltalk of the pages works with both (see Pharo versions).
+It builds the StackVM, the interpreter (a JIT needs executable memory), for 64-bit images, with the FFI on libffi but no threads, and runs the stock Pharo 12 image by default.
+Pharo 13, 14 and 15 images run too: a site is built with one (`WASM_IMAGE_ZIP`), may offer several, which its pages let the user choose from (`WASM_EXTRA_IMAGES`), and the pages open any of them from disk; the Smalltalk of the pages works with all of them (see Pharo versions).
+The site that GitHub Actions builds offers Pharo 15 (the default), 14 and 13.1.
 Two VMs are linked from the same objects:
 
 - a command-line VM for node, with access to the host file system, environment and exit status;
-- a VM for a Web Worker, which a static web site runs: the Console, a Smalltalk REPL with Stop, Save, Download and Open, which starts an image of your own, and its Notebook tab, cells of Smalltalk, which a second VM of their own runs, and of Markdown, which the page renders.
+- a VM for a Web Worker, which a static web site runs: the Console, a Smalltalk REPL with Stop, Save, Download, Open, which starts an image of your own, and Images, which starts another image of the site or one saved in the browser, and its Notebook tab, cells of Smalltalk, which a second VM of their own runs, and of Markdown, which the page renders.
 
 The site also has the world page: the Morphic world of the image in a canvas, drawn through the WebDisplayPlugin.
 Both VMs link the libraries that the image calls through its FFI, built from pinned archives: FreeType 2.14.3 for the fonts of the world, and cairo 1.18.4 for Athens and Roassal, by default; libgit2 1.4.4 for Iceberg (`WASM_LIBGIT2=ON`) and SDL2 2.32.10 for the image's own SDL2 driver, with the page `sdl.html` (`WASM_SDL2=ON`), on request.
@@ -63,6 +64,17 @@ With a native build of this repository in `build/` that generated its sources, o
 An earlier `make wasm` has the same inputs in `build-wasm/host/build/vmmaker/` and `build-wasm/downloads/`.
 `WASM_GENERATED` instead takes sources generated already (see Settings).
 
+A site has a default image, the pinned Pharo 12 or the zip of `WASM_IMAGE_ZIP`, and may offer more images, each from a local zip, which its pages then let the user choose from (see The world page): `WASM_EXTRA_IMAGES` names them as `<id>=<zip>` words.
+The site of GitHub Actions is built so, with the zips of files.pharo.org under their own names (from which the pages read the build of each image):
+
+    make wasm WASM_IMAGE_ZIP=Pharo15.0-SNAPSHOT.build.50.sha.b85960fcc6.arch.64bit.zip WASM_IMAGE_ID=p15 \
+              WASM_EXTRA_IMAGES="p13=Pharo13.0-SNAPSHOT.build.749.sha.d7c6f761d5.arch.64bit.zip p14=Pharo14.0-SNAPSHOT.build.785.sha.74f3a1b398.arch.64bit.zip" \
+              WASM_EXTRA_SOURCES=Pharo15.0-64bit-4e572fe.sources WASM_LIBGIT2=ON
+
+Each extra image is unpacked into `build-wasm/image/stock-<id>/`, prepared for the world as the default one is (into `build-wasm/image/web-<id>/`, once, and again only when its zip or OSWindow-Web changes), and staged under `web/image/<id>/`; the default image keeps the URLs it had, `web/image/Pharo.image.gz` and the like.
+`WASM_EXTRA_SOURCES` stages `.sources` files that no image of the site has, under `web/image/sources/`: an image saved in a browser from an image that the site served before still finds the source of its methods there.
+`WASM_GIT_PROXY` is the site's default CORS proxy of git, `https://cors.isomorphic-git.org/` unless it is given (see libgit2).
+
 The site must be served over HTTP: browsers run no workers from `file://` URLs.
 It needs no special headers (no COOP or COEP, since nothing uses SharedArrayBuffer), so any static web server will do.
 
@@ -72,23 +84,25 @@ It needs no special headers (no COOP or COEP, since nothing uses SharedArrayBuff
   `NODE` selects the node binary, and `NODE_OPTIONS_WASM` gives it options.
   Next to it are `THIRD-PARTY-NOTICES.txt` and the empty placeholders of the libraries of the FFI (`libcairo.so.2`, and `libgit2.so.1.4.4` and `libSDL2-2.0.so.0` with those libraries; see The FFI).
 - `build-wasm/web/`: the static site.
-  It holds the Console page (`index.html`), the web VM (`pharo-web.js`, the factory `createPharoVM`, and `pharo-web.wasm`), the scripts of the pages and of the workers (see The web pages), the image, its `.changes` and the `.sources`, gzipped, in `image/`, the Smalltalk scripts of the pages in `st/`, `THIRD-PARTY-NOTICES.txt`, which the three pages link to, and `manifest.json`, which lists the files the worker loads and says what the build has (`ffi`, `fonts`, `git`, `gitHttp`, `sdl2`, `world`, `libraries`, `webPackage`).
+  It holds the Console page (`index.html`), the web VM (`pharo-web.js`, the factory `createPharoVM`, and `pharo-web.wasm`), the scripts of the pages and of the workers (see The web pages), the default image, its `.changes` and its `.sources`, gzipped, in `image/`, those of each extra image in `image/<id>/`, the `WASM_EXTRA_SOURCES` in `image/sources/`, the Smalltalk scripts of the pages in `st/`, `THIRD-PARTY-NOTICES.txt`, which the pages link to, and `manifest.json`, which lists the files the worker loads and says what the build has (`ffi`, `fonts`, `git`, `gitHttp`, `gitProxyDefault`, `sdl2`, `world`, `libraries`, `webPackage`), with the catalog of its images (`images`, `imageId`, `extraSources`; see The web pages).
   The pages load every file with the build id in its URL (`?v=<id>`), so a new build is never mixed with a cached one.
-  The browser downloads about 25 MB: an image of about 55 MB (15.4 MB gzipped), the 43 MB `.sources` (7.6 MB gzipped), and `pharo-web.wasm`, 2.1 MB in the default build (743 KB gzipped).
+  The browser downloads about 25 MB for the image it starts, and nothing of the others: an image of about 55 MB (15.4 MB gzipped), the 43 MB `.sources` (7.6 MB gzipped), and `pharo-web.wasm`, 2.1 MB in the default build (743 KB gzipped).
 - `build-wasm/web/world.html`: the world page.
   With the world (`WASM_WORLD=ON`, the default, and a native Pharo VM, `WASM_HOST_PHARO`), `web/` holds the world image, which is the stock image with the OSWindow-Web package, prepared at build time; both pages boot it.
   Without it, `web/` holds the stock image, and the world page says that the build has no world image.
 - `build-wasm/web/sdl.html`, with `WASM_SDL2=ON` only: the world through the image's own SDL2 driver (see The world through SDL2).
-- `build-wasm/image/stock/`: the unpacked stock image (as `Pharo.image` and `Pharo.changes`, with its `.sources`); `build-wasm/image/stock.stamp` records the SHA256 of the zip it came from.
+- `build-wasm/image/stock/`: the unpacked stock image (as `Pharo.image` and `Pharo.changes`, with its `.sources`); `build-wasm/image/stock.stamp` records the SHA256 of the zip it came from, and its path.
 - `build-wasm/image/web/`: `Pharo-web.image` and `.changes`, the world image, and `OSWindow-Web.st`, the package filed out for `web-bootstrap.st`.
+- `build-wasm/image/stock-<id>/` and `build-wasm/image/web-<id>/`: the same for each extra image.
 - `build-wasm/host/`: the native tree that generates the sources, in `host/generated/64/{vm,plugins}`, and its VMMaker image (in `host/build/vmmaker/image`, or in `host/vmmaker-image` for a copy of `WASM_VMMAKER_IMAGE`).
 - `build-wasm/cmake/`: the CMake tree of the WebAssembly build, with the unpacked archives of the libraries in `cmake/deps/<name>` and `THIRD-PARTY-NOTICES.txt` in `cmake/wasm/`.
 - `build-wasm/downloads/` and `build-wasm/tests-run/`: the downloaded image zip and archives of the libraries, and the scratch directory of `make wasm-check`.
 - `build-wasm/config.make`, `build-wasm/config-host.make` and `build-wasm/.make-wasm`: the recorded settings, and the mark of a directory that `make wasm` builds in.
 
-The workflow `.github/workflows/build.yml` makes such a site and node VM on every push, with the Pharo 15 image, `WASM_LIBGIT2=ON` and `WASM_SDL2=ON`, so they have the FFI, FreeType, cairo, libgit2, SDL2 (`sdl.html`) and the Notebook.
-It zips them as `PharoVM-<version>-WebAssembly-bin.zip`, with `serve.mjs` and the `README.md` and `node-try.sh` of `packaging/emscripten/dist` (the README says how to use them), and publishes the zip with the release of the push.
-For a push to `pharo-12-wasm` it also deploys `web/` to the root of branch `gh-pages`, which GitHub Pages serves.
+The workflow `.github/workflows/build.yml` makes such a site and node VM on every push, with the images of Pharo 15 (build 50, the default), 14 (build 785) and 13.1 (build 749), which it downloads from files.pharo.org and checks against their SHA256, the `.sources` of Pharo 15 build 41 (the image of the site before), and `WASM_LIBGIT2=ON` (the command above), so they have the FFI, FreeType, cairo, libgit2 and the Notebook.
+SDL2 is left out for now (no `sdl.html`): `WASM_SDL2=ON` in its two make steps brings it back.
+It zips them as `PharoVM-<version>-WebAssembly-bin.zip`, with `serve.mjs` and the `README.md` and `node-try.sh` of `packaging/emscripten/dist` (the README says how to use them; `node-try.sh` runs the default image), and publishes the zip with the release of the push.
+For a push to `pharo-12-wasm` it also deploys `web/` to the root of branch `gh-pages`, which GitHub Pages serves, once it has checked that every file of the manifest is there, of its size, and small enough for git.
 
 The node VM takes the usual arguments of the VM, for example on a copy of the stock image:
 
@@ -110,26 +124,35 @@ Output streams as the VM writes it, and the terminal keeps the last 20000 lines.
   Up and Down recall the history, which is kept in the browser's localStorage when there is one.
 - Stop (Esc, or Ctrl+C with nothing selected) interrupts the evaluation, also one that has not started yet.
   When nothing could be interrupted after the first prompt (the image registered no interrupt semaphore), or when the worker says nothing for 3 s after the Stop (a primitive that runs that long never yields), the worker is replaced and the VM starts again: the changes since the last Save are lost.
+- The browser keeps any number of images, the saved images, each under a name (see The saved images below).
+  The page boots the one that its URL names, `?slot=<id>` of a saved image or `?fresh=<id>` of an image of the site, else the image saved or booted last, else the site's default image; once the VM is ready, the URL names the image that runs (`history.replaceState`), and so does the link to the world page.
+  No other parameter of the URL is read: they only choose among the user's own images and the site's, so a link is safe to share.
 - Save evaluates `Smalltalk snapshot: true andQuit: false`.
-  Whenever the image is saved, by Save or by the image itself, the worker keeps the image and its `.changes` in the browser's IndexedDB, and the next visit boots them ("Started the image saved in this browser").
+  Whenever the image is saved, by Save or by the image itself, the worker keeps the image, its `.changes` and the files of its directory in the browser's IndexedDB: in the saved image that it booted, or in a new one, named after the image ("Pharo 15"), for an image started fresh or opened; the notice then says "The image is saved in this browser as '<name>'", with Rename for a new one.
+  The next visit boots it ("Started the image saved in this browser").
   The `.changes` is stored again when it changed: about 0.5 s after the VM goes idle, at the latest 5 s after it was last stored, and when the VM exits.
   When the page goes away, the worker tries to store it too, but may not have the time.
+- Save as asks for a name and saves into a new saved image of that name, which the VM saves into from then on; the image it came from stays as it was saved.
 - The browser asks before the page goes while a save is being stored, or when code was changed since the image was last stored.
 - Download gives the image and its `.changes` as last saved.
+- Images opens the Images dialog: the images of the site to start fresh, each with its build and the size of its download, and the saved images, newest first, with their Pharo version, when they were saved, their size and the files they keep, to open, rename or delete, or to open on the world page; Open a file…; what the site uses of the browser's storage, and a button that asks the browser to keep the images from its cleanup (`navigator.storage.persist()`), until it does; and Delete all.
+  Choosing an image restarts the VM on it, and the Notebook offers to restart on it too.
 - Open, or a drop of files on the page, starts an image of your own: a Pharo `.zip` as files.pharo.org gives them, even with the files in a directory, or an `.image` with its `.changes`, and its `.sources` when it has one of its own.
   The page unpacks the zip in the browser, with its progress, while the VM goes on, and checks the size and CRC-32 of every entry and that the image is a 64-bit Spur image.
   It refuses anything else, and says why (no image or several, not a whole zip, a damaged or encrypted entry, a method other than deflate, a split zip, a 32-bit image), and the session goes on as it was.
   The `.changes` and the `.sources` are those of the image's base name, or else the only ones of their kind.
-  The image gets its own `.sources` when it has one, and the site's otherwise.
-  It replaces the saved image only once it has started: one that crashes or quits before leaves the saved image as it was.
-  The saved image then keeps its own `.sources` too, and the page asks before it replaces a saved image.
-- Reset deletes the saved image, and starts the original one.
-  When the saved image itself does not start, the notice offers Reset next to Restart.
-- Restart starts the VM again from the saved image.
+  The image gets its own `.sources` when it has one, else the one of its name that the site serves (see Pharo versions).
+  It becomes a new saved image, named after its file, once it has started, and never replaces one: one that crashes or quits before is not kept, and Restart boots the image of before again.
+  Until it is kept, the URL and Images name no saved image as the one that runs.
+  The page asks first only when something was evaluated since the last save ("What you did since the last save is lost").
+- Delete deletes the saved image that runs, after asking ("Delete '<name>' from this browser, and start again?"), and starts again on the saved image used last of those left, else on the site's default image; the other saved images stay.
+  When the saved image itself does not start, the notice offers Delete next to Restart.
+- Restart starts the VM again from the image that runs, as last saved.
   Ctrl+D on an empty line ends the session (after asking), and Ctrl+L clears the terminal.
-- When two tabs share the saved image, the last one to save wins.
-  The other tab says that its image was replaced ("Another tab has replaced the image saved in this browser"), and stops storing its `.changes` until it saves again.
-- Settings, shown when the VM has the smart-HTTP transport of libgit2 (`WASM_LIBGIT2=ON`), holds the CORS proxy of git's requests (see libgit2).
+- When two tabs run the same saved image, the last one to save wins.
+  The other tab says that its image was replaced ("Another tab has replaced the image saved in this browser ('<name>')"), and stops storing its `.changes` until it saves again; tabs on different saved images never interfere.
+- Settings, shown when the VM has the smart-HTTP transport of libgit2 (`WASM_LIBGIT2=ON`), holds the CORS proxy of git's requests: the site's default, none, or a proxy of your own (see libgit2).
+  A note at the start says where git's requests go ("Git requests go through the proxy at <origin> (this site's default)").
 - For screen readers, a live region next to the status pill says how the VM goes: loading, starting, ready, and how it ended.
 
 While the Notebook tab shows, Esc, Ctrl+C and Ctrl+L do nothing to the Console, and a drop of files goes to the Notebook.
@@ -137,12 +160,28 @@ While the Notebook tab shows, Esc, Ctrl+C and Ctrl+L do nothing to the Console, 
 On a site built with the world, the Console links to the world page when the image can open it, and offers to save first when something was evaluated since the last save.
 An image that cannot yet (a stock image opened from disk, or one saved with an older version of OSWindow-Web) gets the offer "Prepare for the world", which files in the OSWindow-Web package (`CodeImporter evaluateFileNamed: '/pharo/st/web-bootstrap.st'`) and saves.
 
+## The saved images
+
+The Console and the world page keep the images of the user in the browser's IndexedDB, in the database of the site's directory, each in a slot of `vm-storage.js` (see The web pages): its image, its `.changes`, its `.sources` when it is not one that the site serves, the files of its directory, and its name.
+Both pages, and the Notebook, see the same saved images, and the Images dialog of either page lists them.
+
+- A slot is made by the first save of an image started fresh (named after its label, "Pharo 14"), by an image opened from disk once it has started (named after its file), and by Save as (the name given); a name already taken gets " (2)", " (3)", and so on.
+  Rename changes only the name; Delete removes the slot, and Delete all every slot.
+- A save stores, with the image, the files of `/pharo` that are neither the image's nor the site's: Iceberg's clones in `pharo-local` with their `.git`, the package cache, the Epicea sessions, `PharoDebug.log` and anything the user wrote there, as they were when the image saved, with their directories (empty ones too), symbolic links, modes and times.
+  A boot of the slot writes them back before the image starts, so a clone made before a save is there after a reload, consistent with the image's Iceberg.
+  At most 256 MiB and 50000 files are kept: beyond that, the save keeps the image but not its files, the slot keeps the files it had, and the notice says that the clones made since its last save would be lost on a reload.
+- Each slot records which Pharo it is, from the name of its `.sources` (or, for a slot saved before there were several, from the bytes of the image, at its next boot: until then the list says "Pharo ?"), where it came from (a fresh image of the site, an opened file, a Save as), when it was made and saved, and its sizes.
+- The image saved before there were several (one per browser and site directory) is the slot `main`, as it was, named "Saved image": nothing is moved or copied, and the database keeps its version.
+- A saved image takes about 60 MB, more with its clones, uncompressed.
+  The Images dialog says what the site uses of the browser's storage, and offers to ask the browser to keep it from its cleanup; a save that exceeds the quota keeps nothing and says so ("Saved, but ...").
+
 ## The Notebook
 
 The Notebook tab of the Console page holds cells of Smalltalk, which a second VM evaluates one at a time, and of Markdown, which the page renders (`notebook-lib.js`); the VM is the kernel, `st/web-notebook.st`, in a worker of its own, driven by `nb-kernel.js`.
 The first visit to the tab starts it.
-It boots the image saved in this browser, read-only, or else the site's, and never saves: a snapshot in a cell ends ok and leaves the saved image as it was.
-When the Console saves, resets or replaces its image, a notice offers to Restart the kernel on it.
+It boots the image of the Console, at each start of the kernel: the saved image that the Console runs, read-only, with its files, or the image of the site that it runs fresh, and never saves: a snapshot in a cell ends ok and leaves the saved image as it was.
+When the Console saves, deletes or replaces its image, or starts another one, a notice offers to Restart the kernel on it.
+Its git proxy is the Console's, and follows Settings.
 In a page opened from `file://`, or in a browser without the memory of the build, the tab starts no worker and says why.
 
 - A code cell is parsed whole before anything runs: a syntax error runs nothing, and says its line and column.
@@ -221,11 +260,14 @@ The example notebook, run, exported in 146 ms (Chromium) and 199 ms (Firefox) to
 The kernel costs a second VM: on the machine the port was made on it was ready 1.9 s (Chromium) and 2.0 s (Firefox) after the first visit to the tab, about 0.9 s after the Console's prompt (1.0 s and 1.1 s after the page was opened); it reads 19.8 MB of the site's 42.8 MB `.sources` at every boot, which the REPL does not.
 In node, the kernel booted in 1.9 s against 0.8 s for the REPL on Pharo 12, and in 2.2 s against 1.0 s on Pharo 15 (27.7 MB of its 46.1 MB `.sources` read).
 Its worker has a linear memory of its own, as large as the Console's: 675 MiB once Pharo 12 has booted, 683 MiB for Pharo 15.
-It fetches the `.sources` once per boot, and the image only when this browser has no saved image.
+It fetches the `.sources` once per boot, and the image only when the Console runs no saved image.
 
 ## The world page
 
-`world.html` boots the saved image, or the world image of the build, with `--interactive`, and the world draws itself in the canvas.
+`world.html` boots an image with `--interactive`, and the world draws itself in the canvas.
+The image is the one its URL names (`?slot=<id>` of a saved image, `?fresh=<id>` of an image of the site, as in the Console), else the image saved or booted last, else the site's default image.
+On a first visit (nothing saved in this browser) to a site of several images, no VM starts: the Images dialog opens as the launcher, "Choose a Pharo image", with a button for each image of the site, its build and the size of its download, and the default one has the focus, so that Enter starts it; Escape does not close it.
+A site of one image starts it at once, as before.
 The canvas follows the size of the page, and the world has its size in CSS pixels.
 On a high-density display the world draws in device pixels: the page reports the canvas in device pixels too, from which Pharo's world renderer takes `devicePixelRatio` for its `canvasScaleFactor`, as with SDL on a Retina display, and draws a Form that much larger, which the page shows one pixel per device pixel; it follows the ratio when the window moves to another screen, or with the zoom of the page.
 The world's text is drawn with FreeType, in the stock fonts of the image (Source Sans Pro and Source Code Pro): text beyond Latin-1, emphasis such as the strike-out of deprecated classes, and exact font sizes are drawn as natively.
@@ -243,27 +285,35 @@ With cairo, Athens draws too: Roassal, the Canvas view of the Inspector, Epicea'
 - Stop (or Alt+. in the world) interrupts the busy process and opens a debugger on it.
   That is the UI process whenever it is ready to run, so that a loop evaluated in a Playground is interrupted even when another process of its priority is ready too: UserInterruptHandler alone may pick that one, and then no debugger opens, since the busy UI process would draw it.
   When the worker then says nothing for 3 s, it is replaced, as in the Console.
-- Save asks the image to save itself, and the worker keeps it as the Console does: the next visit, here or in the Console, boots it.
+- Save asks the image to save itself, and the worker keeps it as the Console does, with the files of its directory (Iceberg's clones): the next visit, here or in the Console, boots it.
+  Save as asks for a name, and saves into a new saved image of that name.
   Download gives the image and its `.changes`.
+- Images, as in the Console: start an image of the site fresh, or a saved one, rename or delete one, or open it in the Console; the page asks first when the world has input that is not saved.
+  Deleting the saved image that runs starts the saved image used last of those left, else the site's default image (the launcher, on a site of several images).
 - The canvas shows one OSWindow at a time: the newest one that has an event handler, such as the window of the Emergency Debugger of Pharo 12, takes the canvas and the input, and the world comes back when it closes.
 - The status pill says Busy while the VM has not slept for a second, or while it does not answer at all (a long primitive).
-- Open, or a drop of files on the page, starts an image of your own, as in the Console.
+- Open, or a drop of files on the page, starts an image of your own, as in the Console, after asking when the world has input that is not saved ("Open <name> as a new image?"); it becomes a new saved image once it has started.
   An image without the OSWindow-Web package, a stock image say, or with an older version of it (the site has version 5), is prepared first: the worker boots it with the REPL, files in the package and saves, the pill says Preparing meanwhile, and then the world boots from the saved image.
   The stock image of the build was unpacked, prepared and painted in 4.3 s (Chromium) and 5.0 s (Firefox) after it was chosen.
-- The Console button opens the Console page.
-  When the world has not drawn 30 s after the VM started, or the VM ended before it drew, the notice points to the Console, which can run the image or reset it.
+- The Console button opens the Console page, on the image that runs.
+  When the world has not drawn 30 s after the VM started, or the VM ended before it drew, the notice points to the Console, which can run the image or delete it.
+- Settings, as in the Console, when the VM has the smart-HTTP transport of libgit2: the git proxy (see libgit2), which this browser keeps for every page.
+  The first git request of a VM through the site's public default says once that the proxy sees what is cloned, and a request that failed says why; both notices have a Settings button.
 
 The first frame came 1.4 s (Chromium) to 2.0 s (Firefox) after the page was first opened on localhost, nothing cached, and a key took 40 to 57 ms (median) to reach the canvas.
 
 ## The world through SDL2
 
 A build with `WASM_SDL2=ON` also has `sdl.html`, which no page links to: there the image draws its world as the desktop VMs do, through its own OSSDL2Driver and SDL2, rather than through OSWebDriver and the WebDisplayPlugin.
-Any image runs there, a stock image of Pharo 12 or Pharo 15 too, unprepared, and so does code that uses the SDL2 bindings of OSWindow.
+(The site of GitHub Actions is built without SDL2 for now.)
+Any image runs there, a stock image of Pharo 12 to 15 too, unprepared, and so does code that uses the SDL2 bindings of OSWindow.
+It boots the site's default image, or the image of the site that `?fresh=<id>` of its URL names, or one opened from disk.
 The worker boots the image with `--interactive` and no display, and SDL's Emscripten video driver draws into the canvas of the page, transferred to the worker as an OffscreenCanvas.
 That driver expects the DOM of the main thread, which a worker lacks: `sdl-shim.js` gives it the few objects it touches (`screen`, the canvas's box, style and events, a `document` that is an EventTarget, `navigator.userActivation`), and the page forwards its pointer, wheel and keyboard events to the worker, where SDL's handlers queue them for the image.
 No threads, COOP or COEP are needed.
 SurfacePlugin is built into these VMs, since an SDL world blits its Form through it; the stock image's Athens then draws through it too.
-Nothing is kept in this browser: Download gives what the image saved, and Restart boots the same image again.
+Nothing is kept in this browser, and no saved image is booted: Download gives what the image saved, and Restart boots the same image again.
+Its git proxy is the one of Settings of the other pages.
 The clipboard, resizing, HiDPI and input methods are SDL's, not bridged to the page.
 
 It costs 156 KiB of gzipped wasm and 10 KiB of JavaScript, and, idle, about 3.5 (Chromium) to 4 to 6 (Firefox, which varies from run to run) times the VM time of the world page, and 186 slices a second against 61, since the image polls `SDL_PollEvent` every 5 ms and every present uploads the whole window.
@@ -287,7 +337,7 @@ The WebAssembly tree can also be configured with CMake alone, from sources gener
     cmake --build build-wasm-cmake
 
 It stages `node/` and `web/` in its build directory, or in `WASM_STAGE_DIR`, and downloads the archives of the libraries into `downloads/` there.
-Its cache variables are the settings `WASM_SJLJ`, `WASM_WEB_MEMORY64`, `WASM_STACK_SIZE`, `WASM_INITIAL_MEMORY`, `WASM_MAXIMUM_MEMORY`, `WASM_OLD_SPACE_BASE`, `WASM_SLICE_MS`, `WASM_WORLD`, `WASM_FFI`, `WASM_FREETYPE`, `WASM_CAIRO`, `WASM_CAIRO_PDF`, `WASM_LIBGIT2`, `WASM_LIBGIT2_HTTP`, `WASM_SDL2`, `WASM_IMAGE_ZIP`, `WASM_DEPS_DIR` and `WASM_HOST_PHARO` below, `CMAKE_BUILD_TYPE` (`Debug` for `WASM_DEBUG=1`), `WASM_STAGE_DIR`, and `NODE_JS_EXECUTABLE`, the node that stages `web/`.
+Its cache variables are the settings `WASM_SJLJ`, `WASM_WEB_MEMORY64`, `WASM_STACK_SIZE`, `WASM_INITIAL_MEMORY`, `WASM_MAXIMUM_MEMORY`, `WASM_OLD_SPACE_BASE`, `WASM_SLICE_MS`, `WASM_WORLD`, `WASM_FFI`, `WASM_FREETYPE`, `WASM_CAIRO`, `WASM_CAIRO_PDF`, `WASM_LIBGIT2`, `WASM_LIBGIT2_HTTP`, `WASM_SDL2`, `WASM_IMAGE_ZIP`, `WASM_IMAGE_ID`, `WASM_EXTRA_IMAGES` and `WASM_EXTRA_SOURCES` (CMake lists there, separated by `;`, of absolute paths), `WASM_GIT_PROXY`, `WASM_DEPS_DIR` and `WASM_HOST_PHARO` below, `CMAKE_BUILD_TYPE` (`Debug` for `WASM_DEBUG=1`), `WASM_STAGE_DIR`, and `NODE_JS_EXECUTABLE`, the node that stages `web/`.
 `WASM_HOST_PHARO` has no default there, so the world image is prepared only when it is given.
 Two more are options for developers of the FFI, which `make wasm` does not give: `WASM_FFI_LIBC_ALL=ON` lists every function of the C library in the registry, not only those the images call (about 100 KB more of gzipped wasm), and `WASM_FFI_TEST_LIBRARY=ON` links the library of the FFI tests into the web VM too, as it always is into the node VM.
 
@@ -335,8 +385,18 @@ To keep two builds, give each its own `WASM_BUILDDIR`:
   With `WASM_GENERATED`, which skips the host tree, that is only `WASM_VMMAKER_VM`, or a VM left there by an earlier build of the same directory: give it otherwise.
   The lanes use it to load an image that the WebAssembly VM saved (S14b, which is skipped without it), to compare FreeType, cairo and libgit2 with the native VM (a note, never a failure), and to check the highlighter of the Notebook against the image's scanner.
   It also prepares the world image (`packaging/emscripten/st/prepare-web-image.st`, in about a second), and lanes 80 and 82 run `tests/wasm/st/osweb-native.st` and `tests/wasm/st/osweb-windows.st` with it; without it, `web/` gets the stock image.
-- `WASM_IMAGE_ZIP`: a local image zip, instead of downloading the pinned Pharo 12 one into `build-wasm/downloads`: a copy of that one for an offline build, or a Pharo 15 one (from https://files.pharo.org/image/150/), which the site then runs.
+- `WASM_IMAGE_ZIP`: a local image zip, instead of downloading the pinned Pharo 12 one into `build-wasm/downloads`: a copy of that one for an offline build, or a Pharo 13, 14 or 15 one (from https://files.pharo.org/image/150/ and its siblings), which the site then runs by default.
   Any zip holding one image, its `.changes` and a `.sources` is accepted; one that is not the pinned image gets a note with its SHA256.
+  Under the name that files.pharo.org gives it (`...build.<n>.sha...`), the pages also show its build.
+- `WASM_IMAGE_ID`: the id of the default image in the catalog of the site, which `?fresh=` names (default: `p<major>` of the name of its `.sources`, `p15` for Pharo 15, else `default`).
+  An id is 1 to 16 lower-case letters, digits and dashes, not a dash first.
+- `WASM_EXTRA_IMAGES`: more images for the site, as words `<id>=<zip>` separated by blanks (default none), for example `p13=Pharo13.zip p14=Pharo14.zip`; see Building.
+  Each id is an id as above, given once, not the default's, and not `sources`; each zip must exist, and is accepted as given, without a pinned SHA256 (the workflow checks those it downloads).
+  Paths with blanks are not supported.
+  Each image is prepared for the world with `WASM_HOST_PHARO` as the default one is; two images whose `.sources` have the same name must have the same file.
+- `WASM_EXTRA_SOURCES`: `.sources` files, separated by blanks, that the site serves under `web/image/sources/` for the images saved in a browser from an image that it served before (default none); one that an image of the site has already is not staged twice, and one of the name of an image's `.sources` but another content is refused.
+- `WASM_GIT_PROXY`: the site's default CORS proxy of git's HTTP requests, which the pages use unless the user chose another or none in Settings (default `https://cors.isomorphic-git.org/`, the public proxy of isomorphic-git); `WASM_GIT_PROXY=` gives the site none.
+  It must be an http:// or https:// URL without a user name, password or `#fragment`; a bare origin gets its `/`.
 - `WASM_GENERATED`: a directory holding `generated/64`, the generated StackVM sources, which skips the host tree.
   For example, `make wasm WASM_BUILDDIR=build-wasm-2 WASM_GENERATED=build-wasm/host WASM_HOST_PHARO=build-wasm/host/build/vmmaker/vm/pharo` builds a second directory with the sources and the native VM of the first.
   The sources must come from this tree's `smalltalksrc`: the configuration refuses sources without the Emscripten hooks.
@@ -522,13 +582,39 @@ Iceberg then works on the file system of the VM, through the image's own binding
 libgit2's own transports would resolve names, and `getaddrinfo` fails with `EAI_FAIL` (it is wrapped: Emscripten's ends a memory64 runtime), so a git:// remote fails with "failed to resolve address for <host>", and the VM goes on.
 With `WASM_LIBGIT2_HTTP` (the default), `src/emscripten/gitSupport.c` registers a smart-HTTP transport for the http and https remotes instead: each request of git's smart HTTP protocol is a synchronous XMLHttpRequest of the worker, which blocks the VM until the response has come, and the browser does the TLS.
 Git servers, github.com among them, send no CORS headers, so a page of another origin reads them only through a CORS proxy: the proxy is a URL prefix put in place of the scheme of the remote's URL (`https://github.com/o/r.git` through `https://proxy.example/` is requested as `https://proxy.example/github.com/o/r.git/info/refs?...`).
-The proxy is a setting of the Console page (Settings), kept in this browser's localStorage, which the world page, `sdl.html` and the Notebook use too (a change reaches their running VMs), and `PHARO_WASM_GIT_PROXY` in the node VM; there is none by default.
-It is never taken from a URL: the proxy sees the code and any credentials that pass through it, and a link must not choose where a user's git traffic goes; a `?gitProxy=` of the page's URL is ignored.
-A request that the browser does not give the answer of (CORS, the network) fails with "git http: request failed (CORS or network)", and a remote that asks for credentials (401, 403 or 407) fails with `GIT_EAUTH`.
-OSWindow-Web (version 4 and later) sets Iceberg's remotes to https.
-In the browsers, a clone through the proxy of the spec took 509 ms (Chromium) and 404 ms (Firefox), with 2 requests.
+The site has a default proxy, `WASM_GIT_PROXY` (the manifest's `gitProxyDefault`): by default the public proxy of isomorphic-git, `https://cors.isomorphic-git.org/`, which forwards only the requests of git's smart HTTP, to public repositories, and which sees what is cloned through it.
+The Settings of the Console and of the world page choose among three:
 
-The working copies live in the memory of the VM, and are lost on a reload: only the image is kept in the browser.
+- Site default: the site's proxy, whatever the site makes it; the dialog names it (or says that the site has none).
+- None: the requests go to the git host itself, which works only for a host of the page's origin, or one that answers CORS.
+- My proxy: a URL of your own, an http:// or https:// one without a user name, password or `#fragment` (a self-hosted proxy, say); the dialog says why it refuses another.
+
+This browser keeps the choice in localStorage, under `pharo-wasm.gitProxy`: absent for the site's default, `none` for none, or the URL (anything else counts as none, as it did in the builds before the default).
+Every page of the site, the Notebook and `sdl.html` use it, and a change reaches their running VMs at once, also from another tab; without localStorage it holds for the page.
+It is never taken from a URL: the proxy sees the code and any credentials that pass through it, and a link must not choose where a user's git traffic goes; a `?gitProxy=` of the page's URL is ignored.
+The first git request of a VM that goes through the site's default says so once per proxy, in a notice with a Settings button: "Git requests (Iceberg clones, Metacello github://) go through the public CORS proxy <origin>, which sees what you clone." (`pharo-wasm.gitProxyNoted` remembers the proxy told).
+In the node VM the proxy is `PHARO_WASM_GIT_PROXY`, and there is none by default.
+
+The transport follows redirects (the browser does, or curl in the node VM), and takes the URL that the advertisement of the refs came from for the next requests of the remote, as libgit2's own HTTP transport does: GitLab and Codeberg redirect a remote named without its `.git` to it, and refuse the pack's POST to the old name with 422.
+It does not follow an https:// remote to http://.
+
+A request that fails says why, and what to do:
+
+- No answer without a proxy (CORS, the network): "git http: request failed (CORS or network): ... A web page cannot read git servers without a CORS proxy: choose one in Settings (Git HTTP proxy)", as `GIT_ERROR_HTTP`, which Iceberg does not retry: a CORS refusal fails the same every time, so the browser makes one request, not three.
+  The page says "The browser blocked git's request to <host> (CORS): git over HTTPS needs a proxy here", with Settings.
+- No answer through a proxy: "git http: request failed (CORS or network) through the proxy <origin>: the proxy is down or refuses this page, or the network is down; check Settings", as `GIT_ERROR_NET`, which Iceberg retries (a proxy may be down for a while); the page says "The git proxy <origin> did not answer".
+- 401: "git http: <host> answered 401: the repository does not exist or is private (this VM sends no credentials)", with `GIT_EAUTH`.
+- 403 from the proxy: "git http: the proxy <origin> refused the request to <host> (403): it forwards only git requests of public repositories"; the page says "The git proxy <origin> refused the request to <host>".
+  403 from the host: "git http: <host> answered 403: access denied (a private repository, or a rate limit)".
+- 404: "git http: no git repository at <url> (404)".
+- 407: "git http: the proxy asks for credentials (407), which this VM does not support", with `GIT_EAUTH`.
+- Any other status: "git http: unexpected http status code: <status>"; a 200 that is not the answer of a smart HTTP server: "git http: invalid content-type: ...".
+
+The VM sends no credentials: only public repositories can be cloned or fetched, and pushing to a host that asks for credentials does not work.
+OSWindow-Web (version 4 and later) sets Iceberg's remotes to https.
+In the browsers, a clone through the proxy of the spec took 573 ms (Chromium) and 478 ms (Firefox), with 2 requests.
+
+The clones live in the file system of the VM, in `/pharo/pharo-local/iceberg` say, and are kept with the image when it is saved in the browser (see The saved images): after a reload they are there as they were at the last save, consistent with the image's Iceberg; what was cloned or committed since is lost.
 libgit2 adds 258.6 KiB of gzipped wasm; the default build is unchanged.
 
 ### SDL2
@@ -556,31 +642,40 @@ The files of `web/`, from `packaging/emscripten/web`:
 - `index.html`, the Console page, and `page.js`, which drives its VM; `notebook.js`, its Notebook tab, with `notebook-lib.js` (the Markdown renderer, the sanitizer of markup, the `.json` format), `notebook-st.js` (what is Smalltalk: the brackets, the highlighter, the `.st` format, the example) and `nb-kernel.js` (the client of the kernel).
 - `world.html` and `world.js`, the world page, with `keymap.js` (the keys of the page as SDL keycodes, scancodes and modifiers) and `display-worker.js` (the display of the WebDisplayPlugin, in the worker).
 - `sdl.html` and `sdl.js`, the world through SDL2, with `sdl-shim.js` (the DOM of SDL, in the worker), with `WASM_SDL2=ON` only.
-- `vm-worker.js`, the worker of every VM, with `vm-driver.js` (the slices, the stdio devices and `/dev/nbevents`) and `vm-storage.js` (the saved image in IndexedDB); `open-image.js`, which reads the images of the user's own; `pharo-logo.png`.
-- `pharo-web.js` and `pharo-web.wasm`, the VM; `manifest.json`; `THIRD-PARTY-NOTICES.txt`; `image/`, the image, its `.changes` and the `.sources`, gzipped; `st/`, `web-repl.st`, `web-notebook.st`, `web-bootstrap.st` and `OSWindow-Web.st`.
+- `vm-worker.js`, the worker of every VM, with `vm-driver.js` (the slices, the stdio devices and `/dev/nbevents`), `vm-storage.js` (the saved images in IndexedDB, which the pages read too) and `catalog.js` (the images of the site, from the manifest, for the worker and the pages); `open-image.js`, which reads the images of the user's own; `images.js`, the Images dialog, and `git-proxy.js`, the git proxy of Settings and its dialog, which the Console and the world page share; `pharo-logo.png`.
+- `pharo-web.js` and `pharo-web.wasm`, the VM; `manifest.json`; `THIRD-PARTY-NOTICES.txt`; `image/`, the images, their `.changes` and `.sources`, gzipped; `st/`, `web-repl.st`, `web-notebook.st`, `web-bootstrap.st` and `OSWindow-Web.st`.
+
+`manifest.json` (`packaging/emscripten/tools/stage.mjs` says every key) lists the files of the default image in `files`, and the catalog of the site's images in `images`, also when there is one: for each its `id`, `label` ("Pharo 13.1"), `pharo` ("13.1", from the name of its `.sources`), `pharoBuild` (from the name of its zip), `world` and `webPackage`, and its `files`; the default one has `default: true`, and `imageId` is its id.
+`extraSources` lists the `WASM_EXTRA_SOURCES`, and `gitProxyDefault` is the site's default git proxy (`""` for none).
+`catalog.js` is its only reader in the pages and the worker, and makes a catalog of one image of the manifest of an older build.
 
 The page compiles `pharo-web.wasm` once, and gives it to every worker it starts (`packaging/emscripten/web/vm-worker.js`).
-The worker fetches the files of `manifest.json`, inflates them as they come (DecompressionStream), writes them into `/pharo` in memory, with the placeholders of the libraries, and boots the image in one of four modes (`PharoVMDriver.vmArgs`): `console`, the REPL, `--headless /pharo/Pharo.image --no-default-preferences st --no-source /pharo/st/web-repl.st`; `notebook`, the same with `web-notebook.st`; and `world` and `sdl`, `--headless /pharo/Pharo.image --no-default-preferences --interactive`, with a display or without one.
+The worker fetches the files of the image it boots, as `manifest.json` lists them, inflates them as they come (DecompressionStream), writes them into `/pharo` in memory, after the files that a saved image keeps and the placeholders of the libraries, and boots the image in one of four modes (`PharoVMDriver.vmArgs`): `console`, the REPL, `--headless /pharo/Pharo.image --no-default-preferences st --no-source /pharo/st/web-repl.st`; `notebook`, the same with `web-notebook.st`; and `world` and `sdl`, `--headless /pharo/Pharo.image --no-default-preferences --interactive`, with a display or without one.
 `--no-source` keeps the script, which is filed in at every boot, out of the `.changes`.
 What the VM writes to stdout and stderr is posted at the end of every slice, and the worker pauses the VM while more than 1 MiB of it is not acknowledged, until less than 512 KiB is: the page acknowledges what it rendered, or, while it is hidden and gets no animation frames, what it received.
 Stdin is Emscripten's terminal device with its read and poll replaced: a read never blocks, and the REPL waits with `waitForData`, so the VM sleeps until the page sends a line.
 Stop calls `vm_interrupt()`, which signals the semaphore that the REPL, or the kernel, registered with the WebHostPlugin.
-When the image saves, the image file access handler tells the host (`Module.onPharoHost`), and after the slice the worker stores the image and its `.changes` in IndexedDB.
-The database belongs to the directory of the site: `pharo-wasm` for a site at the root of its origin, and `pharo-wasm:/dir/` for one in `/dir/`.
-The store is guarded by a per-save id, so that a tab never pairs its `.changes` with the image of another tab.
+When the image saves, the image file access handler tells the host (`Module.onPharoHost`), and after the slice the worker stores the image, its `.changes` and the files of `/pharo` in IndexedDB, in the slot that the VM is bound to: the one it booted, else a new one.
+The database belongs to the directory of the site: `pharo-wasm` for a site at the root of its origin, and `pharo-wasm:/dir/` for one in `/dir/`; it stays at version 1, with its one object store, `files`.
+A slot is `main` or an id of `newId()`; the keys of `main` are those of the single image of before (`meta`, `Pharo.image`, `Pharo.changes`, `Pharo.sources`), and those of another slot have the prefix `slot/<id>/`.
+Each slot has `meta` (its record: the id of its last save, its slot, its sizes and dates, the build and the version of OSWindow-Web it was saved with, the name of its `.sources`, its Pharo version, the catalog entry it came from, and its origin), `Pharo.image`, `Pharo.changes`, `Pharo.sources` (only when it has its own), `Pharo.tree` (its files: `{v: 1, entries, data}`, one record whose entries `[path, kind, mode, mtimeMs, offset, length, linkTarget]` index one Blob of their bytes) and `Pharo.name`, which only a rename or the creation of the slot writes, so that a save never undoes a rename.
+One more key, `last`, names the slot booted or saved last.
+A save writes the whole slot in one transaction; a new slot is `main` when there is none (a guarded write that only an absent `meta` passes, so of two pages that save at once one makes `main` and the other a slot of its own), else a new id.
+The `.changes` of a slot, stored on its own, is guarded by the per-save id of its slot, so that a tab never pairs its `.changes` with the image of another tab, and pages on different slots never interfere.
 In the Console, the worker names the file `/pharo/.pharo-web-world` in `PHARO_WEB_WORLD_FILE`, and the REPL writes there whether the image has OSWebDriver, and its version, when it starts and before it saves: so the page knows whether the image can open the world.
-A worker in `notebook` mode boots the saved image but never stores anything: it ignores the VM's saves, `save`, uploads and preparations.
+A worker in `notebook` mode boots the image of the Console, a saved one too, but never stores anything: it ignores the VM's saves, `save`, uploads and preparations.
 
 The messages between a page and its worker:
 
-- page to worker: `init` (the compiled module, the manifest's URL, the build, the mode, the slice, whether to boot the saved image, an upload, a preparation, a display, the git proxy, a canvas), `input`, `eof`, `interrupt`, `save`, `ack`, `fs`, `download`, `resetStorage`, `flush`, `display`, `gitProxy`, `sdl` and `stats`;
-- worker to page: `progress`, `ready` (what was booted, and what the VM has), `output` (text of fds 1 and 2, bytes of fd 3), `state`, `tick`, `interrupted`, `edited`, `storing`, `saved`, `prepared`, `superseded`, `reset`, `exit`, `crash`, `fs-result`, `file`, `error`, `display`, `sdl` and `stats`.
+- page to worker: `init` (the compiled module, the manifest's URL, the build, the mode, the slice, whether to keep images, the image to boot: an upload, a saved slot or an image of the site, and the name of the slot it will make, a preparation, a display, the git proxy, a canvas), `input`, `eof`, `interrupt`, `save`, `saveAs` (the name of a new slot for the next save), `ack`, `fs`, `download`, `resetStorage` (one slot, the one bound, or all), `flush`, `display`, `gitProxy` (`null` for the site's default, `''` for none, or a URL), `sdl` and `stats`;
+- worker to page: `progress`, `ready` (what was booted: the slot, the catalog entry, the Pharo version, and what was missing of what was asked; the proxy in effect and the site's; and what the VM has), `output` (text of fds 1 and 2, bytes of fd 3), `state`, `tick`, `interrupted`, `edited`, `storing`, `saved` (the slot, whether it was made, the files kept or why not), `prepared`, `superseded`, `reset`, `exit`, `crash`, `fs-result`, `file`, `error`, `display`, `sdl`, `stats` and `git` (the first request of the VM, and a failed one, with its host, proxy and status, from `Module.onGitHttp` of the transport).
 
 The notebook kernel reads its requests on the VM's stdin, one JSON line each (`run {rid, name, code}`, `ping`, `stop-background`), and writes its events on `/dev/nbevents` (`hello`, `start`, `display`, `clear`, `stream`, `error`, `done`, `pong`, `stopped`, `bad-request`), which the worker posts as fd 3; the requests are checked strictly, and the page checks every event before it allocates anything for it.
 
 What the user opens is read by `open-image.js`, which the pages load: it reads the central directory of a zip, inflates its entries with `DecompressionStream('deflate-raw')` (and takes stored ones as they are), pairs the files, and checks the image's header before the VM is touched.
 The page gives the files to a new worker in `init.upload` (`{image, changes, sources}`).
-A `.sources` of the image's own goes to `/pharo/<its name>` instead of the site's, which is then not fetched, and the saved image keeps it in IndexedDB under the key `Pharo.sources`.
+A `.sources` of the image's own goes to `/pharo/<its name>` instead of the site's, which is then not fetched, and the saved image keeps it in IndexedDB under the key `Pharo.sources` of its slot.
+A slot or an upload without one gets the `.sources` of its name that the site serves, of any of its images or of `extraSources`: the name its slot recorded, or the one that the bytes of the image hold (`Pharo<v>-<bits>bit-<commit>`), else the default image's; when the site does not serve that name, the VM gets none, and the page says that the source of the system's methods shows decompiled.
 On the world page, `init.prepare` boots an image that has no OSWindow-Web, or an older version of it, with the REPL, which evaluates `CodeImporter evaluateFileNamed: '/pharo/st/web-bootstrap.st'. Smalltalk snapshot: true andQuit: false`; the worker answers `prepared {error, saved}`, and the page then boots the world from the saved image.
 
 ### The world
@@ -605,13 +700,16 @@ The world page prepares the stock images that it opens, and the Console offers t
 
 ### Pharo versions
 
-The site runs the pinned Pharo 12 image by default, and was also tested with Pharo 15 (Pharo15.0-SNAPSHOT, build 41): built into the site with `WASM_IMAGE_ZIP`, and opened from disk on either page.
-The VM is the same; what differs is the Smalltalk of the pages (`packaging/emscripten/st`), which works with both:
+A local build runs the pinned Pharo 12 image (build 1599) by default.
+The site of GitHub Actions offers Pharo 15 (Pharo15.0-SNAPSHOT build 50, `b85960fcc6`), its default, Pharo 14 (Pharo14.0-SNAPSHOT build 785, `74f3a1b398`) and Pharo 13.1 (Pharo13.0-SNAPSHOT build 749, `d7c6f761d5`), each prepared for the world, and serves the `.sources` of Pharo 15 build 41 (`Pharo15.0-64bit-4e572fe.sources`), the image it had before, for the images that browsers saved from it.
+Lane 80 runs the world on every image of a site, and Pharo 12 and 15 images were also opened from disk on either page.
+The VM is the same; what differs is the Smalltalk of the pages (`packaging/emscripten/st`), which works with all of them; the differences below were found between Pharo 12 and 15:
 
 - Pharo 15's command line (Clap) takes a single file after `st`, with `--save` and `--quit` as its own options, and a file only after `st`: the world image is prepared with `st --save --quit prepare-web-image.st`, which finds its directories in `PHARO_WEB_ST_DIR` and `PHARO_WEB_IMAGE_DIR`.
 - Pharo 15's chunk reader takes one method per `methodsFor:` section, so `web-repl.st`, `web-notebook.st` and the `OSWindow-Web.st` that `prepare-web-image.st` writes (the same from both versions) give each method its section, and define every class before its methods; `web-notebook.st` is ASCII, since Pharo 15 mangles the other characters of a file-in.
 - Pharo 15 handles errors through `ErrorHandler default`, opens its world in `UIManager class>>startUp:` (so OSWebDriver registers for an earlier startup), and does not boot with an empty `.changes`: the pages give an image opened without one a `.changes` that holds only its version header, `"VERSION:1.0"!`.
 - The libraries of the registry are those both images bind: they bind the same functions of cairo, FreeType and SDL2, and each binds one function of libgit2 that the other does not.
+- Pharo 13 writes a `pharo-local` directory next to the image when it is prepared at build time, which the build removes before the image is staged.
 
 ## Tests
 
@@ -625,7 +723,7 @@ The times below are those of that run:
 
 | Lane | What it checks | Checks | Time |
 |---|---|---|---|
-| 05-build-rules | the rules of `GNUmakefile` and `cmake/emscripten/webimage.cmake`, in small trees where stand-ins of cmake, emcmake, the Pharo VMs and the specs log what they are asked to do: what is configured, generated or prepared again when a setting (the libraries' and `WASM_DEPS_DIR` too), the initial cache, a `.st` file or a class of OSWindow-Web changes, comes or goes, the fonts of the world image, the patch of libffi, the guard of `WASM_BUILDDIR`, and which specs `make wasm-check-browser` runs; it needs GNU make and cmake, and builds no VM | every rule | 7 s |
+| 05-build-rules | the rules of `GNUmakefile` and `cmake/emscripten/webimage.cmake`, in small trees where stand-ins of cmake, emcmake, the Pharo VMs and the specs log what they are asked to do: what is configured, generated or prepared again when a setting (the libraries', `WASM_DEPS_DIR` and those of the images and the git proxy too), the initial cache, a `.st` file or a class of OSWindow-Web changes, comes or goes, the refusals of bad images, ids, `.sources` and proxies, an extra image prepared once in a work directory of its own, the fonts of the world image, the patch of libffi, the guard of `WASM_BUILDDIR`, and which specs `make wasm-check-browser` runs; then `stage.mjs` on a catalog of images (the default at its URLs of before, an extra one under `image/<id>/`, the labels, builds and order of `manifest.images`, an extra `.sources`, the checks of the ids, of the `.sources` and of OSWindow-Web, and a build id that follows the build of an image); it needs GNU make and cmake, and builds no VM | every rule | 13 s |
 | 10-types | `tests/wasm/check-types.sh` compiles the generated interpreter with `sqVirtualMachine.c`, `client.c` and `sqExternalSemaphores.c` as one translation unit: every interpreterProxy slot and prototype must have the interpreter's type; both link commands of the CMake tree (Unix Makefiles or Ninja) carry `-Wl,--fatal-warnings`, and neither module has a signature mismatch stub | 0 errors | 1 s |
 | 20-smoke | `tests/wasm/wasm-smoke.sh`, S1 to S22 with the node VM: the exact output of `eval` and `st`, the platform and the FFI backend, files, the environment (`setenv` through the FFI), Delays, preemption, deep recursion, a growing heap, a snapshot reloaded in WebAssembly and natively, exit statuses, time zones, the builtin plugins, the slices and where old space is placed | 28 | 24 s |
 | 22-old-space | `tests/wasm/st/oldspace-window.st`, `oldspace-regrow.st` and `permspace.st` with the node VM: old space ends in an `OutOfMemory` at the end of its window, and the young objects stored at its top survive a scavenge; a freed segment at the top is used and grown again; the perm-space primitives fail | 3 | 12 s |
@@ -638,15 +736,15 @@ The times below are those of that run:
 | 58-ffi | `tests/wasm/st/ffi.st` with the node VM: callouts to the C library and to the FFI test library, scalars, a variadic function, structures by value, callbacks, reentrant ones 50 deep, results declared wider than the function's, the declarations that the adapter adapts (traced with `PHARO_WASM_FFI_TRACE=1`), and exactly two guarded failures and one of the adapter, each with its one line on stderr; a bench of 10000 `strlen` callouts (`WASM_FFI_BENCH_MS`, default 10000); then a 2 s loop in a callback must end no slice (`PHARO_WASM_STATS`) | 3 (26 in `ffi.st`) | 9 s |
 | 59-ffi-clean | the stock image and the world image boot, run `tests/wasm/st/ffi-session.st` (the image's own callouts: the environment, getpid, strerror, a qsort with a callback), save, and run it again on the saved image, then draw text with the image's default font, all without a line of the guard or anything on stderr; a negative control, one mismatched callout, shows that such a line would be seen; and `ffi-symbols.st` says that the registry has every function that the image binds in a library of the registry | 12 | 27 s |
 | 60-vm-harness | `tests/wasm/vm-harness.js`: the web VM and the REPL through `vm-driver.js`, in node, with the default engine and then in Liftoff code only | 32 + 32 | 33 s |
-| 61-notebook-harness | `tests/wasm/notebook-lib.test.mjs` on the libraries of the Notebook (the brackets, the highlighter and their fuzz, the `.st` and `.json` formats, the frames of `/dev/nbevents`, the PNGs, the sanitizer, in linear time) and, with `HOST_PHARO`, the highlighter against the image's own scanner; then `tests/wasm/notebook-harness.js`, the kernel through `vm-driver.js` (requests, values, errors, Stop, output credit, encodings, rich output, background processes, snapshots, the end of stdin; the FFI, cairo and FreeType of the build) and the page's client against the real `vm-worker.js` in worker threads (the queue, Stop and its watchdog, restarts, exits, floods, uploads, the saved image), with the default engine and in Liftoff code only, on the stock image and on each image directory of `NOTEBOOK_IMAGES` | 28 + 64 + 64 per image | 548 s (2 images) |
+| 61-notebook-harness | `tests/wasm/notebook-lib.test.mjs` on the libraries of the Notebook (the brackets, the highlighter and their fuzz, the `.st` and `.json` formats, the frames of `/dev/nbevents`, the PNGs, the sanitizer, in linear time) and, with `HOST_PHARO`, the highlighter against the image's own scanner; then `tests/wasm/notebook-harness.js`, the kernel through `vm-driver.js` (requests, values, errors, Stop, output credit, encodings, rich output, background processes, snapshots, the end of stdin; the FFI, cairo and FreeType of the build) and the page's client against the real `vm-worker.js` in worker threads (the queue, Stop and its watchdog, restarts, exits, floods, uploads, the saved image, the slot that the Console names), with the default engine and in Liftoff code only, on the stock image and on each image directory of `NOTEBOOK_IMAGES` | 28 + 65 + 65 per image | 548 s (2 images) |
 | 62-web-repl-regress | `tests/wasm/web-repl-regress.js`, through `vm-driver.js` as lane 60: a Stop of an evaluation that has not started yet, a Warning that nothing handles, where a syntax error is, and the file in which the REPL tells the page about its image | 4 | 3 s |
 | 64-freetype | `tests/wasm/st/ft-parity.st` on the stock and world images: FreeType 2.14.3 draws a line of the default font with the 688 pixels and the hash of the golden file of the image's version (`tests/wasm/golden/ft-p12.txt`, `ft-p15.txt`); with FreeType hidden (`PHARO_WASM_FFI_HIDE=freetype`) the image falls back to StrikeFont; a note of what FreeType costs a boot | 4 | 10 s |
 | 65-cairo | `tests/wasm/st/athens-parity.st` on the world image: shapes, FreeType text, a repeated gradient, a Roassal canvas, a Mondrian and a PNG drawn by cairo 1.18.4, against the golden hashes (`athens-p12.txt`, `athens-p15.txt`); the functions the adapter adapts (`adapted-65.txt`); with `PHARO_WASM_FFI_ADAPT=0` the gradient fails as a primitive; the stock image without SurfacePlugin fails cleanly, or, with SDL2, draws through it the shapes of the golden file; with cairo hidden, a SymbolNotFoundError | 5 | 20 s |
-| 66-libgit2 | `tests/wasm/st/iceflow.st` on the stock and world images: a repository, a package, two commits and a diff, the log, a branch, the status and a file:// clone through Iceberg, against the golden output of the native VM (`iceflow-p12.txt`, `iceflow-p15.txt`); the adapted functions (`adapted-66.txt`) and the control without the adapter; a git:// clone of an unresolvable host fails cleanly; with git2 hidden, a SymbolNotFoundError; skipped without libgit2 | 6 | 13 s |
+| 66-libgit2 | `tests/wasm/st/iceflow.st` on the stock and world images: a repository, a package, two commits and a diff, the log, a branch, the status and a file:// clone through Iceberg, against the golden output of the native VM (`iceflow-p12.txt`, `iceflow-p15.txt`); the adapted functions (`adapted-66.txt`) and the control without the adapter; a git:// clone of an unresolvable host fails cleanly; with git2 hidden, a SymbolNotFoundError; with the smart-HTTP transport and a `git http-backend`, `tests/wasm/st/git-http-clone.st` clones over HTTP (curl) from `tests/wasm/lib/git-http.mjs` a remote named without its `.git`, which the server redirects, taking the redirect for the pack, and a missing repository fails with the 404 text; skipped without libgit2 | 8 | 19 s |
 | 67-sdl2 | `tests/wasm/st/sdl-session.st` on the stock and world images, with SDL's dummy video driver: the world opens through OSSDL2Driver on SDL 2.32.10, a Playground and a Browser, the clipboard, the cursors, the title, a resize, fullscreen, text input, the colours of the world, and the events of a user queued with `SDL_PushEvent` (the world menu, `3 + 4` typed and printed); SurfacePlugin is built in; with SDL2 hidden, a SymbolNotFoundError; skipped without SDL2 | 4 | 12 s |
-| 70-worker-harness | `tests/wasm/worker-harness.js`: `vm-worker.js` as staged, in worker threads behind a shim of the worker globals: the protocol, Stop, output credit, the downloads, persistence, two workers on one saved image, an image opened with a `.sources` of its own, the preparation of an image for the world and the versions of OSWindow-Web, the placeholders of the libraries, and the notebook mode, which stores nothing | 30 | 70 s |
+| 70-worker-harness | `tests/wasm/storage.test.mjs` on `vm-storage.js` and `catalog.js` (the slots on the in-memory store: `main` if free under its guard, a save, a load and a sync per slot, the guards per slot, rename, remove, `last`, a meta of before the slots, the tree and its paths; the catalog of a manifest with images and of one before them); then `tests/wasm/worker-harness.js`: `vm-worker.js` as staged, in worker threads behind a shim of the worker globals: the protocol, Stop, output credit, the downloads, persistence, two workers on one saved image, an image opened with a `.sources` of its own, the preparation of an image for the world and the versions of OSWindow-Web, the placeholders of the libraries, and the notebook mode, which stores nothing; and, on sites of its own with a catalog of two images, `init.fresh` and `init.slot`, a slot per fresh image, Save as, two workers on two slots, `resetStorage` of a slot, a meta of before the slots, the files of `/pharo` kept with the image, the site's default git proxy, the `.sources` a slot gets by name, and a save that never overwrites another image | 17 + 41 | 120 s |
 | 72-open-image | `tests/wasm/open-image.test.mjs` on `open-image.js` in node: zips (deflated and stored entries, data descriptors, UTF-8 names, directories and the files that the Finder adds, zip64), how the files are paired, every refusal, the image headers, drops, and the build's stock image zipped as files.pharo.org does and opened; `OPEN_ZIPS`, paths separated by colons, adds zips of your own | 11 | 3 s |
-| 80-world-harness | `tests/wasm/keymap.test.mjs`, then `tests/wasm/world-harness.mjs`, which plays the world page in node with a memory framebuffer, and `tests/wasm/st/osweb-native.st` on the native VM | 16 + 15 + 27 | 18 s |
+| 80-world-harness | `tests/wasm/keymap.test.mjs`, then `tests/wasm/world-harness.mjs`, which plays the world page in node with a memory framebuffer, on the default image and then on every other world image of the catalog (`WORLD_IMAGE_ID`), and `tests/wasm/st/osweb-native.st` on the native VM | 16 + 16 per world image + 27 | 20 s (one image) |
 | 82-osweb-windows | `tests/wasm/st/osweb-windows.st` on the native VM: a second OSWindow without an event handler leaves the world shown, and the window of the Emergency Debugger (in Pharo 15, which has none, a window of the same kind) takes the canvas and the input, then gives them back | 11 | 10 s |
 
 The bench measured, on that machine with node 25.2.1, on a build with libgit2 and SDL2:
@@ -684,26 +782,28 @@ The runner exits 2 when it may not use its `TEST_DIR`, or cannot make its lock t
 
 The browser specs drive the pages in real browsers through Playwright, which is not a build dependency, served by `packaging/emscripten/tools/serve.mjs` without COOP or COEP headers (`tests/wasm/lib/pw.mjs`).
 Each browser gets a context of its own, so its IndexedDB and localStorage start empty, and every spec ends with a check that no page or worker logged an error.
+No spec may send a request to the public git proxy that a site has by default: the server of `pw.mjs` serves `manifest.json` with the fields of `t.manifestOverride` merged in, by default a `gitProxyDefault` of a dead local proxy (`http://127.0.0.1:9/`), which a spec may change before it opens a page, and every request to `cors.isomorphic-git.org` is aborted and counts as an error.
 The specs that open images zip the build's stock image, `<web>/../image/stock`, so the web directory they test must have that directory next to it.
 `make wasm-check-browser` runs, in order:
 
-- `tests/wasm/page.spec.mjs`, the Console: evaluation, the keys, history, Stop, Save, Download, the persistence, two tabs, Open with good and damaged zips, drops, Settings and the git proxy (also that a `?gitProxy=` is ignored), the tabs, and the Content-Security-Policy; `OPEN_ZIPS` (paths separated by colons, Pharo downloads say) makes it open those zips too.
-  42 checks per browser.
+- `tests/wasm/page.spec.mjs`, the Console: evaluation, the keys, history, Stop, Save, Download, the persistence, two tabs, Open with good and damaged zips (each a new saved image), drops, `?slot=`, Delete of one saved image, Images and Save as, Settings and the git proxy (the site's default, None, a proxy of one's own, the notes, and that a `?gitProxy=` is ignored), the tabs, and the Content-Security-Policy; `OPEN_ZIPS` (paths separated by colons, Pharo downloads say) makes it open those zips too.
+  45 checks per browser.
 - `tests/wasm/notebook.spec.mjs`, the Notebook tab: the lazy start, Run all on the example, rich outputs, the keys, Stop and its watchdog, the coloring, its contrast and its budget, the caps of the outputs, the sanitizer, the command keys, Upload, the layouts at 390, 360 and 320 px, Restart, Import and Export, autosave across tabs and reloads, Export .html opened from `file://`, the image of the Console, and no worker from `file://` or without memory64.
-  `NB_OPEN_ZIP` names a Pharo zip (of the other version, say) that the Console opens last: the kernel then boots it, and Run all on the example passes on it too.
+  `NB_OPEN_ZIP` names a Pharo zip (of the other version, say) that the Console opens last: the kernel then boots it, and Run all on the example passes on it too; and the kernel boots the Console's `?slot=` after a switch.
   58 checks per browser.
 - `tests/wasm/world.spec.mjs`, the world page, on a build with the world image.
-  It boots the world with `st /pharo/st/world-probe.st` too (`tests/wasm/st/world-probe.st`), which writes `/pharo/probe.json` (the menus, windows, Playground text, debuggers and fonts of the world), and reads it through `window.PharoWorld`, which the world page gives tests: `stats` (the workers started, the frames and when they came, the times from a key to the next frame), `state` (the status pill), `unsaved` and `readFile(path)`.
+  It boots the world with `st /pharo/st/world-probe.st` too (`tests/wasm/st/world-probe.st`), which writes `/pharo/probe.json` (the menus, windows, Playground text, debuggers and fonts of the world), and reads it through `window.PharoWorld`, which the world page gives tests: `stats` (the workers started, the frames and when they came, the times from a key to the next frame), `state` (the status pill), `unsaved`, `choice`, `images`, `readFile(path)` and `fs(op, path, fields)`.
   It checks that FreeType draws the world, and, with cairo, that the Inspector's Roassal canvas, Code Changes and the color picker draw.
-  34 checks per browser.
+  On a site of several images it checks the launcher (Enter starts the default, Escape does not close it) and starts the other images fresh; then Save, `?slot=`, Save as, Images (open, rename, delete), the link to the Console, a file of `/pharo` kept across a Save and a reload, and Settings with the notes of git.
+  41 checks per browser on the site of three images.
 - `tests/wasm/ffi.spec.mjs`, on a build with the FFI: a qsort callback, setenv, an adapted callout and a mismatched one in the Console.
   6 checks per browser.
-- `tests/wasm/git.spec.mjs`, on a build with libgit2 and its transport, and a git with `git http-backend`: a clone without a proxy fails with "request failed (CORS or network)", a clone and a fetch through the proxy of Settings, and again after a reload; every request reached the git server through the proxy.
-  7 checks per browser.
-- `tests/wasm/sdl.spec.mjs`, on a build with SDL2: `sdl.html` paints the world through OSSDL2Driver, the world menu, typing into a Playground and printing, a stock image opened unprepared, the git proxy of Settings (a change reaches the VM, one with credentials is refused, a Restart gives it in its init), the idle cost against the world page (printed, never a failure), and the world page still on OSWebDriver.
-  9 checks per browser.
+- `tests/wasm/git.spec.mjs`, on a build with libgit2 and its transport, and a git with `git http-backend` (`tests/wasm/lib/git-http.mjs` serves the repositories, redirects a remote named without its `.git`, and runs a CORS proxy, all on 127.0.0.1, the proxy being the site's default of the spec): by default a clone goes through the site's proxy, and the one-time note says so once; the clone is kept with the saved image, and fetched again after a reload, without the note; with None a clone fails with "request failed (CORS or network)" after one request, and the notice points to Settings; a clone, a fetch and the clone of a redirected remote through the proxy of Settings, and a clone again after a reload; every request reached the git server through the proxy; and the Settings of the world page.
+  11 checks per browser.
+- `tests/wasm/sdl.spec.mjs`, on a build with SDL2: `sdl.html` paints the world through OSSDL2Driver, the world menu, typing into a Playground and printing, a stock image opened unprepared, the git proxy of Settings (a change reaches the VM, one with credentials is refused, the site's default is `null`, a Restart gives it in its init), `?fresh=` on a site of several images, the idle cost against the world page (printed, never a failure), and the world page still on OSWebDriver.
+  9 checks per browser, 10 on a site of several images.
 
-`tests/wasm/pages-regress.spec.mjs` holds regression checks of the pages (the live regions, input methods, output while the page is hidden, the questions before the page goes, Reset after a failed boot, two sites of one origin, a closed database connection, a browser without DecompressionStream, a notebook cell of 5 MB of output while hidden, the world's progress bar, F6, a refused clipboard write and a world that does not open), and runs the same way; `make wasm-check-browser` does not run it.
+`tests/wasm/pages-regress.spec.mjs` holds regression checks of the pages (the live regions, input methods, output while the page is hidden, the questions before the page goes, Delete after a failed boot, two sites of one origin, a closed database connection, a browser without DecompressionStream, a notebook cell of 5 MB of output while hidden, the world's progress bar, F6, a refused clipboard write, a world that does not open, and the image saved by a build of before the saved images, which Images lists as "Saved image" and the world boots), and runs the same way; `make wasm-check-browser` does not run it.
 `PLAYWRIGHT_MODULE` names the Playwright package, and `BROWSERS` the browsers (default `chromium`); Playwright's own variables, such as `PLAYWRIGHT_BROWSERS_PATH`, apply:
 
     PLAYWRIGHT_MODULE=/path/to/node_modules/playwright BROWSERS=chromium,firefox make wasm-check-browser
@@ -712,7 +812,8 @@ or for one spec, on any staged site:
 
     PLAYWRIGHT_MODULE=/path/to/node_modules/playwright BROWSERS=chromium,firefox node tests/wasm/page.spec.mjs build-wasm/web
 
-On a build with libgit2 and SDL2, in Chromium 153 and Firefox 155 together, the Console spec passed its 84 checks in 117 s, the Notebook spec its 116 in 183 s (with `NB_OPEN_ZIP` of Pharo 15), the world spec its 68 in 112 s, the FFI spec its 12 in 7 s, the git spec its 14 in 12 s, the SDL spec its 18 in 69 s, and `pages-regress.spec.mjs` its 35 in 143 s.
+On the site of three images with libgit2 and without SDL2, in Chromium and Firefox together, the Console spec passed its 90 checks, the Notebook spec its 116, the world spec its 82 and `pages-regress.spec.mjs` its 37; on a site of the Pharo 15 image with libgit2, the git spec passed its 22 in 24 s.
+Before the saved images, on a build with libgit2 and SDL2, the FFI spec passed its 12 checks in 7 s and the SDL spec its 18 in 69 s.
 `SHOTS=1` saves screenshots of the pages, light and dark, at 1280 and 360 px, in `build-wasm/tests-run/shots`.
 
 ## Limitations
@@ -723,7 +824,10 @@ On a build with libgit2 and SDL2, in Chromium 153 and Firefox 155 together, the 
 - A callback keeps the VM from its host until it returns: no output, input or Stop meanwhile.
 - No name resolution (`getaddrinfo` is disabled), and sockets are of little use in browsers.
 - No `fork`, OSProcess, SSL, SSH, threads or TFWorker, and no external surfaces without SDL2 (SurfacePlugin is left out).
-- libgit2 reaches http:// and https:// remotes only, through a CORS proxy for a server of another origin, without credentials; its working copies are lost on a reload.
+- libgit2 reaches http:// and https:// remotes only, through a CORS proxy for a server of another origin (by default a public one, which sees what is cloned), without credentials: no private repository, and no push to a host that asks for them.
+- A saved image keeps the files of its directory, its clones too, as they were at its last save: what was cloned or committed since is lost on a reload.
+  At most 256 MiB and 50000 files are kept; beyond, the save keeps the image and the files of the save before, and says so.
+  The files come back with their modes and modification times, but not their change times (ctime), which are those of the restore: git takes the files of a restored clone as possibly changed, and reads them again at a status (until its index is written again), which is slower but finds no change.
 - Old space is at most 512 MiB by default, and perm space is not supported (see `WASM_OLD_SPACE_BASE`).
   Spur asks for more old space than an object needs (512 MiB for a 256 MB ByteArray), so a single object of 256 MB already fails with the default base, in both VMs.
   Objects that the scavenger moves to a full old space get no `OutOfMemory`: the VM aborts, as a native one does when the system has no more memory to give.
@@ -733,7 +837,9 @@ On a build with libgit2 and SDL2, in Chromium 153 and Firefox 155 together, the 
   In Firefox, `performance.now()`, the monotonic clock of the VM and of its heartbeat, steps by 1 ms in a worker of a page that is not cross-origin isolated (the pages are not), against 0.1 ms in Chromium.
 - A long primitive (a huge `LargePositiveInteger` operation, say) does not yield: Stop then replaces the worker after 3 s, losing what was not saved.
 - Stop ends the evaluation, not the processes that it forked: one that never waits keeps the VM busy until Restart.
-- One image is saved per browser and site directory, shared by all its tabs and pages; the last save wins.
+- The saved images live in the browser of one site directory, shared by all its tabs and pages: two tabs that save the same saved image, the last save wins.
+  They are not compressed (about 60 MB each, more with their clones), and the browser may clear them when the storage runs short, unless it was asked to keep them (Images).
+- A tab of a build of before the saved images, still open when the site is updated, deletes every saved image with its Reset, which knew of one only, until it is reloaded.
 - The Notebook:
   - its cells have no stdin: a cell that reads it says so, and waits until it is stopped;
   - a process that a cell forks and that waits on stdin in the background takes the bytes of the page's next request, which the kernel then refuses as a bad request: the cell sent never ends, until Stop and the watchdog, or Restart;
@@ -772,6 +878,10 @@ Their sources, as those of every library, are those of the pinned archives that 
 - `<archive> is not <library> <version> (<file>): its SHA256 is ..., not ...`: the file of that name in `WASM_DEPS_DIR`, or the one downloaded, is not the pinned archive; put the pinned one there, or remove it from `WASM_DEPS_DIR` to download it.
 - `WASM_DEPS_DIR: ... does not exist`: give an existing directory, or leave the setting out.
 - `WASM_CAIRO=ON needs FreeType, which WASM_FREETYPE=OFF leaves out`: give `WASM_CAIRO=AUTO` or `OFF`, or keep FreeType.
+- `WASM_EXTRA_IMAGES: '...' is not <id>=<zip>`, `... the id of '...' is not 1 to 16 lower-case letters or digits or dashes (not first)`, `... is sources`, `... an id is given twice` or `... does not exist`, and `WASM_IMAGE_ID (...) is not ...`: give each extra image as `<id>=<zip>`, with an id of its own, and a zip that exists at a path without blanks.
+  `WASM_EXTRA_SOURCES: '...' does not exist or is no .sources file`: name `.sources` files that exist.
+  `WASM_GIT_PROXY (...) is not an http:// or https:// URL without a user name or password or a #fragment`: give such a URL, or `WASM_GIT_PROXY=` for none.
+- `stage.mjs: the images <id> and <id> have two different <name>.sources`: two images of the site have `.sources` of one name that differ; `--extra-sources ... is not the <name> of the site`: a `WASM_EXTRA_SOURCES` file has the name of an image's `.sources` but not its content; `... is not ...: the images of the world must be prepared with the same OSWindow-Web`: an extra world image was prepared by another tree (make it again); `--extra-image <id> has the id of the default image`: give `WASM_IMAGE_ID` or the extra image another id.
 - `WASM_BUILDDIR (...) is not empty, and make wasm never built there`, and the other refusals of `WASM_BUILDDIR`: name a new or empty directory, or create `<dir>/.make-wasm` to build in a directory anyway.
   `WASM_BUILDDIR is empty`: leave the setting out for `build-wasm`.
   `WASM_BUILDDIR (...) holds a blank`, or `... is relative to the current directory, ..., whose path holds a blank`: name a path without blanks, or an absolute one.
@@ -787,7 +897,10 @@ Their sources, as those of every library, are those of the pinned archives that 
 - `FFI callout failed, its declaration does not match function N: ...` or `FFI callout trapped in function N: ...` on stderr (the worker's console in a page), and a primitive failure: the image declares that function otherwise than C does, in a way that the adapter does not adapt; `PHARO_WASM_FFI_TRACE=1` in the node VM shows the calls it does adapt.
 - A `SymbolNotFoundError` for a function of a library: the function is in no list of the registry, or the build has not that library (`manifest.json` lists the libraries of the site, and the configuration prints `wasm deps: ffi ON, freetype ON, cairo ON (auto), ...`).
 - Iceberg says `There is no libgit2 available in your system!`: the build has no libgit2; build with `WASM_LIBGIT2=ON`.
-  A clone says `git http: request failed (CORS or network)`: the remote sends no CORS headers; give a CORS proxy in the Console's Settings.
+- A clone says `git http: request failed (CORS or network): ... choose one in Settings (Git HTTP proxy)`: no proxy is chosen (Settings says None, or the site has no default), and the remote sends no CORS headers; choose the site's default or a proxy of your own in Settings.
+  `git http: request failed (CORS or network) through the proxy <origin>: ...`: the proxy did not answer, or did not let the page read its answer; try again later, or choose another proxy.
+  `git http: the proxy <origin> refused the request to <host> (403)`: the proxy forwards only git requests of public repositories, or not to that host; `git http: <host> answered 401: ...` or `... 403: ...`: the repository is private, missing, or the host limits its rate; `git http: no git repository at <url> (404)`: the URL of the remote is wrong.
+  The page names the proxy that the requests go to in its notes and in Settings.
 - With `WASM_DEBUG=1`, the time checks of the lanes (S6b, S8 and the bench) and the checks of an empty stderr (S2, S13) fail: the VM is many times slower with its asserts (lanes 20, 30, 40 and 80 alone took 17 minutes, and failed so), and Emscripten's assertions print "Heap resize call ..." and "program exited (with status: 0), but keepRuntimeAlive() is set ..." when the image quits.
   In lane 80, the world harness fails its keystroke median, and its cases that wait for the world (Stop, the save) can time out.
 - `run-lanes: waiting for the run N ...`: another run uses that `TEST_DIR`; if it is gone, remove the lock that the message names.
