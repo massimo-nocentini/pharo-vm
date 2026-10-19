@@ -9,10 +9,12 @@
   canvas, transferred to the worker as an OffscreenCanvas, through a small
   DOM shim (sdl-shim.js).  sdl.js forwards the DOM events of the canvas,
   which SDL then takes as its own.  Any image runs, a stock one that lacks
-  OSWindow-Web too: the build's image, or one that Open gives
-  (open-image.js).  Nothing is kept in this browser: Download keeps what the
-  image saved.  The system clipboard, resizing, HiDPI and input methods are
-  not bridged; the world page (world.html) has them.  The build (stage.mjs)
+  OSWindow-Web too: the build's image (or the one of its catalog that
+  ?fresh=<id> names, catalog.js), or one that Open gives (open-image.js).
+  Nothing is kept in this browser: Download keeps what the image saved.
+  The git proxy is the one that Settings keep (git-proxy.js).  The system
+  clipboard, resizing, HiDPI and input methods are not bridged; the world
+  page (world.html) has them.  The build (stage.mjs)
   replaces the BUILD placeholder, in the pharo-build meta tag and the URLs
   below, with a build id, which the page passes as ?v= on every script,
   worker and .wasm URL.  No external resources: it must be served over
@@ -413,6 +415,8 @@ button { font: inherit; color: inherit; }
 
 <noscript><p style="padding:16px">This page needs JavaScript and WebAssembly.</p></noscript>
 <script src="open-image.js?v=@BUILD@"></script>
+<script src="catalog.js?v=@BUILD@"></script>
+<script src="git-proxy.js?v=@BUILD@"></script>
 <script src="sdl.js?v=@BUILD@"></script>
 </body>
 </html>

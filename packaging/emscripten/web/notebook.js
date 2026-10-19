@@ -7,14 +7,20 @@
 // No dependencies but the scripts that index.html loads before it.
 //
 // - page.js provides window.PharoPage (storage, the compiled .wasm, the
-//   worker's URL, the git proxy, the theme, the tabs and the pharo:* events);
+//   worker's URL, the git proxy, the image of the Console, the theme, the
+//   tabs and the pharo:* events);
 //   notebook-lib.js (NotebookLib) the Markdown renderer, the markup sanitizer
 //   and the .json format; notebook-st.js (NotebookSt) what is Smalltalk: the
 //   bracket balance, the highlighter, the .st format, quote straightening
 //   and the example; nb-kernel.js (PharoNotebookKernel) the kernel client.
 // - The kernel starts on the first visit to the tab (or the first run).  It
-//   boots the image saved in this browser, read-only, else the site's, and
-//   never saves; when the Console's image changes, a notice offers Restart.
+//   boots the image of the Console (PharoPage.bootChoice(): the slot saved
+//   in this browser that the Console runs, read-only, or the catalog entry
+//   of the site it runs fresh, or, with neither, the slot saved last, else
+//   the site's default), as each start of the kernel asks it again, and
+//   never saves; when the Console's image changes (a save, a delete,
+//   another image chosen), a notice offers Restart.  The git proxy is the
+//   Console's (null for the site's default), also when Settings change it.
 // - Kernel output is queued per cell and rendered once per animation frame,
 //   or soon while the page is hidden (no frames come then); while a cell
 //   runs, its outputs keep their first and last 512 KB of streams and 500
@@ -152,7 +158,9 @@
     kernel = K.create({
       createWorker: () => new Worker(P.workerUrl),
       getModule: () => P.wasmModule(),  // the Console's: compiled once
-      init: { manifestUrl: 'manifest.json' + P.Q, build: P.BUILD, persist: true, gitProxy: P.gitProxy() },
+      // (asked at each start: the Console may run another image by then)
+      init: () => Object.assign({ manifestUrl: 'manifest.json' + P.Q, build: P.BUILD, persist: true, gitProxy: P.gitProxy() },
+                                P.bootChoice ? P.bootChoice() : {}),
       files: () => [...uploads].map(([n, d]) => ({ path: HOME + n, data: d })),
       watchdogMs: 3000,
       stopOnError: true,
@@ -1618,7 +1626,7 @@
 
   // the git proxy goes to a running kernel at once
   addEventListener('pharo:settings', e => {
-    if (kernel) kernel.setGitProxy(e.detail ? e.detail.gitProxy : P.gitProxy());
+    if (kernel) kernel.setGitProxy(e.detail && e.detail.gitProxy !== undefined ? e.detail.gitProxy : P.gitProxy());
     updateMenu();
   });
   addEventListener('pharo:theme', updateMenu);

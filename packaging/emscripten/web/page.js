@@ -2,8 +2,9 @@
 //
 // The page side of the REPL: owns the VM's worker (vm-worker.js, see there
 // for the message protocol), renders its output, and handles input,
-// history, Stop, Save, Download, Open, Reset and the theme.  No
-// dependencies but open-image.js.
+// history, Stop, Save, Save as, Download, Open, Images, Delete and the
+// theme.  No dependencies but open-image.js, vm-storage.js, catalog.js,
+// git-proxy.js and images.js.
 //
 // - pharo-web.wasm is compiled once here and handed to every worker, so
 //   Restart only instantiates it.  A generation number per worker drops
@@ -17,13 +18,25 @@
 //   registered no interrupt semaphore, after the REPL's first prompt), or
 //   when the worker then stays silent for 3 s (a long primitive that never
 //   yields), it is terminated and a fresh one started.
+// - The image: the URL says which (?slot=<slot> of the images saved in this
+//   browser, ?fresh=<id> of the site's catalog; nothing else of it is
+//   read), else the worker boots the image saved or booted last, else the
+//   default one of the catalog (the Console has no launcher: the world page
+//   has).  Once the VM is ready, and after each save, the URL says the
+//   image that runs (history.replaceState), and so does the link to the
+//   world.  Images (images.js) lists the images of the site, to start
+//   fresh, and those saved in this browser, to start, rename or delete;
+//   choosing one restarts the VM on it.
 // - The worker keeps the image in this browser whenever the image is saved,
-//   by Save or otherwise, and boots it the next time; Reset forgets it.
-//   Another tab may save over it: this one says so, and Save keeps it again.
-//   An opened image is kept once it has started (its first prompt): one
-//   that crashes or quits before is not, and Restart boots the saved image
-//   again.  When the saved image itself does not start, the notice offers
-//   Reset next to Restart.
+//   by Save or otherwise: in the slot it booted from, or in a new one for an
+//   image started fresh or opened; Save as names a new slot, which the VM
+//   is bound to from then on.  Delete forgets the slot of the VM, and
+//   starts again.  Another tab may save over that slot: this one says so,
+//   and Save keeps it again.  An opened image is kept, in a slot of its
+//   own, once it has started (its first prompt): one that crashes or quits
+//   before is not, and Restart boots the image of before again.  When the
+//   saved image itself does not start, the notice offers to delete it next
+//   to Restart.
 // - Open (or files dropped on the page) starts an image of your own: a
 //   Pharo .zip, or an .image, its .changes and its .sources, which
 //   open-image.js chooses, unpacks and checks while the VM goes on, the
@@ -31,33 +44,38 @@
 //   cannot open leaves the session as it was.  The image's own .sources
 //   goes with it (the worker keeps it with the image), else it gets the
 //   one of the site.
-// - The world page boots the saved image: when something was evaluated
-//   since it was saved, its link offers to Save first.  While a save is
-//   being stored, or code was changed that the saved image has not (the
-//   worker says "edited"), the browser asks before the page goes.
+// - The world page boots the image of the Console: when something was
+//   evaluated since it was saved, its link offers to Save first.  While a
+//   save is being stored, or code was changed that the saved image has not
+//   (the worker says "edited"), the browser asks before the page goes.
 // - The status pill is no live region: the one next to it says how the VM
 //   goes (loading, starting, ready, ended), not how far the loading got, nor
 //   the state of every evaluation, which the terminal, a log, tells.
 // - Settings, shown when the VM has the smart-HTTP transport of libgit2
-//   (ready.gitHttp), holds the CORS proxy of git's requests: a URL prefix
-//   that the requests of Iceberg's https:// remotes go to, followed by the
-//   host and the path of the repository (src/emscripten/gitSupport.c).  It
-//   is kept in localStorage (pharo-wasm.gitProxy, which world.js and sdl.js
-//   read too) and goes to the worker in init.gitProxy, and to a running VM
-//   at once ("gitProxy"), also when another tab changes it; the worker makes
-//   it Module.gitHttpProxy.  It is set only in the dialog, never from the URL:
-//   a link must not send someone's git traffic, code and credentials, to a
-//   proxy of its choosing.  The dialog and a note at the start name the
-//   origin that the requests go to.
+//   (ready.gitHttp), holds the CORS proxy of git's requests (git-proxy.js,
+//   whose dialog it is): a URL prefix that the requests of Iceberg's
+//   https:// remotes go to, followed by the host and the path of the
+//   repository (src/emscripten/gitSupport.c); the site's default
+//   (manifest.gitProxyDefault), none, or one of the user's.  This browser
+//   keeps the choice (pharo-wasm.gitProxy, which world.js and sdl.js read
+//   too); it goes to the worker in init.gitProxy (null for the default),
+//   and to a running VM at once ("gitProxy"), also when another tab changes
+//   it; the worker makes it Module.gitHttpProxy.  It is set only in the
+//   dialog, never from the URL: a link must not send someone's git traffic,
+//   code and credentials, to a proxy of its choosing.  The dialog and a note
+//   at the start name the origin that the requests go to; the first request
+//   through the site's public default says so once, and a request that
+//   failed says why (the worker's "git").
 // - History, the theme and the proxy live in localStorage when available;
 //   everything works without it (the proxy then only for this session).
 // - The Notebook tab (notebook.js) runs a second VM, in a worker of its own
-//   (vm-worker.js in its notebook mode), which boots the saved image without
-//   ever storing one.  window.PharoPage gives it what the page shares: the
-//   storage, the compiled .wasm, the proxy, Settings and the theme; the page
-//   sends it "pharo:tab", "pharo:settings", "pharo:theme" and
-//   "pharo:image-changed" (the saved image was saved, reset, replaced by
-//   another tab, or is an opened one now) as CustomEvents on window.  The
+//   (vm-worker.js in its notebook mode), which boots the image of the
+//   Console without ever storing one.  window.PharoPage gives it what the
+//   page shares: the storage, the compiled .wasm, the proxy, the image
+//   (bootChoice), Settings and the theme; the page sends it "pharo:tab",
+//   "pharo:settings", "pharo:theme" and "pharo:image-changed" (the image
+//   was saved, deleted, replaced by another tab, is an opened one now, or
+//   another one was chosen: {reason, slot}) as CustomEvents on window.  The
 //   tab shown is kept (pharo-wasm.tab, as the theme for every site); the
 //   Console's keys (Esc, Ctrl+C, Ctrl+L) and the drops that open an image
 //   act only while its tab shows.
@@ -129,23 +147,30 @@
     return theme;
   }
 
-  // The proxy of git's HTTP requests, as typed: {value: ''} for none, else
-  // {value, origin} for an http: or https: URL without credentials or
-  // fragment (a bare origin gets its /, which the host of the repository
-  // follows), else {error}.  world.js and sdl.js check what they read in
-  // the same way.
-  function parseGitProxy(text) {
-    const s = String(text || '').trim();
-    if (!s) return { value: '' };
-    let u;
-    try { u = new URL(s); } catch (e) { return { error: 'This is not a URL.' }; }
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return { error: 'The proxy must be an http:// or https:// URL.' };
-    if (u.username || u.password) return { error: 'Give the URL of the proxy without a user name or password.' };
-    if (u.hash || s.indexOf('#') >= 0) return { error: 'The URL of the proxy cannot have a #fragment.' };
-    return { value: u.pathname === '/' && !u.search ? u.origin + '/' : s, origin: u.origin };
+  const GitProxy = window.PharoGitProxy, Catalog = window.PharoCatalog, Storage = window.PharoStorage;
+
+  // The image of the VM: {slot}, {fresh: id} or {} (the worker's choice),
+  // the name of its slot, and the site's manifest (for Images; null until
+  // fetched).  The URL says it first, as ?slot= or ?fresh=, and nothing
+  // else of the URL is read
+  let current = {}, currentName = '', manifest = null;
+  {
+    const q = new URLSearchParams(location.search);
+    const slot = q.get('slot'), fresh = q.get('fresh');
+    if (slot && Storage.SLOT_ID.test(slot)) current = { slot };
+    else if (fresh && Catalog.ID.test(fresh)) current = { fresh };
   }
-  // the stored one, '' when none or not a valid one
-  let gitProxy = parseGitProxy(store.get('gitProxy', '')).value || '';
+  // the images saved in this browser (vm-storage.js), for Images
+  let slots = null;
+  try { slots = Storage.open(); } catch (e) { slots = null; }
+  const query = c => c && c.slot ? '?slot=' + encodeURIComponent(c.slot) : c && c.fresh ? '?fresh=' + encodeURIComponent(c.fresh) : '';
+  // The image chosen is the one that the URL and the link to the world say
+  function setChoice(choice) {
+    current = choice || {};
+    $('world').href = 'world.html' + query(current);
+    try { window.history.replaceState(window.history.state, '', location.pathname + query(current) + location.hash); }
+    catch (e) { /* (a sandboxed page) */ }
+  }
 
   // ---- terminal output
 
@@ -203,7 +228,8 @@
   }
   // a page message on a line of its own, as a Smalltalk comment
   function note(text) {
-    const lastText = pending.length ? pending[pending.length - 1].text : term.textContent;
+    // (the text that says Loading is no output)
+    const lastText = pending.length ? pending[pending.length - 1].text : $('loading') ? '' : term.textContent;
     emit('sys', (lastText && !lastText.endsWith('\n') ? '\n' : '') + '"' + text + '"\n');
   }
 
@@ -330,6 +356,7 @@
   let opening = false;                  // Open unpacks files
   let source = null;                    // where the image of the worker came from (ready)
   let gitHttp = false;                  // the VM has libgit2's smart-HTTP transport (ready)
+  let gitProxyDefault = '';             // the site's default proxy (ready)
   const reqs = new Map();
   let reqId = 0;
 
@@ -362,9 +389,10 @@
   function updateControls() {
     const on = !!worker && ready && alive;
     line.disabled = !on;
-    for (const id of ['send', 'stop', 'save']) $(id).disabled = !on;
+    for (const id of ['send', 'stop', 'save', 'save-as']) $(id).disabled = !on;
     $('download').disabled = !(worker && ready);
-    $('reset').disabled = !(worker && persisted);
+    $('reset').disabled = !(worker && deletable());
+    $('images').disabled = !!unavailable;
     $('open').disabled = !!unavailable || opening;
     $('restart').disabled = !!unavailable;
     $('world').hidden = !(world && prepared);
@@ -501,7 +529,10 @@
       mode: 'console',
       persist: true,
       upload: upload || undefined,
-      gitProxy,
+      slot: current.slot,
+      fresh: current.fresh,
+      name: upload ? upload.name : undefined,
+      gitProxy: GitProxy.initValue(),
     });
   }
 
@@ -521,7 +552,7 @@
       notice = 'The opened image did not start; it was not kept.';
     } else if (!prompted && !eofSent && source === 'saved') {
       notice = 'The image saved in this browser did not start.';
-      alt = { label: 'Reset saved image', action: resetSaved };
+      alt = { label: 'Delete it', action: resetSaved };
     }
     showNotice(notice, 'Restart', restart, 0, alt);
   }
@@ -532,14 +563,38 @@
     prepared = m.prepared;
     persisted = m.persisted;
     source = m.source;
+    // the image that runs: its slot, or the catalog entry it is a fresh copy
+    // of (an upload is neither until it is kept)
+    if (m.slot) {
+      // (a slot without a name of its own is called as Images calls it)
+      currentName = m.slot.name || (m.slot.slot === 'main' && !m.slot.origin ? 'Saved image'
+        : m.pharo ? Catalog.labelOf(m.pharo) : 'Saved image');
+      setChoice({ slot: m.slot.slot });
+    } else if (m.source !== 'upload') {
+      currentName = '';
+      setChoice(m.imageId ? { fresh: m.imageId } : {});
+    }
+    const entry = (manifest && m.imageId && Catalog.find(manifest, m.imageId)) || null;
+    const label = (entry && entry.label) || (m.pharo ? Catalog.labelOf(m.pharo) : 'Pharo');
+    if (m.slotMissing) note('That saved image is not in this browser any more: started a fresh ' + label + '.');
+    else if (m.freshMissing) note("This site has no image '" + m.freshMissing + "': started " + label + '.');
     if (m.source === 'saved')
-      note('Started the image saved in this browser on ' + new Date(m.savedAt).toLocaleString() + '.');
+      note('Started the image saved in this browser on ' + new Date(m.savedAt).toLocaleString() + ': ' +
+           (currentName ? "'" + currentName + "'" : 'it') + (m.pharo ? ' (' + Catalog.labelOf(m.pharo) + ').' : '.'));
     else if (m.source === 'upload')
       note('Started the opened image, ' + (upload ? upload.name : m.image) +
            (upload && !upload.sources && m.sources ? ', with the .sources of this site, ' + m.sources : '') + '.');
+    else if (entry && !entry.default && !m.slotMissing && !m.freshMissing)
+      note('Started a fresh ' + label + '. Save keeps it in this browser.');
+    if (m.sourcesMissing)
+      note("This image's .sources (" + m.sourcesMissing + ') is not on this site any more: ' +
+           'the source of system methods shows decompiled.');
     if (m.storageError) note('Note: ' + m.storageError + '.');
     gitHttp = !!m.gitHttp;
-    if (gitHttp && gitProxy) note('Git requests go through the proxy at ' + parseGitProxy(gitProxy).origin + ' (Settings).');
+    gitProxyDefault = m.gitProxyDefault || '';
+    if (gitHttp && m.gitProxy)
+      note('Git requests go through the proxy at ' + GitProxy.originOf(m.gitProxy) +
+           (GitProxy.read().mode === 'default' ? " (this site's default)" : '') + ' (Settings).');
     if (world && !prepared)
       showNotice('This image cannot open the Pharo world yet.', 'Prepare for the world', prepareWorld);
     updateControls();
@@ -593,16 +648,24 @@
       } else {
         upload = null;                  // the slot holds this VM's image now
         persisted = true;
+        if (m.slot && m.slot.slot) {
+          currentName = m.slot.name || currentName;
+          setChoice({ slot: m.slot.slot });
+        }
+        const named = currentName ? " as '" + currentName + "'" : '';
         // the REPL said, which the bytes of an upload may not have told
         const unprepared = world && prepared && !m.prepared;
         prepared = m.prepared;
         if (!m.upload) {
           evaluated = false;
-          showNotice('The image is saved in this browser (' + mb(m.bytes) + ').', null, null, 6000);
+          const text = 'The image is saved in this browser' + named + ' (' + mb(m.bytes) + ').' +
+            (m.treeError ? ' Note: ' + m.treeError + '.' : '');
+          if (m.created) showNotice(text, 'Rename', renameCurrent, m.treeError ? 0 : 10000);
+          else showNotice(text, null, null, m.treeError ? 0 : 6000);
         } else if (unprepared)
           showNotice('This image cannot open the Pharo world yet.', 'Prepare for the world', prepareWorld);
         else if ($('notice').hidden)    // e.g. not over the offer to prepare it for the world
-          showNotice('The opened image is now kept in this browser.', null, null, 6000);
+          showNotice('The opened image is now kept in this browser' + named + '.', 'Rename', renameCurrent, 10000);
         imageChanged(m.upload ? 'opened' : 'saved');
         if (then && !m.upload) then();
       }
@@ -610,9 +673,12 @@
       break;
     }
     case 'superseded':
-      showNotice('Another tab has replaced the image saved in this browser. Save to keep this session instead.',
-                 'Save', save);
+      showNotice('Another tab has replaced the image saved in this browser' + (currentName ? " ('" + currentName + "')" : '') +
+                 '. Save to keep this session instead.', 'Save', save);
       imageChanged('superseded');
+      break;
+    case 'git':
+      onGit(m);
       break;
     case 'exit':
       if (eofSent && m.code === 0) ended('exited', 'Exited (0)', 'The session ended.');
@@ -643,7 +709,7 @@
   // The image saved in this browser, which the notebook boots, is another
   // one now
   function imageChanged(reason) {
-    dispatchEvent(new CustomEvent('pharo:image-changed', { detail: { reason } }));
+    dispatchEvent(new CustomEvent('pharo:image-changed', { detail: { reason, slot: current.slot || null } }));
   }
 
   function request(msg) {
@@ -739,7 +805,8 @@
     let opened = null, what = '';
     try {
       const choice = await PharoOpen.choose(files);
-      if (persisted && !confirm('Replace the image saved in this browser with ' + choice.name + '?')) return;
+      // it becomes an image of its own: only what this VM did is lost
+      if (lacking() && !confirm('Open ' + choice.name + ' as a new image? What you did since the last save is lost.')) return;
       let shown = -1;
       const progress = (loaded, total) => {
         const pct = Math.floor(100 * loaded / Math.max(1, total));
@@ -785,17 +852,54 @@
     open: openFiles,
   });
 
+  // Whether the VM has a slot to delete: the one it booted or saved, or the
+  // one it was told to boot (the last one), whose boot failed
+  const deletable = () => !!current.slot || (!current.fresh && !upload && persisted && !ready);
+
+  // Delete the slot of the VM, and start again (the image saved last, else
+  // the site's)
   async function resetSaved() {
     if (!worker) return;
-    if (!confirm('Delete the image saved in this browser, and start the original one again?')) return;
-    try { await request({ type: 'resetStorage' }); }
-    catch (e) { note('Reset failed: ' + e.message); return; }
+    const name = currentName || 'the image saved in this browser';
+    if (!confirm((currentName ? "Delete '" + currentName + "'" : 'Delete the image saved in this browser') +
+                 ' from this browser, and start again?')) return;
+    let r;
+    try { r = await request(current.slot ? { type: 'resetStorage', slot: current.slot } : { type: 'resetStorage' }); }
+    catch (e) { note('Delete failed: ' + e.message); return; }
     upload = null;
     persisted = false;
+    setChoice({});
     imageChanged('reset');
     render();
-    note('Deleted the image saved in this browser.');
+    note(r && r.slot ? 'Deleted the image saved in this browser' + (currentName ? " ('" + name + "')" : '') + '.'
+                     : 'Nothing was deleted: this image was not saved in this browser.');
+    currentName = '';
     restart();
+  }
+
+  // Rename the slot of the VM (the notice of its first save offers it)
+  async function renameCurrent() {
+    const sid = current.slot;
+    if (!sid || !slots) return;
+    const name = prompt('Rename the image', currentName);
+    if (name === null || !name.trim() || name.trim() === currentName) return;
+    try {
+      await slots.rename(sid, name.trim().slice(0, 200));
+      currentName = name.trim().slice(0, 200);
+      note("The image is now named '" + currentName + "'.");
+    } catch (e) { note('Could not rename it: ' + ((e && e.message) || e)); }
+  }
+
+  // Save into a new slot, of the name asked: the worker types the save, and
+  // binds the VM to that slot
+  function saveAs() {
+    if (!worker || !alive || !ready) return;
+    const entry = manifest && current.fresh ? Catalog.find(manifest, current.fresh) : null;
+    const base = currentName || (entry && entry.label) || 'Pharo';
+    const name = prompt('Save as a new image named', base + ' copy');
+    if (name === null || !name.trim()) return;
+    echo(SAVE);
+    worker.postMessage({ type: 'saveAs', name: name.trim() });
   }
 
   // File in OSWindow-Web (st/web-bootstrap.st), then save: the world page
@@ -828,61 +932,99 @@
     e.returnValue = '';                 // older browsers ask for it
   });
 
-  // ---- Settings: the proxy of git's HTTP requests
+  // ---- Settings: the proxy of git's HTTP requests (git-proxy.js)
 
-  const dialog = $('settings-dialog'), proxyInput = $('git-proxy'), proxyState = $('git-proxy-state');
-  // what the dialog says of the text in the field
-  function showProxyState() {
-    const p = parseGitProxy(proxyInput.value);
-    proxyInput.setAttribute('aria-invalid', p.error ? 'true' : 'false');
-    proxyState.dataset.kind = p.error ? 'bad' : p.value ? 'proxy' : 'none';
-    proxyState.textContent = p.error ||
-      (p.value ? 'Git requests go to ' + p.origin + '.' : 'No proxy: git requests go to the repository itself.');
-    return p;
-  }
-  function openSettings() {
-    if (dialog.open) return;
-    proxyInput.value = gitProxy;
-    showProxyState();
-    dialog.showModal();
-    proxyInput.focus();
-    proxyInput.select();
-  }
-  // Keep the proxy, and give it to the running VM: its next request goes there
-  function saveSettings() {
-    const p = showProxyState();
-    if (p.error) { proxyInput.focus(); return; }
-    dialog.close();
-    if (p.value === gitProxy) return;
-    gitProxy = p.value;
-    const kept = gitProxy ? store.set('gitProxy', gitProxy) : store.remove('gitProxy');
-    if (worker) worker.postMessage({ type: 'gitProxy', gitProxy });
-    settingsChanged();
-    note(gitProxy ? 'Git requests now go through the proxy at ' + p.origin + '.'
+  const gitSettings = GitProxy.wireDialog({
+    defaultProxy: () => gitProxyDefault || (manifest && manifest.gitProxyDefault) || '',
+    // keep it, and give it to the running VM: its next request goes there
+    onSaved: (value, chosen, kept) => {
+      if (worker) worker.postMessage({ type: 'gitProxy', gitProxy: value });
+      settingsChanged();
+      const def = gitProxyDefault || (manifest && manifest.gitProxyDefault) || '';
+      const origin = GitProxy.originOf(chosen.mode === 'default' ? def : chosen.value);
+      note(origin ? 'Git requests now go through the proxy at ' + origin + (chosen.mode === 'default' ? " (this site's default)." : '.')
                   : 'Git requests now go to the repositories themselves, without a proxy.');
-    if (!kept) showNotice('This browser cannot keep the setting: it holds for this session only.', null, null, 8000);
-  }
+      if (!kept) showNotice('This browser cannot keep the setting: it holds for this session only.', null, null, 8000);
+    },
+    refocus: () => refocus(),
+  });
+  const openSettings = () => gitSettings.open();
   $('settings').addEventListener('click', openSettings);
-  proxyInput.addEventListener('input', showProxyState);
-  $('settings-form').addEventListener('submit', e => { e.preventDefault(); saveSettings(); });
-  $('git-proxy-clear').addEventListener('click', () => { proxyInput.value = ''; showProxyState(); proxyInput.focus(); });
-  $('settings-cancel').addEventListener('click', () => dialog.close());
-  dialog.addEventListener('close', () => refocus());
-  // a click on the backdrop, outside the form, cancels
-  dialog.addEventListener('click', e => { if (e.target === dialog) dialog.close(); });
-  // the Settings of another tab of the Console
-  addEventListener('storage', e => {
-    if (e.key !== 'pharo-wasm.gitProxy' && e.key !== null) return;
-    const now = parseGitProxy(store.get('gitProxy', '')).value || '';
-    if (now === gitProxy) return;
-    gitProxy = now;
-    if (worker) worker.postMessage({ type: 'gitProxy', gitProxy });
+  // the Settings of another tab
+  GitProxy.onChange(value => {
+    if (worker) worker.postMessage({ type: 'gitProxy', gitProxy: value });
     settingsChanged();
   });
   // (the notebook's VM gets it too)
   function settingsChanged() {
-    dispatchEvent(new CustomEvent('pharo:settings', { detail: { gitProxy } }));
+    dispatchEvent(new CustomEvent('pharo:settings', { detail: { gitProxy: GitProxy.initValue() } }));
   }
+
+  // What the worker says of git's requests: the first one through the
+  // site's public default, once; one that failed, why
+  function onGit(m) {
+    const proxy = m.proxy || '';
+    let text = '';
+    if (m.event === 'request') {
+      if (GitProxy.read().mode !== 'default' || !proxy || GitProxy.noted(proxy)) return;
+      GitProxy.markNoted(proxy);
+      text = 'Git requests (Iceberg clones, Metacello github://) go through the public CORS proxy ' + proxy +
+        ', which sees what you clone.';
+    } else if (m.event === 'failed') {
+      if (!proxy && m.status < 0) text = "The browser blocked git's request to " + m.host + ' (CORS): git over HTTPS needs a proxy here.';
+      else if (proxy && m.status < 0) text = 'The git proxy ' + proxy + ' did not answer.';
+      else if (proxy && m.status === 403) text = 'The git proxy ' + proxy + ' refused the request to ' + m.host + '.';
+    }
+    if (!text) return;
+    note(text + ' (Settings)');
+    showNotice(text, 'Settings', openSettings, 15000);
+  }
+
+  // ---- Images (images.js): the images of the site and those of this browser
+
+  // The site's manifest, for the images to start fresh (the worker reads its
+  // own), fetched at the start
+  const fetchManifest = () => fetch('manifest.json' + Q).then(r => r.ok ? r.json() : null).then(m => { manifest = m; }, () => {});
+  const images = PharoImages.create({
+    store: slots,
+    manifest: () => manifest,
+    current: () => current,
+    running: () => (worker && current.slot) || null,
+    // another image: the VM starts again on it
+    onOpen: choice => {
+      const entry = choice.fresh && manifest ? Catalog.find(manifest, choice.fresh) : null;
+      if (lacking() && !confirm('Open ' + (entry ? 'a fresh ' + entry.label : 'that image') +
+                                '? What you did since the last save is lost.')) return false;
+      upload = null;
+      currentName = '';
+      setChoice(choice);
+      imageChanged('switched');
+      restart();
+      return true;
+    },
+    onOpenFile: () => chooseFile(),
+    // the slot of this VM, or every slot: deleted, and the VM starts again
+    onDeleteRunning: async sid => {
+      const r = await request(sid ? { type: 'resetStorage', slot: sid } : { type: 'resetStorage', all: true });
+      upload = null;
+      persisted = false;
+      setChoice({});
+      imageChanged('reset');
+      render();
+      note(sid ? 'Deleted the image saved in this browser' + (currentName ? " ('" + currentName + "')" : '') + '.'
+               : 'Deleted every image saved in this browser.');
+      currentName = '';
+      restart();
+      return r;
+    },
+    onChange: () => {
+      // a rename of the slot of the VM
+      if (current.slot && slots) slots.name(current.slot).then(n => { if (n) currentName = n; }, () => {});
+    },
+    otherPage: { label: 'World', href: c => 'world.html' + query(c) },
+  });
+  $('images').addEventListener('click', () => images.open());
+  $('save-as').addEventListener('click', () => { saveAs(); refocus(); });
 
   // ---- input and history
 
@@ -955,7 +1097,7 @@
 
   document.addEventListener('keydown', e => {
     if (composing(e)) return;           // Escape cancels the composition
-    if (dialog.open) return;            // its keys: Escape closes it
+    if (document.querySelector('dialog[open]')) return;   // its keys: Escape closes it
     if (!consoleVisible()) return;      // the notebook's (notebook.js)
     const k = e.key.toLowerCase();
     if (e.key === 'Escape') { e.preventDefault(); stop(); }
@@ -1063,7 +1205,8 @@
     unavailable: () => unavailable || (noMemory64 ? NO_MEMORY64 : null),
     wasmModule,                         // Promise<WebAssembly.Module>, compiled once
     workerUrl: 'vm-worker.js' + Q,
-    gitProxy: () => gitProxy,           // '' when none
+    gitProxy: () => GitProxy.initValue(),   // null for the site's default, '' for none, or the URL
+    bootChoice: () => Object.assign({}, current),   // the image of the Console: {slot}, {fresh} or {}
     gitHttp: () => gitHttp,             // the VM has libgit2's smart-HTTP transport (ready)
     openSettings, cycleTheme,
     themeLabel: () => THEMES[theme],    // System, Light or Dark
@@ -1082,6 +1225,7 @@
     term.textContent = '';
     fatal(unavailable);
   } else {
+    fetchManifest();
     spawn();
   }
 })();

@@ -9,7 +9,8 @@
 //                     onerror) of vm-worker.js
 //     getModule,      () => Promise<WebAssembly.Module> (optional)
 //     init,           the fields of the worker's init (manifestUrl, build,
-//                     sliceMs, persist, gitProxy), or () => them
+//                     sliceMs, persist, gitProxy, slot, fresh), or () => them,
+//                     asked again at every spawn
 //     files,          () => [{path, data}] written into the kernel's MEMFS
 //                     after every spawn, before the first cell; data is a
 //                     Uint8Array, an ArrayBuffer or a string
@@ -27,9 +28,9 @@
 // source}]), cancel(cellId) (a queued cell), stop(), restart(),
 // stopBackground() (a promise of how many processes of cells the kernel
 // terminated), writeFile(path, data) (a promise of null once written, or of
-// why not; it never rejects), setGitProxy(url) and dispose(); k.state,
-// k.info, k.count (the last cell's), k.current (the cellId of the cell in
-// flight) and k.queueLength.  The module also exports FrameReader,
+// why not; it never rejects), setGitProxy(p) (a URL, '' for none, null for
+// the site's default) and dispose(); k.state, k.info, k.count (the last
+// cell's), k.current (the cellId of the cell in flight) and k.queueLength.  The module also exports FrameReader,
 // bgraToPng and pngOf (below), with crc32 and base64.
 //
 // The kernel is a second Pharo VM, booted read-only from the image that the
@@ -870,8 +871,9 @@
       // Write a file of the kernel's MEMFS (the worker keeps it until it is
       // ready): answers null once written, or why it was not; never rejects
       writeFile(path, data) { return writeTo(path, data, false); },
+      // null is the site's default, '' none, else the URL
       setGitProxy(p) {
-        gitProxy = typeof p === 'string' ? p : '';
+        gitProxy = p === null ? null : typeof p === 'string' ? p : '';
         post({ type: 'gitProxy', gitProxy });
       },
       dispose() {

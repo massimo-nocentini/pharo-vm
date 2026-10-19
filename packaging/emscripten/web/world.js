@@ -6,7 +6,8 @@
 // transferred to it as an OffscreenCanvas.  The page sends the display the
 // size of the canvas and its input, as the event records of the image's
 // OSWebDriver (packaging/emscripten/st/OSWindow-Web), and shows what the
-// display asks for.  No dependencies but keymap.js and open-image.js.
+// display asks for.  No dependencies but keymap.js, open-image.js,
+// vm-storage.js, catalog.js, git-proxy.js and images.js.
 //
 // - pharo-web.wasm is compiled once here and handed to every worker, so a
 //   restart only instantiates it.  A canvas can be transferred only once:
@@ -36,21 +37,38 @@
 //   when the worker, silent for a second, does not answer a request within
 //   another one: an idle world says nothing, and a VM in a long primitive
 //   after an idle slice could not.
+// - The image: the URL says which (?slot=<slot> of the images saved in this
+//   browser, ?fresh=<id> of the site's catalog; nothing else of the URL is
+//   read), else the worker boots the image saved or booted last, else the
+//   default one of the catalog.  On a first visit (nothing saved) to a site
+//   of several images, no VM starts: the Images dialog opens as the
+//   launcher (images.js), and the user chooses which.  Once the VM is
+//   ready, and after each save, the URL says the image that runs
+//   (history.replaceState), and so does the link to the Console.
 // - Save asks the image to save itself (a save request record); the worker
-//   keeps the saved image in this browser, and the next visit, here or in
-//   the Console, boots it.  Download gives the image and its .changes.
+//   keeps the saved image in this browser: in the slot it booted from, or
+//   in a new one for an image started fresh or opened, named after it.
+//   Save as names a new slot first (the worker's saveAs), which the world
+//   then saves into, and is bound to from then on.  Download gives the
+//   image and its .changes.  A save keeps the files of /pharo with the
+//   image too (Iceberg's clones: the worker's tree).
+// - Images lists the images of the site, to start fresh, and those saved
+//   in this browser, to start, rename or delete (the one that runs: its VM
+//   starts again); it starts one, after a question when the world has input
+//   that is not saved.
 // - Open (or files dropped on the page) starts an image of your own, as in
 //   the Console: open-image.js chooses, unpacks and checks the files while
-//   the world goes on, the notice saying how far it got, and the image
-//   replaces the one saved in this browser once it has started.
+//   the world goes on, the notice saying how far it got; it asks first when
+//   the world has input that is not saved.  The image becomes a new slot
+//   once it has started, and never replaces another one.
 // - An image that cannot open the world (it lacks OSWindow-Web: a stock
 //   image, opened here or in the Console; or it has an older version of
 //   it, saved by an earlier build of the site) is prepared for it: the
 //   worker (init.prepare) files in st/web-bootstrap.st and saves it, as the
-//   Console's "Prepare for the world" does, and says "prepared"; the page
-//   then boots the world from the image saved in this browser.  The notice
-//   names the fonts that the preparation set up (ready.fonts, from the
-//   manifest: FreeType, or bitmap fonts).
+//   Console's "Prepare for the world" does, and says "prepared", with the
+//   slot that holds it now; the page then boots the world from that slot.
+//   The notice names the fonts that the preparation set up (ready.fonts,
+//   from the manifest: FreeType, or bitmap fonts).
 // - The display's title, cursor (RGBA, as a CSS cursor), clipboard
 //   (navigator.clipboard.writeText) and focus.  When the browser refuses to
 //   write the clipboard, the system clipboard still has older text, which
@@ -59,20 +77,27 @@
 //   another window, or a copy of the page changed the clipboard.
 // - A world that did not paint after START_MS, or a VM that ended before
 //   it painted, may be an image that cannot open the world: the notice
-//   points to the Console, which can run it, or reset it.
+//   points to the Console, on that image, which can run it, or delete it.
 // - The status pill is no live region: the one next to it says how the VM
 //   goes (loading, starting, running, ended), not how far the loading got.
-// - The CORS proxy of git's HTTP requests is the one that the Console's
-//   Settings keep in this browser (pharo-wasm.gitProxy, see page.js), read
-//   at each start of a worker and given in init.gitProxy, and given to the
-//   running VM when the Console changes it (a storage event).  Like the
-//   Console, the page never takes it from its URL.
+// - The CORS proxy of git's HTTP requests (git-proxy.js): the site's
+//   default (manifest.gitProxyDefault), or the one, or none, that the user
+//   chose in Settings, here or in the Console, which this browser keeps.
+//   It is read at each start of a worker and given in init.gitProxy (null
+//   for the default), and given to the running VM when Settings or another
+//   page changes it (a storage event).  Like the Console, the page never
+//   takes it from its URL.  The worker says when git made its first request
+//   (git {event: 'request'}): through the site's default, the page tells
+//   once, per proxy, that the public proxy sees what is cloned; and when one
+//   failed, why, with a link to Settings.
 //
 // window.PharoWorld tells tests and the curious how it goes: stats (the
 // workers started, the frames of this one, when they came and the size of
 // the first, the times from a key to the next frame), state (that of the
-// status pill), unsaved (whether closing the page would ask) and
-// readFile(path), a file of the VM.
+// status pill), unsaved (whether closing the page would ask), choice (the
+// image that runs: {slot}, {fresh} or {}), images (the Images dialog),
+// readFile(path), a file of the VM, and fs(op, path, fields), the worker's
+// other "fs" requests.
 
 (function () {
   'use strict';
@@ -104,22 +129,10 @@
     if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
   } catch (e) { /* no storage: follow the system */ }
 
-  // The proxy of git's HTTP requests that the Console keeps (page.js), or
-  // '': an http: or https: URL without credentials or fragment, as the
-  // Console checks it
-  const GIT_PROXY_KEY = 'pharo-wasm.gitProxy';
-  function gitProxy() {
-    let s = null;
-    try { s = localStorage.getItem(GIT_PROXY_KEY); } catch (e) { /* no storage: no proxy */ }
-    if (!s) return '';
-    try {
-      const u = new URL(s);
-      return /^https?:$/.test(u.protocol) && !u.username && !u.password && s.indexOf('#') < 0 ? s : '';
-    } catch (e) { return ''; }
-  }
-  addEventListener('storage', e => {
-    if (worker && (e.key === GIT_PROXY_KEY || e.key === null)) worker.postMessage({ type: 'gitProxy', gitProxy: gitProxy() });
-  });
+  const GitProxy = window.PharoGitProxy, Catalog = window.PharoCatalog, Storage = window.PharoStorage;
+  // The proxy of git's HTTP requests, as another page changes it (Settings
+  // of the Console, or of another world)
+  GitProxy.onChange(value => { if (worker) worker.postMessage({ type: 'gitProxy', gitProxy: value }); });
 
   // ---- status, overlay and notice
 
@@ -134,6 +147,16 @@
   let preparing = false;                // the worker prepares the image for the world (ready.preparing)
   let fonts = null;                     // the fonts that a preparation sets up (ready.fonts)
   let opening = false;                  // Open unpacks files
+  // The image of the page's VM: {slot}, {fresh: id} or {} (the worker's
+  // choice), the name of its slot, and its catalog entry (ready.imageId)
+  let current = {}, currentName = '', currentEntry = null;
+  let manifest = null;                  // the site's (null until fetched, or when it could not be)
+  let images = null;                    // the Images dialog (images.js)
+  let choosing = false;                 // the launcher shows, and no VM runs
+  // the images saved in this browser (vm-storage.js), or null when it
+  // keeps none here
+  let store = null;
+  try { store = Storage.open(); } catch (e) { store = null; }
   const reqs = new Map();
   let reqId = 0;
   // workers started; frames of this one, when it started and they came, and
@@ -184,9 +207,10 @@
   function updateControls() {
     const on = !!worker && alive && ready && !preparing;
     $('stop').disabled = !on;
-    $('save').disabled = !(on && framed);
+    $('save').disabled = $('save-as').disabled = !(on && framed);
     $('download').disabled = !(worker && ready);
     $('open').disabled = !!unavailable || opening;
+    $('images').disabled = !!unavailable;
   }
 
   // the card over the canvas: a text, and how far the loading is (0..1),
@@ -234,7 +258,17 @@
     $('notice').hidden = true;
     noticeAction = null;
   }
-  const CONSOLE = { label: 'Open the Console', href: 'index.html' };
+  // The Console, on the image of this page
+  const query = c => c && c.slot ? '?slot=' + encodeURIComponent(c.slot) : c && c.fresh ? '?fresh=' + encodeURIComponent(c.fresh) : '';
+  const consoleHref = () => 'index.html' + query(current);
+  const CONSOLE = { label: 'Open the Console', get href() { return consoleHref(); } };
+  // The image chosen is the one that the URL and the link to the Console say
+  function setChoice(choice) {
+    current = choice || {};
+    $('console').href = consoleHref();
+    try { window.history.replaceState(window.history.state, '', location.pathname + query(current) + location.hash); }
+    catch (e) { /* (a sandboxed page) */ }
+  }
 
   const mb = n => (n / 1048576).toFixed(1) + ' MB';
 
@@ -299,8 +333,13 @@
     return c;
   }
 
-  async function spawn() {
+  // Start a worker on the image choice ({slot}, {fresh: id} or {}: the
+  // worker's choice), or, without one, on the image of the page again (a
+  // restart); an upload goes first
+  async function spawn(choice) {
     kill();
+    if (choice && typeof choice === 'object' && !(choice instanceof Event)) setChoice(choice);
+    if (choosing) { choosing = false; if (images) images.close(); }
     const g = gen;
     alive = true;
     loadedText = 'Loading';
@@ -350,9 +389,12 @@
       mode: 'world',
       persist: true,
       upload: upload || undefined,
+      slot: current.slot,
+      fresh: current.fresh,
+      name: upload ? upload.name : undefined,
       prepare: true,
       display: { canvas: offscreen, width, height },
-      gitProxy: gitProxy(),
+      gitProxy: GitProxy.initValue(),
     }, [offscreen]);
     // queued by the worker until it is ready, so before the image boots,
     // which then opens the world at the size of the canvas
@@ -398,8 +440,9 @@
     if (!m.error) {
       upload = null;
       restarted = 'The image is prepared for the world (OSWindow-Web and ' +
-        (fonts === 'freetype' ? 'FreeType' : 'bitmap') + ' fonts), and saved in this browser.';
-      spawn();
+        (fonts === 'freetype' ? 'FreeType' : 'bitmap') + ' fonts), and saved in this browser' +
+        (currentName ? " as '" + currentName + "'." : '.');
+      spawn(m.slot ? { slot: m.slot } : undefined);
       return;
     }
     console.warn('pharo: the image could not be prepared for the world: ' + m.error);
@@ -412,27 +455,51 @@
     else showNotice('This image could not be prepared for the world: ' + why + '.', 'Restart', spawn, 0, CONSOLE);
   }
 
+  // "Pharo 13.1", or '' when unknown
+  const pharoLabel = pharo => pharo ? Catalog.labelOf(pharo) : '';
+
   function onReady(m) {
     ready = true;
     source = m.source;
     persisted = m.persisted;
     fonts = m.fonts;
+    currentEntry = (manifest && m.imageId && Catalog.find(manifest, m.imageId)) || null;
+    // the image that runs: its slot, or the catalog entry it is a fresh copy
+    // of (an upload is neither until it is kept)
+    if (m.slot) {
+      // (a slot without a name of its own is called as Images calls it)
+      currentName = m.slot.name || (m.slot.slot === 'main' && !m.slot.origin ? 'Saved image'
+        : m.pharo ? Catalog.labelOf(m.pharo) : 'Saved image');
+      setChoice({ slot: m.slot.slot });
+    } else if (m.source !== 'upload') {
+      currentName = '';
+      setChoice(m.imageId ? { fresh: m.imageId } : {});
+    }
     if (!m.world) {
       fatal('This build has no world image: build it with WASM_WORLD=ON and a host Pharo (WASM_HOST_PHARO).',
-            'Open the Console', 'index.html');
+            'Open the Console', consoleHref());
       return;
     }
     if (!m.prepared && !m.preparing) {
       fatal('This image cannot open the Pharo world: it lacks OSWindow-Web, or has an older version of it.',
-            'Open the Console', 'index.html');
+            'Open the Console', consoleHref());
       return;
     }
     const notes = [restarted];
     restarted = '';
+    const label = (currentEntry && currentEntry.label) || pharoLabel(m.pharo) || 'Pharo';
+    if (m.slotMissing) notes.push('That saved image is not in this browser any more: started a fresh ' + label + '.');
+    else if (m.freshMissing) notes.push("This site has no image '" + m.freshMissing + "': started " + label + '.');
     if (m.source === 'saved')
-      notes.push('Started the image saved in this browser on ' + new Date(m.savedAt).toLocaleString() + '.');
+      notes.push('Started the image saved in this browser on ' + new Date(m.savedAt).toLocaleString() + ': ' +
+                 (currentName ? "'" + currentName + "'" : 'it') + (m.pharo ? ' (' + pharoLabel(m.pharo) + ').' : '.'));
     else if (m.source === 'upload')
       notes.push('Started the opened image, ' + (upload ? upload.name : m.image) + '.');
+    else if (!m.slotMissing && !m.freshMissing && Catalog.images(manifest).length > 1)
+      notes.push('Started a fresh ' + label + '. Save keeps it in this browser.');
+    if (m.sourcesMissing)
+      notes.push("This image's .sources (" + m.sourcesMissing + ') is not on this site any more: ' +
+                 'the source of system methods shows decompiled.');
     if (m.storageError) notes.push('Note: ' + m.storageError + '.');
     const note = notes.filter(Boolean).join(' ');
     if (m.preparing) {
@@ -451,7 +518,7 @@
       if (g !== gen || framed || !alive) return;
       notStarted = true;
       showNotice('The world has not opened yet: this image may not open it. The Console can run it, ' +
-                 'or Reset the saved image.', 'Open the Console', 'index.html', 0);
+                 'or delete it.', 'Open the Console', consoleHref(), 0);
     }, START_MS);
     updateControls();
     updateStatus();
@@ -503,7 +570,8 @@
   function onWorker(m) {
     heardAt = performance.now();
     // a slice ran: the sign of life that Stop's watchdog waits for
-    if (m.type !== 'interrupted' && m.type !== 'fs-result' && m.type !== 'file' && m.type !== 'error')
+    if (m.type !== 'interrupted' && m.type !== 'fs-result' && m.type !== 'file' && m.type !== 'error' &&
+        m.type !== 'reset')
       lastMsgAt = heardAt;
     switch (m.type) {
     case 'progress': {
@@ -532,13 +600,20 @@
         showNotice('This image registered nothing for Stop to interrupt.', 'Restart', spawn, 10000);
       break;
     case 'saved':
+      // the slot that holds the image now, which the page then names
+      if (!m.error && m.slot && m.slot.slot) {
+        currentName = m.slot.name || currentName;
+        setChoice({ slot: m.slot.slot });
+      }
       if (m.upload) {                   // the upload booted, and is kept
         kept = true;
         if (m.error) showNotice('The opened image runs, but ' + m.error + '.', 'Download', download);
         else {
           upload = null;
           persisted = true;
-          if (!preparing) showNotice('The opened image is now kept in this browser.', null, null, 6000);
+          if (!preparing)
+            showNotice('The opened image is now kept in this browser' + (currentName ? " as '" + currentName + "'." : '.'),
+                       'Rename', renameCurrent, 10000);
         }
         break;
       }
@@ -547,7 +622,11 @@
       if (m.error) showNotice('Saved, but ' + m.error + '.', 'Download', download);
       else {
         unsaved = inputWhileSaving;
-        showNotice('The image is saved in this browser (' + mb(m.bytes) + ').', null, null, 6000);
+        persisted = true;
+        const text = 'The image is saved in this browser' + (currentName ? " as '" + currentName + "'" : '') +
+          ' (' + mb(m.bytes) + ').' + (m.treeError ? ' Note: ' + m.treeError + '.' : '');
+        if (m.created) showNotice(text, 'Rename', renameCurrent, m.treeError ? 0 : 10000);
+        else showNotice(text, null, null, m.treeError ? 0 : 6000);
       }
       inputWhileSaving = false;
       updateStatus();
@@ -558,8 +637,11 @@
     case 'superseded':
       // what this VM did since it started is kept nowhere now
       unsaved = touched;
-      showNotice('Another tab has replaced the image saved in this browser. Save to keep this session instead.',
-                 'Save', save);
+      showNotice('Another tab has replaced the image saved in this browser' + (currentName ? " ('" + currentName + "')" : '') +
+                 '. Save to keep this session instead.', 'Save', save);
+      break;
+    case 'git':
+      onGit(m);
       break;
     case 'exit':
       ended('exited', 'Exited (' + m.code + ')', 'Pharo quit with exit code ' + m.code + '.');
@@ -571,7 +653,7 @@
     case 'display':
       onDisplay(m);
       break;
-    case 'fs-result': case 'file': case 'error': {
+    case 'fs-result': case 'reset': case 'file': case 'error': {
       const r = reqs.get(m.id);
       if (!r) break;
       if (m.type === 'file') {           // one message per file
@@ -580,6 +662,7 @@
       }
       reqs.delete(m.id);
       if (m.type === 'error') r.reject(new Error(m.message));
+      else if (m.type === 'reset' && m.error) r.reject(new Error(m.error));
       else r.resolve(m.type === 'file' ? r.files : m);
       break;
     }
@@ -934,6 +1017,29 @@
     record(SAVE_REQUEST);
   }
 
+  // Save into a new slot, of the name asked: the worker binds the VM to it
+  function saveAs() {
+    if (!live()) return;
+    const base = currentName || (currentEntry && currentEntry.label) || 'Pharo';
+    const name = prompt('Save as a new image named', base + ' copy');
+    if (name === null || !name.trim()) return;
+    worker.postMessage({ type: 'saveAs', name: name.trim() });
+    save();
+  }
+
+  // Rename the slot of the VM (the notice of its first save offers it)
+  async function renameCurrent() {
+    const sid = current.slot;
+    if (!sid || !store) return;
+    const name = prompt('Rename the image', currentName);
+    if (name === null || !name.trim() || name.trim() === currentName) return;
+    try {
+      await store.rename(sid, name.trim().slice(0, 200));
+      currentName = name.trim().slice(0, 200);
+      showNotice("The image is now named '" + currentName + "'.", null, null, 4000);
+    } catch (e) { showNotice('Could not rename it: ' + ((e && e.message) || e), null, null, 6000); }
+  }
+
   async function download() {
     if (!worker || !ready) return;
     let files;
@@ -965,9 +1071,9 @@
     let opened = null;
     try {
       const choice = await PharoOpen.choose(files);
-      const lost = live() && unsaved ? ' What the world did since it was last saved is lost.' : '';
-      if ((persisted || lost) &&
-          !confirm((persisted ? 'Replace the image saved in this browser with ' + choice.name + '?' : 'Open ' + choice.name + '?') + lost))
+      // it becomes an image of its own: only what the world did is lost
+      if (live() && unsaved &&
+          !confirm('Open ' + choice.name + ' as a new image? What the world did since it was last saved is lost.'))
         return;
       let shown = -1;
       const progress = (loaded, total) => {
@@ -981,7 +1087,10 @@
       }
       opened = await PharoOpen.load(choice, progress);
     } catch (e) {
-      showNotice(String((e && e.message) || e), 'Open another', chooseFile);
+      const text = String((e && e.message) || e);
+      // the launcher stays, and says why
+      if (choosing) images.open(text, true);
+      else showNotice(text, 'Open another', chooseFile);
     } finally {
       opening = false;
       $('notice').removeAttribute('aria-busy');
@@ -999,9 +1108,89 @@
     open: openFiles,
   });
 
+  // ---- Images (images.js): the images of the site and those of this browser
+
+  // Delete the slot of the VM (sid), or every slot (null): the worker
+  // forgets it, and the page starts again, on the image saved last, or,
+  // with none, as on a first visit
+  async function deleteRunning(sid) {
+    const msg = sid ? { type: 'resetStorage', slot: sid } : { type: 'resetStorage', all: true };
+    if (worker) await request(msg);
+    else if (store) await (sid ? store.remove(sid) : store.reset());
+    upload = null;
+    restarted = sid ? "Deleted '" + (currentName || 'the image') + "' from this browser." : 'Deleted every image saved in this browser.';
+    images.close();
+    const left = store ? await store.list().catch(() => []) : [];
+    if (!left.length && Catalog.images(manifest).length >= 2) launch(restarted);
+    else spawn({});
+  }
+
+  // The image chosen in Images: after a question when the world has input
+  // that is not saved
+  function openChoice(choice) {
+    const entry = choice.fresh && manifest ? Catalog.find(manifest, choice.fresh) : null;
+    const what = entry ? 'a fresh ' + entry.label : 'that image';
+    if (live() && unsaved && !confirm('Open ' + what + '? What the world did since it was last saved is lost.')) return false;
+    upload = null;
+    restarted = '';
+    spawn(choice);
+    return true;
+  }
+
+  // The launcher: the Images dialog that cannot be closed, no VM
+  function launch(text) {
+    kill();
+    choosing = true;
+    setChoice({});
+    setStatus('choosing', 'Choose an image');
+    say('Choose a Pharo image');
+    showOverlay('Choose a Pharo image', false);
+    hideNotice();
+    updateControls();
+    images.open(text || null, true);
+  }
+
+  // ---- the git proxy: Settings, and what the worker says of git's requests
+
+  const gitSettings = GitProxy.wireDialog({
+    defaultProxy: () => (manifest && manifest.gitProxyDefault) || '',
+    onSaved: (value, chosen, kept) => {
+      if (worker) worker.postMessage({ type: 'gitProxy', gitProxy: value });
+      const origin = chosen.mode === 'default' ? GitProxy.originOf((manifest && manifest.gitProxyDefault) || '')
+        : GitProxy.originOf(chosen.value);
+      showNotice((origin ? 'Git requests now go through the proxy at ' + origin +
+                           (chosen.mode === 'default' ? " (this site's default)." : '.')
+                         : 'Git requests now go to the repositories themselves, without a proxy.') +
+                 (kept ? '' : ' This browser cannot keep the setting: it holds for this page only.'), null, null, 8000);
+    },
+    refocus: () => refocus(),
+  });
+  const SETTINGS = 'Settings';
+  function onGit(m) {
+    const chosen = GitProxy.read(), proxy = m.proxy || '';
+    if (m.event === 'request') {
+      if (chosen.mode === 'default' && proxy && !GitProxy.noted(proxy)) {
+        GitProxy.markNoted(proxy);
+        showNotice('Git requests (Iceberg clones, Metacello github://) go through the public CORS proxy ' + proxy +
+                   ', which sees what you clone.', SETTINGS, gitSettings.open, 15000);
+      }
+    } else if (m.event === 'failed') {
+      if (!proxy && m.status < 0)
+        showNotice("The browser blocked git's request to " + m.host + ' (CORS): git over HTTPS needs a proxy here.',
+                   SETTINGS, gitSettings.open, 15000);
+      else if (proxy && m.status < 0)
+        showNotice('The git proxy ' + proxy + ' did not answer.', SETTINGS, gitSettings.open, 15000);
+      else if (proxy && m.status === 403)
+        showNotice('The git proxy ' + proxy + ' refused the request to ' + m.host + '.', SETTINGS, gitSettings.open, 15000);
+    }
+  }
+
   const refocus = () => { if (framed) focusSink(); };
   $('stop').addEventListener('click', () => { stop(); refocus(); });
   $('save').addEventListener('click', () => { save(); refocus(); });
+  $('save-as').addEventListener('click', () => { saveAs(); refocus(); });
+  $('images').addEventListener('click', () => { if (images) images.open(); });
+  $('settings').addEventListener('click', () => gitSettings.open());
   $('download').addEventListener('click', () => { download(); refocus(); });
   $('open').addEventListener('click', chooseFile);
   $('open-file').addEventListener('change', e => {
@@ -1023,7 +1212,10 @@
     stats,
     get state() { return statusPill.dataset.state; },
     get unsaved() { return !!worker && alive && unsaved; },
+    get choice() { return Object.assign({}, current); },
+    get images() { return images; },
     readFile: path => request({ type: 'fs', op: 'readFile', path }).then(r => r.data),
+    fs: (op, path, fields) => request(Object.assign({ type: 'fs', op, path }, fields || {})),
   };
 
   // ---- start
@@ -1040,5 +1232,40 @@
     consoleWorks = true;
   }
   if (unavailable) fatal(unavailable, consoleWorks ? 'Open the Console' : null, 'index.html');
-  else spawn();
+  else start();
+
+  // The image of the URL (?slot=, ?fresh=: nothing else of it is read),
+  // else the last one saved or booted, else, on a first visit to a site of
+  // several images, the launcher
+  async function start() {
+    const q = new URLSearchParams(location.search);
+    const slot = q.get('slot'), fresh = q.get('fresh');
+    const want = slot && Storage.SLOT_ID.test(slot) ? { slot } : fresh && Catalog.ID.test(fresh) ? { fresh } : {};
+    showOverlay('Loading Pharo…', null);
+    let storageUnavailable = !store;
+    const [m, slots] = await Promise.all([
+      fetch('manifest.json' + Q).then(r => r.ok ? r.json() : null).catch(() => null),
+      store ? store.list().catch(() => { storageUnavailable = true; return []; }) : Promise.resolve([]),
+    ]);
+    manifest = m;
+    $('settings').hidden = !(manifest && manifest.git && manifest.gitHttp);
+    images = PharoImages.create({
+      store: storageUnavailable ? null : store,
+      manifest: () => manifest,
+      current: () => current,
+      running: () => (worker && current.slot) || null,
+      onOpen: openChoice,
+      onOpenFile: chooseFile,
+      onDeleteRunning: deleteRunning,
+      otherPage: { label: 'Console', href: c => 'index.html' + query(c) },
+    });
+    if (!manifest) spawn(want);           // (the worker says why it cannot start)
+    else if (want.slot) {
+      if (slots.some(s => s.slot === want.slot)) spawn(want);
+      else launch('That saved image is not in this browser.');
+    } else if (want.fresh) spawn(want);
+    else if (slots.length) spawn({});
+    else if (Catalog.images(manifest).length >= 2) launch();
+    else spawn({});
+  }
 })();

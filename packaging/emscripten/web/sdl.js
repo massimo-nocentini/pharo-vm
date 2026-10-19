@@ -5,7 +5,8 @@
 // 'sdl' mode, whose image opens its world through its own OSSDL2Driver.
 // SDL2's Emscripten video driver draws it into the canvas of this page,
 // transferred to the worker as an OffscreenCanvas, through the DOM shim of
-// sdl-shim.js.  No dependencies but open-image.js.
+// sdl-shim.js.  No dependencies but open-image.js, catalog.js and
+// git-proxy.js.
 //
 // - pharo-web.wasm is compiled once here and handed to every worker, so a
 //   restart only instantiates it.  A canvas can be transferred only once:
@@ -33,18 +34,21 @@
 //   made (SDL_CreateCursor) comes as its pixels (sdl {cursorImage}), and the
 //   page makes its data URL.
 // - Any image runs: the build's (its OSWindow-Web, if it has it, gives the
-//   world to SDL without a display), or one that Open (or files dropped on
-//   the page) gives, stock images too.  Nothing is kept in this browser:
+//   world to SDL without a display; ?fresh=<id> of the URL chooses another
+//   image of the site's catalog, catalog.js, and nothing else of the URL is
+//   read), or one that Open (or files dropped on the page) gives, stock
+//   images too.  Nothing is kept in this browser:
 //   the image that the world menu's Save writes stays in the memory of the
 //   VM, which Download gives.  Restart boots the same image again.
 // - Not bridged: the system clipboard (SDL2 has no Emscripten clipboard:
 //   copy and paste stay within the image), resizing, HiDPI (a canvas pixel
 //   is a CSS pixel), input methods, focus and Stop (the image registers
 //   nothing for it with the VM: Alt+. or Cmd+. interrupts it).
-// - The CORS proxy of git's HTTP requests is the one that the Console's
-//   Settings keep in this browser (pharo-wasm.gitProxy), as on the world
-//   page (world.js): given in init.gitProxy, and to the running VM when the
-//   Console changes it (a storage event).  Never taken from the URL.
+// - The CORS proxy of git's HTTP requests is the one that the Settings of
+//   the Console or of the world keep in this browser (git-proxy.js: the
+//   site's default, null, none, '', or a URL), given in init.gitProxy, and
+//   to the running VM when another page changes it (a storage event).
+//   Never taken from the URL.
 //
 // window.PharoSDL tells tests and the curious how it goes: stats (the
 // workers started, when this one started and painted first, the sizes of
@@ -74,22 +78,15 @@
     if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
   } catch (e) { /* no storage: follow the system */ }
 
-  // The proxy of git's HTTP requests that the Console keeps (page.js), or
-  // '': an http: or https: URL without credentials or fragment, as the
-  // Console checks it
-  const GIT_PROXY_KEY = 'pharo-wasm.gitProxy';
-  function gitProxy() {
-    let s = null;
-    try { s = localStorage.getItem(GIT_PROXY_KEY); } catch (e) { /* no storage: no proxy */ }
-    if (!s) return '';
-    try {
-      const u = new URL(s);
-      return /^https?:$/.test(u.protocol) && !u.username && !u.password && s.indexOf('#') < 0 ? s : '';
-    } catch (e) { return ''; }
-  }
-  addEventListener('storage', e => {
-    if (worker && (e.key === GIT_PROXY_KEY || e.key === null)) worker.postMessage({ type: 'gitProxy', gitProxy: gitProxy() });
-  });
+  // The proxy of git's HTTP requests (git-proxy.js), as another page of
+  // the site changes it
+  const GitProxy = window.PharoGitProxy;
+  GitProxy.onChange(value => { if (worker) worker.postMessage({ type: 'gitProxy', gitProxy: value }); });
+  // The catalog entry of the site that the URL names (?fresh=), if any
+  const fresh = (() => {
+    const f = new URLSearchParams(location.search).get('fresh');
+    return f && window.PharoCatalog.ID.test(f) ? f : undefined;
+  })();
 
   let worker = null, gen = 0, ready = false, alive = false, painted = false, state = null;
   let idleAt = 0, lastMsgAt = 0, startTimer = 0, loadedText = 'Loading';
@@ -289,8 +286,9 @@
       mode: 'sdl',
       persist: false,
       upload: upload || undefined,
+      fresh,
       canvas: offscreen,
-      gitProxy: gitProxy(),
+      gitProxy: GitProxy.initValue(),
     }, [offscreen]);
     updateControls();
   }

@@ -5,14 +5,20 @@
   image, booted with --interactive, and shows its Morphic world in the
   canvas: the worker draws it there (display-worker.js), and world.js
   passes it the pointer, wheel and keyboard (keymap.js), the size of the
-  canvas, pastes and focus.  The image is the one the Console page saves
-  in this browser, or the build's, or one that Open gives (open-image.js),
-  which the worker prepares for the world when it lacks OSWindow-Web.
-  The build (stage.mjs) replaces the
-  BUILD placeholder, in the pharo-build meta tag and the URLs below, with a
-  build id, which the page passes as ?v= on every script, worker and .wasm
-  URL.  No external resources: it must be served over plain HTTP (make
-  wasm-serve), not from file://. -->
+  canvas, pastes and focus.  The image is one of the site's catalog
+  (catalog.js: Pharo 13 to 15 on the published site), started fresh, or
+  one of the images saved in this browser (vm-storage.js), or one that
+  Open gives (open-image.js), which the worker prepares for the world when
+  it lacks OSWindow-Web.  Images (images.js) lists them all, Save as keeps
+  a copy under another name, and Settings (git-proxy.js) holds the CORS
+  proxy of git's requests, as the Console's does.  On a first visit to a
+  site of several images, the Images dialog opens as the launcher, and no
+  VM starts until an image is chosen.  The URL says which image runs, as
+  ?slot= or ?fresh= (nothing else of it is read).  The build (stage.mjs)
+  replaces the BUILD placeholder, in the pharo-build meta tag and the URLs
+  below, with a build id, which the page passes as ?v= on every script,
+  worker and .wasm URL.  No external resources: it must be served over
+  plain HTTP (make wasm-serve), not from file://. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -346,10 +352,53 @@ button { font: inherit; color: inherit; }
 .drop-card p { margin: 0; }
 .drop-card strong { display: block; color: var(--text); font-size: 15px; font-weight: 600; }
 
+/* the Settings dialog (git-proxy.js): the proxy of git's HTTP requests, as
+   in the Console */
+.dialog {
+  width: min(480px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--float);
+  overflow: auto;
+}
+.dialog::backdrop { background: var(--scrim); }
+.dialog form { display: flex; flex-direction: column; gap: 6px; padding: 18px 18px 14px; }
+.dialog h2 { margin: 0 0 8px; font-size: 16px; font-weight: 650; }
+.dialog fieldset { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.dialog legend { margin-bottom: 4px; padding: 0; font-size: 13.5px; font-weight: 600; }
+.dialog .choice { display: flex; align-items: baseline; gap: 8px; font-size: 13.5px; overflow-wrap: anywhere; }
+.dialog .choice input { flex: none; margin: 0; }
+.dialog input[type="url"] {
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: 13.5px/1.4 ui-monospace, "Noto Sans Mono", monospace;
+}
+.dialog input[type="url"]:focus-visible { outline-offset: 0; }
+.dialog input[aria-invalid="true"] { border-color: var(--bad); }
+.dialog .state { margin: 0; min-height: 1.5em; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.dialog .state[data-kind="proxy"], .dialog .state[data-kind="default"] { color: var(--text); }
+.dialog .state[data-kind="bad"] { color: var(--bad); }
+.dialog .about { margin: 2px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+.dialog .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
 @media (max-width: 760px) {
   .brand h1 img { height: 20px; }
   .toolbar .label, .top .label { display: none; }
   .toolbar .btn, .top .btn { padding: 0 9px; }
+}
+/* too narrow for one row: the toolbar moves down to a row of its own */
+@media (max-width: 560px) {
+  .top { flex-wrap: wrap; row-gap: 4px; }
+  .toolbar { order: 3; flex: 1 1 100%; flex-wrap: wrap; }
 }
 @media (max-width: 380px) {
   .top { gap: 6px; }
@@ -373,6 +422,9 @@ button { font: inherit; color: inherit; }
       <button class="btn ghost" id="save" type="button" aria-label="Save" title="Save the image, and keep it in this browser" disabled>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2z"/><path d="M8 3v5h7V3"/><path d="M8 21v-7h8v7"/></svg><span class="label">Save</span>
       </button>
+      <button class="btn ghost" id="save-as" type="button" aria-label="Save as" title="Save the image as a new one, under another name, and keep both in this browser" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3h9l3 3v5"/><path d="M5 3v16a2 2 0 0 0 2 2h5"/><path d="M8 3v5h6V3"/><path d="M18 14v7M14.5 17.5h7"/></svg><span class="label">Save as…</span>
+      </button>
       <button class="btn ghost" id="download" type="button" aria-label="Download" title="Download the image and its .changes, as last saved" disabled>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg><span class="label">Download</span>
       </button>
@@ -380,9 +432,15 @@ button { font: inherit; color: inherit; }
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V6a2 2 0 0 1 2-2h3.5l2 2H18a2 2 0 0 1 2 2v3"/><path d="M4 20h14.4a1.5 1.5 0 0 0 1.4-1l2.1-6.4a1.2 1.2 0 0 0-1.1-1.6H7.7a1.5 1.5 0 0 0-1.4 1z"/></svg><span class="label">Open</span>
       </button>
       <input type="file" id="open-file" accept=".zip,.image,.changes,.sources" multiple hidden>
+      <button class="btn ghost" id="images" type="button" aria-label="Images" aria-haspopup="dialog" title="The images to start: those of this site, fresh, and those saved in this browser">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="label">Images</span>
+      </button>
+      <button class="btn ghost" id="settings" type="button" aria-label="Settings" aria-haspopup="dialog" title="Settings: the proxy of git's HTTP requests" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span class="label">Settings</span>
+      </button>
     </div>
     <span class="grow"></span>
-    <a class="btn console" id="console" href="index.html" title="The Console: a Smalltalk REPL on the image saved in this browser">
+    <a class="btn console" id="console" href="index.html" title="The Console: a Smalltalk REPL on this image">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg><span class="label">Console</span>
     </a>
     <span id="status" class="pill" data-state="loading">
@@ -420,9 +478,32 @@ button { font: inherit; color: inherit; }
   </div>
 </div>
 
+<dialog class="dialog" id="settings-dialog" aria-labelledby="settings-title">
+  <form id="settings-form" method="dialog" novalidate>
+    <h2 id="settings-title">Settings</h2>
+    <fieldset>
+      <legend>Git HTTP proxy</legend>
+      <label class="choice"><input type="radio" name="git-proxy-mode" id="git-proxy-mode-default" value="default"><span>Site default<span id="git-proxy-default-named">: <span id="git-proxy-default-url"></span></span><span id="git-proxy-default-none" hidden> (none)</span></span></label>
+      <label class="choice"><input type="radio" name="git-proxy-mode" id="git-proxy-mode-none" value="none"><span>None: requests go straight to the git host (works only for hosts that let this page in)</span></label>
+      <label class="choice"><input type="radio" name="git-proxy-mode" id="git-proxy-mode-custom" value="custom"><span>My proxy:</span></label>
+      <input id="git-proxy" type="url" inputmode="url" placeholder="https://git-proxy.example/" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="My proxy" aria-describedby="git-proxy-state git-proxy-about">
+    </fieldset>
+    <p class="state" id="git-proxy-state" aria-live="polite"></p>
+    <p class="about" id="git-proxy-about">Iceberg's https:// clones and fetches, and Metacello's github:// loads, go to this CORS proxy: each request goes to the proxy's URL followed by the host and the path of the repository, such as github.com/pharo-project/pharo.git. The proxy sees the code and any credentials that pass through it, so choose only one that you run or trust. With None, the requests go to the repository itself, which works only for a server that lets this page in (CORS). <span id="git-proxy-about-default"></span>This browser keeps your choice; a link cannot set it.</p>
+    <div class="actions">
+      <button class="btn" id="settings-cancel" type="button">Cancel</button>
+      <button class="btn primary" id="settings-save" type="submit">Save</button>
+    </div>
+  </form>
+</dialog>
+
 <noscript><p style="padding:16px">This page needs JavaScript and WebAssembly.</p></noscript>
 <script src="keymap.js?v=@BUILD@"></script>
 <script src="open-image.js?v=@BUILD@"></script>
+<script src="vm-storage.js?v=@BUILD@"></script>
+<script src="catalog.js?v=@BUILD@"></script>
+<script src="git-proxy.js?v=@BUILD@"></script>
+<script src="images.js?v=@BUILD@"></script>
 <script src="world.js?v=@BUILD@"></script>
 </body>
 </html>
