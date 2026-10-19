@@ -160,7 +160,9 @@ EM_JS(int, gitHttpRequest, (const char *method, const char *url, const char *con
 					+ ": the proxy is down or refuses this page, or the network is down; check Settings";
 				return -2;
 			}
-			state.error = "git http: request failed (CORS or network): " + String(detail).slice(0, 300)
+			/* (the browsers end their text with a full stop: one is enough) */
+			state.error = "git http: request failed (CORS or network): "
+				+ String(detail).slice(0, 300).replace(/[. ]+$/, "")
 				+ ". A web page cannot read git servers without a CORS proxy: choose one in Settings (Git HTTP proxy)";
 			return -1;
 		};
