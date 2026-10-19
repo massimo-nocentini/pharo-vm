@@ -62,8 +62,11 @@
 #             fail with the transport's 'git http: no git repository at
 #             <url> (404)', after a single request (GIT_ERROR_HTTP: Iceberg
 #             does not retry it), and the VM must go on.
-#             Both are skipped without the transport (WASM_LIBGIT2_HTTP=OFF),
-#             curl, or git with `git http-backend'.
+#             Both run without the PHARO_WASM_GIT_PROXY of the environment
+#             (the requests never go to a proxy), both fail when the server
+#             does not start or the run of the VM fails, and both are skipped
+#             without the transport (WASM_LIBGIT2_HTTP=OFF), curl, or git
+#             with `git http-backend'.
 #
 # Every run must exit with 0, print no line of the guard of the callouts
 # ('FFI callout failed, its declaration does not match ...' or 'FFI callout
@@ -153,8 +156,11 @@ hidden() (
     export PHARO_WASM_FFI_HIDE WASM_ICEFLOW_STEPS
     vm "$WASM_DIR/node/pharo"
 )
-# (the clones over HTTP, from the git server whose URL is $git_url)
+# (the clones over HTTP, from the git server whose URL is $git_url, never
+# through a proxy of the environment of the user who runs the lane, which
+# the transport would take: the requests of 127.0.0.1 would go there)
 http_clone() (
+    unset PHARO_WASM_GIT_PROXY
     script=$SRCDIR/tests/wasm/st/git-http-clone.st
     WASM_GIT_HTTP_REMOTE=${git_url}r WASM_GIT_HTTP_MISSING=${git_url}nope
     export WASM_GIT_HTTP_REMOTE WASM_GIT_HTTP_MISSING
@@ -409,10 +415,16 @@ else
     fresh http
     home
     mkdir -p repos
+    # (one run of the VM makes both clones: when the server or the run
+    # fails, missing fails too, so that the lane counts both checks)
     if ! start_server; then
-	checks=$((checks + 1))
+	checks=$((checks + 2))
 	fail redirect "the git server did not start: $(head -n 1 server.err | cut -c 1-200)"
-    elif run redirect http_clone && quiet redirect; then
+	fail missing "the git server did not start"
+    elif ! { run redirect http_clone && quiet redirect; }; then
+	checks=$((checks + 1))
+	fail missing "the run of the clones failed (see redirect)"
+    else
 	stop_server
 	# (the requests of r, and of nope, in the order the server answered them)
 	grep -E '^git [A-Z]+ /r(\.git)?/' server.log >r.log
