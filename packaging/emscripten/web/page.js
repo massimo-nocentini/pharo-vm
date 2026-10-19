@@ -34,9 +34,11 @@
 //   starts again.  Another tab may save over that slot: this one says so,
 //   and Save keeps it again.  An opened image is kept, in a slot of its
 //   own, once it has started (its first prompt): one that crashes or quits
-//   before is not, and Restart boots the image of before again.  When the
-//   saved image itself does not start, the notice offers to delete it next
-//   to Restart.
+//   before is not, and Restart boots the image of before again.  Until it
+//   is kept, the URL, the link to the world and Images name no image (the
+//   slot of before is not the one that runs: Delete or Reset must not
+//   touch it).  When the saved image itself does not start, the notice
+//   offers to delete it next to Restart.
 // - Open (or files dropped on the page) starts an image of your own: a
 //   Pharo .zip, or an .image, its .changes and its .sources, which
 //   open-image.js chooses, unpacks and checks while the VM goes on, the
@@ -353,6 +355,7 @@
   let afterSave = null;                 // what to do once the next save is stored
   let leaving = false;                  // the page goes, and asked first
   let upload = null;                    // {name, image, changes, sources} to boot until the worker keeps it
+  let beforeUpload = {};                // the choice that ran before it, which Restart boots if it was not kept
   let opening = false;                  // Open unpacks files
   let source = null;                    // where the image of the worker came from (ready)
   let gitHttp = false;                  // the VM has libgit2's smart-HTTP transport (ready)
@@ -544,11 +547,15 @@
     render();
     clearTimeout(watchdog);
     alive = false;
+    const dropped = !prompted && !eofSent && source === 'upload';
+    if (dropped) {
+      upload = null;
+      setChoice(beforeUpload);          // (first: Delete then has its slot again)
+    }
     setStatus(status, text);
     updateControls();
     let alt;
-    if (!prompted && !eofSent && source === 'upload') {
-      upload = null;
+    if (dropped) {
       notice = 'The opened image did not start; it was not kept.';
     } else if (!prompted && !eofSent && source === 'saved') {
       notice = 'The image saved in this browser did not start.';
@@ -724,7 +731,10 @@
   // ---- Stop, Restart, EOF
 
   function respawn() {
-    if (!prompted && source === 'upload') upload = null;   // it hung before its first prompt
+    if (!prompted && source === 'upload') {   // it hung before its first prompt
+      upload = null;
+      setChoice(beforeUpload);
+    }
     note('VM restarted (unsaved changes lost)');
     spawn();
   }
@@ -831,6 +841,11 @@
     if (!opened) return;
     hideNotice();
     upload = opened;
+    // the VM runs neither the slot nor the fresh image of before: until it
+    // is kept, the URL, the link to the world and Images name none
+    beforeUpload = current;
+    currentName = '';
+    setChoice({});
     render();
     note('Starting ' + what + '…');
     spawn();

@@ -44,13 +44,13 @@
 // Open asks first only when the world has input that is not saved.
 //
 // The images (vm-storage.js slots, images.js): a first visit to a site of
-// several images (manifest.images) shows the launcher, which Escape does
-// not close and where Enter starts the default image (gotoWorld gives the
+// several images (manifest.images) shows the launcher, which Escape (three
+// times) does not close and where Enter starts the default image (gotoWorld gives the
 // other first visits that image, ?fresh=); every other image of the
 // catalog starts fresh and paints; the first Save makes a slot, which the
 // URL (?slot=) and the link to the Console say; Images lists the slots,
 // Save as makes another, which an Open of Images leaves for the first,
-// Rename renames, Delete deletes; a file written into /pharo is kept with
+// Rename renames, Delete deletes, the focus staying in the dialog; a file written into /pharo is kept with
 // the image (the tree) across a Save and a reload.  Settings (git-proxy.js)
 // on the world page: the site's default (pw.mjs serves a dead local one),
 // None, which a reload keeps, and a proxy of the user's, given to the VM;
@@ -867,12 +867,20 @@ await run(async t => {
     await page.click(`#images-saved li[data-slot="${copy}"] [data-act="rename"]`);
     await page.waitForFunction(copy => [...document.querySelectorAll('#images-saved li[data-slot]')].some(li =>
       li.dataset.slot === copy && li.querySelector('.name').textContent === 'World copy renamed'), copy, { timeout: 10000 });
+    // the rows were made again: the focus stays on the button, not on the
+    // body, whose keys go to the world
+    assert(await page.evaluate(copy => {
+      const a = document.activeElement;
+      return a && a.dataset.act === 'rename' && a.closest('li').dataset.slot === copy;
+    }, copy), 'the focus after Rename: ' + await page.evaluate(() => document.activeElement.outerHTML.slice(0, 80)));
     let confirmed = null;
     page.once('dialog', d => { confirmed = d.message(); d.accept(); });
     await page.click(`#images-saved li[data-slot="${copy}"] [data-act="delete"]`);
     await page.waitForFunction(copy => ![...document.querySelectorAll('#images-saved li[data-slot]')].some(li => li.dataset.slot === copy),
                                copy, { timeout: 10000 });
     assert(confirmed === "Delete 'World copy renamed' from this browser?", 'asked ' + confirmed);
+    assert(await page.evaluate(() => document.getElementById('images-dialog').contains(document.activeElement)),
+           'the focus after Delete: ' + await page.evaluate(() => document.activeElement.tagName));
     assert(!(await slotsOf()).some(s => s.slot === copy) && (await stats()).starts === starts + 1, 'deleted, and the world goes on');
     await closeImages();
   });
@@ -1051,9 +1059,14 @@ await run(async t => {
       assert(!f.workers().length && (await f.evaluate(() => window.PharoWorld.stats.starts)) === 0, 'no VM');
       assert(/^Choose a Pharo image/.test(await f.textContent('#overlay-text')), 'the overlay: ' + await f.textContent('#overlay-text'));
       if (t.shots) await f.screenshot({ path: t.shot('world-launcher.png') });
-      await f.keyboard.press('Escape');
-      await f.waitForTimeout(200);
-      assert(await f.$eval('#images-dialog', d => d.open), 'Escape closed the launcher');
+      // (a browser honours the cancel event only for the first Escapes)
+      for (let i = 1; i <= 3; i++) {
+        await f.keyboard.press('Escape');
+        await f.waitForTimeout(200);
+        assert(await f.$eval('#images-dialog', d => d.open), 'Escape ' + i + ' closed the launcher');
+      }
+      assert(await f.evaluate(() => document.activeElement && document.activeElement.dataset.fresh) === defaultId,
+             'the default has the focus again');
       await f.keyboard.press('Enter');
       await f.waitForFunction(() => window.PharoWorld.stats.frames > 0, null, { timeout: 120000 });
       assert(f.url().endsWith('/world.html?fresh=' + defaultId), 'the default, fresh: ' + f.url());

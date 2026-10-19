@@ -31,13 +31,15 @@
 // given a manifest that says it has it, so that the page shows Settings.
 // The site's default (pw.mjs serves a manifest whose gitProxyDefault is a
 // dead local proxy) goes to the worker as null, and the start note names
-// it; a proxy typed in is checked, shown with its origin, kept in
-// localStorage and given to the worker (init.gitProxy, then "gitProxy"),
-// also by the world page; None keeps 'none' and gives '', Default removes
-// the key and gives null; a ?gitProxy= or #gitProxy= of the URL is
-// ignored; without localStorage it holds for the session.  What the worker
-// says of git's requests (its "git" messages) gives a note once, or why a
-// request failed.  A clone through the proxy is git.spec.mjs's.
+// it; tabbing through the empty field of a proxy of one's own leaves the
+// choice as it was; a proxy typed in is checked, shown with its origin,
+// kept in localStorage and given to the worker (init.gitProxy, then
+// "gitProxy"), also by the world page; None keeps 'none' and gives '',
+// Default removes the key and gives null; a ?gitProxy= or #gitProxy= of
+// the URL is ignored; without localStorage it holds for the session.  What
+// the worker says of git's requests (its "git" messages) gives a note
+// once, or why a request failed.  A clone through the proxy is
+// git.spec.mjs's.
 //
 // The Console is the first of two tabs, Console and Notebook (whose checks
 // are notebook.spec.mjs's): while the Notebook shows, Esc, Ctrl+C and
@@ -1010,6 +1012,18 @@ await run(async t => {
                                                                                : 'Default: no proxy, git requests go to the repository itself.']),
              'the default: ' + await proxyState(p));
       assert(await p.textContent('#git-proxy-default-url') === DEFAULT_ORIGIN, 'the default named: ' + await p.textContent('#git-proxy-default-url'));
+      // tabbing through the empty field chooses custom only while it has
+      // the focus: a Save then changes nothing
+      await p.keyboard.press('Tab');
+      assert(await p.evaluate(() => document.activeElement.id) === 'git-proxy' && await mode(p) === 'custom',
+             'a focus of the field chooses custom: ' + await p.evaluate(() => document.activeElement.id) + ' ' + await mode(p));
+      await p.keyboard.press('Tab');
+      assert(await mode(p) === 'default' && (await proxyState(p))[0] === 'default', 'leaving it empty: ' + await mode(p));
+      await p.focus('#git-proxy');
+      await p.press('#git-proxy', 'Enter');
+      assert(!(await p.$eval('#settings-dialog', d => d.open)) && await stored(p) === null &&
+             JSON.stringify(await sent(p)) === '[["init",null]]', 'Enter in the empty field changes nothing: ' + await stored(p));
+      await p.click('#settings');
       for (const [bad, why] of [['ftp://127.0.0.1/', /http:\/\/ or https:\/\//], ['http://me:pw@127.0.0.1:9/', /user name/],
                                 [PROXY + '/#x', /fragment/], ['git proxy', /not a URL/]]) {
         await typeProxy(p, bad);

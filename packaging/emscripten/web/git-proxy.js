@@ -50,10 +50,13 @@
 // (#git-proxy-mode-default, labelled with the site's default,
 // #git-proxy-default-url, #git-proxy-mode-none and #git-proxy-mode-custom),
 // the field #git-proxy of the custom one (a focus or a key in it chooses
-// custom; Enter saves), #git-proxy-state (data-kind default, proxy, none or
-// bad: what the requests do then, or why the URL is not one), the
-// privacy text #git-proxy-about (#git-proxy-about-default names the
-// site's default), and #settings-cancel and #settings-save.  A save that
+// custom; Enter saves; after a focus alone, the field left empty, the
+// choice of before comes back when the focus leaves, or at a save:
+// tabbing through the dialog changes nothing), #git-proxy-state
+// (data-kind default, proxy, none or bad: what the requests do then, or
+// why the URL is not one), the privacy text #git-proxy-about
+// (#git-proxy-about-default names the site's default), and
+// #settings-cancel and #settings-save.  A save that
 // changed the choice keeps it (write) and calls onSaved(initValue(), read(),
 // kept); the page then gives it to its VMs.  A click on the backdrop, Cancel
 // and Escape close the dialog without a change, and refocus() is called
@@ -177,6 +180,13 @@
     const defaultProxy = () => String((o.defaultProxy && o.defaultProxy()) || '');
     const mode = () => Object.keys(radios).find(k => radios[k].checked) || 'default';
     const choose = m => { for (const k in radios) radios[k].checked = k === m; };
+    // the mode that a focus of the empty field replaced by custom, until
+    // something is typed or chosen
+    let byFocus = null;
+    function unfocus() {
+      if (byFocus && !input.value.trim()) choose(byFocus);
+      byFocus = null;
+    }
 
     // the labels that name the default, and the text that names it
     function showDefault() {
@@ -215,6 +225,7 @@
       if (dialog.open) return;
       const r = read();
       choose(r.mode);
+      byFocus = null;
       input.value = r.mode === 'custom' ? r.value : '';
       showDefault();
       showState();
@@ -222,6 +233,7 @@
       (radios[r.mode] || radios.default).focus();
     }
     function save() {
+      unfocus();
       const m = mode(), p = showState();
       if (p && p.error) { input.focus(); return; }
       dialog.close();
@@ -233,12 +245,20 @@
       if (o.onSaved) o.onSaved(initValue(), read(), w.kept);
     }
     for (const k in radios) radios[k].addEventListener('change', () => {
+      byFocus = null;
       if (k !== 'custom') input.value = '';
       showState();
     });
-    // a focus or a key in the field chooses custom
-    input.addEventListener('focus', () => { if (!radios.custom.checked) { choose('custom'); showState(); } });
-    input.addEventListener('input', () => { choose('custom'); showState(); });
+    // a focus or a key in the field chooses custom; a focus alone, until
+    // the field is left
+    input.addEventListener('focus', () => {
+      if (radios.custom.checked) return;
+      byFocus = mode();
+      choose('custom');
+      showState();
+    });
+    input.addEventListener('blur', () => { if (byFocus) { unfocus(); showState(); } });
+    input.addEventListener('input', () => { byFocus = null; choose('custom'); showState(); });
     $('settings-form').addEventListener('submit', e => { e.preventDefault(); save(); });
     $('settings-cancel').addEventListener('click', () => dialog.close());
     dialog.addEventListener('close', () => { if (o.refocus) o.refocus(); });

@@ -58,9 +58,14 @@
 // The launcher is the dialog for a first visit to the world page of a site
 // of several images, where no VM runs until the user chose one: it has no
 // Close, Escape does not close it, and the default image of the catalog has
-// the focus, so that Enter starts it.  The list is read again at each
-// open() and when the window gets the focus back (another tab may have
-// saved meanwhile).
+// the focus, so that Enter starts it.  (A browser stops honouring the
+// cancel event's preventDefault after a few Escapes in a row: the launcher
+// then shows itself again as soon as it closed.)  The list is read again
+// at each open() and when the window gets the focus back (another tab may
+// have saved meanwhile).  Its rows are made again then, and after a rename
+// or a delete: the focus, which would fall to the body (where the world
+// page takes keys for the image), goes to the same button of the same row,
+// else to the first one of the list, or of the dialog.
 
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -224,6 +229,9 @@
       if (g !== gen) return;
       listed = all;
       showNote();
+      // the button of a row that has the focus, given back below
+      const f = doc.activeElement, row = f && savedList.contains(f) ? f.closest('li[data-slot]') : null;
+      const had = row ? { slot: row.dataset.slot, act: f.dataset.act } : null;
       savedList.textContent = '';
       empty.hidden = !!all.length;
       deleteAll.hidden = !all.length;
@@ -259,6 +267,11 @@
         }
         li.appendChild(acts);
         savedList.appendChild(li);
+      }
+      if (dialog.open && (had || !dialog.contains(doc.activeElement))) {
+        const li = had && [...savedList.children].find(e => e.dataset.slot === had.slot);
+        const again = li && [...li.querySelectorAll('[data-act]')].find(e => e.dataset.act === had.act);
+        (again || (had && savedList.querySelector('button')) || firstButton()).focus();
       }
     }
 
@@ -309,11 +322,13 @@
       dialog.toggleAttribute('data-launcher', launcher);
       const shown = refresh();
       if (!dialog.open) dialog.showModal();
-      // the default image, for Enter; else the first thing to do
-      const first = (launcher && freshList.querySelector('[data-default]')) || freshList.querySelector('button') ||
-        savedList.querySelector('button') || openFile;
-      if (launcher || !dialog.contains(doc.activeElement)) first.focus();
+      if (launcher || !dialog.contains(doc.activeElement)) firstButton().focus();
       return shown;
+    }
+    // the default image, for Enter; else the first thing to do
+    function firstButton() {
+      return (launcher && freshList.querySelector('[data-default]')) || freshList.querySelector('button') ||
+        savedList.querySelector('button') || openFile;
     }
     function closeIt() {
       launcher = false;
@@ -338,8 +353,14 @@
       if (dialog.open) refresh();
     });
     close.addEventListener('click', closeIt);
-    // the launcher stays until an image is chosen
+    // the launcher stays until an image is chosen: Escape is kept from it,
+    // and when the browser closes it all the same, it shows again
     dialog.addEventListener('cancel', e => { if (launcher) e.preventDefault(); });
+    dialog.addEventListener('close', () => {
+      if (!launcher || dialog.open) return;
+      dialog.showModal();
+      firstButton().focus();
+    });
     dialog.addEventListener('click', e => { if (e.target === dialog && !launcher) closeIt(); });
     win.addEventListener('focus', () => { if (dialog.open) refresh(); });
 

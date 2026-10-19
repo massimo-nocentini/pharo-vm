@@ -44,7 +44,10 @@
 //   of several images, no VM starts: the Images dialog opens as the
 //   launcher (images.js), and the user chooses which.  Once the VM is
 //   ready, and after each save, the URL says the image that runs
-//   (history.replaceState), and so does the link to the Console.
+//   (history.replaceState), and so does the link to the Console.  An image
+//   opened (Open) is none of them until the worker kept it in a slot: the
+//   URL then names no image, and Images shows no slot running; when it
+//   does not start, Restart boots the image of before again.
 // - Save asks the image to save itself (a save request record); the worker
 //   keeps the saved image in this browser: in the slot it booted from, or
 //   in a new one for an image started fresh or opened, named after it.
@@ -142,6 +145,7 @@
   let heardAt = 0, pingAt = 0;          // when the worker last said anything, and was asked
   let restarted = '';                   // why the worker was replaced, said until the next one is ready
   let upload = null;                    // {name, image, changes, sources} to boot until the worker keeps it
+  let beforeUpload = {};                // the choice that ran before it, which Restart boots if it was not kept
   let kept = false;                     // the worker kept the upload it booted (or failed to)
   let source = null, persisted = false; // where the image came from, and whether one is saved (ready)
   let preparing = false;                // the worker prepares the image for the world (ready.preparing)
@@ -411,6 +415,7 @@
     clearTimeout(startTimer);
     if (!framed && !kept && source === 'upload') {
       upload = null;
+      setChoice(beforeUpload);
       notice = 'The opened image did not start; it was not kept. ' + notice;
     } else if (preparing) {
       notice = 'The image could not be prepared for the world: ' + notice;
@@ -427,7 +432,10 @@
   }
 
   function respawn() {
-    if (!framed && !kept && source === 'upload') upload = null;   // it hung before it started
+    if (!framed && !kept && source === 'upload') {   // it hung before it started
+      upload = null;
+      setChoice(beforeUpload);
+    }
     restarted = 'VM restarted (unsaved changes lost).';
     spawn();
   }
@@ -856,7 +864,11 @@
   const held = new Map();
   let pendingPaste = null;              // the Ctrl/Cmd+V waiting for its paste event
 
-  const keyTarget = t => t === sink || t === document.body || t === document.documentElement || t === canvas;
+  // The keys of the world: those of the sink, the canvas or the page, but
+  // none while a dialog shows (Images, Settings), whose focus may have
+  // fallen to the body; a key held from before is still released
+  const keyTarget = t => (t === sink || t === document.body || t === document.documentElement || t === canvas) &&
+    !document.querySelector('dialog[open]');
   function sendKey(type, k, repeat) {
     record(type, k.sym, k.scan, repeat ? 1 : 0, k.mods);
   }
@@ -1097,9 +1109,13 @@
       updateControls();
     }
     if (!opened) return;
+    // the VM runs neither the slot nor the fresh image of before: until it
+    // is kept, the URL, the link to the Console and Images name none
+    beforeUpload = current;
     upload = opened;
     restarted = '';
-    spawn();
+    currentName = '';
+    spawn({});
   }
   const chooseFile = () => $('open-file').click();
   PharoOpen.drops(window, {
@@ -1257,6 +1273,10 @@
       onOpen: openChoice,
       onOpenFile: chooseFile,
       onDeleteRunning: deleteRunning,
+      // a rename of the slot of the VM
+      onChange: () => {
+        if (current.slot && store) store.name(current.slot).then(n => { if (n) currentName = n; }, () => {});
+      },
       otherPage: { label: 'Console', href: c => 'index.html' + query(c) },
     });
     if (!manifest) spawn(want);           // (the worker says why it cannot start)
