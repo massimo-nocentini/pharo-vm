@@ -87,6 +87,30 @@ if(FEATURE_PLUGIN_SSL)
     endif()
 endif()
 
+# SimdJSONPlugin: JSON reading with simdjson 5.0.5 (C++17), the plugin of
+# plugins/SimdJSONPlugin/st/SimdJSON.st.  Declared here, with the plugin,
+# rather than next to FEATURE_PLUGIN_UUID in CMakeLists.txt.  ON everywhere;
+# verified on Linux and Emscripten only: macOS (a .dylib with the libc++ of
+# the system) and Windows (MSYS2, whose C++ runtime DLLs the install step of
+# cmake/Windows.cmake bundles) have never built it
+option(FEATURE_PLUGIN_SIMDJSON "Build the SimdJSONPlugin (simdjson JSON reader, C++17)" ON)
+if(FEATURE_PLUGIN_SIMDJSON)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/simdjson.cmake)
+    add_vm_plugin(SimdJSONPlugin FALSE FALSE)            # globs src/common/*.c; a builtin STATIC lib on Emscripten
+    target_sources(SimdJSONPlugin PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/plugins/SimdJSONPlugin/src/cxx/sjEngine.cpp)
+    target_link_libraries(SimdJSONPlugin PRIVATE pharo_simdjson)
+    # primitiveInfo answers this version (SimdJSONPlugin.c has no simdjson.h)
+    target_compile_definitions(SimdJSONPlugin PRIVATE SJ_SIMDJSON_VERSION="${PHARO_SIMDJSON_VERSION}")
+    target_compile_options(SimdJSONPlugin PRIVATE -O3 -g0)
+    foreach(option IN LISTS PHARO_SIMDJSON_CXX_OPTIONS)
+        target_compile_options(SimdJSONPlugin PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${option}>)
+    endforeach()
+    set_target_properties(SimdJSONPlugin PROPERTIES
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
+        CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+endif()
+
 # UnixOSProcessPlugin (it needs fork(), which Emscripten has not)
 if(NOT WIN AND NOT EMSCRIPTEN)
     add_vm_plugin(UnixOSProcessPlugin FALSE FALSE)

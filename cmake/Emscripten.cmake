@@ -62,8 +62,11 @@ endif()
 # exception handling of WebAssembly (try_table and exnref), wasm-legacy its
 # legacy instructions (try, delegate and rethrow, which Firefox reports as
 # deprecated, for engines without exnref) and emscripten calls out to
-# JavaScript.  The flags go in this directory's CMAKE_C_FLAGS, which reach the
-# links too, so that a later `cmake -DWASM_SJLJ=<mode> <dir>' changes both.
+# JavaScript.  The flags go in this directory's CMAKE_C_FLAGS, so that a later
+# `cmake -DWASM_SJLJ=<mode> <dir>' changes them, and in PHARO_WASM_LINK_FLAGS:
+# a link takes CMAKE_C_FLAGS only while every source of the executable is C
+# (the C++ of SimdJSONPlugin makes it take CMAKE_CXX_FLAGS instead).  C++
+# sources take them from their targets (cmake/simdjson.cmake).
 if(WASM_SJLJ STREQUAL "wasm")
     set(PHARO_WASM_SJLJ_FLAGS -sSUPPORT_LONGJMP=wasm -sWASM_LEGACY_EXCEPTIONS=0)
 elseif(WASM_SJLJ STREQUAL "wasm-legacy")
@@ -293,7 +296,8 @@ set(PHARO_WASM_NODE_LINK_DEPENDS
 
 # The web factory: its host (packaging/emscripten/web/vm-driver.js) gives the
 # devices and runs the slices.  -sMEMORY64=2 wins over the -m64 of
-# CMAKE_C_FLAGS, which CMake also passes to the link.
+# CMAKE_C_FLAGS, which CMake also passes to the link when it links only C
+# (with SimdJSONPlugin it links C++, with CMAKE_CXX_FLAGS, which have no -m64).
 if(WASM_WEB_MEMORY64 STREQUAL "2")
     set(PHARO_WASM_WEB_LINK_FLAGS -sMEMORY64=2)
 else()

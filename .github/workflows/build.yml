@@ -107,6 +107,16 @@ jobs:
           "$RUNNER_TEMP/vm/pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences eval '3 + 4' | tee "$RUNNER_TEMP/eval.txt"
           grep -qx 7 "$RUNNER_TEMP/eval.txt"
 
+      # The plugin is C++: it must load, and need no libstdc++ newer than the
+      # GLIBCXX_3.4.21 of GCC 5 (cmake/simdjson.cmake)
+      - name: Load the SimdJSONPlugin of the zip
+        run: |
+          "$RUNNER_TEMP/vm/pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/SimdJSONPlugin/tests/ci-load.st | tee "$RUNNER_TEMP/simdjson.txt"
+          grep -q '^SimdJSONPlugin native ' "$RUNNER_TEMP/simdjson.txt"
+          glibcxx=$(objdump -T "$RUNNER_TEMP/vm/lib/libSimdJSONPlugin.so" | grep -o 'GLIBCXX_[0-9.]*' | sort -uV | tail -n 1)
+          echo "$glibcxx"
+          test "$(printf '%s\n' "$glibcxx" GLIBCXX_3.4.21 | sort -V | tail -n 1)" = GLIBCXX_3.4.21
+
       - uses: actions/upload-artifact@v7
         with:
           path: build/build/packages/PharoVM-*-Linux-${{ matrix.arch }}-bin.zip
@@ -176,6 +186,11 @@ jobs:
           "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Pharo" --headless --version
           "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences eval '3 + 4' | tee "$RUNNER_TEMP/eval.txt"
           grep -qx 7 "$RUNNER_TEMP/eval.txt"
+
+      - name: Load the SimdJSONPlugin of the zip
+        run: |
+          "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/SimdJSONPlugin/tests/ci-load.st | tee "$RUNNER_TEMP/simdjson.txt"
+          grep -q '^SimdJSONPlugin native ' "$RUNNER_TEMP/simdjson.txt"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -269,6 +284,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $out
           if (-not ($out -contains '7')) { exit 1 }
+
+      # With the same PATH: the C++ runtime DLLs of the plugin must be in the zip
+      - name: Load the SimdJSONPlugin of the zip
+        shell: pwsh
+        run: |
+          $vm = "$env:RUNNER_TEMP\vm"
+          $env:PATH = "$vm;$env:SystemRoot\System32;$env:SystemRoot"
+          $out = & "$vm\PharoConsole.exe" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/SimdJSONPlugin/tests/ci-load.st
+          if ($LASTEXITCODE -ne 0) { $out; exit $LASTEXITCODE }
+          $out
+          if (-not ($out -match '^SimdJSONPlugin native ')) { exit 1 }
 
       - uses: actions/upload-artifact@v7
         with:
