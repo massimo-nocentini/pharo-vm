@@ -508,7 +508,8 @@
            'counter count'),
       md('## Rich output\n\n' +
          'The class `Notebook` shows values as tables, HTML, SVG, Markdown or pictures: `Notebook table:header:`, ' +
-         '`html:`, `svg:`, `markdown:`, `image:` and `show:id:`. A Form or a Morph that a cell answers is shown as ' +
+         '`html:`, `svg:`, `markdown:`, `image:` and `show:id:`; `cairo:` hands a block a Roassal canvas and shows ' +
+         'what cairo draws of it as SVG. A Form or a Morph that a cell answers is shown as ' +
          'what it looks like, and what the cell writes on the `Transcript` comes out under it. Markup is cleaned ' +
          'of scripts and external resources before it is shown.'),
       code('Notebook\n' +
@@ -529,6 +530,30 @@
            '\t\t\t<< \'<text x="\' << (x + 14) printString << \'" y="\' << (height + 15) printString\n' +
            '\t\t\t<< \'" font-size="11" text-anchor="middle" fill="currentColor">\' << v printString << \'</text>\' ].\n' +
            '\tsvg << \'</svg>\' ])'),
+      code('"cairo: draws a Roassal canvas as SVG: the classes of numbers, the busier the bluer"\n' +
+           'Notebook cairo: [ :canvas | | classes most nodes |\n' +
+           '\tclasses := Number withAllSubclasses.\n' +
+           '\tmost := classes inject: 1 into: [ :m :c | m max: c methods size ].\n' +
+           '\tnodes := classes collect: [ :class | | label |\n' +
+           '\t\tlabel := RSLabel new text: class name; fontSize: 10; color: Color black; yourself.\n' +
+           '\t\tRSComposite new\n' +
+           '\t\t\tmodel: class;\n' +
+           '\t\t\tshapes: {\n' +
+           '\t\t\t\tRSBox new\n' +
+           '\t\t\t\t\textent: label extent + (14 @ 8);\n' +
+           '\t\t\t\t\tcornerRadius: 5;\n' +
+           '\t\t\t\t\tcolor: (Color h: 205 s: 0.1 + (0.6 * class methods size / most) v: 0.97);\n' +
+           '\t\t\t\t\tyourself.\n' +
+           '\t\t\t\tlabel };\n' +
+           '\t\t\tyourself ].\n' +
+           '\tcanvas addAll: nodes.\n' +
+           '\tRSLineBuilder horizontalBezier\n' +
+           '\t\tcanvas: canvas;\n' +
+           '\t\tshapes: nodes;\n' +
+           '\t\twithHorizontalAttachPoint;\n' +
+           '\t\tcolor: Color gray;\n' +
+           '\t\tconnectFrom: #superclass.\n' +
+           '\tRSHorizontalTreeLayout new horizontalGap: 40; on: nodes ]'),
       code('Transcript show: \'Hello from the Transcript\'; cr'),
       code('(Form extent: 160 @ 48 depth: 32)\n' +
            '\tfillColor: Color orange;\n' +

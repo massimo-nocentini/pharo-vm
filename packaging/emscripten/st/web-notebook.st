@@ -325,6 +325,24 @@ image: anObject
 	^ self error: 'Notebook image: takes a Form, a Morph, a Roassal canvas or shape, or an AthensCairoSurface'! !
 
 !Notebook class methodsFor: 'displaying'!
+cairo: aBlock
+	"SVG of a Roassal canvas, which cairo's SVG surface draws: aBlock gets a new RSCanvas to fill, and
+	 may answer another canvas to draw instead, or a shape to add.  The shapes are fitted as image:
+	 fits them, on the canvas's color; the labels become the paths of their glyphs, so the SVG looks
+	 as the image draws it, with no fonts of the page.  Vector output, unlike image:, and small: its
+	 text, not pixels, goes to the page"
+
+	| canvas answer |
+	(#( #RSCanvas #RSAthensRenderer #AthensCairoSVGSurface ) allSatisfy: [ :name |
+		Smalltalk globals includesKey: name ])
+		ifFalse: [ ^ self error: 'Notebook cairo: needs Roassal and Athens-Cairo' ].
+	canvas := (Smalltalk at: #RSCanvas) new.
+	answer := aBlock cull: canvas.
+	(self is: answer a: #RSCanvas) ifTrue: [ canvas := answer ].
+	((self is: answer a: #RSShape) and: [ answer parent isNil ]) ifTrue: [ canvas add: answer ].
+	^ self svg: (self svgOfCanvas: canvas)! !
+
+!Notebook class methodsFor: 'displaying'!
 png: aByteArray
 	"The bytes of a PNG, sent as they are"
 
@@ -434,19 +452,51 @@ is: anObject a: className
 
 !Notebook class methodsFor: 'private'!
 formOfCanvas: aCanvas
-	"What its morph draws, at the extent of its shapes, zoomed to fit: zoomToFit after createMorph
-	 would clip them"
+	"What its morph draws, fitted: zoomToFit after createMorph would clip the shapes"
 
 	| extent morph |
+	extent := self fit: aCanvas.
+	morph := aCanvas createMorph.
+	morph extent: extent.
+	^ morph imageForm! !
+
+!Notebook class methodsFor: 'private'!
+fit: aCanvas
+	"Give aCanvas the extent of its shapes, and zoom its camera to show them all; answer the extent"
+
+	| extent |
 	extent := aCanvas nodes isEmpty
 		ifTrue: [ 300 @ 200 ]
 		ifFalse: [ ((aCanvas encompassingRectangle extent + 40) max: 100 @ 60) min: 1200 @ 900 ].
 	extent := extent rounded.
 	aCanvas extent: extent.
 	aCanvas zoomToFit.
-	morph := aCanvas createMorph.
-	morph extent: extent.
-	^ morph imageForm! !
+	^ extent! !
+
+!Notebook class methodsFor: 'private'!
+svgOfCanvas: aCanvas
+	"What cairo's SVG surface draws of aCanvas, fitted, from the svg element on.  The surface writes a
+	 file, which is read and deleted.  The renderer would clear the background with the source
+	 operator, which cairo's SVG surface takes as deleting what was drawn, the canvas's color too.
+	 Pharo 12's renderer scales by a scale of its own"
+
+	| extent clears file surface renderer svg |
+	extent := self fit: aCanvas.
+	clears := aCanvas shouldClearBackground.
+	file := FileLocator temp / ('notebook-cairo-' , Time primUTCMicrosecondsClock printString , '.svg').
+	[
+		surface := (Smalltalk at: #AthensCairoSVGSurface) extent: extent fileName: file fullName.
+		renderer := (Smalltalk at: #RSAthensRenderer) new.
+		(renderer respondsTo: #scale:) ifTrue: [ renderer scale: 1 ].
+		aCanvas shouldClearBackground: false.
+		[ surface drawDuring: [ :athens |
+			athens setPaint: aCanvas color; drawShape: (0 @ 0 extent: extent).
+			renderer surface: surface; canvas: athens.
+			aCanvas accept: renderer ] ] ensure: [ surface close ].
+		svg := file contents ] ensure: [
+			aCanvas shouldClearBackground: clears.
+			file ensureDelete ].
+	^ svg copyFrom: ((svg findString: '<svg') max: 1) to: svg size! !
 
 !Notebook class methodsFor: 'private'!
 row: row tag: tag on: aStream

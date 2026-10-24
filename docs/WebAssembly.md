@@ -197,12 +197,14 @@ In a page opened from `file://`, or in a browser without the memory of the build
   Esc is command mode, where `?` lists every shortcut: a and b insert a cell, d d deletes it (z undoes it), m and y make it text or code, Alt+Up and Down move it, o hides its output, i i interrupts and 0 0 restarts the kernel.
   Cells run in their order of request, each once the cell before is done, and their counts say in which order they ran.
 - Run all runs every code cell from the top, and stops at the first one that does not end ok: an error, a syntax error or a Stop cancels the cells queued after it (a cell whose process terminates itself does not).
-  The example notebook (More, Load example), 13 cells, stops at its error on purpose.
+  The example notebook (More, Load example), 14 cells, stops at its error on purpose.
 
 The class `Notebook` shows rich output in the cell of the process that calls it:
 
 - `Notebook show: anObject` shows a display, a String as text, a Form, a Morph, a Roassal canvas or shape, or an AthensCairoSurface as an image, and anything else as its printString; `show:id:` replaces a display shown with the same id in the same cell, as a progress bar does.
 - `Notebook text:`, `html:`, `svg:`, `markdown:`, `table:` and `table:header:` make displays; a table's Strings, numbers and Characters are escaped.
+- `Notebook cairo: [ :canvas | ... ]` gives the block a new Roassal canvas to fill, and makes an SVG display of it, which cairo's SVG surface draws (`AthensCairoSVGSurface`, with `RSAthensRenderer`): the shapes fitted as `image:` fits them, on the canvas's color, and the labels as the paths of their glyphs, so it looks as the image draws it, without the page's fonts; the block may answer another canvas to draw instead, or a shape to add.
+  It is vector output, and small: a tree of 15 nodes with labels is 26 KB of SVG, drawn in about 0.25 s.
 - `Notebook image:` makes the display of what an object looks like, as the raw pixels of a Form, which the page turns into a PNG (the VM has no ZipPlugin to encode one); `Notebook png:` takes the bytes of a PNG.
 - `Notebook clearOutput` clears the output of the cell so far.
 - A cell whose value is a Form, a Morph, a Roassal canvas or shape, or an Athens cairo surface shows it as an image.

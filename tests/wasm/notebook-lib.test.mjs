@@ -232,12 +232,12 @@ await check('straightenQuotes: curly quotes outside strings and comments, and af
     eq(St.straightenQuotes(s), want, J(s));
 });
 
-await check('the example: 13 cells, its fences and labels', () => {
+await check('the example: 14 cells, its fences and labels', () => {
   const ex = St.example();
-  eq(ex.cells.length, 13, 'cells');
-  eq(ex.cells.map(c => c.type[0]).join(''), 'mccccmccccccc', 'the types');
+  eq(ex.cells.length, 14, 'cells');
+  eq(ex.cells.map(c => c.type[0]).join(''), 'mccccmcccccccc', 'the types');
   for (const c of ex.cells) if (c.type === 'code') assert(St.balance(c.source).ok, 'balanced: ' + J(c.source.slice(0, 60)));
-  assert(/#\(1 2 3\) at: 5/.test(ex.cells[11].source), 'the error cell');
+  assert(/#\(1 2 3\) at: 5/.test(ex.cells[12].source), 'the error cell');
   for (const f of ['', 'smalltalk', 'ST', 'Pharo']) assert(St.FENCE.test(f), 'fence ' + J(f));
   for (const f of ['scheme', 'js', 'smalltalk2']) assert(!St.FENCE.test(f), 'not a fence ' + J(f));
   eq(St.LANGUAGE, 'Smalltalk', 'LANGUAGE');

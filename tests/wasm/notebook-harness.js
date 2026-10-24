@@ -920,6 +920,29 @@ async function partF() {
     assert(d && d.mime === 'image/x-pharo-bgra' && opaque(d) > 0, 'the canvas ' + J(Object.assign({}, d, { attachment: undefined })));
     console.log(`#   the canvas: ${d.width}x${d.height}, ${opaque(d)} opaque pixels, premultiplied ${d.premultiplied}`);
   });
+  if (!(manifest.libraries || []).includes('libcairo.so.2')) skip('F2b', 'no libcairo.so.2 in manifest.libraries');
+  else await check('F2b Notebook cairo: the SVG that cairo draws of a Roassal canvas, of the block\'s answer too; no file left', async () => {
+    const temps = "(FileLocator temp children count: [ :f | f basename beginsWith: 'notebook-cairo-' ])";
+    let r = await ok(K, "Notebook cairo: [ :c | c add: (RSBox new size: 40; color: Color blue; yourself); " +
+                        "add: (RSLabel new text: 'Hi'; yourself) ]", null, 60000);
+    let d = r.displays[0];
+    assert(d && d.mime === 'image/svg+xml' && d.data.startsWith('<svg xmlns="http://www.w3.org/2000/svg"') &&
+           d.data.trim().endsWith('</svg>'), 'the svg ' + J(d && d.data.slice(0, 200)));
+    assert(/<svg [^>]*width="100" height="80"/.test(d.data), 'fitted as image: fits it: ' + J(d.data.slice(0, 200)));
+    assert(d.data.includes('fill="rgb(100%, 100%, 100%)"'), 'on the canvas\'s white');
+    assert(d.data.includes('fill="rgb(0%, 0%, 100%)"'), 'the blue box');
+    assert(/<use xlink:href="#glyph-/.test(d.data), 'the label as glyphs');
+    console.log(`#   ${d.data.length} chars of SVG`);
+    r = await ok(K, 'Notebook cairo: [ RSEllipse new size: 30; color: Color red; yourself ]', null, 60000);
+    assert(r.displays[0].data.includes('fill="rgb(100%, 0%, 0%)"'), 'a shape answered is added');
+    r = await ok(K, '| other | other := RSCanvas new. other color: Color black. other add: (RSBox new size: 20; yourself). ' +
+                    'Notebook cairo: [ :c | c add: (RSBox new size: 20; color: Color red; yourself). other ]', null, 60000);
+    d = r.displays[0];
+    assert(d.data.includes('fill="rgb(0%, 0%, 0%)"') && !d.data.includes('fill="rgb(100%, 0%, 0%)"'), 'a canvas answered is drawn instead');
+    const e = await failing(K, 'Notebook cairo: [ :c | c add: RSBox new. 1 / 0 ]');
+    assert(/ZeroDivide/.test(e.done.error.text), 'the error of the block: ' + J(e.done.error.text));
+    await ok(K, temps, ['0']);
+  });
   if (manifest.fonts !== 'freetype') skip('F3', 'manifest.fonts is ' + J(manifest.fonts));
   else await check('F3 text drawn into a Form with FreeType', async () => {
     const r = await ok(K, '| f | f := Form extent: 100 @ 20 depth: 32. f fillWhite. f getCanvas drawString: \'Hello\' at: 2 @ 2 ' +
