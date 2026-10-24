@@ -1,13 +1,16 @@
-# Third-party libraries of a MinGW-w64 build (MSYS2 UCRT64): take the DLLs
-# of the MSYS2 packages instead of the Pharo prebuilt binaries.  The image
-# loads them through FFI, so the VM does not link them: copy each one next to
-# the VM, under the names the image looks for, and let the install step add
-# their transitive dependencies (see configure_installables).
+# Third-party libraries of a MinGW-w64 build (MSYS2 UCRT64 or CLANGARM64):
+# take the DLLs of the MSYS2 packages instead of the Pharo prebuilt binaries.
+# The image loads them through FFI, so the VM does not link them: copy each
+# one next to the VM, under the names the image looks for, and let the install
+# step add their transitive dependencies (see configure_installables).
 #
-#   FEATURE_LIB_GIT2      mingw-w64-ucrt-x86_64-libgit2-winhttp  libgit2-1.9.dll -> also libgit2.dll
-#   FEATURE_LIB_FREETYPE2 mingw-w64-ucrt-x86_64-freetype         libfreetype-6.dll
-#   FEATURE_LIB_CAIRO     mingw-w64-ucrt-x86_64-cairo            libcairo-2.dll
-#   FEATURE_LIB_SDL2      mingw-w64-ucrt-x86_64-SDL2 (+ sdl3)    SDL2.dll (SDL3.dll)
+#   FEATURE_LIB_GIT2      mingw-w64-<env>-libgit2-winhttp  libgit2-1.9.dll -> also libgit2.dll
+#   FEATURE_LIB_FREETYPE2 mingw-w64-<env>-freetype         libfreetype-6.dll
+#   FEATURE_LIB_CAIRO     mingw-w64-<env>-cairo            libcairo-2.dll
+#   FEATURE_LIB_SDL2      mingw-w64-<env>-SDL2 (+ sdl3)    SDL2.dll (SDL3.dll)
+#
+# where <env> is ucrt-x86_64 or clang-aarch64: the names of the DLLs are the
+# same in both.
 
 set(PHARO_MINGW_DLLS "")
 

@@ -144,7 +144,9 @@ macro(configure_installables INSTALL_COMPONENT)
 	        string(APPEND _mingw_dirs_code " \"${_dir}\"")
 	    endforeach()
 	    # GNU objdump: before CMake 3.31 file(GET_RUNTIME_DEPENDENCIES) does not
-	    # parse the output of llvm-objdump, which CMake prefers with clang
+	    # parse the output of llvm-objdump, which CMake prefers with clang.
+	    # CLANGARM64 has no binutils: its objdump is LLVM's, which the CMake 4
+	    # of MSYS2 parses (with CMake 3.28 nothing would be bundled)
 	    find_program(PHARO_PE_OBJDUMP NAMES objdump x86_64-w64-mingw32-objdump
 	        HINTS "${_mingw_compiler_dir}" NO_CMAKE_FIND_ROOT_PATH)
 	    if(NOT PHARO_PE_OBJDUMP)

@@ -123,13 +123,20 @@ endif()
 #This needs to be at this point, after setting the toolchain configuration
 project(PharoVM)
 
-# MinGW-w64 toolchains (MSYS2 UCRT64/CLANG64 with their own native CMake, or a
-# MinGW cross toolchain): CMake sets MINGW and WIN32 but neither UNIX nor
-# CYGWIN, so select the GNU-flavoured Windows branch below
+# MinGW-w64 toolchains (MSYS2 UCRT64/CLANG64/CLANGARM64 with their own native
+# CMake, or a MinGW cross toolchain): CMake sets MINGW and WIN32 but neither
+# UNIX nor CYGWIN, so select the GNU-flavoured Windows branch below
 if(MINGW AND NOT CYGWIN)
   set(WIN 1)
-  # A native CMake reports the host's AMD64, the Cygwin build says x86_64
-  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|x64)$")
+  # A native CMake reports the host's AMD64 or ARM64 (from the environment of
+  # the shell, which on Windows arm64 runs x64-emulated), the Cygwin build
+  # says x86_64.  CMake 4.1 and later know the target of the compiler itself
+  # (aarch64 or x86_64 for MinGW): it wins.  arm64, as on macOS, names the
+  # zip Windows-arm64
+  if(CMAKE_C_COMPILER_ARCHITECTURE_ID STREQUAL "aarch64"
+     OR (NOT CMAKE_C_COMPILER_ARCHITECTURE_ID AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|arm64|aarch64)$"))
+    set(CMAKE_SYSTEM_PROCESSOR arm64)
+  elseif(CMAKE_C_COMPILER_ARCHITECTURE_ID STREQUAL "x86_64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|x64)$")
     set(CMAKE_SYSTEM_PROCESSOR x86_64)
   endif()
 endif()
@@ -233,6 +240,10 @@ elseif(WIN)
 
 #    if(NOT MSVC)
         set(COMMON_FLAGS "-fwrapv -fdeclspec -msse2 -ggdb2 -m64 -mno-rtd -mms-bitfields -momit-leaf-frame-pointer -funroll-loops -D_MT -fno-builtin-printf -fno-builtin-putchar -fno-builtin-fprintf -Wall -Wno-unused-variable -fno-optimize-sibling-calls")
+        # -msse2 is an error for clang on aarch64; -m64 and -mno-rtd are x86 options
+        if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+            string(REPLACE " -msse2 -ggdb2 -m64 -mno-rtd " " -ggdb2 " COMMON_FLAGS "${COMMON_FLAGS}")
+        endif()
 #    endif()
 
     set(OS_TYPE "Win32")

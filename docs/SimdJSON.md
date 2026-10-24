@@ -39,7 +39,7 @@ simdjson chooses its kernel at run time (haswell, westmere, icelake... on x86_64
 Platforms:
 
 - Linux (x86_64) and Emscripten (the node and web VMs of `make wasm`) are built and tested;
-- macOS (a `.dylib` against the system's libc++) and Windows (MSYS2 UCRT64 with clang, whose C++ runtime DLLs the install step of `cmake/Windows.cmake` bundles) are written for, but **untested**: no build of them has run.
+- macOS (a `.dylib` against the system's libc++) and Windows (MSYS2 UCRT64 with clang on x86_64, MSYS2 CLANGARM64 on arm64, where the C++ runtime is libc++; the install step of `cmake/Windows.cmake` bundles the C++ runtime DLLs) are written for, but **untested**: no build of them has run.
   On Windows, `-U_MT` cannot keep simdjson's threads off, since the mingw-w64 `_mingw.h` defines `_MT` again whenever it is missing; `include/win/sjNoThreads.h`, included first (`-include`) in simdjson.cpp and sjEngine.cpp, reads `_mingw.h` and then undefines `_MT` (checked with the headers of llvm-mingw, which are those of MSYS2).
   Build with `-DFEATURE_PLUGIN_SIMDJSON=OFF` there if the build breaks.
   Each native job of `.github/workflows/build.yml` loads the plugin of its zip with `plugins/SimdJSONPlugin/tests/ci-load.st` (and, on Linux, checks that it needs no libstdc++ newer than GLIBCXX_3.4.21), so the first CI run tells;
