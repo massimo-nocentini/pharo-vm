@@ -65,7 +65,7 @@ void* allocateJITMemory(usqInt desiredSize, usqInt desiredPosition){
 	}
 
 	if (!VirtualProtect(alloc, allocBytes, PAGE_EXECUTE_READWRITE, &previousPermissions)) {
-		logErrorFromErrno("Could not make JIT memory executable");
+		logErrorFromGetLastError("Could not make JIT memory executable");
 		exit(1);
 	}
 
@@ -212,7 +212,7 @@ sqMakeMemoryExecutableFromTo(usqIntptr_t startAddr, usqIntptr_t endAddr)
 						size,
 						PAGE_EXECUTE_READWRITE,
 						&previous))
-		logErrorFromErrno("VirtualProtect(x,y,PAGE_EXECUTE_READWRITE)");
+		logErrorFromGetLastError("VirtualProtect(x,y,PAGE_EXECUTE_READWRITE)");
 }
 
 void
@@ -226,7 +226,7 @@ sqMakeMemoryNotExecutableFromTo(usqIntptr_t startAddr, usqIntptr_t endAddr)
 						size,
 						PAGE_READWRITE,
 						&previous))
-		logErrorFromErrno("VirtualProtect(x,y,PAGE_EXECUTE_READWRITE)");
+		logErrorFromGetLastError("VirtualProtect(x,y,PAGE_READWRITE)");
 }
 # endif /* COGVM */
 
