@@ -110,16 +110,17 @@ clearHeapMap(void)
  * root pages, for a minimum overhead of 512k then each page needs to cover
  * 2^58 / 65536 words = 2^42 bytes per page, so we need a two-level page table.
  * We split the table 16 bits for the root, 19 bits for intermediate pages (an
- * overhead of 4mb per second-level page), leaving 2^23 byts per page, 8mb per
- * page.
+ * overhead of 4mb per second-level page), leaving the low 26 bits of an address
+ * (PAGESHIFT) to a page: 2^23 words, at a bit per word 2^20 bytes, 1mb per page.
  */
  
 #define NUMROOTPAGES 65536
 
 static uchar **mapPages[NUMROOTPAGES] = { 0, };
 
-#define HEAP_MAP_PAGE_SIZE (8*1024*1024)
-#define PAGESHIFT 26 /* 8mb = 2^23, + 2^3 for 64-bit units = 2^26 */
+#define PAGESHIFT 26 /* 2^23 bits, + 2^3 for 64-bit units = 2^26 */
+/* BYTEINDEX is below 2^(PAGESHIFT - LOGWORDSIZE - LOGBITSPERBYTE) = 2^20 */
+#define HEAP_MAP_PAGE_SIZE (1024*1024)
 #define PAGEMASK 0x3FFFFFF
 #define DIRECTORYSIZE ((1 << 19) * sizeof(void *))
 #define DIRECTORYSHIFT (PAGESHIFT + 19)

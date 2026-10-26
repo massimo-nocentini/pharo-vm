@@ -67,9 +67,14 @@ semaphore_new(long initialValue){
 	PlatformSemaphore wrapper = malloc(sizeof(sem_t));
     int returnCode;
 
+    if(wrapper == NULL){
+        return NULL;
+    }
+
     returnCode = sem_init(wrapper, 0, initialValue);
 
     if(returnCode != 0){
+        free(wrapper);
         return NULL;
     }
 

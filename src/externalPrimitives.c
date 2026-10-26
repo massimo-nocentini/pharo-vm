@@ -44,7 +44,6 @@ const char *moduleNamePatterns[] = {
     "%s%s.dll",
     "%slib%s.dll",
 #elif defined(__APPLE__)
-    "%s%s",
     "%s%s.dylib",
     "%slib%s.dylib",
 #else
@@ -116,7 +115,9 @@ ioFindExternalFunctionInAccessorDepthInto(char *lookupName, void *moduleHandle,
 {
     void *function;
 
-    if (!*lookupName) /* avoid errors in dlsym from eitherPlugin: code. */
+    /* An empty name (which sqNamedPrims.c canonicalizes to NULL) names no function;
+     * this also avoids errors in dlsym from eitherPlugin: code. */
+    if (!lookupName || !*lookupName)
       return 0;
 
 #if defined(__EMSCRIPTEN__)
@@ -135,18 +136,13 @@ ioFindExternalFunctionInAccessorDepthInto(char *lookupName, void *moduleHandle,
     {
         char buf[256];
         signed char *accessorDepthVarPtr;
+        int length;
 
-#ifdef _WIN32
-        /*
-        * Unsafe version of deprecated strcpy for compatibility
-        * - does not check error code
-        */
-        strcpy_s(buf, 256, lookupName);
-#else
-        strcpy(buf, lookupName);
-#endif
-    	snprintf(buf+strlen(buf), sizeof(buf) - strlen(buf), "AccessorDepth");
-    	accessorDepthVarPtr = (signed char *)getModuleSymbol(moduleHandle, buf);
+        /* A name too long for buf has no accessor depth variable we could look up */
+        length = snprintf(buf, sizeof(buf), "%sAccessorDepth", lookupName);
+    	accessorDepthVarPtr = length > 0 && length < (int)sizeof(buf)
+    							? (signed char *)getModuleSymbol(moduleHandle, buf)
+    							: NULL;
     	/* The Slang machinery assumes accessor depth defaults to -1, which
     	 * means "no accessor depth".  It saves space not outputting -1 depths.
     	 */
@@ -396,6 +392,11 @@ freeModuleHandle(void *module)
 
 #include <dlfcn.h>
 
+#ifndef RTLD_DEFAULT
+/* glibc declares it only for _GNU_SOURCE, and there it is the null handle */
+# define RTLD_DEFAULT ((void *) 0)
+#endif
+
 void *
 loadModuleHandle(const char *fileName)
 {
@@ -416,7 +417,7 @@ freeModuleHandle(void *module){
 void *
 getModuleSymbol(void *module, const char *symbol)
 {
-    return dlsym(module ? module: dlopen(NULL,0), symbol);
+    return dlsym(module ? module : RTLD_DEFAULT, symbol);
 }
 
 #else
