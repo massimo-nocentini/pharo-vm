@@ -70,9 +70,10 @@ static char* emptyString = "";
 /********************************************************************/
 /********************************************************************/
 
-/* sslFromHandle: Maps a handle to an SSL */
+/* sslFromHandle: Maps a handle to an SSL.
+	The handle comes from the image: a negative one must not index handleBuf. */
 static sqSSL *sslFromHandle(sqInt handle) {
-	return handle < handleMax ? handleBuf[handle] : NULL;
+	return (handle > 0 && handle < handleMax) ? handleBuf[handle] : NULL;
 }
 
 /* sqCopyBioSSL: Copies data from a BIO into an out buffer */
@@ -103,13 +104,13 @@ sqInt sqSetupSSL(sqSSL *ssl, int server) {
 
 	logTrace("sqSetupSSL: Creating context\n");
 	ssl->ctx = SSL_CTX_new(ssl->method);
-	logTrace("sqSetupSSL: Disabling SSLv2 and SSLv3\n");
-	SSL_CTX_set_options(ssl->ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
-
 	if(!ssl->ctx) {
 		ERR_print_errors_fp(stdout);
 		return 0;
 	}
+
+	logTrace("sqSetupSSL: Disabling SSLv2 and SSLv3\n");
+	SSL_CTX_set_options(ssl->ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
 
 	logTrace("sqSetupSSL: setting cipher list\n");
 	SSL_CTX_set_cipher_list(ssl->ctx, "!ADH:HIGH:MEDIUM:@STRENGTH");
@@ -137,6 +138,11 @@ sqInt sqSetupSSL(sqSSL *ssl, int server) {
 
 	logTrace("sqSetupSSL: Creating SSL\n");
 	ssl->ssl = SSL_new(ssl->ctx);
+	if(!ssl->ssl) {
+		/* The BIOs stay owned by ssl; sqDestroySSL frees them */
+		ERR_print_errors_fp(stderr);
+		return 0;
+	}
 	logTrace("sqSetupSSL: setting bios\n");
 	SSL_set_bio(ssl->ssl, ssl->bioRead, ssl->bioWrite);
 	return 1;
@@ -147,15 +153,17 @@ sqInt sqSetupSSL(sqSSL *ssl, int server) {
 
 /* sqCreateSSL: Creates a new SSL instance.
 	Arguments: None.
-	Returns: SSL handle.
+	Returns: SSL handle, or 0 if out of memory.
 */
 sqInt sqCreateSSL(void) {
 	sqInt handle = 0;
 	sqSSL *ssl = NULL;
 
 	ssl = calloc(1, sizeof(sqSSL));
+	if(ssl == NULL) return 0;
 	ssl->bioRead = BIO_new(BIO_s_mem());
 	ssl->bioWrite = BIO_new(BIO_s_mem());
+	if(ssl->bioRead == NULL || ssl->bioWrite == NULL) goto fail;
 	BIO_set_close(ssl->bioRead, BIO_CLOSE);
 	BIO_set_close(ssl->bioWrite, BIO_CLOSE);
 
@@ -166,13 +174,21 @@ sqInt sqCreateSSL(void) {
 	if(handle >= handleMax) {
 		int i, delta = 100;
 		/* Resize the handle buffer */
-		handleBuf = realloc(handleBuf, (handleMax+delta)*sizeof(void*));
+		sqSSL **newBuf = realloc(handleBuf, (handleMax+delta)*sizeof(void*));
+		if(newBuf == NULL) goto fail;
+		handleBuf = newBuf;
 		for(i = handleMax; i < handleMax+delta; i++)
 			handleBuf[i] = NULL;
 		handleMax += delta;
 	}
 	handleBuf[handle] = ssl;
 	return handle;
+
+fail:
+	BIO_free_all(ssl->bioRead);
+	BIO_free_all(ssl->bioWrite);
+	free(ssl);
+	return 0;
 }
 
 /* sqDestroySSL: Destroys an SSL instance.
@@ -233,6 +249,8 @@ sqInt sqConnectSSL(sqInt handle, char* srcBuf, sqInt srcLen, char *dstBuf, sqInt
 		logTrace("sqConnectSSL: Setting connect state\n");
 		SSL_set_connect_state(ssl->ssl);
 	}
+	/* A failed setup left no SSL to continue with */
+	if(ssl->ssl == NULL) return SQSSL_GENERIC_ERROR;
 
 	logTrace("sqConnectSSL: BIO_write %ld bytes\n", (long)srcLen);
 
@@ -323,9 +341,11 @@ sqInt sqConnectSSL(sqInt handle, char* srcBuf, sqInt srcLen, char *dstBuf, sqInt
 		}
 		// fallback for missing sAN or non-provided serverName
 		if (matched == NO_MATCH_DONE_YET || matched == NO_SAN_PRESENT) {
-			X509_NAME_get_text_by_NID(X509_get_subject_name(cert),
+			/* A cert without a commonName leaves peerName untouched: answer "" */
+			if (X509_NAME_get_text_by_NID(X509_get_subject_name(cert),
 						      NID_commonName, peerName,
-						      sizeof(peerName));
+						      sizeof(peerName)) < 0)
+				peerName[0] = '\0';
 			logTrace("sqConnectSSL: peerName = %s\n", peerName);
 			ssl->peerName = strndup(peerName, sizeof(peerName) - 1);
 		}
@@ -370,6 +390,8 @@ sqInt sqAcceptSSL(sqInt handle, char* srcBuf, sqInt srcLen, char *dstBuf, sqInt 
 		logTrace("sqAcceptSSL: setting accept state\n");
 		SSL_set_accept_state(ssl->ssl);
 	}
+	/* A failed setup left no SSL to continue with */
+	if(ssl->ssl == NULL) return SQSSL_GENERIC_ERROR;
 
 	logTrace("sqAcceptSSL: BIO_write %ld bytes\n", (long)srcLen);
 
@@ -410,9 +432,11 @@ sqInt sqAcceptSSL(sqInt handle, char* srcBuf, sqInt srcLen, char *dstBuf, sqInt 
 	logTrace("sqAcceptSSL: cert = %p\n", cert);
 
 	if(cert) {
-		X509_NAME_get_text_by_NID(X509_get_subject_name(cert),
+		/* A cert without a commonName leaves peerName untouched: answer "" */
+		if (X509_NAME_get_text_by_NID(X509_get_subject_name(cert),
 					      NID_commonName, peerName,
-					      sizeof(peerName));
+					      sizeof(peerName)) < 0)
+			peerName[0] = '\0';
 		logTrace("sqAcceptSSL: peerName = %s\n", peerName);
 		ssl->peerName = strndup(peerName, sizeof(peerName) - 1);
 		X509_free(cert);

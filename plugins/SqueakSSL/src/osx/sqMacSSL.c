@@ -112,10 +112,11 @@ static int logStatus(OSStatus status, const char* restrict format, ...)
     return ret;
 }
 
-/* sqSSLFromHandle: Maps a handle to an SSL */
+/* sqSSLFromHandle: Maps a handle to an SSL.
+   The handle comes from the image: a negative one must not index handleBuf. */
 static sqSSL* sqSSLFromHandle(sqInt handle)
 {
-    return handle < handleMax ? handleBuf[handle] : NULL;
+    return (handle > 0 && handle < handleMax) ? handleBuf[handle] : NULL;
 }
 
 /* sqSetupSSL: Common SSL setup task */

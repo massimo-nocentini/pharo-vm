@@ -92,9 +92,10 @@ static const char* emptyString = "";
 /********************************************************************/
 /********************************************************************/
 
-/* sslFromHandle: Maps a handle to an SSL */
+/* sslFromHandle: Maps a handle to an SSL.
+	The handle comes from the image: a negative one must not index handleBuf. */
 static sqSSL *sslFromHandle(sqInt handle) {
-	return handle < handleMax ? handleBuf[handle] : NULL;
+	return (handle > 0 && handle < handleMax) ? handleBuf[handle] : NULL;
 }
 
 
