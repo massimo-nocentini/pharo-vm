@@ -48,6 +48,7 @@ TSQueue *threadsafe_queue_new(Semaphore *semaphore) {
  *  Free a queue in heap and all its nodes
  *  Does not free the elements pointed by the nodes, as they are owned by the user
  *  Fails if pointer is invalid
+ *  Nobody may use the queue any longer, so the mutex is freed as well
  **/
 void threadsafe_queue_free(TSQueue *queue) {
 	Semaphore *mutex = queue->mutex;
@@ -61,7 +62,7 @@ void threadsafe_queue_free(TSQueue *queue) {
 	}
 	free(queue);
 	platform_semaphore_signal(mutex);
-	//TODO: shouldn't we free the mutex here? if so, we should check if the mutex is alive after every wait
+	mutex->free(mutex);
 }
 
 /**
@@ -117,21 +118,26 @@ void *threadsafe_queue_take(TSQueue *queue) {
 		return NULL;
 	}
 
+	/*
+	 * Read the first node under the mutex too: the semaphore of the callback queue is
+	 * a Pharo semaphore whose wait does nothing, so only the mutex orders this read
+	 * after the producer's writes to the node (and two consumers never take one node)
+	 */
+	platform_semaphore_wait(queue->mutex);
 	TSQueueNode *node = queue->first;
 
-	if(node == NULL)
+	if(node == NULL) {
+		platform_semaphore_signal(queue->mutex);
 		return NULL;
+	}
 
-	void *element = node->element;
-
-	platform_semaphore_wait(queue->mutex);
-	if (queue->first == queue->last) {
-		queue->first = NULL;
+	queue->first = node->next;
+	if (queue->first == NULL) {
 		queue->last = NULL;
-	} else {
-		queue->first = node->next;
 	}
 	platform_semaphore_signal(queue->mutex);
+
+	void *element = node->element;
 	free(node);
 	return element;
 }
