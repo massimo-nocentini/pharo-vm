@@ -35,6 +35,8 @@ static char __buildInfo[] = "DSAPlugin CryptographyPlugins-eem.14 uuid: 54292ff0
 
 /*** Constants ***/
 #define PrimErrBadArgument 3
+#define PrimErrBadNumArgs 5
+#define PrimErrNoModification 8
 
 
 /*** Function Prototypes ***/
@@ -59,7 +61,11 @@ static sqInt (*classLargePositiveInteger)(void);
 static sqInt (*fetchClassOf)(sqInt oop);
 static void * (*firstIndexableField)(sqInt oop);
 static sqInt (*isBytes)(sqInt oop);
+#if IMMUTABILITY
+static sqInt (*isOopImmutable)(sqInt oop);
+#endif /* IMMUTABILITY */
 static sqInt (*isWords)(sqInt oop);
+static sqInt (*methodArgumentCount)(void);
 static sqInt (*pop)(sqInt nItems);
 static sqInt (*primitiveFailFor)(sqInt reasonCode);
 static sqInt (*pushBool)(sqInt trueOrFalse);
@@ -71,7 +77,11 @@ extern sqInt classLargePositiveInteger(void);
 extern sqInt fetchClassOf(sqInt oop);
 extern void * firstIndexableField(sqInt oop);
 extern sqInt isBytes(sqInt oop);
+#if IMMUTABILITY
+extern sqInt isOopImmutable(sqInt oop);
+#endif /* IMMUTABILITY */
 extern sqInt isWords(sqInt oop);
+extern sqInt methodArgumentCount(void);
 extern sqInt pop(sqInt nItems);
 extern sqInt primitiveFailFor(sqInt reasonCode);
 extern sqInt pushBool(sqInt trueOrFalse);
@@ -81,6 +91,9 @@ extern sqInt stackValue(sqInt offset);
 extern
 #endif
 struct VirtualMachine* interpreterProxy;
+#if !IMMUTABILITY
+# define isOopImmutable(oop) 0
+#endif /* !IMMUTABILITY */
 static const char *moduleName =
 #ifdef SQUEAK_BUILTIN_PLUGIN
 	"DSAPrims CryptographyPlugins-eem.14 (i)"
@@ -136,6 +149,14 @@ getModuleName(void)
 	rem. 
  */
 /*	Assume: quo starts out filled with zeros. */
+/*	Fail unless div has at least two digits and a non-zero top digit (the
+	quotient digit estimate reads the top two digits and divides by the top
+	one), and unless quo has room for the size of rem - size of div quotient
+	digits; the loop below writes them without any bounds check. The divisor
+	checks apply even when rem has no more digits than div, so that the loop
+	never runs: such a call used to succeed without writing anything, and
+	now fails, as on the Rust branch. Only denormalised LargePositiveIntegers
+	reach that case. */
 
 	/* DSAPlugin>>#primitiveBigDivide */
 EXPORT(sqInt)
@@ -164,6 +185,9 @@ primitiveBigDivide(void)
     sqInt sum;
     unsigned char thirdDigit;
 
+	if (!((methodArgumentCount()) == 3)) {
+		return primitiveFailFor(PrimErrBadNumArgs);
+	}
 	quo = stackValue(0);
 	div = stackValue(1);
 	rem = stackValue(2);
@@ -171,15 +195,24 @@ primitiveBigDivide(void)
 	if (!(((fetchClassOf(rem)) == clpi)
 		 && (((fetchClassOf(div)) == clpi)
 		 && ((fetchClassOf(quo)) == clpi)))) {
-		primitiveFailFor(PrimErrBadArgument);
+		return primitiveFailFor(PrimErrBadArgument);
 	}
 	dsaRemainder = firstIndexableField(rem);
 	dsaDivisor = firstIndexableField(div);
 	dsaQuotient = firstIndexableField(quo);
 	divisorDigitCount = stSizeOf(div);
+	remainderDigitCount = stSizeOf(rem);
+	if (!((divisorDigitCount >= 2)
+		 && (((dsaDivisor[divisorDigitCount - 1]) != 0)
+		 && ((stSizeOf(quo)) >= (remainderDigitCount - divisorDigitCount))))) {
+		return primitiveFailFor(PrimErrBadArgument);
+	}
+	if ((isOopImmutable(rem))
+	 || (isOopImmutable(quo))) {
+		return primitiveFailFor(PrimErrNoModification);
+	}
 
 	/* adjust pointers for base-1 indexing */
-	remainderDigitCount = stSizeOf(rem);
 	dsaRemainder -= 1;
 	dsaDivisor -= 1;
 	dsaQuotient -= 1;
@@ -293,6 +326,9 @@ primitiveBigMultiply(void)
     unsigned char *prodPtr;
     sqInt sum;
 
+	if (!((methodArgumentCount()) == 3)) {
+		return primitiveFailFor(PrimErrBadNumArgs);
+	}
 	prod = stackValue(0);
 	f2 = stackValue(1);
 	f1 = stackValue(2);
@@ -300,13 +336,16 @@ primitiveBigMultiply(void)
 	if (!(((fetchClassOf(prod)) == clpi)
 		 && (((fetchClassOf(f2)) == clpi)
 		 && ((fetchClassOf(f1)) == clpi)))) {
-		primitiveFailFor(PrimErrBadArgument);
+		return primitiveFailFor(PrimErrBadArgument);
 	}
 	prodLen = stSizeOf(prod);
 	f1Len = stSizeOf(f1);
 	f2Len = stSizeOf(f2);
 	if (!(prodLen == (f1Len + f2Len))) {
-		primitiveFailFor(PrimErrBadArgument);
+		return primitiveFailFor(PrimErrBadArgument);
+	}
+	if (isOopImmutable(prod)) {
+		return primitiveFailFor(PrimErrNoModification);
 	}
 	prodPtr = firstIndexableField(prod);
 	f2Ptr = firstIndexableField(f2);
@@ -349,13 +388,19 @@ primitiveExpandBlock(void)
     unsigned int v;
     unsigned int *wordPtr;
 
+	if (!((methodArgumentCount()) == 2)) {
+		return primitiveFailFor(PrimErrBadNumArgs);
+	}
 	expanded = stackValue(0);
 	buf = stackValue(1);
 	if (!((isWords(expanded))
 		 && ((isBytes(buf))
 		 && (((stSizeOf(expanded)) == 80)
 		 && ((stSizeOf(buf)) == 64))))) {
-		primitiveFailFor(PrimErrBadArgument);
+		return primitiveFailFor(PrimErrBadArgument);
+	}
+	if (isOopImmutable(expanded)) {
+		return primitiveFailFor(PrimErrNoModification);
 	}
 	wordPtr = firstIndexableField(expanded);
 	bytePtr = firstIndexableField(buf);
@@ -396,13 +441,19 @@ primitiveHashBlock(void)
     unsigned int *statePtr;
     unsigned int tmp;
 
+	if (!((methodArgumentCount()) == 2)) {
+		return primitiveFailFor(PrimErrBadNumArgs);
+	}
 	state = stackValue(0);
 	buf = stackValue(1);
 	if (!((isWords(state))
 		 && ((isWords(buf))
 		 && (((stSizeOf(state)) == 5)
 		 && ((stSizeOf(buf)) == 80))))) {
-		primitiveFailFor(PrimErrBadArgument);
+		return primitiveFailFor(PrimErrBadArgument);
+	}
+	if (isOopImmutable(state)) {
+		return primitiveFailFor(PrimErrNoModification);
 	}
 	statePtr = firstIndexableField(state);
 	bufPtr = firstIndexableField(buf);
@@ -463,6 +514,9 @@ primitiveHashBlock(void)
 EXPORT(sqInt)
 primitiveHasSecureHashPrimitive(void)
 {
+	if (!((methodArgumentCount()) == 0)) {
+		return primitiveFailFor(PrimErrBadNumArgs);
+	}
 	pop(1);
 	pushBool(1);
 	return 0;
@@ -472,6 +526,8 @@ primitiveHasSecureHashPrimitive(void)
 /*	Called with one LargePositiveInteger argument. Answer the index of the
 	top-most non-zero digit.
  */
+/*	The argument is the receiver: popping one slot and pushing the result
+	leaves the stack balanced only for a unary send. */
 
 	/* DSAPlugin>>#primitiveHighestNonZeroDigitIndex */
 EXPORT(sqInt)
@@ -481,9 +537,12 @@ primitiveHighestNonZeroDigitIndex(void)
     unsigned char *bigIntPtr;
     sqInt i;
 
+	if (!((methodArgumentCount()) == 0)) {
+		return primitiveFailFor(PrimErrBadNumArgs);
+	}
 	arg = stackValue(0);
 	if (!((fetchClassOf(arg)) == (classLargePositiveInteger()))) {
-		primitiveFailFor(PrimErrBadArgument);
+		return primitiveFailFor(PrimErrBadArgument);
 	}
 	bigIntPtr = firstIndexableField(arg);
 	i = stSizeOf(arg);
@@ -514,7 +573,11 @@ setInterpreter(struct VirtualMachine *anInterpreter)
 		fetchClassOf = interpreterProxy->fetchClassOf;
 		firstIndexableField = interpreterProxy->firstIndexableField;
 		isBytes = interpreterProxy->isBytes;
+#if IMMUTABILITY
+		isOopImmutable = interpreterProxy->isOopImmutable;
+#endif /* IMMUTABILITY */
 		isWords = interpreterProxy->isWords;
+		methodArgumentCount = interpreterProxy->methodArgumentCount;
 		pop = interpreterProxy->pop;
 		primitiveFailFor = interpreterProxy->primitiveFailFor;
 		pushBool = interpreterProxy->pushBool;
