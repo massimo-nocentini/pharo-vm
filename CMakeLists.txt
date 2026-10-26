@@ -427,6 +427,13 @@ check_library_exists(uuid uuid_generate "" HAVE_UUID_GENERATE)
 include(cmake/vmmaker.cmake)
 
 #Generating config file
+# config.h tests ALWAYS_INTERACTIVE with #if, so it must be 0 or 1 however the
+# option was spelled (ON, TRUE, YES...); this normal variable shadows the cache entry
+if(ALWAYS_INTERACTIVE)
+  set(ALWAYS_INTERACTIVE 1)
+else()
+  set(ALWAYS_INTERACTIVE 0)
+endif()
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/include/pharovm/config.h.in ${CMAKE_CURRENT_BINARY_DIR}/build/include/pharovm/config.h)
 
 message(STATUS "C Compiler: ${CMAKE_C_COMPILER}")
