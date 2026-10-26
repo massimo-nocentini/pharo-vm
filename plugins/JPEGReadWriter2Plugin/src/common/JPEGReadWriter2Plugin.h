@@ -29,7 +29,9 @@ void primJPEGWriteImageonByteArrayformqualityprogressiveJPEGerrorMgrWriteScanlin
     char*,
     unsigned int*);
 
-void primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgrReadScanlines(
+/* Answers 0, having written nothing to the bitmap, when the JPEG's output
+ * extent does not fit in wordsPerRow x formHeight words; 1 otherwise. */
+int primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgrReadScanlines(
     char*,
     char*,
     char*,
@@ -38,7 +40,8 @@ void primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgrReadScanlines(
     unsigned int*,
     unsigned int,
     unsigned int,
-    int);
+    int,
+    unsigned int);
 
 void primJPEGReadHeaderfromByteArraysizeerrorMgrReadHeader(
     char*,

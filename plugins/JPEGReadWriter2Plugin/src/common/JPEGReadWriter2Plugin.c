@@ -368,7 +368,10 @@ primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgr(void)
 	formPitch = ((formWidth + (pixelsPerWord - 1)) / pixelsPerWord) * 4;
 	formBitmapSizeInBytes = byteSizeOf(formBitmapOOP);
 	success((isWordsOrBytes(formBitmapOOP))
-	 && (formBitmapSizeInBytes >= (formPitch * formHeight)));
+	 && ((formWidth >= 0)
+	 && ((formHeight >= 0)
+	 && ((formHeight == 0)
+	 || ((formBitmapSizeInBytes / formHeight) >= formPitch)))));
 	if (failed()) {
 		return null;
 	}
@@ -378,7 +381,10 @@ primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgr(void)
 		return null;
 	}
 	formBitmap = firstIndexableField(formBitmapOOP);
-	primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgrReadScanlines(aJPEGDecompressStruct, aJPEGErrorMgr2Struct, source, sourceSize, ditherFlag, formBitmap, pixelsPerWord, wordsPerRow, formNativeDepth);
+	if (!(primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgrReadScanlines(aJPEGDecompressStruct, aJPEGErrorMgr2Struct, source, sourceSize, ditherFlag, formBitmap, pixelsPerWord, wordsPerRow, formNativeDepth, formHeight))) {
+		primitiveFail();
+		return null;
+	}
 	if (!(failed())) {
 		pop(5);
 	}

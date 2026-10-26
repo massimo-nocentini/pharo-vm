@@ -145,7 +145,10 @@ primJPEGWriteImageonByteArrayformqualityprogressiveJPEGerrorMgrWriteScanlines(
 	free(pjerr->setjmp_buffer);
 }
 
-void
+/* Answers 0 when the JPEG's output extent does not fit in the bitmap, i.e. in
+ * wordsPerRow x formHeight words, and 1 otherwise. A libjpeg error still answers
+ * 1, as before: only the extent check makes the primitive fail. */
+int
 primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgrReadScanlines(
     char* jpegDecompressStruct,
     char* jpegErrorMgr2Struct,
@@ -155,12 +158,15 @@ primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgrReadScanlines(
     unsigned int* bitmap,
     unsigned int pixelsPerWord,
     unsigned int wordsPerRow,
-    int nativeDepth)
+    int nativeDepth,
+    unsigned int formHeight)
 {
 	j_decompress_ptr pcinfo = (j_decompress_ptr)jpegDecompressStruct;
 	error_ptr2 pjerr = (error_ptr2)jpegErrorMgr2Struct;
 
 	int ok = 1;
+	/* volatile: read after a longjmp back to the setjmp below */
+	volatile int fits = 1;
 	pcinfo->err = jpeg_std_error(&pjerr->pub);
 	pjerr->setjmp_buffer = (jmp_buf *) malloc(sizeof(jmp_buf));
 	pjerr->pub.error_exit = error_exit;
@@ -176,6 +182,23 @@ primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgrReadScanlines(
 	if (ok) {
 		jpeg_start_decompress(pcinfo);
 
+		/* The loop below writes output_height rows of bitmap words, each at
+		 * (output_scanline - 1) * wordsPerRow, and one word per step of
+		 * out_color_components * pixelsPerWord bytes of the rowStride-byte
+		 * scanline. The output extent comes from the JPEG, not from the Form,
+		 * so check that those words fit in the Form's rows before writing any. */
+		unsigned int stepBytes = pcinfo->out_color_components * pixelsPerWord;
+		unsigned int stride = pcinfo->output_width * pcinfo->output_components;
+		if (stepBytes == 0
+		 || (stride + stepBytes - 1) / stepBytes > wordsPerRow
+		 || pcinfo->output_height > formHeight) {
+			fits = 0;
+			jpeg_destroy_decompress(pcinfo);
+			ok = 0;
+		}
+	}
+
+	if (ok) {
 		int depth = abs(nativeDepth);
 
 		unsigned int rowStride = pcinfo->output_width * pcinfo->output_components;
@@ -299,6 +322,7 @@ primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgrReadScanlines(
 		jpeg_destroy_decompress(pcinfo);
 	}
 	free(pjerr->setjmp_buffer);
+	return fits;
 }
 
 void

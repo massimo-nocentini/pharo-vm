@@ -284,9 +284,14 @@ JPEGReadWriter2Plugin >> primJPEGReadImage: aJPEGDecompressStruct fromByteArray:
 	formPitch := formWidth + (pixelsPerWord-1) // pixelsPerWord * 4.
 	formBitmapSizeInBytes := interpreterProxy byteSizeOf: formBitmapOOP.
 	
+	"The extent must not be negative, since the C side gets wordsPerRow and formHeight
+	 as unsigned ints. The size check divides rather than multiplies so that it cannot
+	 overflow; for non-negative values it is the same as size >= (formPitch * formHeight)."
 	interpreterProxy success: 
 		((interpreterProxy isWordsOrBytes: formBitmapOOP)
-		 and: [formBitmapSizeInBytes >= (formPitch * formHeight)]).
+		 and: [formWidth >= 0
+		 and: [formHeight >= 0
+		 and: [formHeight = 0 or: [formBitmapSizeInBytes // formHeight >= formPitch]]]]).
 	interpreterProxy failed ifTrue: [^nil].
 	
 	sourceSize := interpreterProxy stSizeOf: (interpreterProxy stackValue: 3).
@@ -296,7 +301,10 @@ JPEGReadWriter2Plugin >> primJPEGReadImage: aJPEGDecompressStruct fromByteArray:
 	
 	formBitmap := interpreterProxy firstIndexableField: formBitmapOOP.
 	
-	self primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgrReadScanlines: aJPEGDecompressStruct
+	"The decoder writes the JPEG's output extent, not the Form's, using wordsPerRow as
+	 the stride. It answers false, having written nothing, when that extent does not
+	 fit in wordsPerRow x formHeight words."
+	(self primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgrReadScanlines: aJPEGDecompressStruct
 																			    		_: aJPEGErrorMgr2Struct
 																					_: source
 																			    		_: sourceSize
@@ -305,11 +313,13 @@ JPEGReadWriter2Plugin >> primJPEGReadImage: aJPEGDecompressStruct fromByteArray:
 																			   		_: pixelsPerWord
 																			   		_: wordsPerRow
 																			    		_: formNativeDepth
+																			    		_: formHeight) ifFalse:
+		[^interpreterProxy primitiveFail]
 ]
 
 { #category : 'simulation' }
-JPEGReadWriter2Plugin >> primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgrReadScanlines: jpegDecompressStruct _: jpegErrorMgr2Struct _: source _: sourceSize _: ditherFlag _: formBitmap _: pixelsPerWord _: wordsPerRow _: formNativeDepth [
-	"void primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgrReadScanlines(
+JPEGReadWriter2Plugin >> primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgrReadScanlines: jpegDecompressStruct _: jpegErrorMgr2Struct _: source _: sourceSize _: ditherFlag _: formBitmap _: pixelsPerWord _: wordsPerRow _: formNativeDepth _: formHeight [
+	"int primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgrReadScanlines(
 		    char* jpegDecompressStruct,
 		    char* jpegErrorMgr2Struct,
 		    char* source,
@@ -318,29 +328,30 @@ JPEGReadWriter2Plugin >> primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgr
 		    unsigned int* bitmap,
 		    unsigned int pixelsPerWord,
 		    unsigned int wordsPerRow,
-		    int nativeDepth)"
+		    int nativeDepth,
+		    unsigned int formHeight)
+	 Answer false if the JPEG's output extent does not fit in wordsPerRow x formHeight words."
 	<doNotGenerate>
 	| sourceBytes decompressStruct errorStruct form |
 	sourceBytes := source asByteArray.
 	decompressStruct := jpegDecompressStruct asByteArray.
 	errorStruct := jpegErrorMgr2Struct asByteArray.
 	(self evaluateIfFailed:
-		[| slave height |
+		[| slave |
 		 slave := JPEGReadWriter2 new.
-		 height := slave primImageWidth: decompressStruct. "cheating ;-)"
-		 form := Form extent: wordsPerRow * pixelsPerWord @ height depth: formNativeDepth.
+		 form := Form extent: wordsPerRow * pixelsPerWord @ formHeight depth: formNativeDepth.
 		 slave
 			primJPEGReadImage: decompressStruct
 			fromByteArray: sourceBytes
 			onForm: form
 			doDithering: true
-			errorMgr: errorStruct]) ifTrue: [^nil].
+			errorMgr: errorStruct]) ifTrue: [^false].
 	jpegDecompressStruct overwriteContentsWith: decompressStruct.
 	jpegErrorMgr2Struct overwriteContentsWith: errorStruct.
 	source overwriteContentsWith: sourceBytes. "could happen..."
 	ByteArray adoptInstance: form bits.
 	formBitmap overwriteContentsWith: form bits.
-	^nil
+	^true
 ]
 
 { #category : 'primitives' }
