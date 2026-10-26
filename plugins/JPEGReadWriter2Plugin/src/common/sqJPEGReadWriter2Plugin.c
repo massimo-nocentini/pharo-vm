@@ -29,6 +29,14 @@
  */
 #include "JPEGReadWriter2Plugin.h"
 #include <stdlib.h> /* abs */
+#include <string.h> /* memset */
+
+/* Slack after each decompressed scanline for the packing loop in ReadScanlines
+ * below. It reads buffer[0][i + k] with k <= 5 and i < rowStride, so 5 bytes
+ * always suffice. As i is a multiple of the step, the real over-read is at most
+ * 3 bytes (index rowStride + 2: colour at depth 16, gray at depth 8); the
+ * other 2 are margin. */
+#define SCANLINE_SLACK 5
 
 /*
  * For more info regarding what's being done here, download libjpeg 6b from
@@ -172,8 +180,15 @@ primJPEGReadImagefromByteArrayonFormdoDitheringerrorMgrReadScanlines(
 
 		unsigned int rowStride = pcinfo->output_width * pcinfo->output_components;
 
+		/* The packing loop below converts a whole word of pixels at a time, so
+		 * when the width is not a multiple of pixelsPerWord the last word reads
+		 * up to 3 bytes past the row. Give the row SCANLINE_SLACK bytes, zeroed
+		 * once: libjpeg only writes the first rowStride bytes, so the padding
+		 * pixels of the last word come out as zeros instead of an out-of-bounds
+		 * read. */
 		JSAMPARRAY buffer = (*(pcinfo->mem)->alloc_sarray)
-			((j_common_ptr) pcinfo, JPOOL_IMAGE, rowStride, 1);
+			((j_common_ptr) pcinfo, JPOOL_IMAGE, rowStride + SCANLINE_SLACK, 1);
+		memset(buffer[0] + rowStride, 0, SCANLINE_SLACK);
 
 		int redOffset1, redOffset2;
 		int greenOffset1, greenOffset2;
