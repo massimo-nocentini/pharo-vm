@@ -102,6 +102,8 @@ sqInt sqFileClose(SQFile *f) {
 
   if (!sqFileValid(f))
     FAIL();
+  /* drop a pending waitForDataonSemaphoreIndex watch on this handle */
+  aioDisable((int)FILE_HANDLE(f));
   if(!CloseHandle(FILE_HANDLE(f)))
     FAIL();
   RemoveHandleFromTable(win32Files, FILE_HANDLE(f));

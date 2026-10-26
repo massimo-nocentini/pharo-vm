@@ -35,6 +35,8 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "memoryAccess.h"
 #include "FilePlugin.h" /* must be included after sq.h */
@@ -109,6 +111,50 @@ static void setFile(SQFile *f, FILE *file)
 # define setFile(f,fileptr) ((f)->file = (fileptr))
 #endif /* OBJECTS_32BIT_ALIGNED */
 
+/*
+ * The descriptors that waitForDataonSemaphoreIndex armed and that have not
+ * fired yet, one bit each. sqFileClose calls aioDisable only for these: on
+ * macOS aioDisable logs a warning for a descriptor aio does not know, and
+ * almost no file is ever watched. If a mark cannot be recorded (no memory),
+ * every descriptor counts as armed, so that a watch is never left behind.
+ * aio handlers run on the VM thread, as the file primitives do.
+ */
+static unsigned char *armedFds = NULL;
+static size_t armedFdsSize = 0;	/* in bytes */
+static int armedFdsLost = 0;
+
+static void
+armDataWatch(int fd)
+{
+	if (fd < 0)
+		return;
+	if ((size_t)fd / 8 >= armedFdsSize) {
+		size_t newSize = ((size_t)fd / 8 + 64) & ~(size_t)63;
+		unsigned char *newFds = realloc(armedFds, newSize);
+		if (!newFds) {
+			armedFdsLost = 1;
+			return;
+		}
+		memset(newFds + armedFdsSize, 0, newSize - armedFdsSize);
+		armedFds = newFds;
+		armedFdsSize = newSize;
+	}
+	armedFds[fd / 8] |= 1 << (fd % 8);
+}
+
+static void
+disarmDataWatch(int fd)
+{
+	int armed = armedFdsLost;
+
+	if (fd >= 0 && (size_t)fd / 8 < armedFdsSize) {
+		armed |= (armedFds[fd / 8] >> (fd % 8)) & 1;
+		armedFds[fd / 8] &= ~(1 << (fd % 8));
+	}
+	if (armed)
+		aioDisable(fd);
+}
+
 static fileOffset_t getSize(SQFile *f)
 {
   FILE *file = getFile(f);
@@ -175,6 +221,11 @@ sqFileClose(SQFile *f) {
 	if (!sqFileValid(f))
 		return interpreterProxy->success(false);
 
+	/*
+	 * Drop a watch left by waitForDataonSemaphoreIndex that never fired;
+	 * otherwise aio keeps polling the closed (or reused) descriptor.
+	 */
+	disarmDataWatch(fileno(getFile(f)));
 	result = fclose(getFile(f));
 	setFile(f, NULL);
 	f->sessionID = 0;
@@ -809,7 +860,7 @@ sqFileThisSession() {
 void
 signalOnDataArrival(sqInt fd, void *clientData, int flag){
 	interpreterProxy->signalSemaphoreWithIndex((sqInt)clientData);
-	aioDisable(fd);
+	disarmDataWatch(fd);
 }
 
 sqInt
@@ -817,6 +868,7 @@ waitForDataonSemaphoreIndex(SQFile *file, sqInt semaphoreIndex){
 	if (!(sqFileValid(file)))
 		return interpreterProxy->success(false);
 
+	armDataWatch(fileno(getFile(file)));
 	aioEnable(fileno(getFile(file)), (void*) semaphoreIndex, AIO_EXT);
 	aioHandle(fileno(getFile(file)), signalOnDataArrival, AIO_R);
 
