@@ -65,6 +65,7 @@ typedef struct _AioUnixDescriptor {
 	aioHandler writeHandlerFn;
 	struct _AioUnixDescriptor* next;
 	int mask;
+	int addErrno;	/* why epoll_ctl last refused fd (0 if it did not); it is logged once */
 
 } AioUnixDescriptor;
 
@@ -74,11 +75,21 @@ typedef struct _AioUnixDescriptor {
 AioUnixDescriptor* descriptorList = NULL;
 
 /*
+ * A handler may disable its own descriptor, or another one, while aio_handle_events
+ * dispatches, and a later event of the same batch can still name that descriptor.
+ * So during the dispatch a removed descriptor is not freed: it is parked in this list,
+ * with fd -1 and no handlers, and freed once the dispatch is over.
+ */
+static AioUnixDescriptor* retiredDescriptors = NULL;
+static int dispatchDepth = 0;
+
+/*
  * I can access the elements in the list
  */
 AioUnixDescriptor* AioUnixDescriptor_find(sqInt fd);
 void AioUnixDescriptor_remove(sqInt fd);
 void AioUnixDescriptor_removeAll();
+static void AioUnixDescriptor_freeRetired();
 
 /*
  * This is important, the AIO poll should only do a long pause if there is no pending signals for semaphores.
@@ -90,8 +101,13 @@ void heartbeat_poll_enter(long microSeconds);
 void heartbeat_poll_exit(long microSeconds);
 static int aio_handle_events(long microSeconds);
 
-Semaphore* interruptFIFOMutex;
-int pendingInterruption;
+/*
+ * aioInterruptPoll sets pendingInterruption and the VM thread clears it.
+ * aioInterruptPoll is reached from signal handlers (through signalSemaphoreWithIndex),
+ * so no lock guards this flag: the handler could interrupt the very thread holding it.
+ * It is only accessed through atomic operations instead.
+ */
+static int pendingInterruption = 0;
 int aio_in_sleep = 0;
 int aio_request_interrupt = 0;
 
@@ -109,8 +125,6 @@ void
 aioInit(void)
 {
 	int arg;
-	
-	interruptFIFOMutex = platform_semaphore_new(1);
 
 	if (pipe(signal_pipe_fd) != 0) {
 		logErrorFromErrno("pipe");
@@ -158,7 +172,6 @@ volatile int aio_responses = 0;
 
 /*
  * I Try to clear all the data available in the pipe, so it does not passes the limit of data.
- * Do not call me outside the mutex area of interruptFIFOMutex.
  */
 void
 aio_flush_pipe(sqInt fd){
@@ -166,10 +179,7 @@ aio_flush_pipe(sqInt fd){
 	int bytesRead;
 	char buf[1024];
 
-	interruptFIFOMutex->wait(interruptFIFOMutex);
-	if(pendingInterruption){
-		pendingInterruption = false;
-	}
+	__atomic_store_n(&pendingInterruption, 0, __ATOMIC_SEQ_CST);
 
 	do {
 		bytesRead = read(fd, &buf, 1024);
@@ -177,59 +187,68 @@ aio_flush_pipe(sqInt fd){
 		if(bytesRead == -1){
 
 			if(errno == EAGAIN || errno == EWOULDBLOCK){
-				interruptFIFOMutex->signal(interruptFIFOMutex);
 				return;
 			}
 
 			logErrorFromErrno("pipe - read");
-
-			interruptFIFOMutex->signal(interruptFIFOMutex);
 			return;
 		}
 
 	} while(bytesRead > 0);
-
-	interruptFIFOMutex->signal(interruptFIFOMutex);
 }
 
 long
 aioPoll(long microSeconds){
 	long timeout;
 
-	interruptFIFOMutex->wait(interruptFIFOMutex);
-
-	if(pendingInterruption || isPendingSemaphores()){
+	/* This consumes the pending interruption, if any, before looking at the semaphores */
+	if(__atomic_exchange_n(&pendingInterruption, 0, __ATOMIC_SEQ_CST) || isPendingSemaphores()){
 		timeout = 0;
 	}else{
 		timeout = microSeconds;
 	}
 
-	if(pendingInterruption){
-		pendingInterruption = false;
-	}
-
-	interruptFIFOMutex->signal(interruptFIFOMutex);
-
 	return aio_handle_events(timeout);
 }
 
+/* Answer 0, or -1 with errno set by epoll_ctl; the caller decides what to log */
 static int addFDToEPoll(int epollDescriptor, sqInt fd, int events, void* userData){
 	struct epoll_event ev;
 	ev.events = events;
 	ev.data.ptr = userData;
-	
-	if (epoll_ctl(epollDescriptor, EPOLL_CTL_ADD, fd, &ev) == -1) {
-		logError("Error adding FD %d to Epoll", fd);
-		logErrorFromErrno("epoll_ctl");
-		return -1;
-	}
 
-	return 0;
+	return epoll_ctl(epollDescriptor, EPOLL_CTL_ADD, fd, &ev) == -1 ? -1 : 0;
 }
 
-static int fillEPollDescriptor(){
+/*
+ * At most this many descriptors that epoll refused are reported in one turn;
+ * the others are reported in the next turns. aio_handle_events keeps room for
+ * them in its array of events.
+ */
+#define MAX_REFUSED_DESCRIPTORS	(INCOMING_EVENTS_SIZE / 2)
+
+/*
+ * When more descriptors are refused than one turn reports, the turns take them in
+ * rotation: a turn starts with the refused descriptor at this position in
+ * descriptorList (counting the refused ones only), and wraps around to the first ones.
+ * Otherwise handlers that re-arm the first ones at once would starve the others.
+ */
+static int nextRefusedPosition = 0;
+
+/*
+ * Answer a new epoll set holding the signal pipe and every armed descriptor, or -1.
+ * The descriptors epoll refuses go to refused (refusedCount of them) instead.
+ */
+static int fillEPollDescriptor(AioUnixDescriptor** refused, int* refusedCount){
 
 	int epollDescriptor = epoll_create1(0);
+
+	/* The refused descriptors before nextRefusedPosition, reported after the others */
+	AioUnixDescriptor* wrapped[MAX_REFUSED_DESCRIPTORS];
+	int wrappedCount = 0;
+	int refusedPosition = 0;
+
+	*refusedCount = 0;
 
 	if (epollDescriptor == -1) {
 		logErrorFromErrno("epoll_create1");
@@ -237,6 +256,7 @@ static int fillEPollDescriptor(){
 	}
 
 	if(addFDToEPoll(epollDescriptor, signal_pipe_fd[0], EPOLLIN, NULL) == -1){
+		logErrorFromErrno("epoll_ctl");
 		logError("Error adding Pipe FD");
 
 		if(epollDescriptor != -1){
@@ -269,24 +289,82 @@ static int fillEPollDescriptor(){
 		}
 
 		if(addFDToEPoll(epollDescriptor, descriptor->fd, events, descriptor) == -1){
-			if(epollDescriptor != -1){
-				close(epollDescriptor);
-				epollDescriptor = -1;
+			/*
+			 * epoll refuses descriptors that poll(2) and select(2) accept: regular
+			 * files and directories (EPERM), which are always ready, and descriptors
+			 * closed underneath aio (EBADF). One of them must not take the whole set
+			 * down (no notification at all, and an idle loop that never sleeps), so
+			 * keep adding the others, and report this one in this turn: ready (EPERM)
+			 * or failed (any other reason). Running out of memory or of epoll watches
+			 * (ENOMEM, ENOSPC) is not the descriptor's fault: it is tried again next turn.
+			 */
+			int addErrno = errno;
+
+			if(addErrno != descriptor->addErrno){
+				if(addErrno == EPERM){
+					logDebug("FD %d does not support epoll: reporting it as ready", (int) descriptor->fd);
+				}else{
+					logError("Error adding FD %d to Epoll", (int) descriptor->fd);
+					logErrorFromErrno("epoll_ctl");
+				}
+				descriptor->addErrno = addErrno;
 			}
 
-			return -1;
+			if(addErrno != ENOMEM && addErrno != ENOSPC
+					&& (descriptor->readHandlerFn || descriptor->writeHandlerFn)){
+				if(refusedPosition < nextRefusedPosition){
+					if(wrappedCount < MAX_REFUSED_DESCRIPTORS)
+						wrapped[wrappedCount++] = descriptor;
+				}else if(*refusedCount < MAX_REFUSED_DESCRIPTORS){
+					refused[(*refusedCount)++] = descriptor;
+				}
+				refusedPosition++;
+			}
+		}else{
+			descriptor->addErrno = 0;
 		}
 
 		descriptor = descriptor->next;
 	}
 
+	/*
+	 * refused holds the positions from nextRefusedPosition on, and wrapped the ones
+	 * from 0: the next turn starts after the last one reported
+	 */
+	int wrappedTaken = 0;
+	while(wrappedTaken < wrappedCount && *refusedCount < MAX_REFUSED_DESCRIPTORS){
+		refused[(*refusedCount)++] = wrapped[wrappedTaken++];
+	}
+	nextRefusedPosition = wrappedTaken > 0 ? wrappedTaken : nextRefusedPosition + *refusedCount;
+	if(nextRefusedPosition >= refusedPosition){
+		nextRefusedPosition = 0;
+	}
+
 	return epollDescriptor;
+}
+
+/*
+ * The events that report a descriptor epoll refused, as epoll_wait would report it
+ */
+static uint32_t refusedDescriptorEvents(AioUnixDescriptor* descriptor){
+	uint32_t events = 0;
+
+	if(descriptor->readHandlerFn)
+		events |= EPOLLIN;
+	if(descriptor->writeHandlerFn)
+		events |= EPOLLOUT;
+	if(descriptor->addErrno != EPERM)
+		events |= EPOLLERR;
+
+	return events;
 }
 
 static int
 aio_handle_events(long microSecondsTimeout){
 
 	struct epoll_event incomingEvents[INCOMING_EVENTS_SIZE];
+	AioUnixDescriptor* refused[MAX_REFUSED_DESCRIPTORS];
+	int refusedCount = 0;
 	int epollReturn;
 	int withError = 0;
 	AioUnixDescriptor* triggeredDescriptor;
@@ -300,10 +378,32 @@ aio_handle_events(long microSecondsTimeout){
 
 	sqLowLevelMFence();
 	isPooling = 1;
+	/*
+	 * The store of isPooling must be visible before the re-check below loads the flags:
+	 * this fence and the one in aioInterruptPoll make a Dekker pair with the signaller
+	 * (it sets checkSignalRequests, fences, then reads isPooling). Without it the store
+	 * can wait in the store buffer (x86 and arm64 both allow that) and both sides read 0.
+	 */
+	sqLowLevelMFence();
 
-	epollDescriptor = fillEPollDescriptor();
-		
-	epollReturn = epoll_wait(epollDescriptor, incomingEvents, INCOMING_EVENTS_SIZE, milliSecondsTimeout);
+	epollDescriptor = fillEPollDescriptor(refused, &refusedCount);
+
+	/*
+	 * Do not wait when there are descriptors to report already, or when an interruption
+	 * or a semaphore signal came after aioPoll looked: its signaller may have seen
+	 * isPooling still 0, and then it did not write to the pipe.
+	 */
+	if(refusedCount > 0
+			|| __atomic_load_n(&pendingInterruption, __ATOMIC_SEQ_CST)
+			|| isPendingSemaphores()){
+		milliSecondsTimeout = 0;
+	}
+
+	epollReturn = epoll_wait(epollDescriptor, incomingEvents, INCOMING_EVENTS_SIZE - refusedCount, milliSecondsTimeout);
+
+	if(epollReturn == -1 && errno != EINTR && errno != EAGAIN){
+		logErrorFromErrno("epoll_wait");
+	}
 
 	if(epollDescriptor != -1){
 		close(epollDescriptor);
@@ -313,29 +413,38 @@ aio_handle_events(long microSecondsTimeout){
 	sqLowLevelMFence();
 	isPooling = 0;
 
-	interruptFIFOMutex->wait(interruptFIFOMutex);
-	pendingInterruption = false;
-	interruptFIFOMutex->signal(interruptFIFOMutex);
+	__atomic_store_n(&pendingInterruption, 0, __ATOMIC_SEQ_CST);
 
 	//I notify the heartbeat of the end of the pause
 	heartbeat_poll_exit(microSecondsTimeout);
 	aio_flush_pipe(signal_pipe_fd[0]);
 
 	if(epollReturn == -1){
-		if(errno != EINTR && errno != EAGAIN){
-			logErrorFromErrno("epoll_wait");
-		}
-		return 0;
+		epollReturn = 0;
+	}
+
+	// The descriptors epoll refused are reported after the ones it answered
+	for(int index = 0; index < refusedCount; index++){
+		incomingEvents[epollReturn].events = refusedDescriptorEvents(refused[index]);
+		incomingEvents[epollReturn].data.ptr = refused[index];
+		epollReturn++;
 	}
 
 	if(epollReturn == 0){
 		return 0;
 	}
 
+	dispatchDepth++;
+
 	for(int index = 0; index < epollReturn; index++){
 		//Only process the signals that are not from the interrupt pipe
 		if(incomingEvents[index].data.ptr != NULL){
 			triggeredDescriptor = (AioUnixDescriptor*) incomingEvents[index].data.ptr;
+
+			// A handler disabled it earlier in this batch
+			if(triggeredDescriptor->fd == -1){
+				continue;
+			}
 
 			// Clearing the mask aioHandle will re add it
 			triggeredDescriptor->mask = 0;
@@ -351,6 +460,7 @@ aio_handle_events(long microSecondsTimeout){
 					triggeredDescriptor->readHandlerFn(triggeredDescriptor->fd, triggeredDescriptor->clientData, AIO_R | withError);
 				}
 			}
+			// The read handler may have disabled the descriptor: then its write handler is NULL
 			if((incomingEvents[index].events & EPOLLOUT) == EPOLLOUT){
 				if(triggeredDescriptor->writeHandlerFn){
 					triggeredDescriptor->writeHandlerFn(triggeredDescriptor->fd, triggeredDescriptor->clientData, AIO_W | withError);
@@ -359,23 +469,31 @@ aio_handle_events(long microSecondsTimeout){
 		}
 	}
 
+	if(--dispatchDepth == 0){
+		AioUnixDescriptor_freeRetired();
+	}
+
 	return 1;
 }
 
 /*
  * This function is used to interrupt a aioPoll.
  * Used when signalling a Pharo semaphore to re-wake the VM and execute code of the image.
+ * It is called from signal handlers too, so it takes no lock: write(2) and the atomic
+ * store are async-signal-safe.
  */
 
 void
 aioInterruptPoll(){
 	int n;
+	int savedErrno = errno;	/* the interrupted code may be about to read it */
 
 	sqLowLevelMFence();
 
 	if(isPooling){
 		n = write(signal_pipe_fd[1], "1", 1);
-		if(n != 1){
+		/* A full pipe (EAGAIN) wakes the poll already */
+		if(n != 1 && errno != EAGAIN && errno != EWOULDBLOCK){
 			logErrorFromErrno("write to pipe");
 		}
 #if !defined(__EMSCRIPTEN__)	/* its pipes are in memory, with nothing to flush */
@@ -383,9 +501,8 @@ aioInterruptPoll(){
 #endif
 	}
 
-	interruptFIFOMutex->wait(interruptFIFOMutex);
-	pendingInterruption = true;
-	interruptFIFOMutex->signal(interruptFIFOMutex);
+	__atomic_store_n(&pendingInterruption, 1, __ATOMIC_SEQ_CST);
+	errno = savedErrno;
 }
 
 void 
@@ -411,6 +528,7 @@ aioEnable(sqInt fd, void *clientData, int flags)
 
 	descriptor->fd = fd;
 	descriptor->clientData = clientData;
+	descriptor->addErrno = 0;
 
 	logTrace("Enabling FD: %d", (int) descriptor->fd);
 
@@ -537,6 +655,35 @@ AioUnixDescriptor* AioUnixDescriptor_find(sqInt fd){
 	return NULL;
 }
 
+/*
+ * Free a descriptor that is no longer in descriptorList, or park it until the
+ * dispatch in progress is over (see retiredDescriptors)
+ */
+static void AioUnixDescriptor_retire(AioUnixDescriptor* descriptor){
+
+	if(dispatchDepth == 0){
+		free(descriptor);
+		return;
+	}
+
+	descriptor->fd = -1;
+	descriptor->readHandlerFn = NULL;
+	descriptor->writeHandlerFn = NULL;
+	descriptor->mask = 0;
+	descriptor->next = retiredDescriptors;
+	retiredDescriptors = descriptor;
+}
+
+static void AioUnixDescriptor_freeRetired(){
+	AioUnixDescriptor* current;
+
+	while(retiredDescriptors != NULL){
+		current = retiredDescriptors;
+		retiredDescriptors = current->next;
+		free(current);
+	}
+}
+
 void AioUnixDescriptor_remove(sqInt fd){
 	AioUnixDescriptor* found;
 	AioUnixDescriptor* prev = NULL;
@@ -551,7 +698,7 @@ void AioUnixDescriptor_remove(sqInt fd){
 			}else{
 				prev->next = found->next;
 			}
-			free(found);
+			AioUnixDescriptor_retire(found);
 			return;
 		}
 		prev = found;
@@ -566,6 +713,6 @@ void AioUnixDescriptor_removeAll(){
 	while(descriptorList != NULL){
 		current = descriptorList;
 		descriptorList = current->next;
-		free(current);
+		AioUnixDescriptor_retire(current);
 	}
 }

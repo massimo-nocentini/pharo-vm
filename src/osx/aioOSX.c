@@ -74,10 +74,22 @@ typedef struct _AioOSXDescriptor {
 AioOSXDescriptor* descriptorList = NULL;
 
 /*
+ * A handler may disable its own descriptor, or another one, while aio_handle_events
+ * dispatches (aioDisable even runs a nested aio_handle_events), and a later event of
+ * the same batch can still name that descriptor in its udata: kqueue reports the read
+ * and the write readiness of a descriptor as two events. So during a dispatch a
+ * removed descriptor is not freed: it is parked in this list, with fd -1 and no
+ * handlers, and freed once the outermost dispatch is over.
+ */
+static AioOSXDescriptor* retiredDescriptors = NULL;
+static int dispatchDepth = 0;
+
+/*
  * I can access the elements in the list
  */
 AioOSXDescriptor* AioOSXDescriptor_find(sqInt fd);
 void AioOSXDescriptor_remove(sqInt fd);
+static void AioOSXDescriptor_freeRetired();
 
 /*
  * This is kqueue used in the poll of the events.
@@ -100,10 +112,12 @@ static int aio_handle_events(struct kevent* changes, int numberOfChanges, long m
 int isPendingSemaphores();
 
 /*
- * The access to the pendingInterruption variable is done through the use of a mutex
+ * aioInterruptPoll sets pendingInterruption and the VM thread clears it.
+ * aioInterruptPoll is reached from signal handlers (through signalSemaphoreWithIndex),
+ * so no lock guards this flag: the handler could interrupt the very thread holding it.
+ * It is only accessed through atomic operations instead.
  */
-Semaphore * interruptFIFOMutex;
-volatile int pendingInterruption = 0;
+static int pendingInterruption = 0;
 volatile int isPooling = 0;
 
 #define INTERRUPT_EVENT_ID 0
@@ -119,9 +133,6 @@ aioInit(void){
 	if((kqueueDescriptor = kqueue()) < 0) {
 		logErrorFromErrno("kqueue");
 	}
-
-
-	interruptFIFOMutex = platform_semaphore_new(1);
 
 	EV_SET(&userEvent, INTERRUPT_EVENT_ID, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, NULL);
 	kevent(kqueueDescriptor, &userEvent, 1, NULL, 0, NULL);
@@ -148,6 +159,21 @@ aio_handle_events(struct kevent* changes, int numberOfChanges, long microSeconds
 
 	sqLowLevelMFence();
 	isPooling = 1;
+	/*
+	 * The store of isPooling must be visible before the re-check below loads the flags:
+	 * this fence and the one in aioInterruptPoll make a Dekker pair with the signaller
+	 * (it sets checkSignalRequests, fences, then reads isPooling). Without it the store
+	 * can wait in the store buffer (x86 and arm64 both allow that) and both sides read 0.
+	 */
+	sqLowLevelMFence();
+
+	/*
+	 * Do not wait when an interruption or a semaphore signal came after aioPoll looked:
+	 * its signaller may have seen isPooling still 0, and then it did not trigger the event.
+	 */
+	if(__atomic_load_n(&pendingInterruption, __ATOMIC_SEQ_CST) || isPendingSemaphores()){
+		microSecondsTimeout = 0;
+	}
 
 	timeout.tv_nsec = (microSecondsTimeout % 1000000) * 1000;
 	timeout.tv_sec = microSecondsTimeout / 1000000;
@@ -156,9 +182,7 @@ aio_handle_events(struct kevent* changes, int numberOfChanges, long microSeconds
 	sqLowLevelMFence();
 	isPooling = 0;
 
-	interruptFIFOMutex->wait(interruptFIFOMutex);
-	pendingInterruption = false;
-	interruptFIFOMutex->signal(interruptFIFOMutex);
+	__atomic_store_n(&pendingInterruption, 0, __ATOMIC_SEQ_CST);
 
 	//I notify the heartbeat of the end of the pause
 	heartbeat_poll_exit(microSecondsTimeout);
@@ -173,6 +197,8 @@ aio_handle_events(struct kevent* changes, int numberOfChanges, long microSeconds
 	if(keventReturn == 0){
 		return 0;
 	}
+
+	dispatchDepth++;
 
 	for(int index = 0; index < keventReturn; index++){
 		//First I check if the event is an error in the registration
@@ -189,6 +215,11 @@ aio_handle_events(struct kevent* changes, int numberOfChanges, long microSeconds
 				
 				//If not is a regular registered FD
 				AioOSXDescriptor *descriptor = (AioOSXDescriptor*)incomingEvents[index].udata;
+
+				// A handler disabled it earlier in this batch
+				if(descriptor == NULL || descriptor->fd == -1){
+					continue;
+				}
 				
 #if AIO_HAS_EVFILT_EXCEPT
 				logTrace("Event %d %hd %hd %hd %hd", incomingEvents[index].ident, incomingEvents[index].filter, EVFILT_EXCEPT, EVFILT_READ, EVFILT_WRITE );
@@ -240,6 +271,10 @@ aio_handle_events(struct kevent* changes, int numberOfChanges, long microSeconds
 		}
 	}
 
+	if(--dispatchDepth == 0){
+		AioOSXDescriptor_freeRetired();
+	}
+
 	return 1;
 }
 
@@ -263,20 +298,12 @@ aioPoll(long microSeconds){
 
 	long timeout;
 
-	interruptFIFOMutex->wait(interruptFIFOMutex);
-
-	if(pendingInterruption || isPendingSemaphores()){
+	/* This consumes the pending interruption, if any, before looking at the semaphores */
+	if(__atomic_exchange_n(&pendingInterruption, 0, __ATOMIC_SEQ_CST) || isPendingSemaphores()){
 		timeout = 0;
 	}else{
 		timeout = microSeconds;
 	}
-
-	if(pendingInterruption){
-		pendingInterruption = false;
-	}
-
-	interruptFIFOMutex->signal(interruptFIFOMutex);
-
 
 	return aio_handle_events(NULL, 0, timeout);
 }
@@ -284,10 +311,13 @@ aioPoll(long microSeconds){
 /*
  * With this is is possible to interrupt a long AIO poll.
  * The external semaphores uses this function to interrupt the poll loop.
+ * It is called from signal handlers too, so it takes no lock: kevent(2) and the
+ * atomic store are async-signal-safe.
  */
 EXPORT(void)
 aioInterruptPoll(){
 	struct kevent userEvent;
+	int savedErrno = errno;	/* the interrupted code may be about to read it */
 
 	sqLowLevelMFence();
 	if(isPooling){
@@ -295,9 +325,8 @@ aioInterruptPoll(){
 		kevent(kqueueDescriptor, &userEvent, 1, NULL, 0, NULL);
 	}
 
-	interruptFIFOMutex->wait(interruptFIFOMutex);
-	pendingInterruption = true;
-	interruptFIFOMutex->signal(interruptFIFOMutex);
+	__atomic_store_n(&pendingInterruption, 1, __ATOMIC_SEQ_CST);
+	errno = savedErrno;
 }
 
 /*
@@ -470,11 +499,31 @@ void AioOSXDescriptor_remove(sqInt fd){
 			}else{
 				prev->next = found->next;
 			}
-			free(found);
+
+			if(dispatchDepth == 0){
+				free(found);
+			}else{
+				// See retiredDescriptors
+				found->fd = -1;
+				found->readHandlerFn = NULL;
+				found->writeHandlerFn = NULL;
+				found->next = retiredDescriptors;
+				retiredDescriptors = found;
+			}
 			return;
 		}
 		prev = found;
 		found = found->next;
 	}
 
+}
+
+static void AioOSXDescriptor_freeRetired(){
+	AioOSXDescriptor* current;
+
+	while(retiredDescriptors != NULL){
+		current = retiredDescriptors;
+		retiredDescriptors = current->next;
+		free(current);
+	}
 }

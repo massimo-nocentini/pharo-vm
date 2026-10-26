@@ -38,6 +38,7 @@
 
 #if !defined(_WIN32)
 #include <signal.h>
+#include <pthread.h>
 #endif
 
 #if !COGMTVM
@@ -121,6 +122,42 @@ ioInitExternalSemaphores(void)
 // This is defined here as there is no common interface for unix AIO and windows AIO
 void aioInterruptPoll();
 
+#if !defined(_WIN32)
+/*
+ * signalSemaphoreWithIndex is called from signal handlers: UnixOSProcessPlugin's
+ * SIGCHLD handler, and its handler for any signal the image asks it to forward.
+ * It takes requestMutex, which is not reentrant, so a handler interrupting a thread
+ * that holds requestMutex would wait forever for its own thread. Therefore every
+ * holder of requestMutex blocks all the asynchronous signals while it holds it (the
+ * synchronous ones, raised by a fault in this very code, must still reach the VM's
+ * crash handler), and restores the caller's mask afterwards instead of unblocking
+ * them: a caller that had a signal blocked, such as a handler that runs with its own
+ * signal blocked, must still have it blocked. (OSProcess installs its SIGCHLD handler
+ * with SA_NODEFER, so that one can still nest when SIGCHLDs come back to back.)
+ * pthread_sigmask, because sigprocmask is unspecified in a multithreaded process.
+ */
+static void
+blockAsynchronousSignals(sigset_t *savedMask)
+{
+	sigset_t blockedSignalSet;
+
+	sigfillset(&blockedSignalSet);
+	sigdelset(&blockedSignalSet, SIGSEGV);
+	sigdelset(&blockedSignalSet, SIGBUS);
+	sigdelset(&blockedSignalSet, SIGILL);
+	sigdelset(&blockedSignalSet, SIGFPE);
+	sigdelset(&blockedSignalSet, SIGTRAP);
+	sigdelset(&blockedSignalSet, SIGSYS);
+	pthread_sigmask(SIG_BLOCK, &blockedSignalSet, savedMask);
+}
+
+static void
+restoreSignalMask(sigset_t *savedMask)
+{
+	pthread_sigmask(SIG_SETMASK, savedMask, NULL);
+}
+#endif
+
 
 /* Signal the external semaphore with the given index.  Answer non-zero on
  * success, zero otherwise.  This function is (should be) thread-safe;
@@ -134,12 +171,7 @@ signalSemaphoreWithIndex(sqInt index)
 	int i = index - 1;
 
 #if !defined(_WIN32)
-    sigset_t blockedSignalSet;
-    sigemptyset(&blockedSignalSet);
-    sigaddset(&blockedSignalSet, SIGCHLD);
-    sigaddset(&blockedSignalSet, SIGINT);
-    sigaddset(&blockedSignalSet, SIGSTOP);
-    sigaddset(&blockedSignalSet, SIGTSTP);
+	sigset_t savedMask;
 #endif
 
 	/* An index of zero should be and is silently ignored. */
@@ -149,7 +181,7 @@ signalSemaphoreWithIndex(sqInt index)
 		return 0;
 
 #if !defined(_WIN32)
-    sigprocmask(SIG_BLOCK, &blockedSignalSet, NULL);
+	blockAsynchronousSignals(&savedMask);
 #endif
 	requestMutex->wait(requestMutex);
 
@@ -168,12 +200,12 @@ signalSemaphoreWithIndex(sqInt index)
 	forceInterruptCheck();
 
 	requestMutex->signal(requestMutex);
-#if !defined(_WIN32)
-    sigprocmask(SIG_UNBLOCK, &blockedSignalSet, NULL);
-#endif
 
 	aioInterruptPoll();
 
+#if !defined(_WIN32)
+	restoreSignalMask(&savedMask);
+#endif
 
 	return 1;
 }
@@ -197,14 +229,9 @@ doSignalExternalSemaphores(sqInt externalSemaphoreTableSize)
 	char switched;
 
 #if !defined(_WIN32)
-    sigset_t blockedSignalSet;
-    sigemptyset(&blockedSignalSet);
-    sigaddset(&blockedSignalSet, SIGCHLD);
-    sigaddset(&blockedSignalSet, SIGINT);
-    sigaddset(&blockedSignalSet, SIGSTOP);
-    sigaddset(&blockedSignalSet, SIGTSTP);
+	sigset_t savedMask;
 
-    sigprocmask(SIG_BLOCK, &blockedSignalSet, NULL);
+	blockAsynchronousSignals(&savedMask);
 #endif
 	requestMutex->wait(requestMutex);
 
@@ -212,7 +239,7 @@ doSignalExternalSemaphores(sqInt externalSemaphoreTableSize)
 	if (!checkSignalRequests){
 		requestMutex->signal(requestMutex);
 #if !defined(_WIN32)
-        sigprocmask(SIG_UNBLOCK, &blockedSignalSet, NULL);
+		restoreSignalMask(&savedMask);
 #endif
 		return 0;
 	}
@@ -252,7 +279,7 @@ doSignalExternalSemaphores(sqInt externalSemaphoreTableSize)
 		}
 
 #if !defined(_WIN32)
-    sigprocmask(SIG_UNBLOCK, &blockedSignalSet, NULL);
+	restoreSignalMask(&savedMask);
 #endif
 
 	return switched;
