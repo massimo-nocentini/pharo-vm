@@ -4405,7 +4405,7 @@ static unsigned int
 partitionedANDtonBitsnPartitions(unsigned int word1, unsigned int word2, sqInt nBits, sqInt nParts)
 {
 	sqInt i;
-	sqInt mask;
+	unsigned int mask;
 	unsigned int result;
 
 
@@ -4418,7 +4418,7 @@ partitionedANDtonBitsnPartitions(unsigned int word1, unsigned int word2, sqInt n
 		}
 
 		/* slide left to next partition */
-		mask = ((sqInt)((usqInt)(mask) << nBits));
+		mask = ((usqInt)(mask) << nBits);
 	}
 	return result;
 }

@@ -2592,6 +2592,7 @@ BitBltSimulation >> partitionedAND: word1 to: word2 nBits: nBits nPartitions: nP
 	<returnTypeC: 'unsigned int'>
 	<var: #word1 type: 'unsigned int'>
 	<var: #word2 type: 'unsigned int'>
+	<var: #mask type: 'unsigned int'>
 	<var: #result type: 'unsigned int'>
 	mask := maskTable at: nBits.  "partition mask starts at the right"
 	result := 0.
