@@ -141,8 +141,9 @@ int createManualSurface(int width, int height, int rowPitch, int depth, int isMS
 	
 	if (width < 0) return -1;
 	if (height < 0) return -1;
-	if (rowPitch < (width*depth)/8) return -1;
 	if (depth < 1 || depth > 32) return -1;
+	/* In 64 bits: width*depth overflows an int from width 2^26 at depth 32 */
+	if ((sqLong)rowPitch < ((sqLong)width * depth) / 8) return -1;
 	
 	newSurface = (ManualSurface*)malloc(sizeof(ManualSurface));
 	if (!newSurface) return -1;
@@ -172,7 +173,8 @@ int setManualSurfacePointer(int surfaceID, void* ptr) {
 	ManualSurface *surface;
 	int result;
 
-	result = ioFindSurface(surfaceID, NULL, &surfaceHandle);
+	/* Only a surface registered with manualSurfaceDispatch has a ManualSurface as its handle */
+	result = ioFindSurface(surfaceID, &manualSurfaceDispatch, &surfaceHandle);
 
 	if (!result) return FALSE; /* failed to find surface */
 	surface = (ManualSurface*)surfaceHandle;	

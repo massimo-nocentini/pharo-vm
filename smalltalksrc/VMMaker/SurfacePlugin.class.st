@@ -87,7 +87,9 @@ SurfacePlugin >> ioFindSurface: surfaceID _: fn _: surfaceHandle [
 	"Find the surface with the given ID, and, optionally,
 	the given set of surface functions. The registered handle
 	is returned in surfaceHandle. Return true if successful
-	(e.g., the surface has been found), false otherwise."
+	(e.g., the surface has been found), false otherwise.
+	Valid IDs are 0 to maxSurfaces - 1. Before the first registration
+	maxSurfaces is 0 and surfaceArray is NULL, so every ID is rejected."
 
 	<export: true>
 	<var: #surfaceID type: 'int'>
@@ -96,7 +98,7 @@ SurfacePlugin >> ioFindSurface: surfaceID _: fn _: surfaceHandle [
 	<var: #surface type: 'SqueakSurface *'>
 
 	| surface |
-	(surfaceID < 0 or: [ surfaceID > maxSurfaces ])
+	(surfaceID < 0 or: [ surfaceID >= maxSurfaces ])
 		ifTrue: [ ^ 0 ].
 
 	surface := self addressOf: (surfaceArray at: surfaceID).
@@ -106,6 +108,8 @@ SurfacePlugin >> ioFindSurface: surfaceID _: fn _: surfaceHandle [
 	
 	(fn ~= 0 and: [fn ~= (self dispatchOf: surface)])
 		ifTrue: [ ^ 0 ].
+	
+	surfaceHandle ifNil: [ ^ 0 ].
 	
 	self 
 		cCode: '*surfaceHandle = surface->handle'
@@ -129,7 +133,7 @@ SurfacePlugin >> ioGetSurfaceFormat:surfaceID _:width _:height _:depth _: isMSB 
 	Return true if successful, false otherwise."
 
 	| surface fnGetSurfaceFormat |
-	(surfaceID < 0 or: [ surfaceID > maxSurfaces ])
+	(surfaceID < 0 or: [ surfaceID >= maxSurfaces ])
 		ifTrue: [ self primitiveFail. ^ 0 ].
 
 	surface := self addressOf: (surfaceArray at: surfaceID).
@@ -166,7 +170,7 @@ SurfacePlugin >> ioLockSurface: surfaceID _: pitch _: x _: y _: w _: h [
 
 	| surface fnLockSurface |
 
-	(surfaceID < 0 or: [ surfaceID > maxSurfaces ])
+	(surfaceID < 0 or: [ surfaceID >= maxSurfaces ])
 		ifTrue: [ self primitiveFail. ^ 0 ].
 
 	surface := self addressOf: (surfaceArray at: surfaceID).
@@ -194,12 +198,15 @@ SurfacePlugin >> ioRegisterSurface: surfaceHandle _: fn _: surfaceIDPtr [
 	<var: #fn type: #'sqSurfaceDispatch *'>
 	<var: #surfaceIDPtr type: #'int*'>
 	<var: #index type: #'int'>
+	<var: #newMaxSurfaces type: #'int'>
+	<var: #newSurfaceArray type: 'SqueakSurface *'>
 	
 	<export: true>
 	
-	| index |
+	| index newMaxSurfaces newSurfaceArray |
 	
 	fn = 0 ifTrue: [ ^ 0 ].
+	surfaceIDPtr = 0 ifTrue: [ ^ 0 ].
 	"Validating the sqSurfaceDispatch is the correct version"
 	self cCode: 'if(fn->majorVersion != 1 && fn->minorVersion != 0) return 0'.
 
@@ -207,8 +214,12 @@ SurfacePlugin >> ioRegisterSurface: surfaceHandle _: fn _: surfaceIDPtr [
 
 	numSurfaces = maxSurfaces 
 		ifTrue: [ 
-			maxSurfaces := maxSurfaces * 2 + 10.
-			surfaceArray := self realloc: surfaceArray _:  (self sizeof: #SqueakSurface) * maxSurfaces.
+			"Grow the array only once realloc succeeded, so a failure keeps the old one"
+			newMaxSurfaces := maxSurfaces * 2 + 10.
+			newSurfaceArray := self realloc: surfaceArray _:  (self sizeof: #SqueakSurface) * newMaxSurfaces.
+			newSurfaceArray ifNil: [ ^ 0 ].
+			surfaceArray := newSurfaceArray.
+			maxSurfaces := newMaxSurfaces.
 			numSurfaces to: maxSurfaces - 1 do: [ :i | 
 				self surfaceIndex: i putHandle: 0.
 				self surfaceIndex: i putDispatch: 0  ].
@@ -218,7 +229,8 @@ SurfacePlugin >> ioRegisterSurface: surfaceHandle _: fn _: surfaceIDPtr [
 				(index = -1 and: [ (self dispatchOfSurfaceIndex: i) == 0 ])
 					ifTrue: [ index := i ] ]].
 
-	index > maxSurfaces ifTrue: [ ^ 0 ].
+	"No free slot found: never write at surfaceArray[-1]"
+	(index < 0 or: [ index >= maxSurfaces ]) ifTrue: [ ^ 0 ].
 	self surfaceIndex: index putHandle: surfaceHandle.
 	self surfaceIndex: index putDispatch: fn.
 	
@@ -246,7 +258,7 @@ SurfacePlugin >> ioShowSurface: surfaceID _: x _: y _: w _: h [
 
 	| surface fnShowSurface |
 
-	(surfaceID < 0 or: [ surfaceID > maxSurfaces ])
+	(surfaceID < 0 or: [ surfaceID >= maxSurfaces ])
 		ifTrue: [ self primitiveFail. ^ 0 ].
 
 	surface := self addressOf: (surfaceArray at: surfaceID).
@@ -277,7 +289,7 @@ SurfacePlugin >> ioUnlockSurface: surfaceID _: x _: y _: w _: h [
 
 	| surface fnUnlockSurface |
 
-	(surfaceID < 0 or: [ surfaceID > maxSurfaces ])
+	(surfaceID < 0 or: [ surfaceID >= maxSurfaces ])
 		ifTrue: [ self primitiveFail. ^ 0 ].
 
 	surface := self addressOf: (surfaceArray at: surfaceID).
@@ -301,7 +313,7 @@ SurfacePlugin >> ioUnregisterSurface: surfaceID [
 
 	| surface |
 
-	(surfaceID < 0 or: [ surfaceID > maxSurfaces ])
+	(surfaceID < 0 or: [ surfaceID >= maxSurfaces ])
 		ifTrue: [ ^ 0 ].
 
 	surface := self addressOf: (surfaceArray at: surfaceID).
@@ -344,6 +356,13 @@ SurfacePlugin >> primitiveCreateManualSurface [
 	isMSB := interpreterProxy booleanValueOf: isMSB. 
 	interpreterProxy failed ifTrue: [^nil].
 	
+	"createManualSurface() takes C ints: reject here what it would truncate.
+	Its pitch check is done in 64 bits, so width * depth may exceed an int."
+	(width < 0 or: [ width > 16r7FFFFFFF ]) ifTrue: [^interpreterProxy primitiveFail].
+	(height < 0 or: [ height > 16r7FFFFFFF ]) ifTrue: [^interpreterProxy primitiveFail].
+	(rowPitch < 0 or: [ rowPitch > 16r7FFFFFFF ]) ifTrue: [^interpreterProxy primitiveFail].
+	(depth < 1 or: [ depth > 32 ]) ifTrue: [^interpreterProxy primitiveFail].
+	
 	self touch: width; touch: height; touch: rowPitch; touch: depth; touch: isMSB.
 	
 	result := self cCode: 'createManualSurface(width, height, rowPitch, depth, isMSB)'.
@@ -373,12 +392,12 @@ SurfacePlugin >> primitiveDestroyManualSurface [
 SurfacePlugin >> primitiveFindSurface [
 	"arguments: name(type, stack offset)
 		externalID(Integer, 1)
-		surfaceHandleHolder(ByteArray(4), 0) "
+		surfaceHandleHolder(ByteArray(8) on 64 bits, ByteArray(4) on 32 bits, 0) "
 
-	| externalID surfaceHandleHolder surfaceHandlePtr result |
+	| externalID surfaceHandleHolder handle result |
 	<export: true>
 	<var: #result type:'int'>
-	<var: #surfaceHandlePtr type: 'void*'>
+	<var: #handle type: #'sqIntptr_t'>
 	
 	interpreterProxy methodArgumentCount == 2 ifFalse: [^interpreterProxy primitiveFail].
 	
@@ -389,11 +408,24 @@ SurfacePlugin >> primitiveFindSurface [
 	(interpreterProxy isBytes: surfaceHandleHolder)
 		ifFalse: [ ^ interpreterProxy primitiveFail ].
 	
-	surfaceHandlePtr := interpreterProxy firstIndexableField: surfaceHandleHolder.
-
-	result := self ioFindSurface: externalID _: 0 _: surfaceHandlePtr.
+	"Look up first, so a missing ID answers false whatever the holder"
+	handle := 0.
+	result := self ioFindSurface: externalID _: 0 _: (self addressOf: handle).
+	result ifFalse: [
+		interpreterProxy pop: 3 thenPush: interpreterProxy falseObject.
+		^ nil ].
 	
-	interpreterProxy pop: 3 thenPush: (result ifTrue: [interpreterProxy trueObject] ifFalse: [interpreterProxy falseObject])
+	"The handle is a whole sqIntptr_t"
+	(interpreterProxy byteSizeOf: surfaceHandleHolder) >= (self sizeof: #sqIntptr_t)
+		ifFalse: [ ^ interpreterProxy primitiveFail ].
+	
+	(interpreterProxy isOopImmutable: surfaceHandleHolder)
+		ifTrue: [ ^ interpreterProxy primitiveFailFor: PrimErrNoModification ].
+	
+	(self cCoerce: (interpreterProxy firstIndexableField: surfaceHandleHolder) to: #'sqIntptr_t *')
+		at: 0 put: handle.
+	
+	interpreterProxy pop: 3 thenPush: interpreterProxy trueObject
 ]
 
 { #category : 'primitives' }
@@ -424,6 +456,9 @@ SurfacePlugin >> primitiveRegisterSurface [
 
 	(interpreterProxy byteSizeOf: surfaceIDHolder) >= 4
 		ifFalse: [ ^ interpreterProxy primitiveFail ].
+
+	(interpreterProxy isOopImmutable: surfaceIDHolder)
+		ifTrue: [ ^ interpreterProxy primitiveFailFor: PrimErrNoModification ].
 
 	(interpreterProxy is: dispatchAddress KindOfClass: interpreterProxy classExternalAddress)
 		ifFalse: [ ^ interpreterProxy primitiveFail ].
@@ -501,6 +536,9 @@ SurfacePlugin >> shutdownModule [
 		ifFalse: [ ^ 0 ].
 
 	self free: surfaceArray.
+	"Forget the freed array, so that no later call reads or writes it"
+	surfaceArray := nil.
+	maxSurfaces := 0.
 	
 	^ 1.
 	
