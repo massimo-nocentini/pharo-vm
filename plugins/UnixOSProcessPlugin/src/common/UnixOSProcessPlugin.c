@@ -13,6 +13,7 @@ static char __buildInfo[] = "UnixOSProcessPlugin VMConstruction-Plugins-OSProces
 
 #include <math.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -272,6 +273,7 @@ static sqInt (*integerValueOf)(sqInt oop);
 static void * (*ioLoadFunctionFrom)(char *functionName, char *moduleName);
 static sqInt (*isBytes)(sqInt oop);
 static sqInt (*isIntegerObject)(sqInt objectPointer);
+static sqInt (*isPointers)(sqInt oop);
 static sqInt (*methodArgumentCount)(void);
 static sqInt (*methodReturnValue)(sqInt oop);
 static sqInt (*nilObject)(void);
@@ -310,6 +312,7 @@ extern sqInt isBytes(sqInt oop);
 #if !defined(isIntegerObject)
 extern sqInt isIntegerObject(sqInt objectPointer);
 #endif
+extern sqInt isPointers(sqInt oop);
 extern sqInt methodArgumentCount(void);
 extern sqInt methodReturnValue(sqInt oop);
 extern sqInt nilObject(void);
@@ -342,7 +345,10 @@ static const char *moduleName =
 static void *originalSigHandlers[NSIG + 1];
 static pid_t *pidArray = NULL;
 static sqInt pidCount;
-static unsigned char semaIndices[NSIG + 1];
+/* Read by handleSignal, so sig_atomic_t; was unsigned char, which truncated
+   external semaphore indices to 8 bits (and the handler then read them back
+   as a signed char, so indices above 127 were never signalled). */
+static volatile sig_atomic_t semaIndices[NSIG + 1];
 static sqInt sigChldSemaIndex;
 static int sigNumToSend = SIGTERM;
 static sqInt useSignalStack;
@@ -1010,6 +1016,15 @@ forwardSignaltoSemaphoreAt(sqInt sigNum, sqInt semaphoreIndex)
 {
     void *oldHandler;
 
+	/* sigNum indexes semaIndices and originalSigHandlers, and semaIndices
+	   holds a sig_atomic_t; answer an error for anything out of range. */
+	if ((sigNum < 1)
+	 || (sigNum > NSIG)
+	 || (semaphoreIndex < 0)
+	 || (semaphoreIndex > SIG_ATOMIC_MAX)) {
+		/* begin sigErrorNumber */
+		return SIG_ERR;
+	}
 	if (semaphoreIndex == 0) {
 
 		/* Disable the handler */
@@ -1182,7 +1197,7 @@ handleSignalFunctionAddress(void)
 static void
 handleSignal(int sigNum)
 {
-     char semaIndex;
+    sig_atomic_t semaIndex;
 
 	semaIndex = semaIndices[sigNum];
 	forwardSignaltoSemaphoreAt(sigNum, semaIndex);
@@ -2220,6 +2235,9 @@ primitiveForwardSignalToSemaphore(void)
 		}
 	}
 	sigNum = stackIntegerValue(1);
+	if (failed()) {
+		return null;
+	}
 	handler = forwardSignaltoSemaphoreAt(sigNum, semaphoreIndex);
 	if (handler == (sigErrorNumber())) {
 		return primitiveFail();
@@ -2601,40 +2619,72 @@ EXPORT(sqInt)
 primitiveKillOnExit(void)
 {
     sqInt count;
-    pid_t *p;
-    pid_t pid;
+    pid_t *newPidArray;
+    sqInt newPidCount;
+    sqInt newSigNum;
     sqInt *pidPointer;
     sqInt pids;
     sqInt signum;
 
 	pids = stackValue(1);
 	signum = stackValue(0);
-	pidCount = stSizeOf(pids);
-	if (failed()) {
-		return null;
+
+	/* Validate everything before touching the current list, so that a failing
+	   call leaves both the list and the stack as they were. */
+	if (!(isPointers(pids))) {
+		return primitiveFailFor(PrimErrBadArgument);
+	}
+	newSigNum = sigNumToSend;
+	if (!(signum == (nilObject()))) {
+		if (!(isIntegerObject(signum))) {
+			return primitiveFailFor(PrimErrBadArgument);
+		}
+		newSigNum = integerValueOf(signum);
+
+		/* 0 is valid for kill(): it only checks that the process exists */
+		if ((newSigNum < 0)
+		 || (newSigNum > NSIG)) {
+			return primitiveFailFor(PrimErrBadArgument);
+		}
+	}
+	newPidCount = stSizeOf(pids);
+	pidPointer = firstIndexableField(pids);
+	count = 0;
+	while (count < newPidCount) {
+		if (!(isIntegerObject(pidPointer[count]))) {
+			return primitiveFailFor(PrimErrBadArgument);
+		}
+
+		/* Only real pids. A value <= 0, or one that truncates to one in pid_t
+		   (e.g. 4294967295 -> -1), would make kill() at exit signal a whole
+		   process group, or every process the user may signal. */
+		if ((integerValueOf(pidPointer[count]) <= 0)
+		 || (((sqInt) ((pid_t) (integerValueOf(pidPointer[count])))) != (integerValueOf(pidPointer[count])))) {
+			return primitiveFailFor(PrimErrBadArgument);
+		}
+		count += 1;
+	}
+	newPidArray = NULL;
+	if (newPidCount > 0) {
+		newPidArray = malloc(newPidCount * sizeof(pid_t));
+		if (newPidArray == 0) {
+			return primitiveFailFor(PrimErrNoMemory);
+		}
+
+		/* count < newPidCount: the loop used to copy one element past the end of
+		   both the Array and the malloc'ed block */
+		count = 0;
+		while (count < newPidCount) {
+			newPidArray[count] = integerValueOf(pidPointer[count]);
+			count += 1;
+		}
 	}
 	if (!(pidArray == 0)) {
 		free(pidArray);
 	}
-	pidArray = malloc(pidCount * sizeof(pid_t));
-	if (pidArray == 0) {
-		pidCount = 0;
-		return primitiveFail();
-	}
-	pidPointer = firstIndexableField(pids);
-	count = 0;
-	p = pidArray;
-	while (count <= pidCount) {
-		pid = integerValueOf(*pidPointer++);
-		*p++ = pid;
-		count += 1;
-	}
-	if (!(signum == (nilObject()))) {
-		sigNumToSend = checkedIntegerValueOf(signum);
-	}
-	if (failed()) {
-		pidCount = 0;
-	}
+	pidArray = newPidArray;
+	pidCount = newPidCount;
+	sigNumToSend = newSigNum;
 	pop(2);
 	return 0;
 }
@@ -2970,6 +3020,13 @@ primitiveSemaIndexFor(void)
     sqInt sigNum;
 
 	sigNum = stackIntegerValue(0);
+	if (failed()) {
+		return null;
+	}
+	if ((sigNum < 1)
+	 || (sigNum > NSIG)) {
+		return primitiveFailFor(PrimErrBadArgument);
+	}
 	index = semaIndices[sigNum];
 	pop(2);
 	pushInteger(index);
@@ -4182,38 +4239,47 @@ primitiveVersionString(void)
 static sqInt
 realpathAsType(sqInt classIdentifier)
 {
-    char *buffer;
-    sqInt bufferSize;
     sqInt len;
-    sqInt newPathString;
     sqInt newString;
+    sqInt pathOop;
     char *pathString;
     char * realpathResult;
-    sqInt s;
 
-	bufferSize = 1024;
-	newPathString = instantiateClassindexableSize(classString(), bufferSize);
-	pushRemappableOop(newPathString);
-	pathString = transientCStringFromString(stackObjectValue(0));
-	newPathString = popRemappableOop();
-	buffer = arrayValueOf(newPathString);
-	realpathResult = realpath(pathString, buffer);
+	pathOop = stackObjectValue(0);
+	if (failed()) {
+		return null;
+	}
+	if (!(isBytes(pathOop))) {
+		return primitiveFailFor(PrimErrBadArgument);
+	}
+	pathString = transientCStringFromString(pathOop);
+	if (failed()) {
+		return null;
+	}
+
+	/* Let realpath() malloc the result. It used to write into a 1024 byte
+	   String, but it may write up to PATH_MAX bytes, overrunning the object. */
+	realpathResult = realpath(pathString, NULL);
 	if (realpathResult == 0) {
 		return primitiveFail();
 	}
-	else {
-		if ((strlen(realpathResult)) >= 1024) {
-			logErrorFromErrno("warning: statically allocated array exceeded in UnixOSProcessPlugin>>primitiveRealPath, object memory may have been corrupted");
-			return primitiveFail();
-		}
-		/* begin cString:asCollection: */
-		len = strlen(realpathResult);
-		newString = instantiateClassindexableSize(classIdentifier, len);
-		memcpy(arrayValueOf(newString),realpathResult, len);
-		s = newString;
-		pop(2);
-		push(s);
+
+	/* Answers longer than 1023 bytes used to fail; keep failing them. */
+	len = strlen(realpathResult);
+	if (len >= 1024) {
+		free(realpathResult);
+		return primitiveFail();
 	}
+	/* begin cString:asCollection: */
+	newString = instantiateClassindexableSize(classIdentifier, len);
+	if (newString == 0) {
+		free(realpathResult);
+		return primitiveFailFor(PrimErrNoMemory);
+	}
+	memcpy(arrayValueOf(newString),realpathResult, len);
+	free(realpathResult);
+	pop(2);
+	push(newString);
 	return 0;
 }
 
@@ -4369,6 +4435,7 @@ setInterpreter(struct VirtualMachine *anInterpreter)
 		ioLoadFunctionFrom = interpreterProxy->ioLoadFunctionFrom;
 		isBytes = interpreterProxy->isBytes;
 		isIntegerObject = interpreterProxy->isIntegerObject;
+		isPointers = interpreterProxy->isPointers;
 		methodArgumentCount = interpreterProxy->methodArgumentCount;
 		methodReturnValue = interpreterProxy->methodReturnValue;
 		nilObject = interpreterProxy->nilObject;
@@ -4463,6 +4530,9 @@ setSignalNumberhandler(sqInt signalNumber, void *signalHandlerAddress)
 	sigemptyset(&sigHandlerAction.sa_mask);
 	if ((sigaction(signalNumber, (&sigHandlerAction), (&oldHandlerAction))) == (usqIntptr_t) (sigErrorNumber())) {
 		logErrorFromErrno("signal");
+
+		/* oldHandlerAction was not filled in */
+		return SIG_ERR;
 	}
 	return oldHandlerAction.sa_sigaction;
 }
