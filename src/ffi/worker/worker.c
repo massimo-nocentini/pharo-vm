@@ -26,6 +26,12 @@ struct __Worker {
 	int hasToQuit;
 	int nestedRuns;
 
+	/*
+	 * The worker that runs on the main thread (runMainThreadWorker) is never released:
+	 * when its worker_run returns, main returns and the process exits under the VM.
+	 */
+	int isMainThread;
+
     pthread_t threadId;
     TSQueue *taskQueue;
 
@@ -87,6 +93,7 @@ Worker *worker_newSpawning(int spawn) {
     
     worker->hasToQuit = false;
     worker->nestedRuns = 0;
+    worker->isMainThread = !spawn;
     worker->next = NULL;
     /* Notice, that we do not initilize threadId and selfThread, since `int` and `void*` are not of type pthread_t,
      * which leads to an error when compiling with clang
@@ -151,6 +158,10 @@ void *worker_run(void *aWorker) {
         if (task) {
         	switch(task->type){
         		case WORKER_RELEASE:
+        			if(worker->isMainThread){
+        				logWarn("Ignoring a request to release the main thread worker");
+        				break;
+        			}
         			worker->hasToQuit = true;
         			//We wait in case we need to receive a callback_return message
         			#ifdef _WIN32
