@@ -43,6 +43,12 @@ if (${FEATURE_NETWORK})
     add_vm_plugin(SocketPlugin FALSE FALSE)
   if(WIN)
     target_link_libraries(SocketPlugin PRIVATE "-lws2_32")
+  elseif(NOT EMSCRIPTEN)
+    # The resolver's lookup threads (ASYNC_RESOLVER in SocketPluginImpl.c):
+    # link pthreads explicitly rather than through the VM, which a glibc
+    # before 2.34 does not export them from
+    find_package(Threads REQUIRED)
+    target_link_libraries(SocketPlugin PRIVATE Threads::Threads)
   endif()
 endif()
 
