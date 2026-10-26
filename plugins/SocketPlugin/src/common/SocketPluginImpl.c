@@ -35,7 +35,8 @@
  * Fix to option parsing in sqSocketSetOptions... by Eliot Miranda, 2013/4/12
  * 
  * Notes:
- * 	Sockets are completely asynchronous, but the resolver is still synchronous.
+ * 	Sockets are completely asynchronous.  So are name and address lookups,
+ *	except on Windows and Emscripten (see "Resolver functions" below).
  * 
  * BUGS:
  *	Now that the image has real UDP primitives, the TCP/UDP duality in
@@ -270,10 +271,72 @@ typedef struct privateSocketStruct
 
 /*** Resolver state ***/
 
+/* Name and address lookups run on threads of their own, so that a DNS round
+ * trip no longer stops every Process in the image.  Windows and Emscripten
+ * keep the synchronous resolver: Windows has no pthreads guaranteed, and
+ * Emscripten cannot look names up at all.
+ */
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__) && !defined(ACORN)
+# define ASYNC_RESOLVER 1
+# include <pthread.h>
+# include <signal.h>
+#else
+# define ASYNC_RESOLVER 0
+#endif
+
 static char lastName[MAXHOSTNAMELEN+1];
 static int  lastAddr= 0;
-static int  lastError= 0;
+static int  lastError= 0;	/* only through loadInt()/storeInt() */
 static int  resolverSema= 0;
+static int  lookupBusy= 0;	/* from the start of a lookup until its answer is stored, or it is aborted */
+static unsigned long lookupGeneration= 0;	/* the lookup an answer must belong to */
+
+#if ASYNC_RESOLVER
+
+/* The image polls sqResolverStatus while a worker owns the lookup, so
+   lastError and lookupBusy are read without the mutex. */
+# define loadInt(V)	__atomic_load_n(&(V), __ATOMIC_ACQUIRE)
+# define storeInt(V, X)	__atomic_store_n(&(V), (X), __ATOMIC_RELEASE)
+
+/* resolverMutex guards lastName, lastAddr, resolverSema and lookupGeneration
+   against the lookup threads.  It is held only to store an answer, never
+   across getaddrinfo() or getnameinfo(). */
+static pthread_mutex_t resolverMutex= PTHREAD_MUTEX_INITIALIZER;
+# define resolverLock()		pthread_mutex_lock(&resolverMutex)
+# define resolverUnlock()	pthread_mutex_unlock(&resolverMutex)
+
+/* The lookup threads not joined yet.  At most MaxLookupWorkers run at once;
+   past that a lookup runs inline, as it always did.  shutdownModule refuses
+   while any is here, because unloading the module would unmap its code. */
+# define MaxLookupWorkers	16
+static struct { pthread_t thread; int used; int done; } lookupWorkers[MaxLookupWorkers];
+
+static pid_t resolverPid= 0;	/* the process the state above belongs to */
+
+/* The fork guard: a fork() waits until no thread runs a lookup.  Inside
+   getaddrinfo() or getnameinfo() a thread may hold libc locks, which the child
+   would inherit held, and hang in its own lookups.  lookupsRunning counts
+   those threads, under forkGuardMutex. */
+static pthread_mutex_t forkGuardMutex= PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  forkGuardIdle= PTHREAD_COND_INITIALIZER;
+static int lookupsRunning= 0;
+static pthread_once_t forkGuardOnce= PTHREAD_ONCE_INIT;
+static int forkGuardInstalled= 0;
+
+static void resolverForkCheck(void);
+static int  lookupWorkersQuiescent(void);
+
+#else /* !ASYNC_RESOLVER */
+
+# define loadInt(V)		(V)
+# define storeInt(V, X)		((V)= (X))
+# define resolverLock()		((void)0)
+# define resolverUnlock()	((void)0)
+# define resolverForkCheck()	((void)0)
+
+#endif /* !ASYNC_RESOLVER */
+
+static void abandonLookup(void);
 
 /*** Variables ***/
 
@@ -336,6 +399,19 @@ sqInt socketInit(void)
 
 sqInt socketShutdown(void)
 {
+#if ASYNC_RESOLVER
+  /* a lookup thread still runs code of this module, which unloading it would
+     unmap: refuse, and ioUnloadModule keeps the module */
+  resolverForkCheck();
+  if (!lookupWorkersQuiescent())
+    return 0;
+# if !defined(__GLIBC__)
+  /* glibc drops a module's pthread_atfork handlers when dlclose() unmaps it;
+     other libcs (macOS) keep calling them, so the module must stay */
+  if (forkGuardInstalled)
+    return 0;
+# endif
+#endif
   /* shutdown the network */
   sqNetworkShutdown();
   return 1;
@@ -352,42 +428,84 @@ static void setLinger(int fd, int flag)
   setsockopt(fd, SOL_SOCKET, SO_LINGER, (char *)&linger, sizeof(linger));
 }
 
-/* answer the hostname for the given IP address */
+/* put the hostname for the given IP address into name (MAXHOSTNAMELEN+1
+   bytes; "" if there is none) and answer 0, or the error for the resolver */
 
-static const char *addrToName(int netAddress)
+static int addrToName(int netAddress, char *name)
 {
+#if ASYNC_RESOLVER
+  /* not gethostbyaddr(): it answers static storage, which a lookup thread cannot use */
+  struct sockaddr_in sin;
+  char host[NI_MAXHOST];
+  int gaiError;
+
+  memset(&sin, 0, sizeof(sin));
+# ifdef SIN6_LEN	/* BSD sockaddrs carry their length */
+  sin.sin_len= sizeof(sin);
+# endif
+  sin.sin_family= AF_INET;
+  sin.sin_addr.s_addr= htonl(netAddress);
+  gaiError= getnameinfo((struct sockaddr *)&sin, sizeof(sin), host, sizeof(host), 0, 0, NI_NAMEREQD);
+  if (!gaiError)
+    {
+      strncpy(name, host, MAXHOSTNAMELEN);
+      name[MAXHOSTNAMELEN]= '\0';
+      return 0;
+    }
+  name[0]= '\0';
+  /* the h_errno values gethostbyaddr() answered */
+  switch (gaiError)
+    {
+    case EAI_NONAME:	return HOST_NOT_FOUND;
+    case EAI_AGAIN:	return TRY_AGAIN;
+    default:		return NO_RECOVERY;
+    }
+#else
   u_long nAddr;
   struct hostent *he;
 
-  lastError= 0;			/* for the resolver */
   nAddr= htonl(netAddress);
   if ((he= gethostbyaddr((char *)&nAddr, sizeof(nAddr), AF_INET)))
-    return he->h_name;
-  lastError= h_errno;		/* ditto */
-  return "";
+    {
+      strncpy(name, he->h_name, MAXHOSTNAMELEN);
+      name[MAXHOSTNAMELEN]= '\0';
+      return 0;
+    }
+  name[0]= '\0';
+  return h_errno;
+#endif
 }
 
-/* answer the IP address for the given hostname */
+/* answer the IP address for the given hostname, and in *errorOut 0 or the
+   getaddrinfo() error */
 
-static int nameToAddr(char *hostName)
+static int nameToAddr(char *hostName, int *errorOut)
 {
 	struct addrinfo* result;
 	struct addrinfo* anAddressInfo;
 	int error;
 	int address = 0;
 	struct sockaddr_in* addr;
+	struct addrinfo hints;
 
-	/* resolve the domain name into a list of addresses */
+	*errorOut = 0;
+	/* resolve the domain name into a list of addresses.  Only the first
+	   AF_INET answer is used, so ask for AF_INET only.  NULL hints would mean
+	   AI_ADDRCONFIG on glibc, whose interface check (__check_pf) holds a
+	   process-wide lock that a fork() on the VM thread can copy into the
+	   child locked, so that every getaddrinfo() of the child hangs. */
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_INET;
 #if defined(__EMSCRIPTEN__)
    /* Emscripten's getaddrinfo() aborts the wasm64 runtime (BigInt(null))
       instead of failing, and it would only make up addresses anyway. */
    result = NULL;
    error = EAI_FAIL;
 #else
-   error = getaddrinfo(hostName, NULL, NULL, &result);
+   error = getaddrinfo(hostName, NULL, &hints, &result);
 #endif
    if (error != 0) {
-	   lastError = error;
+	   *errorOut = error;
 	   return 0;
    }
 
@@ -686,7 +804,10 @@ sqInt sqNetworkInit(sqInt resolverSemaIndex)
   thisNetSession= clock() + time(0);
   if (0 == thisNetSession)
     thisNetSession= 1;  /* 0 => uninitialised */
+  resolverForkCheck();
+  resolverLock();
   resolverSema= resolverSemaIndex;
+  resolverUnlock();
   return 0;
 }
 
@@ -696,7 +817,12 @@ sqInt sqNetworkInit(sqInt resolverSemaIndex)
 void sqNetworkShutdown(void)
 {
   thisNetSession= 0;
+  resolverForkCheck();
+  resolverLock();
   resolverSema= 0;
+  /* the lookup in flight must not answer into the next session */
+  abandonLookup();
+  resolverUnlock();
   aioFini();
 }
 
@@ -1744,39 +1870,297 @@ void sqSocketSetReusable(SocketPtr s)
 /*** Resolver functions ***/
 
 
-/* Note: the Mac and Win32 implementations implement asynchronous lookups
- * in the DNS.  I can't think of an easy way to do this in Unix without
- * going totally ott with threads or somesuch.  If anyone knows differently,
- * please tell me about it. - Ian
+/* A start primitive names a lookup, hands it to a thread and returns with the
+ * resolver busy; the thread signals resolverSema when it has the answer.
+ * NetNameResolver was written for this: it waits on the semaphore while
+ * polling sqResolverStatus, and calls sqResolverAbort when it gives up.
+ *
+ * Every start, abort and shutdown bumps lookupGeneration under the mutex.  A
+ * thread stores its answer and signals only if its generation is still the
+ * current one; an aborted or superseded lookup finishes in silence.  A thread
+ * is never cancelled: getaddrinfo() is not cancellation-safe.  An abort (or a
+ * shutdown, or a fork) of a lookup in flight leaves the resolver in
+ * ResolverError (EAI_AGAIN) with no result.
+ *
+ * Without ASYNC_RESOLVER every lookup runs inline, as it always did.
  */
 
+typedef struct lookupJob
+{
+  unsigned long generation;	/* the lookup this job answers */
+  int slot;			/* its entry in lookupWorkers */
+  int reverse;			/* address -> name, else name -> address */
+  int address;			/* the address looked up, or found */
+  int error;			/* 0, or what sqResolverError answers */
+  char name[MAXHOSTNAMELEN+1];	/* the name looked up, or found */
+} lookupJob;
 
-/*** irrelevancies ***/
+/* do the slow part, with no lock held */
 
-void sqResolverAbort(void) {}
+static void runLookup(lookupJob *job)
+{
+  if (job->reverse)
+    job->error= addrToName(job->address, job->name);
+  else
+    job->address= nameToAddr(job->name, &job->error);
+}
+
+/* store the answer if the image still waits for this lookup, and tell it */
+
+static void finishLookup(lookupJob *job)
+{
+  resolverLock();
+  if (job->generation == lookupGeneration)
+    {
+      if (job->reverse)
+	strncpy(lastName, job->name, MAXHOSTNAMELEN);
+      else
+	lastAddr= job->address;
+      storeInt(lastError, job->error);
+      storeInt(lookupBusy, 0);
+      /* under the lock, so that no shutdown comes in between and leaves the
+	 signal to a semaphore index the image may have reused */
+      interpreterProxy->signalSemaphoreWithIndex(resolverSema);
+    }
+  resolverUnlock();
+}
+
+/* disown the lookup in flight, if any, and answer the next one's generation.
+   The caller holds the lock. */
+
+static unsigned long beginLookup(void)
+{
+  storeInt(lastError, 0);
+  storeInt(lookupBusy, 1);
+  return ++lookupGeneration;
+}
+
+/* disown the lookup in flight, if any.  It ends in an error rather than in
+   ResolverReady, so that the accessors do not answer an older lookup's result
+   for it.  The caller holds the lock (or is alone, in a forked child). */
+
+static void abandonLookup(void)
+{
+  ++lookupGeneration;
+  if (loadInt(lookupBusy))
+    {
+      lastAddr= 0;
+      lastName[0]= '\0';
+      storeInt(lastError, EAI_AGAIN);
+      storeInt(lookupBusy, 0);
+    }
+}
+
+#if ASYNC_RESOLVER
+
+/* pthread_atfork handlers of the fork guard.  The prepare handler runs before
+   libc takes its own fork locks, and keeps forkGuardMutex until the fork is
+   over, so no lookup thread enters libc meanwhile.  The wait is at most the
+   longest lookup in flight, which the synchronous resolver spent blocking the
+   VM.  vfork() and posix_spawn() (OSProcess forkAndExec, system()) do not run
+   these handlers and do not need them. */
+
+static void forkGuardPrepare(void)
+{
+  pthread_mutex_lock(&forkGuardMutex);
+  while (lookupsRunning)
+    pthread_cond_wait(&forkGuardIdle, &forkGuardMutex);
+}
+
+static void forkGuardParent(void)
+{
+  pthread_mutex_unlock(&forkGuardMutex);
+}
+
+static void forkGuardChild(void)
+{
+  /* the child has only the forking thread */
+  pthread_mutex_init(&forkGuardMutex, 0);
+  pthread_cond_init(&forkGuardIdle, 0);
+  lookupsRunning= 0;
+}
+
+static void installForkGuard(void)
+{
+  forkGuardInstalled= !pthread_atfork(forkGuardPrepare, forkGuardParent, forkGuardChild);
+}
+
+static void *lookupWorker(void *arg)
+{
+  lookupJob *job= (lookupJob *)arg;
+  int slot= job->slot;
+
+  /* a fork waits for the answer: then the child has it, and never a
+     resolverMutex this thread held */
+  pthread_mutex_lock(&forkGuardMutex);
+  ++lookupsRunning;
+  pthread_mutex_unlock(&forkGuardMutex);
+  runLookup(job);
+  finishLookup(job);
+  pthread_mutex_lock(&forkGuardMutex);
+  if (!--lookupsRunning)
+    pthread_cond_broadcast(&forkGuardIdle);
+  pthread_mutex_unlock(&forkGuardMutex);
+  free(job);
+  /* last: from here on the thread only returns, and can be joined */
+  __atomic_store_n(&lookupWorkers[slot].done, 1, __ATOMIC_RELEASE);
+  return 0;
+}
+
+/* join the lookup threads that have finished */
+
+static void reapLookupWorkers(void)
+{
+  int i;
+
+  for (i= 0; i < MaxLookupWorkers; ++i)
+    if (lookupWorkers[i].used && __atomic_load_n(&lookupWorkers[i].done, __ATOMIC_ACQUIRE))
+      {
+	pthread_join(lookupWorkers[i].thread, 0);
+	lookupWorkers[i].used= 0;
+      }
+}
+
+/* answer whether every lookup thread has been joined.  Not a counter that a
+   thread decrements: it would reach zero while the thread still runs its last
+   instructions, which are code of this module. */
+
+static int lookupWorkersQuiescent(void)
+{
+  int i;
+
+  reapLookupWorkers();
+  for (i= 0; i < MaxLookupWorkers; ++i)
+    if (lookupWorkers[i].used)
+      return 0;
+  return 1;
+}
+
+/* A fork (OSProcess forkSqueak) copies none of the lookup threads, and may
+   copy resolverMutex locked by one of them.  The child notices the new pid the
+   first time it uses the resolver, and starts over with no lookup in flight
+   (one the parent had in flight ends in an error).  This is not done in the
+   fork guard's child handler because that is not installed until a first
+   thread is started, and may fail to install. */
+
+static void resolverForkCheck(void)
+{
+  pid_t pid= getpid();
+
+  if (pid == resolverPid)
+    return;
+  if (resolverPid)
+    {
+      pthread_mutex_init(&resolverMutex, 0);
+      memset(lookupWorkers, 0, sizeof(lookupWorkers));
+      abandonLookup();
+    }
+  resolverPid= pid;
+}
+
+#endif /* ASYNC_RESOLVER */
+
+/* run the job on a thread of its own, or inline when MaxLookupWorkers are
+   running already or no thread can be had (the old behaviour, not a failure) */
+
+static void startLookup(lookupJob *job)
+{
+#if ASYNC_RESOLVER
+  int slot;
+  lookupJob *threadJob;
+
+  reapLookupWorkers();
+  /* no threads without the fork guard */
+  pthread_once(&forkGuardOnce, installForkGuard);
+  for (slot= 0; (slot < MaxLookupWorkers) && lookupWorkers[slot].used; ++slot)
+    ;
+  if (forkGuardInstalled
+   && (slot < MaxLookupWorkers)
+   && (threadJob= (lookupJob *)malloc(sizeof(lookupJob))))
+    {
+      sigset_t blocked, saved;
+      int error;
+
+      *threadJob= *job;
+      threadJob->slot= slot;
+      __atomic_store_n(&lookupWorkers[slot].done, 0, __ATOMIC_RELEASE);
+      /* the thread inherits a mask that leaves the asynchronous signals to the
+	 VM's own threads; a fault in it must still reach the crash handler */
+      sigfillset(&blocked);
+      sigdelset(&blocked, SIGSEGV);
+      sigdelset(&blocked, SIGBUS);
+      sigdelset(&blocked, SIGILL);
+      sigdelset(&blocked, SIGFPE);
+      sigdelset(&blocked, SIGTRAP);
+      sigdelset(&blocked, SIGSYS);
+      pthread_sigmask(SIG_BLOCK, &blocked, &saved);
+      error= pthread_create(&lookupWorkers[slot].thread, 0, lookupWorker, threadJob);
+      pthread_sigmask(SIG_SETMASK, &saved, 0);
+      if (!error)
+	{
+	  lookupWorkers[slot].used= 1;
+	  return;
+	}
+      free(threadJob);
+    }
+#endif
+  runLookup(job);
+  finishLookup(job);
+}
+
+void sqResolverAbort(void)
+{
+  resolverForkCheck();
+  resolverLock();
+  abandonLookup();
+  resolverUnlock();
+}
 
 void sqResolverStartAddrLookup(sqInt address)
 {
-  const char *res;
-  res= addrToName(address);
-  strncpy(lastName, res, MAXHOSTNAMELEN);
-  logTrace( "startAddrLookup %s\n", lastName);
+  lookupJob job;
+
+  resolverForkCheck();
+  resolverLock();
+  job.generation= beginLookup();
+  resolverUnlock();
+  job.reverse= 1;
+  job.address= address;
+  job.name[0]= '\0';
+  logTrace( "startAddrLookup %ld\n", (long)address);
+  startLookup(&job);
 }
 
 
 sqInt sqResolverStatus(void)
 {
+  resolverForkCheck();
   if (!thisNetSession)
     return ResolverUninitialised;
-  if (lastError != 0)
+  if (loadInt(lookupBusy))
+    return ResolverBusy;
+  if (loadInt(lastError) != 0)
     return ResolverError;
   return ResolverSuccess;
 }
 
+/* fail while a lookup is in flight, rather than answer the previous one's
+   result.  Once the resolver is not busy no thread may store an answer, so
+   lastName and lastAddr can then be read without the lock. */
+
+static int lookupInFlight(void)
+{
+  resolverForkCheck();
+  if (!loadInt(lookupBusy))
+    return 0;
+  success(false);
+  return 1;
+}
+
 /*** trivialities ***/
 
-sqInt sqResolverAddrLookupResultSize(void)	{ return strlen(lastName); }
-sqInt sqResolverError(void)			{ return lastError; }
+sqInt sqResolverAddrLookupResultSize(void)	{ return lookupInFlight() ? 0 : strlen(lastName); }
+sqInt sqResolverError(void)			{ return loadInt(lastError); }
 sqInt sqResolverLocalAddress(void) {
 
 #ifndef _WIN32
@@ -1828,21 +2212,29 @@ sqInt sqResolverLocalAddress(void) {
     static u_long localHostAddress;
 
     sqInt address;
+    int error;
 
     gethostname(localHostName,MAXHOSTNAMELEN);
-    return nameToAddr(localHostName);
+    address= nameToAddr(localHostName, &error);
+    if (error)
+        storeInt(lastError, error);	/* for the resolver */
+    return address;
 
 #endif
 }
 
 sqInt sqResolverNameLookupResult(void)		{ 
-	if(lastError != 0)
+	if(lookupInFlight())
+		return 0;
+	if(loadInt(lastError) != 0)
 		success(false);
 	
 	return lastAddr; }
 
 void
 sqResolverAddrLookupResult(char *nameForAddress, sqInt nameSize) {
+  if (lookupInFlight())
+    return;
   memcpy(nameForAddress, lastName, nameSize);
 }
 
@@ -1851,12 +2243,19 @@ sqResolverAddrLookupResult(char *nameForAddress, sqInt nameSize) {
 void
 sqResolverStartNameLookup(char *hostName, sqInt nameSize) {
   int len= (nameSize < MAXHOSTNAMELEN) ? nameSize : MAXHOSTNAMELEN;
+  lookupJob job;
+
+  resolverForkCheck();
+  resolverLock();
+  job.generation= beginLookup();
+  /* lastName answers the name being looked up, as it always has */
   memcpy(lastName, hostName, len);
-  lastName[len]= lastError= 0;
-  logTrace( "name lookup %s\n", lastName);
-  lastAddr= nameToAddr(lastName);
-  /* we're done before we even started */
-  interpreterProxy->signalSemaphoreWithIndex(resolverSema);
+  lastName[len]= 0;
+  memcpy(job.name, lastName, len + 1);
+  resolverUnlock();
+  job.reverse= 0;
+  logTrace( "name lookup %s\n", job.name);
+  startLookup(&job);
 }
 
 
@@ -2032,7 +2431,7 @@ void sqResolverGetAddressInfoHostSizeServiceSizeFlagsFamilyTypeProtocol(char *ho
       if (EAI_BADHINTS != gaiError)
 	{
 	  logTrace("getaddrinfo: %s\n", gai_strerror(gaiError));
-	  lastError= gaiError;
+	  storeInt(lastError, gaiError);
 	  goto fail;
 	}
 #    else
@@ -2236,7 +2635,7 @@ void sqResolverGetNameInfoSizeFlags(char *addr, sqInt addrSize, sqInt flags)
   if (gaiError)
     {
       logTrace("getnameinfo: %s\n", gai_strerror(gaiError));
-      lastError= gaiError;
+      storeInt(lastError, gaiError);
       goto fail;
     }
 
@@ -2566,7 +2965,9 @@ sqInt sqSocketReceiveUDPDataBufCount(SocketPtr s, char *buf, sqInt bufSize)
 
       int nread= recvfrom(SOCKET(s), buf, bufSize, 0, &SOCKETPEER(s).sa, &saddrSize);
 
-      lastError = getLastSocketError();
+      /* a local: this wrote the resolver's lastError, which lookup threads
+	 now store into (no primitive calls this function today) */
+      int lastError = getLastSocketError();
 
       if (nread >= 0) {
     	  SOCKETPEERSIZE(s)= saddrSize;
