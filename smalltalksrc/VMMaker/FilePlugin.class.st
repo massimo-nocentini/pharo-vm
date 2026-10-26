@@ -361,6 +361,8 @@ FilePlugin >> primitiveDirectoryEntry [
 	pathName := interpreterProxy stackValue: 1.
 	(interpreterProxy isBytes: pathName) ifFalse:
 		[^interpreterProxy primitiveFail].
+	(interpreterProxy isBytes: requestedName) ifFalse:
+		[^interpreterProxy primitiveFail].
 
 	"Outbound string parameters"
 	pathNameIndex := interpreterProxy firstIndexableField: pathName.
@@ -446,6 +448,7 @@ FilePlugin >> primitiveDirectoryLookup [
 	<export: true>
 	| index pathName pathNameIndex pathNameSize status entryName entryNameSize createDate modifiedDate dirFlag symlinkFlag posixPermissions fileSize |
 	index := interpreterProxy stackIntegerValue: 0.
+	interpreterProxy failed ifTrue: [ ^ nil ].
 	pathName := interpreterProxy stackValue: 1.
 	(interpreterProxy isBytes: pathName) ifFalse: [
 		^ interpreterProxy primitiveFail ].

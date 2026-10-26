@@ -49,6 +49,31 @@ extern struct VirtualMachine *interpreterProxy;
 #define NO_MORE_ENTRIES 1
 #define BAD_PATH        2
 
+/* The size of the name buffer the primitives pass in (char entryName[256]) */
+#define ENTRY_NAME_MAX  256
+
+/* Convert an entry name to UTF-8 into the primitive's name buffer, without a
+   terminating NUL. A name of more than ENTRY_NAME_MAX bytes (Windows allows
+   255 UTF-16 units, up to 765 UTF-8 bytes) loses whole trailing characters,
+   as the unix dir_Lookup truncates to 256 bytes too: WideCharToMultiByte
+   fails rather than truncate. Answers the byte count. */
+static sqInt entryNameToUTF8(WCHAR *wideName, char *name)
+{
+  int wideLength = (int)wcslen(wideName);
+  int sz;
+
+  while ((sz = WideCharToMultiByte(CP_UTF8, 0, wideName, wideLength,
+                                   name, ENTRY_NAME_MAX, NULL, NULL)) == 0
+         && wideLength > 0) {
+    wideLength--;
+    /* never keep the high half of a surrogate pair alone */
+    if (wideLength > 0
+        && wideName[wideLength-1] >= 0xD800 && wideName[wideLength-1] <= 0xDBFF)
+      wideLength--;
+  }
+  return sz;
+}
+
 #define DEFAULT_DRIVE_PERMISSIONS (S_IRUSR | (S_IRUSR>>3) | (S_IRUSR>>6) | \
                                    S_IWUSR | (S_IWUSR>>3) | (S_IWUSR>>6) | \
                                    S_IXUSR | (S_IXUSR>>3) | (S_IXUSR>>6))
@@ -213,7 +238,7 @@ sqInt dir_Lookup(char *pathString, sqInt pathLength, sqInt index,
   sqInt patternLength;
   FILETIME fileTime;
   SYSTEMTIME sysTime;
-  sqInt i, sz;
+  sqInt i;
 
   /* default return values */
   *name             = 0;
@@ -325,8 +350,7 @@ sqInt dir_Lookup(char *pathString, sqInt pathLength, sqInt index,
   }
 
   /* convert to UTF-8 */
-  sz = WideCharToMultiByte(CP_UTF8, 0, findData.cFileName, -1, name, MAX_PATH, NULL, NULL);
-  *nameLength = sz-1;
+  *nameLength = entryNameToUTF8(findData.cFileName, name);
 
   FileTimeToLocalFileTime(&findData.ftCreationTime, &fileTime);
   FileTimeToSystemTime(&fileTime, &sysTime);
@@ -335,7 +359,7 @@ sqInt dir_Lookup(char *pathString, sqInt pathLength, sqInt index,
   FileTimeToSystemTime(&fileTime, &sysTime);
   *modificationDate = convertToSqueakTime(sysTime);
 
-  read_permissions(posixPermissions, findData.cFileName, sz, findData.dwFileAttributes); 
+  read_permissions(posixPermissions, findData.cFileName, wcslen(findData.cFileName), findData.dwFileAttributes); 
 
   if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
     *isDirectory= true;
@@ -434,8 +458,9 @@ sqInt dir_EntryLookup(char *pathString, sqInt pathLength, char* nameString, sqIn
     }
   }
 
-  memcpy(name, nameString, nameStringLength);
-  *nameLength = nameStringLength;
+  /* name is the primitive's 256-byte buffer: the unix version truncates too */
+  *nameLength = nameStringLength < ENTRY_NAME_MAX ? nameStringLength : ENTRY_NAME_MAX;
+  memcpy(name, nameString, *nameLength);
 
   FileTimeToLocalFileTime(&winAttrs.ftCreationTime, &fileTime);
   FileTimeToSystemTime(&fileTime, &sysTime);

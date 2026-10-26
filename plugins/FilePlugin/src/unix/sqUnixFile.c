@@ -215,6 +215,7 @@ sqInt dir_Lookup(char *pathString, sqInt pathStringLength, sqInt index,
 #else
   /* (Re)open the directory if required */
   if (lastPathValid && 
+      index > 0 &&	/* a lastIndex left < 0 by an index < 1 must not hit */
       ++lastIndex == index &&
       !strcmp(lastPath, unixPath)) {
 #endif
@@ -258,7 +259,11 @@ sqInt dir_Lookup(char *pathString, sqInt pathStringLength, sqInt index,
 	  goto nextEntry;
     }
 
-  *nameLength= ux2sqPath(dirEntry->d_name, nameLen, name, MAXPATHLEN, 0);
+  /* entries are numbered from 1: for an index < 1 no entry was read */
+  if (!dirEntry)
+    return NO_MORE_ENTRIES;
+
+  *nameLength= ux2sqPath(dirEntry->d_name, nameLen, name, 256, 0);	/* name is the primitive's char[256] */
 
   {
     char terminatedName[MAXPATHLEN+1];

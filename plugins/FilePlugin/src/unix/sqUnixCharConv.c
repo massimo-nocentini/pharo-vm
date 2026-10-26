@@ -47,8 +47,9 @@ static inline int min(int x, int y) { return (x < y) ? x : y; }
 static int convertCopy(char *from, int fromLen, char *to, int toLen, int term)
 {
   int len= min(toLen - term, fromLen);
+  if (len < 0) len= 0;			/* toLen == 0 with term: no room at all */
   strncpy(to, from, len);
-  if (term) to[len]= '\0';
+  if (term && len < toLen) to[len]= '\0';
   return len;
 }
 
@@ -309,6 +310,8 @@ int convertChars(char *from, int fromLen, void *fromCode, char *to, int toLen, v
 			  skip++;
 			  mask >>= 1;
 			}
+		    if (0 == skip)			/* a byte < 0x80: skip it, or loop forever */
+		      skip= 1;
 		    inbuf += skip;
 		    inbytes -= skip;
 		    if (outbytes > 0)
