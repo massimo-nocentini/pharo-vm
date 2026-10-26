@@ -86,6 +86,7 @@ EXPORT(sqInt) primitiveColorConvertGrayscaleMCU(void);
 EXPORT(sqInt) primitiveColorConvertMCU(void);
 EXPORT(sqInt) primitiveDecodeMCU(void);
 EXPORT(sqInt) primitiveIdctInt(void);
+static sqInt samplesOffitIn(int *aColorComponent, sqInt blockCount);
 EXPORT(sqInt) setInterpreter(struct VirtualMachine *anInterpreter);
 static sqInt yColorComponentFrom(sqInt oop);
 
@@ -168,9 +169,20 @@ static int yComponent[11];
 static sqInt
 cbColorComponentFrom(sqInt oop)
 {
-	return (colorComponentfrom(cbComponent, oop))
-	 && (colorComponentBlocksfrom(cbBlocks, oop));
+    sqInt blockCount;
+
+	if (!(colorComponentfrom(cbComponent, oop))) {
+		return 0;
+	}
+	blockCount = colorComponentBlocksfrom(cbBlocks, oop);
+	return (blockCount >= 0)
+	 && (samplesOffitIn(cbComponent, blockCount));
 }
+
+/*	Load the MCU blocks of the JPEGColorComponent oop into blocks.
+	Answer how many were loaded, or -1 if they are not valid. Only that many
+	entries of blocks are valid: the rest still point where a previous call
+	left them. */
 
 	/* JPEGReaderPlugin>>#colorComponentBlocks:from: */
 static sqInt
@@ -182,30 +194,33 @@ colorComponentBlocksfrom(int **blocks, sqInt oop)
     sqInt max;
 
 	if (!(isPointers(oop))) {
-		return 0;
+		return -1;
 	}
 	if ((slotSizeOf(oop)) < MinComponentSize) {
-		return 0;
+		return -1;
 	}
 	arrayOop = fetchPointerofObject(MCUBlockIndex, oop);
 	if (!(isPointers(arrayOop))) {
-		return 0;
+		return -1;
 	}
 	max = slotSizeOf(arrayOop);
 	if (max > MaxMCUBlocks) {
-		return 0;
+		return -1;
 	}
 	for (i = 0; i < max; i += 1) {
 		blockOop = fetchPointerofObject(i, arrayOop);
 		if (!(isWords(blockOop))) {
-			return 0;
+			return -1;
 		}
 		if (!((slotSizeOf(blockOop)) == DCTSize2)) {
-			return 0;
+			return -1;
 		}
 		blocks[i] = (firstIndexableField(blockOop));
 	}
-	return !(failed());
+	if (failed()) {
+		return -1;
+	}
+	return max;
 }
 
 	/* JPEGReaderPlugin>>#colorComponent:from: */
@@ -232,8 +247,14 @@ colorComponentfrom(int *aColorComponent, sqInt oop)
 static sqInt
 crColorComponentFrom(sqInt oop)
 {
-	return (colorComponentfrom(crComponent, oop))
-	 && (colorComponentBlocksfrom(crBlocks, oop));
+    sqInt blockCount;
+
+	if (!(colorComponentfrom(crComponent, oop))) {
+		return 0;
+	}
+	blockCount = colorComponentBlocksfrom(crBlocks, oop);
+	return (blockCount >= 0)
+	 && (samplesOffitIn(crComponent, blockCount));
 }
 
 /*	Note: This is hardcoded so it can be run from Squeak.
@@ -262,6 +283,10 @@ jpegDecodeValueFromsize(int *table, sqInt tableSize)
     int value;
     sqInt value1;
 
+
+	if (tableSize < 1) {
+		return -1;
+	}
 
 	/* Initial bits needed */
 	bitsNeeded = ((usqInt) (table[0])) >> 24;
@@ -309,7 +334,8 @@ jpegDecodeValueFromsize(int *table, sqInt tableSize)
 			return -1;
 		}
 		index = (tableIndex + bits) - 1;
-		if (index >= tableSize) {
+		if ((index < 0)
+		 || (index >= tableSize)) {
 			return -1;
 		}
 
@@ -364,6 +390,14 @@ loadJPEGStreamFrom(sqInt streamOop)
 	 || (jsPosition >= jsReadLimit)) {
 		return 0;
 	}
+	if ((jsBitCount < 0)
+	 || (jsBitCount > 24)) {
+		return 0;
+	}
+	if ((jsBitBuffer < 0)
+	 || (jsBitBuffer >= (1U << jsBitCount))) {
+		return 0;
+	}
 	return 1;
 }
 
@@ -411,8 +445,7 @@ primitiveColorConvertGrayscaleMCU(void)
 	jpegBitsSize = slotSizeOf(arrayOop);
 	jpegBits = firstIndexableField(arrayOop);
 	arrayOop = stackValue(3);
-	if (!((colorComponentfrom(yComponent, arrayOop))
-		 && (colorComponentBlocksfrom(yBlocks, arrayOop)))) {
+	if (!(yColorComponentFrom(arrayOop))) {
 		return primitiveFail();
 	}
 	/* begin colorConvertGrayscaleMCU */
@@ -1015,6 +1048,70 @@ primitiveIdctInt(void)
 	return 0;
 }
 
+/*	Answer whether the jpegBitsSize samples that nextSample reads from
+	aColorComponent all lie in its first blockCount blocks, the only ones
+	loaded by this call. The cursor starts at 0@0 and wraps every mcuWidth*8
+	samples. With positive scales and a non-negative blockWidth the block
+	index grows with both cursor coordinates, so the last row and the last
+	column bound it. Anything else (one zero scale, which nextSample would
+	divide by, or negative values) never comes from the image and fails, so
+	the pixel loop needs no check of its own. */
+
+	/* JPEGReaderPlugin>>#samplesOf:fitIn: */
+static sqInt
+samplesOffitIn(int *aColorComponent, sqInt blockCount)
+{
+    int blockWidth;
+    sqInt columns;
+    sqInt maxX;
+    sqInt maxY;
+    int rowSize;
+    sqInt rows;
+    int sx;
+    int sy;
+
+	if (jpegBitsSize == 0) {
+		return 1;
+	}
+	sx = aColorComponent[HScaleIndex];
+	sy = aColorComponent[VScaleIndex];
+	if ((sx == 0)
+	 && (sy == 0)) {
+		sx = 1;
+		sy = 1;
+	}
+	if (!((sx > 0)
+		 && (sy > 0))) {
+		return 0;
+	}
+	blockWidth = aColorComponent[BlockWidthIndex];
+	if (blockWidth < 0) {
+		return 0;
+	}
+
+	/* nextSample computes mcuWidth * 8 as a C int */
+	rowSize = aColorComponent[MCUWidthIndex];
+	if ((rowSize < 1)
+	 || (rowSize > 0xFFFFFFF)) {
+		return 0;
+	}
+	rowSize = rowSize * 8;
+	maxX = (((rowSize < jpegBitsSize) ? rowSize : jpegBitsSize)) - 1;
+	maxY = (jpegBitsSize - 1) / rowSize;
+	columns = ((usqInt) (maxX / sx)) >> 3;
+	rows = ((usqInt) (maxY / sy)) >> 3;
+	if ((rows > 0)
+	 && (blockWidth > 0)) {
+
+		/* The index is at least rows, so this loses nothing and keeps the product small */
+		if (rows >= blockCount) {
+			return 0;
+		}
+		columns += rows * blockWidth;
+	}
+	return columns < blockCount;
+}
+
 /*	Note: This is coded so that it can be run in Squeak. */
 
 	/* InterpreterPlugin>>#setInterpreter: */
@@ -1053,8 +1150,14 @@ setInterpreter(struct VirtualMachine *anInterpreter)
 static sqInt
 yColorComponentFrom(sqInt oop)
 {
-	return (colorComponentfrom(yComponent, oop))
-	 && (colorComponentBlocksfrom(yBlocks, oop));
+    sqInt blockCount;
+
+	if (!(colorComponentfrom(yComponent, oop))) {
+		return 0;
+	}
+	blockCount = colorComponentBlocksfrom(yBlocks, oop);
+	return (blockCount >= 0)
+	 && (samplesOffitIn(yComponent, blockCount));
 }
 
 

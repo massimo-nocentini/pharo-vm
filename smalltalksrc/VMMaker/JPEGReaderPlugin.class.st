@@ -169,8 +169,10 @@ JPEGReaderPlugin class >> initialize [
 
 { #category : 'decoding' }
 JPEGReaderPlugin >> cbColorComponentFrom: oop [
-	^(self colorComponent: cbComponent from: oop)
-		and:[self colorComponentBlocks: cbBlocks from: oop]
+	| blockCount |
+	(self colorComponent: cbComponent from: oop) ifFalse:[^false].
+	blockCount := self colorComponentBlocks: cbBlocks from: oop.
+	^blockCount >= 0 and:[self samplesOf: cbComponent fitIn: blockCount]
 ]
 
 { #category : 'decoding' }
@@ -197,22 +199,26 @@ JPEGReaderPlugin >> colorComponent: aColorComponent from: oop [
 
 { #category : 'decoding' }
 JPEGReaderPlugin >> colorComponentBlocks: blocks from: oop [
+	"Load the MCU blocks of the JPEGColorComponent oop into blocks.
+	Answer how many were loaded, or -1 if they are not valid. Only that many
+	entries of blocks are valid: the rest still point where a previous call left them."
 	| arrayOop max blockOop |
 	<var: #blocks type: 'int **'>
-	(interpreterProxy isPointers: oop) ifFalse:[^false].
-	(interpreterProxy slotSizeOf: oop) < MinComponentSize ifTrue:[^false].
+	(interpreterProxy isPointers: oop) ifFalse:[^-1].
+	(interpreterProxy slotSizeOf: oop) < MinComponentSize ifTrue:[^-1].
 
 	arrayOop := interpreterProxy fetchPointer: MCUBlockIndex ofObject: oop.
-	(interpreterProxy isPointers: arrayOop) ifFalse:[^false].
+	(interpreterProxy isPointers: arrayOop) ifFalse:[^-1].
 	max := interpreterProxy slotSizeOf: arrayOop.
-	max > MaxMCUBlocks ifTrue:[^false].
+	max > MaxMCUBlocks ifTrue:[^-1].
 	0 to: max-1 do:[:i|
 		blockOop := interpreterProxy fetchPointer: i ofObject: arrayOop.
-		(interpreterProxy isWords: blockOop) ifFalse:[^false].
-		(interpreterProxy slotSizeOf: blockOop) = DCTSize2 ifFalse:[^false].
+		(interpreterProxy isWords: blockOop) ifFalse:[^-1].
+		(interpreterProxy slotSizeOf: blockOop) = DCTSize2 ifFalse:[^-1].
 		blocks at: i put: (interpreterProxy firstIndexableField: blockOop).
 	].
-	^interpreterProxy failed not
+	interpreterProxy failed ifTrue:[^-1].
+	^max
 ]
 
 { #category : 'decoding' }
@@ -268,8 +274,10 @@ JPEGReaderPlugin >> colorConvertMCU [
 
 { #category : 'decoding' }
 JPEGReaderPlugin >> crColorComponentFrom: oop [
-	^(self colorComponent: crComponent from: oop)
-		and:[self colorComponentBlocks: crBlocks from: oop]
+	| blockCount |
+	(self colorComponent: crComponent from: oop) ifFalse:[^false].
+	blockCount := self colorComponentBlocks: crBlocks from: oop.
+	^blockCount >= 0 and:[self samplesOf: crComponent fitIn: blockCount]
 ]
 
 { #category : 'decoding' }
@@ -464,6 +472,7 @@ JPEGReaderPlugin >> jpegDecodeValueFrom: table size: tableSize [
 	"Decode the next value in the receiver using the given huffman table."
 	| bits bitsNeeded tableIndex value index |
 	<var: #table type: 'int *'>
+	tableSize < 1 ifTrue:[^-1].
 	bitsNeeded := (table at: 0) >> 24.	"Initial bits needed"
 	bitsNeeded > MaxBits ifTrue:[^-1].
 	tableIndex := 2.							"First real table"
@@ -471,7 +480,7 @@ JPEGReaderPlugin >> jpegDecodeValueFrom: table size: tableSize [
 		bits := self getBits: bitsNeeded.		"Get bits"
 		bits < 0 ifTrue:[^-1].
 		index := tableIndex + bits - 1.
-		index >= tableSize ifTrue:[^-1].
+		(index < 0 or:[index >= tableSize]) ifTrue:[^-1].
 		value := table at: index.					"Lookup entry in table"
 		(value bitAnd: 16r3F000000) = 0 ifTrue:[^value]. "Check if it is a leaf node"
 		"Fetch sub table"
@@ -497,6 +506,10 @@ JPEGReaderPlugin >> loadJPEGStreamFrom: streamOop [
 	interpreterProxy failed ifTrue:[^false].
 	sz < jsReadLimit ifTrue:[^false].
 	(jsPosition < 0 or:[jsPosition >= jsReadLimit]) ifTrue:[^false].
+	"A JPEGReadStream buffers at most 24 bits, and bitBuffer < (1 << bitsInBuffer).
+	 Anything else would overflow the shifts here and the huffman table index"
+	(jsBitCount < 0 or:[jsBitCount > 24]) ifTrue:[^false].
+	(jsBitBuffer < 0 or:[jsBitBuffer >= (1 << jsBitCount)]) ifTrue:[^false].
 	^true
 ]
 
@@ -753,6 +766,40 @@ JPEGReaderPlugin >> primitiveIdctInt [
 ]
 
 { #category : 'decoding' }
+JPEGReaderPlugin >> samplesOf: aColorComponent fitIn: blockCount [
+	"Answer whether the jpegBitsSize samples that nextSample reads from aColorComponent
+	all lie in its first blockCount blocks, the only ones loaded by this call. The cursor
+	starts at 0@0 and wraps every mcuWidth*8 samples. With positive scales and a
+	non-negative blockWidth the block index grows with both cursor coordinates, so the
+	last row and the last column bound it. Anything else (one zero scale, which
+	nextSample would divide by, or negative values) never comes from the image and
+	fails, so the pixel loop needs no check of its own."
+	| sx sy blockWidth rowSize maxX maxY columns rows |
+	<var: #aColorComponent type: 'int *'>
+	<inline: false>
+	jpegBitsSize = 0 ifTrue:[^true].
+	sx := aColorComponent at: HScaleIndex.
+	sy := aColorComponent at: VScaleIndex.
+	(sx = 0 and:[sy = 0]) ifTrue:[sx := 1. sy := 1].
+	(sx > 0 and:[sy > 0]) ifFalse:[^false].
+	blockWidth := aColorComponent at: BlockWidthIndex.
+	blockWidth < 0 ifTrue:[^false].
+	rowSize := aColorComponent at: MCUWidthIndex.
+	"nextSample computes mcuWidth * 8 as a C int"
+	(rowSize < 1 or:[rowSize > 16r0FFFFFFF]) ifTrue:[^false].
+	rowSize := rowSize * 8.
+	maxX := (rowSize min: jpegBitsSize) - 1.
+	maxY := (jpegBitsSize - 1) // rowSize.
+	columns := (maxX // sx) bitShift: -3.
+	rows := (maxY // sy) bitShift: -3.
+	(rows > 0 and:[blockWidth > 0]) ifTrue:[
+		"The index is at least rows, so this loses nothing and keeps the product small"
+		rows >= blockCount ifTrue:[^false].
+		columns := columns + (rows * blockWidth)].
+	^columns < blockCount
+]
+
+{ #category : 'decoding' }
 JPEGReaderPlugin >> scaleAndSignExtend: aNumber inFieldWidth: w [
 	<inline: true>
 	aNumber < (1 << (w - 1))
@@ -790,6 +837,8 @@ JPEGReaderPlugin >> storeJPEGStreamOn: streamOop [
 
 { #category : 'decoding' }
 JPEGReaderPlugin >> yColorComponentFrom: oop [
-	^(self colorComponent: yComponent from: oop)
-		and:[self colorComponentBlocks: yBlocks from: oop]
+	| blockCount |
+	(self colorComponent: yComponent from: oop) ifFalse:[^false].
+	blockCount := self colorComponentBlocks: yBlocks from: oop.
+	^blockCount >= 0 and:[self samplesOf: yComponent fitIn: blockCount]
 ]
