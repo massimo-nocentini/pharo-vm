@@ -27,6 +27,23 @@ NewFilePlugin class >> requiresPlatformFiles [
 	^true
 ]
 
+{ #category : 'private' }
+NewFilePlugin >> checkBuffer: bufferOop offset: bufferOffset size: size isDestination: isDestination [
+	"Fail unless bufferOop is a words or bytes object holding the bytes [bufferOffset, bufferOffset + size),
+	 and, when the file is read into it, is mutable. That span is handed to read(2)/write(2) as is."
+	<var: 'bufferOffset' type: #usqInt>
+	<var: 'size' type: #usqInt>
+	<var: 'bufferSize' type: #usqInt>
+	| bufferSize |
+	(interpreterProxy isWordsOrBytes: bufferOop)
+		ifFalse: [^ interpreterProxy primitiveFailFor: PrimErrBadArgument].
+	(isDestination and: [interpreterProxy isOopImmutable: bufferOop])
+		ifTrue: [^ interpreterProxy primitiveFailFor: PrimErrNoModification].
+	bufferSize := interpreterProxy byteSizeOf: bufferOop.
+	(bufferOffset > bufferSize or: [size > (bufferSize - bufferOffset)])
+		ifTrue: [^ interpreterProxy primitiveFailFor: PrimErrBadIndex]
+]
+
 { #category : 'file primitives' }
 NewFilePlugin >> primitiveDeleteFile [
 	<var: 'pathIndex' type: 'char *'>
@@ -88,6 +105,7 @@ NewFilePlugin >> primitiveDirectoryNext [
 	| directoryOop directoryPointer stringOop stringPointer|
 	directoryOop := interpreterProxy stackValue: 0.
 	stringOop := interpreterProxy instantiateClass: interpreterProxy classExternalAddress indexableSize: BytesPerWord.
+	stringOop = nil ifTrue: [^ interpreterProxy primitiveFailFor: PrimErrNoMemory].
 	interpreterProxy failed ifFalse: [
 		directoryPointer := self cCoerce: (self pointerAtPointer: (interpreterProxy firstIndexableField: directoryOop)) to: #'NewDirectory_t *'.
 		stringPointer := self cCode: '(char *)NewDirectory_next(directoryPointer)'.
@@ -111,6 +129,7 @@ NewFilePlugin >> primitiveDirectoryOpen [
 	pathSize := interpreterProxy byteSizeOf: pathPointer.
 
 	directoryOop := interpreterProxy instantiateClass: interpreterProxy classExternalAddress indexableSize: BytesPerWord.
+	directoryOop = nil ifTrue: [^ interpreterProxy primitiveFailFor: PrimErrNoMemory].
 	
 	directoryPointer := self cCode: 'NewDirectory_open(pathIndex, pathSize)'.
 	self pointerAtPointer: (interpreterProxy firstIndexableField: directoryOop) put: directoryPointer.
@@ -193,6 +212,8 @@ NewFilePlugin >> primitiveFileOpen [
 	flags := interpreterProxy positive32BitValueOf: (interpreterProxy stackValue: 0).
 	creationDisposition := interpreterProxy positive32BitValueOf: (interpreterProxy stackValue: 1).
 	mode := interpreterProxy positive32BitValueOf: (interpreterProxy stackValue: 2).
+	"Fail before NewFile_open, which may create the file"
+	interpreterProxy failed ifTrue: [^ nil].
 	
 	pathPointer := interpreterProxy stackValue: 3.
 	(interpreterProxy isBytes: pathPointer)
@@ -201,6 +222,7 @@ NewFilePlugin >> primitiveFileOpen [
 	pathSize := interpreterProxy byteSizeOf: pathPointer.
 
 	fileOop := interpreterProxy instantiateClass: interpreterProxy classExternalAddress indexableSize: BytesPerWord.
+	fileOop = nil ifTrue: [^ interpreterProxy primitiveFailFor: PrimErrNoMemory].
 	
 	filePointer := self cCode: 'NewFile_open(pathIndex, pathSize, mode, creationDisposition, flags)'.
 	self pointerAtPointer: (interpreterProxy firstIndexableField: fileOop) put: filePointer.
@@ -222,6 +244,8 @@ NewFilePlugin >> primitiveFileReadInto [
 	bufferOffset := interpreterProxy positiveMachineIntegerValueOf: (interpreterProxy stackValue: 1).
 	bufferOop := interpreterProxy stackValue: 2.
 	fileOop := interpreterProxy stackValue: 3.
+	interpreterProxy failed ifFalse: [
+		self checkBuffer: bufferOop offset: bufferOffset size: readSize isDestination: true].
 
 	interpreterProxy failed ifFalse: [
 		bufferPointer := interpreterProxy firstIndexableField: bufferOop.
@@ -244,6 +268,8 @@ NewFilePlugin >> primitiveFileReadIntoAtFileOffset [
 	bufferOffset := interpreterProxy positiveMachineIntegerValueOf: (interpreterProxy stackValue: 2).
 	bufferOop := interpreterProxy stackValue: 3.
 	fileOop := interpreterProxy stackValue: 4.
+	interpreterProxy failed ifFalse: [
+		self checkBuffer: bufferOop offset: bufferOffset size: readSize isDestination: true].
 
 	interpreterProxy failed ifFalse: [
 		bufferPointer := interpreterProxy firstIndexableField: bufferOop.
@@ -312,6 +338,8 @@ NewFilePlugin >> primitiveFileWriteFrom [
 	bufferOffset := interpreterProxy positiveMachineIntegerValueOf: (interpreterProxy stackValue: 1).
 	bufferOop := interpreterProxy stackValue: 2.
 	fileOop := interpreterProxy stackValue: 3.
+	interpreterProxy failed ifFalse: [
+		self checkBuffer: bufferOop offset: bufferOffset size: writeSize isDestination: false].
 
 	interpreterProxy failed ifFalse: [
 		bufferPointer := interpreterProxy firstIndexableField: bufferOop.
@@ -334,6 +362,8 @@ NewFilePlugin >> primitiveFileWriteFromAtFileOffset [
 	bufferOffset := interpreterProxy positiveMachineIntegerValueOf: (interpreterProxy stackValue: 2).
 	bufferOop := interpreterProxy stackValue: 3.
 	fileOop := interpreterProxy stackValue: 4.
+	interpreterProxy failed ifFalse: [
+		self checkBuffer: bufferOop offset: bufferOffset size: writeSize isDestination: false].
 
 	interpreterProxy failed ifFalse: [
 		bufferPointer := interpreterProxy firstIndexableField: bufferOop.
@@ -359,6 +389,7 @@ NewFilePlugin >> primitiveMemoryMapWithProtection [
 	protectionFlags := interpreterProxy positive32BitValueOf:(interpreterProxy stackValue: 0).
 	fileOop := interpreterProxy stackValue: 1.
 	memoryMappedPointerOop := interpreterProxy instantiateClass: interpreterProxy classExternalAddress indexableSize: BytesPerWord.
+	memoryMappedPointerOop = nil ifTrue: [^ interpreterProxy primitiveFailFor: PrimErrNoMemory].
 	interpreterProxy failed ifFalse: [
 		filePointer := 	self cCoerce: (self pointerAtPointer: (interpreterProxy firstIndexableField: fileOop)) to: 'NewFile_t *'.
 		memoryMappedPointer := self cCode: 'NewFile_memoryMap(filePointer, protectionFlags)'.

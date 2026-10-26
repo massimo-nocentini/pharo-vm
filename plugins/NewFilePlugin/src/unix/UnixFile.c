@@ -44,7 +44,7 @@ NewDirectory_t *
 NewDirectory_open(const char *path, size_t pathSize)
 {
     char *cpath = makeCStringWithFixedString(path, pathSize);
-    DIR *handle = opendir(path);
+    DIR *handle = opendir(cpath);
     free(cpath);
     if(!handle)
         return NULL;
@@ -164,6 +164,9 @@ NewFile_close(NewFile_t *file)
     if(!file)
         return;
 
+    // Release a mapping that is still outstanding, as the Windows version does.
+    if(file->memoryMapCount > 0)
+        munmap(file->memoryMapAddress, file->memoryMapLength);
     close(file->fileDescriptor);
     free(file);
 }
@@ -183,6 +186,9 @@ NewFile_getSize(NewFile_t *file)
 
 void NewFile_seek(NewFile_t *file, int64_t offset, NewFileSeekMode_t seekMode)
 {
+    if(!file)
+        return;
+
     int whence = 0;
     switch(seekMode)
     {
@@ -267,9 +273,10 @@ NewFile_memoryMap(NewFile_t *file, NewFileMemMapProtection_t protection)
         return file->memoryMapAddress;
     }
 
-    file->memoryMapLength = NewFile_getSize(file);
-    if(file->memoryMapLength == 0)
-        return 0;
+    int64_t fileSize = NewFile_getSize(file);
+    if(fileSize <= 0)
+        return NULL;
+    file->memoryMapLength = fileSize;
 
     int mmapProtection = PROT_NONE;
     switch(protection)
@@ -284,9 +291,11 @@ NewFile_memoryMap(NewFile_t *file, NewFileMemMapProtection_t protection)
         break;
     }
 
-    file->memoryMapAddress = mmap(NULL, file->memoryMapLength, mmapProtection, MAP_SHARED, file->fileDescriptor, 0);
-    if(file->memoryMapAddress == MAP_FAILED)
+    void *address = mmap(NULL, file->memoryMapLength, mmapProtection, MAP_SHARED, file->fileDescriptor, 0);
+    if(address == MAP_FAILED)
         return NULL;
+
+    file->memoryMapAddress = address;
 
     ++file->memoryMapCount;
     return file->memoryMapAddress;
@@ -298,9 +307,12 @@ NewFile_memoryUnmap(NewFile_t *file)
     if(!file || file->memoryMapCount <= 0)
         return;
 
+    // Only the last unmap releases the mapping; the other mappers still use it.
     --file->memoryMapCount;
-    if(!file->memoryMapCount)
+    if(file->memoryMapCount > 0)
         return;
 
     munmap(file->memoryMapAddress, file->memoryMapLength);
+    file->memoryMapAddress = NULL;
+    file->memoryMapLength = 0;
 }
