@@ -213,6 +213,9 @@ primitiveCompressToByteArray(void)
 	if (destSize < (((size * 4) + 7) + ((size / 0x7C0) * 3))) {
 		return primitiveFailFor(PrimErrUnsupported);
 	}
+	if (size > ((byteSizeOf(stackValue(1))) / 4)) {
+		return primitiveFailFor(PrimErrBadArgument);
+	}
 	/* begin encodeInt:in:at: */
 	if (size <= 223) {
 		ba[0] = size;
@@ -424,6 +427,7 @@ primitiveDecompressFromByteArray(void)
     sqInt index;
     sqInt j;
     sqInt k;
+    sqInt lanes;
     sqInt m;
     unsigned int n;
     sqInt pastEnd;
@@ -440,19 +444,32 @@ primitiveDecompressFromByteArray(void)
 	if (failed()) {
 		return null;
 	}
+	if (index < 1) {
+		return primitiveFailFor(PrimErrBadIndex);
+	}
 	i = index - 1;
 	k = 0;
 	end = sizeOfSTArrayFromCPrimitive(ba);
 	pastEnd = sizeOfSTArrayFromCPrimitive(bm);
+	lanes = (byteSizeOf(stackValue(2))) / 4;
+	if (pastEnd < lanes) {
+		lanes = pastEnd;
+	}
 	while (i < end) {
 		anInt = ba[i];
 		i += 1;
 		if (!(anInt <= 223)) {
 			if (anInt <= 0xFE) {
+				if (!(i < end)) {
+					return primitiveFailFor(PrimErrBadIndex);
+				}
 				anInt = ((anInt - 224) * 256) + (ba[i]);
 				i += 1;
 			}
 			else {
+				if ((i + 4) > end) {
+					return primitiveFailFor(PrimErrBadIndex);
+				}
 				anInt = 0;
 				for (j = 1; j <= 4; j += 1) {
 					anInt = (((usqInt) anInt << 8)) + (ba[i]);
@@ -461,13 +478,18 @@ primitiveDecompressFromByteArray(void)
 			}
 		}
 		n = ((usqInt) anInt) >> 2;
-		if ((k + n) > pastEnd) {
+
+		/* code 0 writes nothing, so only the element count bounds it */
+		code = anInt & 3;
+		if (((k + n) > lanes) && ((code != 0) || ((k + n) > pastEnd))) {
 			return primitiveFailFor(PrimErrBadIndex);
 		}
 
 		/* code = 0 ifTrue: [nil]. */
-		code = anInt & 3;
 		if (code == 1) {
+			if (!(i < end)) {
+				return primitiveFailFor(PrimErrBadIndex);
+			}
 			data = ba[i];
 			i += 1;
 			data = data | (((usqInt) data << 8));
@@ -478,6 +500,9 @@ primitiveDecompressFromByteArray(void)
 			}
 		}
 		if (code == 2) {
+			if ((i + 4) > end) {
+				return primitiveFailFor(PrimErrBadIndex);
+			}
 			data = 0;
 			for (j = 1; j <= 4; j += 1) {
 				data = (((usqInt) data << 8)) | (ba[i]);
@@ -490,6 +515,9 @@ primitiveDecompressFromByteArray(void)
 		}
 		if (code == 3) {
 			for (m = 1; m <= n; m += 1) {
+				if ((i + 4) > end) {
+					return primitiveFailFor(PrimErrBadIndex);
+				}
 				data = 0;
 				for (j = 1; j <= 4; j += 1) {
 					data = (((usqInt) data << 8)) | (ba[i]);

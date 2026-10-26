@@ -89,6 +89,9 @@ MiscPrimitivePlugin >> primitiveCompressToByteArray [
 	destSize := interpreterProxy sizeOfSTArrayFromCPrimitive: ba.
 	destSize < ((size * 4) + 7 + (size // 1984 * 3)) ifTrue:
 		[^interpreterProxy primitiveFailFor: PrimErrUnsupported]. "Size may be OK but we don't know, hence fail with unsupported"
+	"bm may be any bits object but is read as 32-bit words; it must hold size of them"
+	size > ((interpreterProxy byteSizeOf: (interpreterProxy stackValue: 1)) // 4) ifTrue:
+		[^interpreterProxy primitiveFailFor: PrimErrBadArgument].
 	i := self encodeInt: size in: ba at: 0.
 	k := 0.
 	[k < size] whileTrue: 
@@ -163,7 +166,7 @@ MiscPrimitivePlugin >> primitiveConvert8BitSigned [
 MiscPrimitivePlugin >> primitiveDecompressFromByteArray [
 	"Bitmap decompress: bm fromByteArray: ba at: index"
 	<export: true>
-	| bm ba index i anInt code data end k n pastEnd |
+	| bm ba index i anInt code data end k n pastEnd lanes |
 	<var: 'ba' type: #'unsigned char *'>
 	<var: 'bm' type: #'int *'>
 	<var: 'anInt' type: #'unsigned int'>
@@ -181,30 +184,39 @@ MiscPrimitivePlugin >> primitiveDecompressFromByteArray [
 	ba := interpreterProxy firstIndexableField: (interpreterProxy stackValue: 1).
 	index := interpreterProxy stackIntegerValue: 0.
 	interpreterProxy failed ifTrue: [^nil].
+	index < 1 ifTrue: [^interpreterProxy primitiveFailFor: PrimErrBadIndex].
 	i := index - 1.
 	k := 0.
 	end := interpreterProxy sizeOfSTArrayFromCPrimitive: ba.
 	pastEnd := interpreterProxy sizeOfSTArrayFromCPrimitive: bm.
+	"bm may be any bits object but is written as 32-bit words; runs must fit in those it can hold"
+	lanes := (interpreterProxy byteSizeOf: (interpreterProxy stackValue: 2)) // 4.
+	pastEnd < lanes ifTrue: [lanes := pastEnd].
+	"Every read of ba within a token is checked, so a truncated stream fails rather than reading past ba"
 	[i < end] whileTrue: 
 		[anInt := ba at: i.
 		i := i + 1.
 		anInt <= 223 ifFalse:
 			[anInt <= 254
 				ifTrue: 
-					[anInt := anInt - 224 * 256 + (ba at: i).
+					[i < end ifFalse: [^interpreterProxy primitiveFailFor: PrimErrBadIndex].
+					anInt := anInt - 224 * 256 + (ba at: i).
 					i := i + 1]
 				ifFalse: 
-					[anInt := 0.
+					[i + 4 > end ifTrue: [^interpreterProxy primitiveFailFor: PrimErrBadIndex].
+					anInt := 0.
 					1 to: 4 by: 1 do: 
 						[ :j | anInt := (anInt bitShift: 8) + (ba at: i).
 						i := i + 1]]].
 		n := anInt >> 2.
-		k + n > pastEnd ifTrue:
-			[^interpreterProxy primitiveFailFor: PrimErrBadIndex].
 		code := anInt bitAnd: 3.
+		"code 0 writes nothing, so only the element count bounds it"
+		(k + n > lanes and: [code ~= 0 or: [k + n > pastEnd]]) ifTrue:
+			[^interpreterProxy primitiveFailFor: PrimErrBadIndex].
 		"code = 0 ifTrue: [nil]."
 		code = 1 ifTrue: 
-			[data := ba at: i.
+			[i < end ifFalse: [^interpreterProxy primitiveFailFor: PrimErrBadIndex].
+			data := ba at: i.
 			i := i + 1.
 			data := data bitOr: (data bitShift: 8).
 			data := data bitOr: (data bitShift: 16).
@@ -213,7 +225,8 @@ MiscPrimitivePlugin >> primitiveDecompressFromByteArray [
 				bm at: k put: data.
 				k := k + 1]].
 		code = 2 ifTrue: 
-			[data := 0.
+			[i + 4 > end ifTrue: [^interpreterProxy primitiveFailFor: PrimErrBadIndex].
+			data := 0.
 			1 to: 4 do: 
 				[ :j |
 				data := (data bitShift: 8) bitOr: (ba at: i).
@@ -225,6 +238,7 @@ MiscPrimitivePlugin >> primitiveDecompressFromByteArray [
 		code = 3 ifTrue:
 			[1 to: n do: 
 				[ :m |
+				i + 4 > end ifTrue: [^interpreterProxy primitiveFailFor: PrimErrBadIndex].
 				data := 0.
 				1 to: 4 do: 
 					[ :j |
