@@ -23,7 +23,7 @@
 # packaging/emscripten/dist (README.md, which names the commit, and
 # node-try.sh).  SDL2 is left out for now (no sdl.html, and the lane of
 # sdl.spec skips): WASM_SDL2=ON in both make steps, and its lines in the
-# README, bring it back.  On a push to pharo-12-wasm, its web/ is also deployed to
+# README, bring it back.  On a push to pharo-12, its web/ is also deployed to
 # the root of branch gh-pages, which GitHub Pages serves, once every file of
 # its manifest is checked (and small enough for git).
 #
@@ -506,7 +506,7 @@ jobs:
   # are.  Settings > Pages must deploy from branch gh-pages, folder /.
   pages:
     name: GitHub Pages
-    if: github.event_name == 'push' && github.ref == 'refs/heads/pharo-12-wasm'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/pharo-12'
     needs: wasm
     runs-on: ubuntu-24.04
     permissions:

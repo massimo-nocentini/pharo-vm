@@ -102,7 +102,7 @@ It needs no special headers (no COOP or COEP, since nothing uses SharedArrayBuff
 The workflow `.github/workflows/build.yml` makes such a site and node VM on every push, with the images of Pharo 15 (build 50, the default), 14 (build 785) and 13.1 (build 749), which it downloads from files.pharo.org and checks against their SHA256, the `.sources` of Pharo 15 build 41 (the image of the site before), and `WASM_LIBGIT2=ON` (the command above), so they have the FFI, FreeType, cairo, libgit2 and the Notebook.
 SDL2 is left out for now (no `sdl.html`): `WASM_SDL2=ON` in its two make steps brings it back.
 It zips them as `PharoVM-<version>-WebAssembly-bin.zip`, with `serve.mjs` and the `README.md` and `node-try.sh` of `packaging/emscripten/dist` (the README says how to use them; `node-try.sh` runs the default image), and publishes the zip with the release of the push.
-For a push to `pharo-12-wasm` it also deploys `web/` to the root of branch `gh-pages`, which GitHub Pages serves, once it has checked that every file of the manifest is there, of its size, and small enough for git.
+For a push to `pharo-12` it also deploys `web/` to the root of branch `gh-pages`, which GitHub Pages serves, once it has checked that every file of the manifest is there, of its size, and small enough for git.
 
 The node VM takes the usual arguments of the VM, for example on a copy of the stock image:
 
