@@ -1291,6 +1291,12 @@ copyBitsFastPathSpecialised(void)
 			return primitiveFail();
 		}
 	}
+	if (!noHalftone
+	 && (halftoneHeight == 0)) {
+
+		/* An empty halftone would make the copy loops divide by zero (y \\ halftoneHeight) */
+		return primitiveFail();
+	}
 	if ((combinationRule != 22) && (combinationRule != 32)) {
 
 		/* zero width and height; return the count */
@@ -1458,6 +1464,12 @@ copyBitsLockedAndClipped(void)
 		 || (sourceAlpha > 0xFF))) {
 			return primitiveFail();
 		}
+	}
+	if (!noHalftone
+	 && (halftoneHeight == 0)) {
+
+		/* An empty halftone would make the copy loops divide by zero (y \\ halftoneHeight) */
+		return primitiveFail();
 	}
 
 	/* Choose and perform the actual copy loop. */
@@ -3091,11 +3103,19 @@ loadBitBltDestForm(void)
 			primitiveFailFor(PrimErrCallbackError);
 			return 0;
 		}
+		if (!((destDepth >= 1)
+			 && (destDepth <= 32))) {
+			return 0;
+		}
 		destPPW = 32 / destDepth;
 		destBits = (destPitch = 0);
 	}
 	else {
 		if (!(isWordsOrBytes(destBits))) {
+			return 0;
+		}
+		if (!((destDepth >= 1)
+			 && (destDepth <= 32))) {
 			return 0;
 		}
 		destPPW = 32 / destDepth;
@@ -3243,11 +3263,21 @@ loadBitBltFromwarping(sqInt bbObj, sqInt aBool)
 			ok = 0;
 			goto l3;
 		}
+		if (!((destDepth >= 1)
+			 && (destDepth <= 32))) {
+			ok = 0;
+			goto l3;
+		}
 		destPPW = 32 / destDepth;
 		destBits = (destPitch = 0);
 	}
 	else {
 		if (!(isWordsOrBytes(destBits))) {
+			ok = 0;
+			goto l3;
+		}
+		if (!((destDepth >= 1)
+			 && (destDepth <= 32))) {
 			ok = 0;
 			goto l3;
 		}
@@ -3336,11 +3366,21 @@ loadBitBltFromwarping(sqInt bbObj, sqInt aBool)
 				ok = 0;
 				goto l7;
 			}
+			if (!((sourceDepth >= 1)
+				 && (sourceDepth <= 32))) {
+				ok = 0;
+				goto l7;
+			}
 			sourcePPW = 32 / sourceDepth;
 			sourceBits = (sourcePitch = 0);
 		}
 		else {
 			if (!(isWordsOrBytes(sourceBits))) {
+				ok = 0;
+				goto l7;
+			}
+			if (!((sourceDepth >= 1)
+				 && (sourceDepth <= 32))) {
 				ok = 0;
 				goto l7;
 			}
@@ -3608,11 +3648,19 @@ loadBitBltSourceForm(void)
 			primitiveFailFor(PrimErrCallbackError);
 			return 0;
 		}
+		if (!((sourceDepth >= 1)
+			 && (sourceDepth <= 32))) {
+			return 0;
+		}
 		sourcePPW = 32 / sourceDepth;
 		sourceBits = (sourcePitch = 0);
 	}
 	else {
 		if (!(isWordsOrBytes(sourceBits))) {
+			return 0;
+		}
+		if (!((sourceDepth >= 1)
+			 && (sourceDepth <= 32))) {
 			return 0;
 		}
 		sourcePPW = 32 / sourceDepth;
@@ -5217,6 +5265,12 @@ primitiveDisplayString(void)
 		if ((bbW > 0)
 		 && (bbH > 0)) {
 			if (quickBlt) {
+				if (!noHalftone
+				 && (halftoneHeight == 0)) {
+
+					/* copyLoopPixMap would divide by zero */
+					return primitiveFail();
+				}
 				/* begin destMaskAndPointerInit */
 
 				/* A mask, assuming power of two */
@@ -5516,6 +5570,11 @@ primitivePixelValueAt(void)
 		return null;
 	}
 	if (depth < 0) {
+		primitiveFail();
+		return null;
+	}
+	if ((depth == 0)
+	 || (depth > 32)) {
 		primitiveFail();
 		return null;
 	}
@@ -7491,6 +7550,9 @@ warpLoop(void)
 	}
 	if ((methodArgumentCount()) == 2) {
 		smoothingCount = stackIntegerValue(1);
+		if (smoothingCount < 1) {
+			return primitiveFailFor(PrimErrBadArgument);
+		}
 		sourceMapOop = stackValue(0);
 		if (sourceMapOop == (nilObject())) {
 			if (sourceDepth < 16) {
@@ -7575,6 +7637,12 @@ warpLoop(void)
 	else {
 		dstShiftInc = destDepth;
 		dstShiftLeft = 0;
+	}
+	if (!noHalftone
+	 && (halftoneHeight == 0)) {
+
+		/* the vertical loop would divide by zero */
+		return primitiveFail();
 	}
 	if (noHalftone) {
 		halftoneWord = AllOnes;

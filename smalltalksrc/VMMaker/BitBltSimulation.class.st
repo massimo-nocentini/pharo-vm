@@ -1206,6 +1206,10 @@ BitBltSimulation >> copyBitsFastPathSpecialised [
 						ifFalse: [^ interpreterProxy primitiveFail]]
 			ifFalse: [^ interpreterProxy primitiveFail]].
 
+	"An empty halftone would make the copy loops divide by zero (y \\ halftoneHeight)"
+	(noHalftone not and: [halftoneHeight = 0]) ifTrue:
+		[^interpreterProxy primitiveFail].
+
 	"we don't worry about bitCount"
 	"bitCount := 0."
 
@@ -1297,6 +1301,10 @@ BitBltSimulation >> copyBitsLockedAndClipped [
 		  or: [sourceAlpha < 0
 		  or: [sourceAlpha > 255]]) ifTrue:
 			[^interpreterProxy primitiveFail]].
+
+	"An empty halftone would make the copy loops divide by zero (y \\ halftoneHeight)"
+	(noHalftone not and: [halftoneHeight = 0]) ifTrue:
+		[^interpreterProxy primitiveFail].
 
 	bitCount := 0.
 	"Choose and perform the actual copy loop."
@@ -2156,10 +2164,15 @@ BitBltSimulation >> loadBitBltDestForm [
 								_: (self addressOf: destMSB put: [:v| destMSB := v])) ifFalse:
 					[interpreterProxy primitiveFailFor: PrimErrCallbackError.
 					 ^false].
+			"A depth of 0 or above 32 would divide by zero below"
+			(destDepth between: 1 and: 32) ifFalse:
+				[^false].
 			destPPW := 32 // destDepth.
 			destBits := destPitch := 0]
 		ifFalse:
 			[(interpreterProxy isWordsOrBytes: destBits) ifFalse:
+				[^false].
+			(destDepth between: 1 and: 32) ifFalse:
 				[^false].
 			destPPW := 32 // destDepth.
 			destPitch := destWidth + (destPPW-1) // destPPW * 4.
@@ -2269,10 +2282,15 @@ BitBltSimulation >> loadBitBltSourceForm [
 								_: (self addressOf: sourceMSB put: [:v| sourceMSB := v])) ifFalse:
 					[interpreterProxy primitiveFailFor: PrimErrCallbackError.
 					 ^false].
+			"A depth of 0 or above 32 would divide by zero below"
+			(sourceDepth between: 1 and: 32) ifFalse:
+				[^false].
 			sourcePPW := 32 // sourceDepth.
 			sourceBits := sourcePitch := 0]
 		ifFalse:
 			[(interpreterProxy isWordsOrBytes: sourceBits) ifFalse:
+				[^false].
+			(sourceDepth between: 1 and: 32) ifFalse:
 				[^false].
 			sourcePPW := 32 // sourceDepth.
 			sourcePitch := sourceWidth + (sourcePPW-1) // sourcePPW * 4.
@@ -3056,7 +3074,9 @@ BitBltSimulation >> primitiveDisplayString [
 		(bbW > 0 and: [bbH > 0]) ifTrue:
 			[quickBlt
 				ifTrue:
-					[self destMaskAndPointerInit.
+					[(noHalftone not and: [halftoneHeight = 0]) ifTrue: "copyLoopPixMap would divide by zero"
+						[^interpreterProxy primitiveFail].
+					 self destMaskAndPointerInit.
 					 self copyLoopPixMap.
 					 "both, hDir and vDir are known to be > 0"
 					 affectedL := dx.
@@ -3123,6 +3143,8 @@ BitBltSimulation >> primitivePixelValueAtX: xVal y: yVal [
 
 	"we don't handle LSB Forms yet"
 	depth < 0 ifTrue:[^interpreterProxy primitiveFail].
+	"a depth of 0 or above 32 would divide by zero below"
+	(depth = 0 or: [depth > 32]) ifTrue:[^interpreterProxy primitiveFail].
 	
 	"OK so now we know we have a plausible Form, the width/height/depth/x/y are all reasonable and it's time to plunder the bitmap"
 	ppW := 32//depth. "pixels in each word"
@@ -4112,6 +4134,8 @@ BitBltSimulation >> warpLoop [
 	interpreterProxy methodArgumentCount = 2
 		ifTrue:
 			[smoothingCount := interpreterProxy stackIntegerValue: 1.
+			 smoothingCount < 1 ifTrue: "warpPickSmoothPixels divides by the smoothing count"
+				[^interpreterProxy primitiveFailFor: PrimErrBadArgument].
 			 sourceMapOop := interpreterProxy stackValue: 0.
 			 sourceMapOop = interpreterProxy nilObject
 				ifTrue:
@@ -4150,6 +4174,8 @@ BitBltSimulation >> warpLoop [
 				dstShiftLeft := 32 - destDepth]
 		ifFalse:[	dstShiftInc := destDepth.
 				dstShiftLeft := 0].
+	(noHalftone not and: [halftoneHeight = 0]) ifTrue: "the vertical loop would divide by zero"
+		[^interpreterProxy primitiveFail].
 	noHalftone ifTrue:
 		[halftoneWord := AllOnes].
 	1 to: bbH do:
