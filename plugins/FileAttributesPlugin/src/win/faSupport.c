@@ -41,7 +41,8 @@ sqInt	status;
 	if (len+1 >= FA_PATH_MAX)
 		return interpreterProxy->primitiveFailForOSError(FA_STRING_TOO_LONG);
 	memcpy(aFaPath->path, pathName, len);
-	if (aFaPath->path[len-1] != PATH_SEPARATOR)
+	/* An empty name gets the separator too (don't read path[-1]) */
+	if (len == 0 || aFaPath->path[len-1] != PATH_SEPARATOR)
 		aFaPath->path[len++] = PATH_SEPARATOR;
 	aFaPath->path[len] = 0;
 	aFaPath->path_len = len;

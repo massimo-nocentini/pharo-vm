@@ -16,14 +16,14 @@ int	vmSessionId = 0;
  *
  * Initialise global data for the FileAttributesPlugin.
  *
- * This function must be called only once each each time the VM is run.
+ * Called from initialiseModule.  Record the VM session ID so that directory
+ * handles from a previous session, or closed ones (whose sessionId is 0),
+ * fail faValidateSessionId.
  */
 sqInt faInitialiseModule()
 {
-	if (vmSessionId == 0)
-		return interpreterProxy->falseObject();
 	vmSessionId = interpreterProxy->getThisSessionID();
-	return interpreterProxy->trueObject();
+	return 1;
 }
 
 

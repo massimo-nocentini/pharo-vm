@@ -258,8 +258,7 @@ attributeArrayformask(sqInt *attributeArrayPtr, fapath *faPath, sqInt attributeM
 
 		if (!(accessArray)) {
 			primitiveFailFor(PrimErrNoMemory);
-
-			/* interpreterError */
+			return -15 /* interpreterError */;
 		}
 		faAccessAttributes(faPath, accessArray, 0);
 		if (failed()) {
@@ -274,8 +273,7 @@ attributeArrayformask(sqInt *attributeArrayPtr, fapath *faPath, sqInt attributeM
 
 		if (!(resultOop)) {
 			primitiveFailFor(PrimErrNoMemory);
-
-			/* interpreterError */
+			return -15 /* interpreterError */;
 		}
 		storePointerofObjectwithValue(0, resultOop, attributeArray);
 		storePointerofObjectwithValue(1, resultOop, accessArray);
@@ -352,6 +350,7 @@ getModuleName(void)
 EXPORT(sqInt)
 initialiseModule(void)
 {
+	faInitialiseModule();
 	return 1;
 }
 
@@ -508,7 +507,8 @@ primitiveClosedir(void)
 	dirPointerOop = stackValue(0);
 	/* begin structFromObject:size: */
 	structSize = sizeof(FAPathPtr);
-	if (!((stSizeOf(dirPointerOop)) == structSize)) {
+	if (!((isBytes(dirPointerOop))
+		 && ((stSizeOf(dirPointerOop)) == structSize))) {
 		primitiveFailFor(PrimErrBadArgument);
 		faPathPtr = ((void *) 0);
 		goto l1;
@@ -530,7 +530,14 @@ primitiveClosedir(void)
 	}
 	faPath = (faPathPtr->faPath);
 	result = faCloseDirectory(faPath);
+
+	/* Invalidate the handle in the image, not just the local copy, so that using it again
+	   fails with badSessionId instead of reaching the freed faPath */
 	faInvalidateSessionId(&faPathPtr->sessionId);
+	(faPathPtr->faPath = null);
+	memcpy(arrayValueOf(dirPointerOop), faPathPtr, sizeof(FAPathPtr));
+
+	/* Free only on success: a failure can mean that faPath was already freed by closing a copy of this handle */
 	if (!(result == 0)) {
 		return primitiveFailForOSError(result);
 	}
@@ -731,6 +738,7 @@ primitiveOpendir(void)
 	}
 	faSetStDirOop(faPath, dirName);
 	if (failed()) {
+		free(faPath);
 		return primitiveFailureCode();
 	}
 	status = faOpenDirectory(faPath);
@@ -744,6 +752,7 @@ primitiveOpendir(void)
 	}
 	resultOop = processDirectory(faPath);
 	if (failed()) {
+		faCloseDirectory(faPath);
 		free(faPath);
 		return primitiveFailureCode();
 	}
@@ -763,6 +772,11 @@ primitiveOpendir(void)
 	dirOop = addressOop;
 	l1:	/* end objectFromStruct:size: */;
 
+	if (failed()) {
+		faCloseDirectory(faPath);
+		free(faPath);
+		return primitiveFailureCode();
+	}
 	return (storePointerofObjectwithValue(2, resultOop, dirOop),
 		methodReturnValue(resultOop));
 }
@@ -831,7 +845,8 @@ primitiveReaddir(void)
 	dirPointerOop = stackValue(0);
 	/* begin structFromObject:size: */
 	structSize = sizeof(FAPathPtr);
-	if (!((stSizeOf(dirPointerOop)) == structSize)) {
+	if (!((isBytes(dirPointerOop))
+		 && ((stSizeOf(dirPointerOop)) == structSize))) {
 		primitiveFailFor(PrimErrBadArgument);
 		faPathPtr = ((void *) 0);
 		goto l1;
@@ -883,7 +898,8 @@ primitiveRewinddir(void)
 	dirPointerOop = stackValue(0);
 	/* begin structFromObject:size: */
 	structSize = sizeof(FAPathPtr);
-	if (!((stSizeOf(dirPointerOop)) == structSize)) {
+	if (!((isBytes(dirPointerOop))
+		 && ((stSizeOf(dirPointerOop)) == structSize))) {
 		primitiveFailFor(PrimErrBadArgument);
 		faPathPtr = ((void *) 0);
 		goto l1;

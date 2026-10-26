@@ -199,7 +199,7 @@ FileAttributesPlugin >> attributeArray: attributeArrayPtr for: faPath mask: attr
 			[accessArray := interpreterProxy instantiateClass: interpreterProxy classArray indexableSize: 3].
 		accessArray ifNil:
 			[interpreterProxy primitiveFailFor: PrimErrNoMemory.
-			self interpreterError].
+			^self interpreterError].
 		self faAccessAttributes: faPath _: accessArray _: 0.
 		interpreterProxy failed ifTrue: 
 			[^self interpreterError].
@@ -211,7 +211,7 @@ FileAttributesPlugin >> attributeArray: attributeArrayPtr for: faPath mask: attr
 			[resultOop := interpreterProxy instantiateClass: interpreterProxy classArray indexableSize: 2].
 		resultOop ifNil:
 			[interpreterProxy primitiveFailFor: PrimErrNoMemory.
-			self interpreterError].
+			^self interpreterError].
 		interpreterProxy
 			storePointer: 0 ofObject: resultOop withValue: attributeArray;
 			storePointer: 1 ofObject: resultOop withValue: accessArray
@@ -385,6 +385,8 @@ FileAttributesPlugin >> initialiseModule [
 
 	sCOFfn := interpreterProxy ioLoadFunction: 'secCanOpenFileOfSizeWritable' From: 'SecurityPlugin'.
 	sCLPfn := interpreterProxy ioLoadFunction: 'secCanListPathOfSize' From: 'SecurityPlugin'.
+	"Record the VM session ID, against which directory handles are validated"
+	self faInitialiseModule.
 	^true
 ]
 
@@ -552,7 +554,13 @@ FileAttributesPlugin >> primitiveClosedir [
 	faPath := faPathPtr faPath.
 
 	result := self faCloseDirectory: faPath.
+	"Invalidate the handle in the image, not just the local copy, so that using it again
+	fails with badSessionId instead of reaching the freed faPath"
 	self faInvalidateSessionId: (self cCode: '&faPathPtr->sessionId' inSmalltalk: [faPathPtr]).
+	faPathPtr faPath: nil.
+	self cCode: [self memcpy: (interpreterProxy arrayValueOf: dirPointerOop) _: faPathPtr _: (self sizeof: #FAPathPtr)]
+		inSmalltalk: [].
+	"Free only on success: a failure can mean that faPath was already freed by closing a copy of this handle"
 	result = 0 ifFalse:
 		[^interpreterProxy primitiveFailForOSError: result].
 	self free: faPath.
@@ -730,7 +738,9 @@ FileAttributesPlugin >> primitiveOpendir [
 				inSmalltalk: [self simulatedFaPath].
 	faPath = nil ifTrue: [^interpreterProxy primitiveFailForOSError: self cantAllocateMemory].
 	self faSetStDirOop: faPath _: dirName.
-	interpreterProxy failed ifTrue: [^interpreterProxy primitiveFailureCode].
+	interpreterProxy failed ifTrue: [
+		self free: faPath.
+		^interpreterProxy primitiveFailureCode].
 
 	(self canOpenDirectoryStreamFor: (self faGetStPath: faPath) length: (self faGetStPathLen: faPath)) ifFalse: [
 		self free: faPath.
@@ -746,6 +756,7 @@ FileAttributesPlugin >> primitiveOpendir [
 		^interpreterProxy primitiveFailForOSError: status].
 	resultOop := self processDirectory: faPath.
 	interpreterProxy failed ifTrue: [
+		self faCloseDirectory: faPath.
 		self free: faPath.
 		^interpreterProxy primitiveFailureCode ].
 
@@ -755,6 +766,10 @@ FileAttributesPlugin >> primitiveOpendir [
 	faPathPtr faPath: faPath.
 	self remapOop: resultOop in:
 		[ dirOop := self objectFromStruct: (self addressOf: faPathPtr) size: self sizeOfFaPathPtr ].
+	interpreterProxy failed ifTrue: [
+		self faCloseDirectory: faPath.
+		self free: faPath.
+		^interpreterProxy primitiveFailureCode ].
 
 	^interpreterProxy 
 		storePointer: 2 ofObject: resultOop withValue: dirOop;
@@ -1050,9 +1065,10 @@ FileAttributesPlugin >> structFromObject: anObject size: structSize [
 	<returnTypeC: #'void *'>
 	<var: 'buffer' type: #'void *'>
 
-	(interpreterProxy stSizeOf: anObject) = structSize ifFalse:
-		[interpreterProxy primitiveFailFor: PrimErrBadArgument.
-		^0].
+	((interpreterProxy isBytes: anObject)
+		and: [(interpreterProxy stSizeOf: anObject) = structSize]) ifFalse:
+			[interpreterProxy primitiveFailFor: PrimErrBadArgument.
+			^0].
 	buffer := self alloca: structSize.
 	buffer = 0 ifTrue:
 		[interpreterProxy primitiveFailFor: PrimErrNoCMemory]

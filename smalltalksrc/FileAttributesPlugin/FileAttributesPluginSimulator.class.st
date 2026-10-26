@@ -289,6 +289,13 @@ FileAttributesPluginSimulator >> faGetStPathLen: faPath [
 ]
 
 { #category : #simulation }
+FileAttributesPluginSimulator >> faInitialiseModule [
+	"Nothing to record: the simulation validates session ids against interpreterProxy getThisSessionID directly."
+
+	^true
+]
+
+{ #category : #simulation }
 FileAttributesPluginSimulator >> faInitSessionId: faPathPtr [
 	"Set the session id in the supplied pointer"
 

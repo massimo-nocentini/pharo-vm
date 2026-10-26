@@ -21,7 +21,8 @@ sqInt	status;
 	if (len+1 >= FA_PATH_MAX)
 		return interpreterProxy->primitiveFailForOSError(FA_STRING_TOO_LONG);
 	memcpy(aFaPath->path, pathName, len);
-	if (aFaPath->path[len-1] != PATH_SEPARATOR)
+	/* An empty name gets the separator too (don't read path[-1]) */
+	if (len == 0 || aFaPath->path[len-1] != PATH_SEPARATOR)
 		aFaPath->path[len++] = PATH_SEPARATOR;
 	aFaPath->path[len] = 0;
 	aFaPath->path_len = len;
@@ -183,10 +184,18 @@ sqInt	status;
 sqLong faConvertUnixToLongSqueakTime(time_t unixTime)
 {
 sqLong	squeakTime;
+#if defined(HAVE_TM_GMTOFF)
+struct tm	localTm;
+#endif
 
 	squeakTime = unixTime;
 #if defined(HAVE_TM_GMTOFF)
-	squeakTime = squeakTime + localtime(&unixTime)->tm_gmtoff;
+	/* localtime_r() fails for times it can't represent: no offset then.
+	 * Unlike localtime(), localtime_r() need not re-read TZ, so call tzset()
+	 * first to pick up a TZ the image changed at runtime. */
+	tzset();
+	if (localtime_r(&unixTime, &localTm) != NULL)
+		squeakTime = squeakTime + localTm.tm_gmtoff;
 #elif defined(HAVE_TIMEZONE)
 	squeakTime = squeakTime + (daylight*60*60) - timezone;
 #else
@@ -254,6 +263,9 @@ sqInt	rstatus, cstatus;
 		cstatus = faCloseDirectory(aFaPath);
 		if (cstatus != FA_SUCCESS)
 			return cstatus; }
+	else if (rstatus != FA_SUCCESS)
+		/* Don't leak the DIR: the caller frees aFaPath on error */
+		faCloseDirectory(aFaPath);
 	return rstatus;
 }
 
@@ -477,9 +489,14 @@ char		targetFile[FA_PATH_MAX];
 		if (S_ISLNK(statBuf.st_mode)) {
 			/* This is a symbolic link, provide the target filename */
 			status = readlink(faGetPlatPath(aFaPath), targetFile, FA_PATH_MAX);
+			/* A full buffer may be a truncated target, and leaves no room for the NUL */
+			if (status >= FA_PATH_MAX)
+				return FA_STRING_TOO_LONG;
 			if (status >= 0) {
 				targetFile[status] = 0;
-				targetOop = pathNameToOop(targetFile); } } }
+				targetOop = pathNameToOop(targetFile);
+				if (interpreterProxy->failed())
+					return FA_INTERPRETER_ERROR; } } }
 			
 	else {
 		status = stat(faGetPlatPath(aFaPath), &statBuf);
