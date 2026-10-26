@@ -205,6 +205,8 @@ SocketPlugin >> primitiveResolverGetNameInfo: socketAddress flags: flags [
 	<var: #addrBase type: 'char *'>
 	self primitive: 'primitiveResolverGetNameInfo'
 		parameters: #(Oop SmallInteger).
+	(interpreterProxy isBytes: socketAddress) ifFalse:
+		[^interpreterProxy primitiveFailFor: PrimErrBadArgument].
 	interpreterProxy failed
 		ifFalse:
 			[addrSize := interpreterProxy byteSizeOf: socketAddress.
@@ -341,6 +343,8 @@ SocketPlugin >> primitiveSocket: socket bindTo: socketAddress [
 	<var: #s type: 'SocketPtr'>
 	self primitive: 'primitiveSocketBindTo' parameters: #(#Oop #Oop).
 	s := self socketValueOf: socket.
+	(interpreterProxy isBytes: socketAddress) ifFalse:
+		[^interpreterProxy primitiveFailFor: PrimErrBadArgument].
 	addrSize := interpreterProxy byteSizeOf: socketAddress.
 	addrBase := self cCoerce: (interpreterProxy firstIndexableField: socketAddress) to: 'char *'.
 	interpreterProxy failed ifFalse: [self sqSocket: s BindToAddress: addrBase Size: addrSize]
@@ -366,6 +370,8 @@ SocketPlugin >> primitiveSocket: socket connectTo: socketAddress [
 	<var: #s type: 'SocketPtr'>
 	self primitive: 'primitiveSocketConnectTo' parameters: #(#Oop #Oop).
 	s := self socketValueOf: socket.
+	(interpreterProxy isBytes: socketAddress) ifFalse:
+		[^interpreterProxy primitiveFailFor: PrimErrBadArgument].
 	addrSize := interpreterProxy byteSizeOf: socketAddress.
 	addrBase := self cCoerce: (interpreterProxy firstIndexableField: socketAddress) to: 'char *'.
 	interpreterProxy failed ifFalse: [self sqSocket: s ConnectToAddress: addrBase Size: addrSize]
@@ -396,7 +402,8 @@ SocketPlugin >> primitiveSocket: socket getOptions: optionName [
 		parameters: #(Oop Oop).
 
 	s := self socketValueOf: socket.
-	interpreterProxy success: (interpreterProxy isBytes: optionName).
+	(interpreterProxy isBytes: optionName) ifFalse:
+		[^interpreterProxy primitiveFailFor: PrimErrBadArgument].
 	optionNameStart := self cCoerce: (interpreterProxy firstIndexableField: optionName) to: #'char *'.
 	optionNameSize := interpreterProxy slotSizeOf: optionName.
 
@@ -482,6 +489,8 @@ SocketPlugin >> primitiveSocket: socket localAddressResult: socketAddress [
 	<var: #s type: 'SocketPtr'>
 	self primitive: 'primitiveSocketLocalAddressResult' parameters: #(#Oop #Oop).
 	s := self socketValueOf: socket.
+	(interpreterProxy isBytes: socketAddress) ifFalse:
+		[^interpreterProxy primitiveFailFor: PrimErrBadArgument].
 	addrSize := interpreterProxy byteSizeOf: socketAddress.
 	addrBase := self cCoerce: (interpreterProxy firstIndexableField: socketAddress) to: 'char *'.
 	interpreterProxy failed ifFalse: [self sqSocket: s LocalAddressResult: addrBase Size: addrSize]
@@ -568,6 +577,8 @@ SocketPlugin >> primitiveSocket: socket remoteAddressResult: socketAddress [
 	<var: #s type: 'SocketPtr'>
 	self primitive: 'primitiveSocketRemoteAddressResult' parameters: #(#Oop #Oop).
 	s := self socketValueOf: socket.
+	(interpreterProxy isBytes: socketAddress) ifFalse:
+		[^interpreterProxy primitiveFailFor: PrimErrBadArgument].
 	addrSize := interpreterProxy byteSizeOf: socketAddress.
 	addrBase := self cCoerce: (interpreterProxy firstIndexableField: socketAddress) to: 'char *'.
 	interpreterProxy failed ifFalse: [self sqSocket: s RemoteAddressResult: addrBase Size: addrSize]
@@ -646,10 +657,12 @@ SocketPlugin >> primitiveSocket: socket setOptions: optionName value: optionValu
 		parameters: #(Oop Oop Oop).
 
 	s := self socketValueOf: socket.
-	interpreterProxy success: (interpreterProxy isBytes: optionName).
+	(interpreterProxy isBytes: optionName) ifFalse:
+		[^interpreterProxy primitiveFailFor: PrimErrBadArgument].
 	optionNameStart := self cCoerce: (interpreterProxy firstIndexableField: optionName) to: #'char *'.
 	optionNameSize := interpreterProxy slotSizeOf: optionName.
-	interpreterProxy success: (interpreterProxy isBytes: optionValue).
+	(interpreterProxy isBytes: optionValue) ifFalse:
+		[^interpreterProxy primitiveFailFor: PrimErrBadArgument].
 	optionValueStart:= self cCoerce: (interpreterProxy firstIndexableField: optionValue) to: #'char *'.
 	optionValueSize := interpreterProxy slotSizeOf: optionValue.
 
@@ -731,6 +744,8 @@ SocketPlugin >> primitiveSocketAddressGetPort [
 	| addr addrSize addrBase port |
 	<var: #addrBase type: 'char *'>
 	addr := self primitive: 'primitiveSocketAddressGetPort' parameters: #() receiver: #Oop.
+	(interpreterProxy isBytes: addr) ifFalse:
+		[^interpreterProxy primitiveFailFor: PrimErrBadArgument].
 	addrSize := interpreterProxy byteSizeOf: addr.
 	addrBase := self cCoerce: (interpreterProxy firstIndexableField: addr) to: 'char *'.
 	interpreterProxy failed
@@ -745,6 +760,8 @@ SocketPlugin >> primitiveSocketAddressSetPort: portNumber [
 	| addr addrSize addrBase |
 	<var: #addrBase type: 'char *'>
 	addr := self primitive: 'primitiveSocketAddressSetPort' parameters: #(SmallInteger) receiver: #Oop.
+	(interpreterProxy isBytes: addr) ifFalse:
+		[^interpreterProxy primitiveFailFor: PrimErrBadArgument].
 	addrSize := interpreterProxy byteSizeOf: addr.
 	addrBase := self cCoerce: (interpreterProxy firstIndexableField: addr) to: 'char *'.
 	interpreterProxy failed ifFalse: [self sqSocketAddress: addrBase Size: addrSize SetPort: portNumber]

@@ -477,6 +477,10 @@ primitiveResolverGetNameInfo(void)
 	if (failed()) {
 		return null;
 	}
+	if (!(isBytes(socketAddress))) {
+		primitiveFailFor(PrimErrBadArgument);
+		return null;
+	}
 	if (!(failed())) {
 		addrSize = byteSizeOf(socketAddress);
 		addrBase = ((char *) (firstIndexableField(socketAddress)));
@@ -872,6 +876,10 @@ primitiveSocketAddressGetPort(void)
 	if (failed()) {
 		return null;
 	}
+	if (!(isBytes(addr))) {
+		primitiveFailFor(PrimErrBadArgument);
+		return null;
+	}
 	addrSize = byteSizeOf(addr);
 	addrBase = ((char *) (firstIndexableField(addr)));
 	if (!(failed())) {
@@ -900,6 +908,10 @@ primitiveSocketAddressSetPort(void)
 	portNumber = stackIntegerValue(0);
 	addr = stackValue(1);
 	if (failed()) {
+		return null;
+	}
+	if (!(isBytes(addr))) {
+		primitiveFailFor(PrimErrBadArgument);
 		return null;
 	}
 	addrSize = byteSizeOf(addr);
@@ -936,6 +948,10 @@ primitiveSocketBindTo(void)
 	else {
 		primitiveFailFor(PrimErrBadArgument);
 		s = null;
+	}
+	if (!(isBytes(socketAddress))) {
+		primitiveFailFor(PrimErrBadArgument);
+		return null;
 	}
 	addrSize = byteSizeOf(socketAddress);
 	addrBase = ((char *) (firstIndexableField(socketAddress)));
@@ -1079,6 +1095,10 @@ primitiveSocketConnectTo(void)
 	else {
 		primitiveFailFor(PrimErrBadArgument);
 		s = null;
+	}
+	if (!(isBytes(socketAddress))) {
+		primitiveFailFor(PrimErrBadArgument);
+		return null;
 	}
 	addrSize = byteSizeOf(socketAddress);
 	addrBase = ((char *) (firstIndexableField(socketAddress)));
@@ -1383,7 +1403,10 @@ primitiveSocketGetOptions(void)
 		primitiveFailFor(PrimErrBadArgument);
 		s = null;
 	}
-	success(isBytes(optionName));
+	if (!(isBytes(optionName))) {
+		primitiveFailFor(PrimErrBadArgument);
+		return null;
+	}
 	optionNameStart = ((char *) (firstIndexableField(optionName)));
 	optionNameSize = slotSizeOf(optionName);
 	if (failed()) {
@@ -1644,6 +1667,10 @@ primitiveSocketLocalAddressResult(void)
 	else {
 		primitiveFailFor(PrimErrBadArgument);
 		s = null;
+	}
+	if (!(isBytes(socketAddress))) {
+		primitiveFailFor(PrimErrBadArgument);
+		return null;
 	}
 	addrSize = byteSizeOf(socketAddress);
 	addrBase = ((char *) (firstIndexableField(socketAddress)));
@@ -1938,6 +1965,10 @@ primitiveSocketRemoteAddressResult(void)
 		primitiveFailFor(PrimErrBadArgument);
 		s = null;
 	}
+	if (!(isBytes(socketAddress))) {
+		primitiveFailFor(PrimErrBadArgument);
+		return null;
+	}
 	addrSize = byteSizeOf(socketAddress);
 	addrBase = ((char *) (firstIndexableField(socketAddress)));
 	if (!(failed())) {
@@ -2213,10 +2244,16 @@ primitiveSocketSetOptions(void)
 		primitiveFailFor(PrimErrBadArgument);
 		s = null;
 	}
-	success(isBytes(optionName));
+	if (!(isBytes(optionName))) {
+		primitiveFailFor(PrimErrBadArgument);
+		return null;
+	}
 	optionNameStart = ((char *) (firstIndexableField(optionName)));
 	optionNameSize = slotSizeOf(optionName);
-	success(isBytes(optionValue));
+	if (!(isBytes(optionValue))) {
+		primitiveFailFor(PrimErrBadArgument);
+		return null;
+	}
 	optionValueStart = ((char *) (firstIndexableField(optionValue)));
 	optionValueSize = slotSizeOf(optionValue);
 	if (failed()) {

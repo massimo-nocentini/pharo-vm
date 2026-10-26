@@ -92,6 +92,10 @@ struct sockaddr_un
 
 #define TCP_MAXSEG 536
 #define S_IFSOCK   0xC000
+/* Windows stat() reports no socket file type, so keep the historical mask test there */
+#ifndef S_ISSOCK
+# define S_ISSOCK(m) ((m) & S_IFSOCK)
+#endif
 
 #define socklen_t int
 
@@ -1323,6 +1327,59 @@ sqInt sqSocketReceiveDataBufCount(SocketPtr s, char *buf, sqInt bufSize)
 }
 
 
+/* send one datagram from buf to the default peer of the UDP/RAW socket s.
+
+   The peer is passed with its own length rather than
+   sizeof(union sockaddr_any), which BSD stacks reject with EINVAL and which
+   is longer than the sockaddr_un that Linux accepts for AF_UNIX.
+   On BSD stacks such as macOS, a socket that connect(2) has been called on
+   (connectTo:port: and connectToAddress: both do it) is sent to with
+   send(2), because they answer EISCONN to a sendto() that names a
+   destination on it.  Linux accepts that sendto() and delivers to the
+   destination given, which is the sender of the last datagram received
+   (possibly one queued before the connect), so it keeps using sendto().
+*/
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) \
+ || defined(__OpenBSD__) || defined(__DragonFly__)
+# define CONNECTED_UDP_REFUSES_SENDTO 1
+#endif
+
+static int udpSendToPeer(SocketPtr s, char *buf, sqInt bufSize)
+{
+#ifdef _WIN32
+  /* Winsock ignores the destination of a connected socket and accepts the longer length */
+  return sendto(SOCKET(s), buf, bufSize, 0, (struct sockaddr *)&SOCKETPEER(s), sizeof(SOCKETPEER(s)));
+#else
+  socklen_t peerSize;
+# ifdef CONNECTED_UDP_REFUSES_SENDTO
+  union sockaddr_any connectedPeer;
+  int savedErrno= errno;
+  int connected;
+
+  peerSize= sizeof(connectedPeer);
+  connected= (0 == getpeername(SOCKET(s), &connectedPeer.sa, &peerSize));
+  /* the probe must not leave ENOTCONN behind for the error path of the caller */
+  errno= savedErrno;
+  if (connected)
+    return send(SOCKET(s), buf, bufSize, 0);
+# endif
+
+  /* the size recorded with the peer is exact (it may be an unnamed or abstract
+     AF_UNIX address), but a receive that found no datagram clears it */
+  peerSize= SOCKETPEERSIZE(s);
+  if (!peerSize)
+    switch (SOCKETPEER(s).sa.sa_family)
+      {
+      case AF_INET:	peerSize= sizeof(struct sockaddr_in);	break;
+      case AF_INET6:	peerSize= sizeof(struct sockaddr_in6);	break;
+      case AF_UNIX:	peerSize= sizeof(struct sockaddr_un);	break;
+      default:		peerSize= sizeof(SOCKETPEER(s));	break;
+      }
+  return sendto(SOCKET(s), buf, bufSize, 0, &SOCKETPEER(s).sa, peerSize);
+#endif
+}
+
+
 /* write data to the socket s from buf for at most bufSize bytes.
    answer the number of bytes actually written.
 */ 
@@ -1338,7 +1395,7 @@ sqInt sqSocketSendDataBufCount(SocketPtr s, char *buf, sqInt bufSize)
     {
       /* --- UDP/RAW --- */
       logTrace( "UDP sendData(%d, %ld)\n", SOCKET(s), bufSize);
-      if ((nsent= sendto(SOCKET(s), buf, bufSize, 0, (struct sockaddr *)&SOCKETPEER(s), sizeof(SOCKETPEER(s)))) <= 0)
+      if ((nsent= udpSendToPeer(s, buf, bufSize)) <= 0)
 	{
       lastError = getLastSocketError();
       int err = lastError;
@@ -1750,6 +1807,7 @@ sqInt sqResolverLocalAddress(void) {
         {
             if (s != 0)
             {
+                freeifaddrs(ifaddr);
                 success(false);
                 return 0;
             }
@@ -1916,7 +1974,8 @@ void sqResolverGetAddressInfoHostSizeServiceSizeFlagsFamilyTypeProtocol(char *ho
   if (servSize && (family == SQ_SOCKET_FAMILY_LOCAL) && (servSize < sizeof(((struct sockaddr_un *)0)->sun_path)) && !(flags & SQ_SOCKET_NUMERIC))
     {
       struct stat st;
-      if ((0 == stat(servName, &st)) && (st.st_mode & S_IFSOCK))
+      /* stat the NUL-terminated copy: servName is unterminated image memory */
+      if ((0 == stat(serv, &st)) && S_ISSOCK(st.st_mode))
 	{
 	  struct sockaddr_un *saun= calloc(1, sizeof(struct sockaddr_un));
 	  localInfo= (struct addrinfo *)calloc(1, sizeof(struct addrinfo));
@@ -2003,8 +2062,11 @@ struct addressHeader
 #define addressHeader(A)	((struct addressHeader *)(A))
 #define socketAddress(A)	((struct sockaddr *)((char *)(A) + AddressHeaderSize))
 
-#define addressValid(A, S)	(thisNetSession && (thisNetSession == addressHeader(A)->sessionID) && (addressHeader(A)->size == ((S) - AddressHeaderSize)))
+/* the size test comes first: an object shorter than the header has no header to read */
+#define addressValid(A, S)	(thisNetSession && ((S) >= (sqInt)AddressHeaderSize) && (thisNetSession == addressHeader(A)->sessionID) && (addressHeader(A)->size == ((S) - AddressHeaderSize)))
 #define addressSize(A)		(addressHeader(A)->size)
+/* whether a valid address's payload is long enough to hold a T (the sockaddr read from it) */
+#define addressHolds(A, T)	(addressSize(A) >= (int)sizeof(T))
 
 
 #if 0
@@ -2114,11 +2176,11 @@ sqInt sqResolverGetAddressInfoNext(void)
 
 sqInt sqSocketAddressSizeGetPort(char *addr, sqInt addrSize)
 {
-  if (addressValid(addr, addrSize))
+  if (addressValid(addr, addrSize) && addressHolds(addr, struct sockaddr))
     switch (socketAddress(addr)->sa_family)
       {
-      case AF_INET:	return ntohs(((struct sockaddr_in  *)socketAddress(addr))->sin_port);
-      case AF_INET6:	return ntohs(((struct sockaddr_in6 *)socketAddress(addr))->sin6_port);
+      case AF_INET:	if (addressHolds(addr, struct sockaddr_in))  return ntohs(((struct sockaddr_in  *)socketAddress(addr))->sin_port);	break;
+      case AF_INET6:	if (addressHolds(addr, struct sockaddr_in6)) return ntohs(((struct sockaddr_in6 *)socketAddress(addr))->sin6_port);	break;
       }
 
   success(false);
@@ -2128,11 +2190,11 @@ sqInt sqSocketAddressSizeGetPort(char *addr, sqInt addrSize)
 
 void sqSocketAddressSizeSetPort(char *addr, sqInt addrSize, sqInt port)
 {
-  if (addressValid(addr, addrSize))
+  if (addressValid(addr, addrSize) && addressHolds(addr, struct sockaddr))
     switch (socketAddress(addr)->sa_family)
       {
-      case AF_INET:	((struct sockaddr_in  *)socketAddress(addr))->sin_port= htons(port);	return;
-      case AF_INET6:	((struct sockaddr_in6 *)socketAddress(addr))->sin6_port= htons(port);	return;
+      case AF_INET:	if (addressHolds(addr, struct sockaddr_in))  { ((struct sockaddr_in  *)socketAddress(addr))->sin_port= htons(port);	return; }	break;
+      case AF_INET6:	if (addressHolds(addr, struct sockaddr_in6)) { ((struct sockaddr_in6 *)socketAddress(addr))->sin6_port= htons(port);	return; }	break;
       }
 
   success(false);
