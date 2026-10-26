@@ -34,6 +34,10 @@ static char __buildInfo[] = "LocalePlugin VMMaker.oscog-eem.2495 uuid: fcbf4c90-
 #include "memoryAccess.h"
 
 
+/*** Constants ***/
+#define PrimErrNoMemory 9
+
+
 /*** Function Prototypes ***/
 EXPORT(const char*) getModuleName(void);
 EXPORT(sqInt) initialiseModule(void);
@@ -64,6 +68,7 @@ static void * (*firstIndexableField)(sqInt oop);
 static sqInt (*instantiateClassindexableSize)(sqInt classPointer, sqInt size);
 static sqInt (*integerObjectOf)(sqInt value);
 static void (*popthenPush)(sqInt nItems, sqInt oop);
+static sqInt (*primitiveFailFor)(sqInt reasonCode);
 static sqInt (*trueObject)(void);
 #else /* !defined(SQUEAK_BUILTIN_PLUGIN) */
 extern sqInt classString(void);
@@ -73,6 +78,7 @@ extern void * firstIndexableField(sqInt oop);
 extern sqInt instantiateClassindexableSize(sqInt classPointer, sqInt size);
 extern sqInt integerObjectOf(sqInt value);
 extern void popthenPush(sqInt nItems, sqInt oop);
+extern sqInt primitiveFailFor(sqInt reasonCode);
 extern sqInt trueObject(void);
 extern
 #endif
@@ -119,6 +125,10 @@ primitiveCountry(void)
 	sqInt oop;
 
 	oop = instantiateClassindexableSize(classString(), 3);
+	if (!(oop)) {
+		primitiveFailFor(PrimErrNoMemory);
+		return null;
+	}
 	sqLocGetCountryInto(firstIndexableField(oop));
 	if (!(failed())) {
 		popthenPush(1, oop);
@@ -159,6 +169,10 @@ primitiveCurrencySymbol(void)
 
 	length = sqLocCurrencySymbolSize();
 	oop = instantiateClassindexableSize(classString(), length);
+	if (!(oop)) {
+		primitiveFailFor(PrimErrNoMemory);
+		return null;
+	}
 	sqLocGetCurrencySymbolInto(firstIndexableField(oop));
 	if (!(failed())) {
 		popthenPush(1, oop);
@@ -194,6 +208,10 @@ primitiveDecimalSymbol(void)
 	sqInt oop;
 
 	oop = instantiateClassindexableSize(classString(), 1);
+	if (!(oop)) {
+		primitiveFailFor(PrimErrNoMemory);
+		return null;
+	}
 	sqLocGetDecimalSymbolInto(firstIndexableField(oop));
 	if (!(failed())) {
 		popthenPush(1, oop);
@@ -213,6 +231,10 @@ primitiveDigitGroupingSymbol(void)
 	sqInt oop;
 
 	oop = instantiateClassindexableSize(classString(), 1);
+	if (!(oop)) {
+		primitiveFailFor(PrimErrNoMemory);
+		return null;
+	}
 	sqLocGetDigitGroupingSymbolInto(firstIndexableField(oop));
 	if (!(failed())) {
 		popthenPush(1, oop);
@@ -233,6 +255,10 @@ primitiveLanguage(void)
 	sqInt oop;
 
 	oop = instantiateClassindexableSize(classString(), 3);
+	if (!(oop)) {
+		primitiveFailFor(PrimErrNoMemory);
+		return null;
+	}
 	sqLocGetLanguageInto(firstIndexableField(oop));
 	if (!(failed())) {
 		popthenPush(1, oop);
@@ -259,6 +285,10 @@ primitiveLongDateFormat(void)
 
 	length = sqLocLongDateFormatSize();
 	oop = instantiateClassindexableSize(classString(), length);
+	if (!(oop)) {
+		primitiveFailFor(PrimErrNoMemory);
+		return null;
+	}
 	sqLocGetLongDateFormatInto(firstIndexableField(oop));
 	if (!(failed())) {
 		popthenPush(1, oop);
@@ -303,6 +333,10 @@ primitiveShortDateFormat(void)
 
 	length = sqLocShortDateFormatSize();
 	oop = instantiateClassindexableSize(classString(), length);
+	if (!(oop)) {
+		primitiveFailFor(PrimErrNoMemory);
+		return null;
+	}
 	sqLocGetShortDateFormatInto(firstIndexableField(oop));
 	if (!(failed())) {
 		popthenPush(1, oop);
@@ -326,6 +360,10 @@ primitiveTimeFormat(void)
 
 	length = sqLocTimeFormatSize();
 	oop = instantiateClassindexableSize(classString(), length);
+	if (!(oop)) {
+		primitiveFailFor(PrimErrNoMemory);
+		return null;
+	}
 	sqLocGetTimeFormatInto(firstIndexableField(oop));
 	if (!(failed())) {
 		popthenPush(1, oop);
@@ -377,6 +415,7 @@ setInterpreter(struct VirtualMachine *anInterpreter)
 		instantiateClassindexableSize = interpreterProxy->instantiateClassindexableSize;
 		integerObjectOf = interpreterProxy->integerObjectOf;
 		popthenPush = interpreterProxy->popthenPush;
+		primitiveFailFor = interpreterProxy->primitiveFailFor;
 		trueObject = interpreterProxy->trueObject;
 #endif /* !defined(SQUEAK_BUILTIN_PLUGIN) */
 	}

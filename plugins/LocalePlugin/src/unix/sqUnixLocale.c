@@ -617,6 +617,17 @@ sqInt sqLocCurrencyNotation(void)
 	memcpy(str,src,len); \
 } while (0)
 
+/* The decimal and digit grouping symbols are answered in a 1-byte String,
+ * but the locale's separator may be a multi-byte UTF-8 sequence (e.g. the
+ * thousands_sep of ru_RU.UTF-8 is U+202F, 3 bytes).  Copy only its first
+ * byte, which is all the image ever saw, instead of writing past the end
+ * of the String.  An empty separator still answers a NUL.
+ */
+#define safecharcpy(str,source) do { \
+	const char *src = (source); \
+	(str)[0] = src[0]; \
+} while (0)
+
 /* Store the currency symbol into the given string.
  */
 void sqLocGetCurrencySymbolInto(char *str)
@@ -646,7 +657,7 @@ sqInt sqLocMeasurementMetric(void)
  */
 void sqLocGetDigitGroupingSymbolInto(char *str)
 {
-  safestrcpy(str, localeConv->thousands_sep);
+  safecharcpy(str, localeConv->thousands_sep);
 }
 
 
@@ -654,7 +665,7 @@ void sqLocGetDigitGroupingSymbolInto(char *str)
  */
 void sqLocGetDecimalSymbolInto(char *str)
 {
-  safestrcpy(str, localeConv->decimal_point);
+  safecharcpy(str, localeConv->decimal_point);
 }
 
 

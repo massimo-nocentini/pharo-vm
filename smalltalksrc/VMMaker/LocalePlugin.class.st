@@ -48,6 +48,7 @@ LocalePlugin >> primitiveCountry [
 	| oop |
 	self primitive:'primitiveCountry'.
 	oop := interpreterProxy instantiateClass: interpreterProxy classString indexableSize: 3.
+	oop ifNil: [^interpreterProxy primitiveFailFor: PrimErrNoMemory].
 	self sqLocGetCountryInto: (interpreterProxy firstIndexableField: oop).
 	^oop
 
@@ -68,6 +69,7 @@ Still need to find details on standard symbols - ISO 4217 is supposed to be it b
 	self primitive:'primitiveCurrencySymbol'.
 	length := self sqLocCurrencySymbolSize.
 	oop := interpreterProxy instantiateClass: interpreterProxy classString indexableSize: length.
+	oop ifNil: [^interpreterProxy primitiveFailFor: PrimErrNoMemory].
 	self sqLocGetCurrencySymbolInto: (interpreterProxy firstIndexableField: oop).
 	^oop
 
@@ -86,6 +88,7 @@ LocalePlugin >> primitiveDecimalSymbol [
 	| oop |
 	self primitive:'primitiveDecimalSymbol'.
 	oop := interpreterProxy instantiateClass: interpreterProxy classString indexableSize: 1.
+	oop ifNil: [^interpreterProxy primitiveFailFor: PrimErrNoMemory].
 	self sqLocGetDecimalSymbolInto: (interpreterProxy firstIndexableField: oop).
 	^oop
 
@@ -97,6 +100,7 @@ LocalePlugin >> primitiveDigitGroupingSymbol [
 	| oop |
 	self primitive:'primitiveDigitGroupingSymbol'.
 	oop := interpreterProxy instantiateClass: interpreterProxy classString indexableSize: 1.
+	oop ifNil: [^interpreterProxy primitiveFailFor: PrimErrNoMemory].
 	self sqLocGetDigitGroupingSymbolInto: (interpreterProxy firstIndexableField: oop).
 	^oop
 
@@ -108,6 +112,7 @@ LocalePlugin >> primitiveLanguage [
 	| oop |
 	self primitive:'primitiveLanguage'.
 	oop := interpreterProxy instantiateClass: interpreterProxy classString indexableSize: 3.
+	oop ifNil: [^interpreterProxy primitiveFailFor: PrimErrNoMemory].
 	self sqLocGetLanguageInto: (interpreterProxy firstIndexableField: oop).
 	^oop
 
@@ -126,6 +131,7 @@ mmmm month name
 	self primitive:'primitiveLongDateFormat'.
 	length := self sqLocLongDateFormatSize.
 	oop := interpreterProxy instantiateClass: interpreterProxy classString indexableSize: length.
+	oop ifNil: [^interpreterProxy primitiveFailFor: PrimErrNoMemory].
 	self sqLocGetLongDateFormatInto: (interpreterProxy firstIndexableField: oop).
 	^oop
 
@@ -151,6 +157,7 @@ mmmm month name
 	self primitive:'primitiveShortDateFormat'.
 	length := self sqLocShortDateFormatSize.
 	oop := interpreterProxy instantiateClass: interpreterProxy classString indexableSize: length.
+	oop ifNil: [^interpreterProxy primitiveFailFor: PrimErrNoMemory].
 	self sqLocGetShortDateFormatInto: (interpreterProxy firstIndexableField: oop).
 	^oop
 
@@ -166,6 +173,7 @@ double symbol is null padded, single not padded (h=6, hh=06)"
 	self primitive:'primitiveTimeFormat'.
 	length := self sqLocTimeFormatSize.
 	oop := interpreterProxy instantiateClass: interpreterProxy classString indexableSize: length.
+	oop ifNil: [^interpreterProxy primitiveFailFor: PrimErrNoMemory].
 	self sqLocGetTimeFormatInto: (interpreterProxy firstIndexableField: oop).
 	^oop
 
