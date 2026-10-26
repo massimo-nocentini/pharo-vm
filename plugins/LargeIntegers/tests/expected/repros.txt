@@ -1,0 +1,33 @@
+The output each method of st/repro.st must print (run-image-tests.sh compares the block
+under '== <method>' with the output of 'LIH new <method>').  The plugin before the kernels
+crashes on li01, answers stale eden bytes in li06 and garbage or #'bad argument' in li07 and arity.
+== li01
+# mid  shift 1 => LPI 1 02
+# mid  shift 33 => LPI 5 0000000002
+# midN shift 7 => LNI 3 807f40
+# big  shift 1 => LPI 1 02
+== li05
+# LargePositiveInteger new: 0 - LargePositiveInteger new: 0 => SI 0
+# LargePositiveInteger new: 0 - LargeNegativeInteger new: 0 => SI 0
+# LargeNegativeInteger new: 0 - LargePositiveInteger new: 0 => SI 0
+# LargeNegativeInteger new: 0 - LargeNegativeInteger new: 0 => SI 0
+== li06
+# try 1: P4:acb3e164 * P0 mod P8:3bb624e1ab749a8b => FAIL nil
+# try 2: P4:acb3e164 * P0 mod P8:3bb624e1ab749a8b => FAIL nil
+# try 3: P4:acb3e164 * P0 mod P8:3bb624e1ab749a8b => FAIL nil
+# try 4: P4:acb3e164 * P0 mod P8:3bb624e1ab749a8b => FAIL nil
+# try 5: P4:acb3e164 * P0 mod P8:3bb624e1ab749a8b => FAIL nil
+# try 6: P4:acb3e164 * P0 mod P8:3bb624e1ab749a8b => FAIL nil
+# try 7: P4:acb3e164 * P0 mod P8:3bb624e1ab749a8b => FAIL nil
+# try 8: P4:acb3e164 * P0 mod P8:3bb624e1ab749a8b => FAIL nil
+== li07
+# {5. x liAddNoArg} => #('5' 'FAIL #''bad number of arguments''')
+# {7. x liAdd: 1 extra: 2. 9} => #('7' 'FAIL #''bad number of arguments''' '9')
+# {7. 3 liNormPosArg: p. 9} => #('7' 'FAIL #''bad number of arguments''' '9')
+# {7. x liMontOne: 5. 9} => #('7' 'FAIL #''bad number of arguments''' '9')
+# {7. x liModuleNameArg: 1. 9} => #('7' 'FAIL #''bad number of arguments''' '9')
+# {7. x liMontLenArg: 1. 9} => #('7' 'FAIL #''bad number of arguments''' '9')
+# {7. x liDivOne: true. 9} => #('7' 'FAIL #''bad number of arguments''' '9')
+# {5. x liShiftNoArg} => #('5' 'FAIL #''bad number of arguments''')
+== arity
+# arity: 120 shapes, 0 with another answer

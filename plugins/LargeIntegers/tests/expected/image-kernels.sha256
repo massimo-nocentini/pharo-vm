@@ -1,0 +1,25 @@
+# python3 -I digest.py < (the output of st/diff-kernels.st), recorded with
+# run-image-tests.sh --record from the reference VM: the plugin before the kernels.
+0050b3987fd3c889564f7ec3be060ce124ebd9e871320930f175ccd605aecec9 1 multiply: random sizes | (section)
+0004e1ae39d26f88ca8bee490f08689fa332a6bb468a6722fbaf1d12558d833f 1259 multiply: random sizes | mul-
+75568e0288a8e6c2ad599eaa94e22daed7e04f1929b435e2f1840764da61ed15 1241 multiply: random sizes | mul+
+afa5b8dbb96fe9f755648c80fa1bba0dcfff8f2d0be88b5e374ea5d104ce6d8c 1 multiply: Karatsuba threshold straddle (192 bytes = 24 limbs) | (section)
+f44ba79728b8c274820c87d2682efd414b65e85de9519dfcc394b5727d32c93f 78 multiply: Karatsuba threshold straddle (192 bytes = 24 limbs) | mul+
+ab6c9ba4cf3f5ec6a00089657ee7d61da5f9dcf1e88b9449c80e80c1684ee4ff 65 multiply: Karatsuba threshold straddle (192 bytes = 24 limbs) | mul-
+26acb58bd0ed2526a4e81a8d5e3044ed2068cb6ed73534d1ff1a86b918a3aee9 1 multiply: big | (section)
+cfabc4c28f33629ed396d9baff9cbd57fdb959ab4e3b96726b3265dbe8b40953 8 multiply: big | mul+
+e8a8bd450f7e06e0f3f2753c5f7e248b0fd5d4a42ca1a031cc50f68cb04b13e1 8 multiply: big | mul-
+d2c1a408c64678f9e29af6bfabdf0de154c1bdcf55af41a549d74424186c3516 1 divide: random sizes | (section)
+7985156289568059f9931e3c4f47b6202ae0f86de2d4a9098fedf75cabeadfe6 1280 divide: random sizes | div+
+1d7f2e8c2dd2dd8e8e19fe75b88c99ab2573a57d4be52ef1e5e7304d3b3ec657 1220 divide: random sizes | div-
+723d72087b9a5021d3b263e90bc460c1b84b8412568f554aa5c6c15afecb76d1 1 divide: one quotient digit, divisors around 24 digits | (section)
+447687ca2618e3ceb107e9d83b4bbe46790bc277e65e8bfae5532463459893c3 48 divide: one quotient digit, divisors around 24 digits | div+
+4a0f141f5faf87d4ef3c726e6bb0a5a9cce261eceef1fdb6a3848629e3e70e7e 48 divide: one quotient digit, divisors around 24 digits | div-
+a90ede5d82ab81723e0fefec2b51a6aa24874569c181c5b40389f2365a2a6e97 1 divide: top dividend digits = top divisor digits | (section)
+2eb191936372d591addeacba781805e15acac54c7fdf37dfd985b4639e131cfa 400 divide: top dividend digits = top divisor digits | div+
+43ced57a3bf11169da68583c8f61c21a56e6965291fefbb84d3acfb56e2d62b0 1 divide: exact (a * b / b), and by SmallIntegers | (section)
+6f609ac7261d1d21755f68b8483ca5753029c3c2f444cc37f2e030f39b79ac5c 335 divide: exact (a * b / b), and by SmallIntegers | div+
+79f9a904254f199d35bfac6a417a21fd575c5470c1de9b1d6615f1329556caa0 300 divide: exact (a * b / b), and by SmallIntegers | div-
+38cd0cb1f540bab8ada31c6b9bd3ad0c2e46a7d78bcc0a246b39bb5eca6ce1ed 1 divide: big | (section)
+1d899cfed9e8456852a52bdeb62183707ba3d79e12b8448700189d6b89637ef1 7 divide: big | div+
+467b0ec83116745777f843d78405be5d52c42117d86e53bc8b3fa1c6bff7ab57 1 done 6297 calls | (section)

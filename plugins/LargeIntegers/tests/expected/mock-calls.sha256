@@ -1,0 +1,24 @@
+# python3 -I digest.py < (the output of plugin_harness calls), recorded with
+# run-c-tests.sh --record --reference-c from the LargeIntegers.c before the kernels.
+16bb99b40800593db0665486493a4a7125b4535a9347985e4ccde0cdf70bec90 1 pairs, shifts, anyBit, normalize, module name | (section)
+247080d1af61264b5aa0acf16ed881b4c583b8427593023beda052c4e4841bb7 8100 pairs, shifts, anyBit, normalize, module name | primDigitAdd
+6503e2f8eba8504e24c2412d0db01b171d10161f77ea1922cf99721914197fc1 8096 pairs, shifts, anyBit, normalize, module name | primDigitSubtract
+5d2c1118643ccbdbde7a719ca5ef34b27ae94ba9d88be43062b147dd0fc4e98b 8100 pairs, shifts, anyBit, normalize, module name | primDigitBitAnd
+d0ea558e110f449697b6ff95ad86300e56da3aaf54df71d15f4cfdc7483ccf79 8100 pairs, shifts, anyBit, normalize, module name | primDigitBitOr
+3b489ca4ae4f12fe5dc86957f220ab54ca12c6fdfd6c60341d3b3e58486f9a40 8100 pairs, shifts, anyBit, normalize, module name | primDigitBitXor
+252d22fbee701d36796d42e5ec6c3b80d8ffa4146d6b6bf19849dc0b22e4ab9f 8100 pairs, shifts, anyBit, normalize, module name | primDigitCompare
+81ec33a8dc4e0957a670e8a240c806bb8dea7b9244450a384639c4fab38397fb 16200 pairs, shifts, anyBit, normalize, module name | primDigitMultiplyNegative
+cfcbc1c6f965a8048fe88e71b753e761c616d4acac209a871a447d917ca06804 16200 pairs, shifts, anyBit, normalize, module name | primDigitDivNegative
+88d5c4f0c38c7f161116d1d0f34b596edb34252098994ce9f9a3beb9fe87eb0a 1513 pairs, shifts, anyBit, normalize, module name | primDigitBitShiftMagnitude
+7aa62f94deb36627f675bbc96b35c3bb154336516bc456b42ce1fe9d5edd3d37 900 pairs, shifts, anyBit, normalize, module name | primAnyBitFromTo
+e3ffe8871491c6fef0376d69f3ee5f3c7e581090cfc550b83e0f10c1d8d27fab 90 pairs, shifts, anyBit, normalize, module name | primNormalizePositive
+1f1ec501d5a03cd0720d52d247de9284b8ff26c204f7ceccb312f6173642cdf8 90 pairs, shifts, anyBit, normalize, module name | primNormalizeNegative
+05b2df0bc44b179a42020ea8e24cb4c770e2e28c1b46d2e11ec0cc7fb00aba82 90 pairs, shifts, anyBit, normalize, module name | primMontgomeryDigitLength
+726112c073556b8201febf67fed692799049250e49812d366ece13dfa9279058 90 pairs, shifts, anyBit, normalize, module name | primGetModuleName
+a5360573cd4b474f317cea2baf994bc13d34302b17a4e5bc2af64043cc522fb9 1 montgomery | (section)
+776cadc4d3391f74d0833e6053cfe28f0ae4fdd3493c7a911ab93f0994c57692 896 montgomery | primMontgomeryTimesModulo
+153e0ef4e4e737871a56b2432110f2a1a68baab056600207349862df0df6a61e 1 wrong-type arguments | (section)
+b15d2a066022a64ed9396ef6dcfc43006503c9945ac6e5b324b4fd085664869f 21 wrong-type arguments | primDigitBitShiftMagnitude
+2338478667abbed48ff4eeed2eb18a5be959ae6681fc84e6e6d5767b1dcb1bc7 42 wrong-type arguments | primAnyBitFromTo
+dc68a1d253280e3c750f53a7c6b21ac8b618ff58c927f94721840afa7a974bb9 41 wrong-type arguments | primMontgomeryTimesModulo
+0029653d49505f0803db65ed468527a51e5d5205bd0c7ec4e4bd1a40d1a60083 1 done 84773 calls | (section)
