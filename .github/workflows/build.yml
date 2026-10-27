@@ -12,8 +12,9 @@
 #
 # where <version> is the version of the VM without the count of commits
 # since its tag (v12.0.5-beta-4266c4ec4 for v12.0.5-beta+28.4266c4ec4).
-# On a push, when the seven jobs succeed, the zips are also published as
-# the GitHub release PharoVM-<version>, tagged at the commit built.
+# On a push to pharo-12, when the seven jobs succeed, the zips are also
+# published as the GitHub release PharoVM-<version>, tagged at the commit
+# built; other branches keep them as artifacts of their run.
 #
 # The WebAssembly zip is what `make wasm` stages (docs/WebAssembly.md): the
 # site web/ and the node VM node/, built with libgit2 and the images of the
@@ -549,7 +550,7 @@ jobs:
 
   release:
     name: Release
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/pharo-12'
     needs: [linux, macos, windows, wasm]
     runs-on: ubuntu-24.04
     permissions:
