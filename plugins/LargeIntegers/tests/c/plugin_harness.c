@@ -13,7 +13,9 @@
  *                         pool of SmallIntegers, normalized, unnormalized and empty
  *                         LargeIntegers of 1 to 2100 bytes, wrong types; shifts,
  *                         anyBit, Montgomery; wrong-type arguments of those
- *                         three), one line each: '<n> <prim> <shape> => <answer>'.
+ *                         three; then x * x through one object, and Montgomery
+ *                         products with the right inverse over moduli of 1 to
+ *                         2000 digits), one line each: '<n> <prim> <shape> => <answer>'.
  *                         run-c-tests.sh digests them and compares with
  *                         expected/mock-calls.sha256, recorded from the plugin as it
  *                         was before the kernels.  The shapes of `ub` are left out.
@@ -645,8 +647,71 @@ static int runDiff(void)
 		sameObject = 0;
 		for (int i = 0; i < ns; i++) free(specs[i]);
 	}
-	if (diffMode) printf("diff: %ld calls, %d mismatches\n", calls + sameCalls, bad);
-	else printf("# done %ld same-object calls\n", sameCalls);
+	if (!diffMode) printf("# done %ld same-object calls\n", sameCalls);
+
+	/* Montgomery products as modular exponentiation makes them, the right inverse of the
+	   modulus over many sizes: moduli of 1 to 2000 digits (both sides of the 128-digit
+	   stack buffer, and of the kernel's thresholds: the 32-bit loop, CIOS, REDC of a
+	   square and of a product), random, all ones, 2^k - 1, top digit FFFFFFFF, top digit
+	   zero (unnormalized); operands unreduced (as many digits as the modulus) and short,
+	   x times itself (one object, as #montgomeryRaisedTo:times:modulo:mInvModB: squares)
+	   and times a copy, the modulus times x (0), x times 1 (out of Montgomery form), a
+	   negative receiver (its magnitude), and a wrong inverse (the loop's own answer).
+	   Last, added with the 64-bit Montgomery kernel, so that the calls above and their
+	   digests stay as they were recorded. */
+	long montCalls = 0;
+	note("montgomery: sizes");
+	{
+		static const int ks[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+			25, 26, 27, 28, 31, 32, 33, 35, 36, 37, 40, 47, 48, 49, 63, 64, 65, 71, 72, 73, 74, 95, 96, 97, 127, 128, 129,
+			130, 143, 144, 145, 200, 255, 256, 257, 300, 513, 1000, 2000 };
+		Spec *one = specSI(1);
+		for (unsigned ki = 0; ki < sizeof ks / sizeof ks[0]; ki++) {
+			int k = ks[ki];
+			for (int rep = 0; rep < 4; rep++) {
+				/* one draw per statement: the arguments of a call are evaluated in no fixed order */
+				Spec *m = spec(K_LPI, 4 * k, rep == 3, 1);
+				if (rep == 1) {
+					int bits = 32 * k - (int)(rnd() % 32);
+					memset(m->bytes, 0, m->n);
+					for (int i = 0; i < bits; i++) m->bytes[i / 8] |= (unsigned char)(1 << (i % 8));
+				}
+				if (rep == 2) memset(m->bytes + 4 * k - 4, 0xFF, 4);
+				if (rep == 3 && k > 1) memset(m->bytes + 4 * k - 4, 0, 4);
+				m->bytes[0] |= 1;
+				uint32_t m0 = m->bytes[0] | m->bytes[1] << 8 | m->bytes[2] << 16 | (uint32_t)m->bytes[3] << 24;
+				Spec *inv = specSI(montInv(m0)), *wrongInv = specSI(montInv(m0) ^ 4);
+				int an = rep == 2 ? 1 + (int)(rnd() % (4 * k)) : 4 * k;
+				int aKind = rnd() & 1 ? K_LNI : K_LPI;
+				Spec *a = spec(aKind, an, rep & 1, 1);
+				int bn = rep == 1 ? 1 + (int)(rnd() % (4 * k)) : 4 * k;
+				Spec *b = spec(K_LPI, bn, rep == 3, 1);
+				if (rep == 1) memset(a->bytes, 0xFF, a->n);
+				/* a copy of a: equal digits in two objects */
+				Spec *ac = calloc(1, sizeof(Spec));
+				*ac = *a;
+				ac->kind = K_LPI;
+				const Spec *ab[3] = { b, m, inv }, *ba[3] = { a, m, inv }, *aac[3] = { ac, m, inv };
+				const Spec *a1[3] = { one, m, inv }, *abWrong[3] = { b, m, wrongInv };
+				bad += diffOne("montsz", "primMontgomeryTimesModulo", a, ab, 3);
+				bad += diffOne("montsz", "primMontgomeryTimesModulo", b, ba, 3);
+				bad += diffOne("montsz-copy", "primMontgomeryTimesModulo", a, aac, 3);
+				bad += diffOne("montsz-m", "primMontgomeryTimesModulo", m, ab, 3);
+				bad += diffOne("montsz-1", "primMontgomeryTimesModulo", a, a1, 3);
+				bad += diffOne("montsz-wronginv", "primMontgomeryTimesModulo", a, abWrong, 3);
+				/* the first argument the receiver's object itself */
+				sameObject = 1;
+				bad += diffOne("montsz-same", "primMontgomeryTimesModulo", a, ab, 3);
+				bad += diffOne("montsz-same", "primMontgomeryTimesModulo", b, ab, 3);
+				sameObject = 0;
+				montCalls += 8;
+				free(m); free(inv); free(wrongInv); free(a); free(b); free(ac);
+			}
+		}
+		free(one);
+	}
+	if (diffMode) printf("diff: %ld calls, %d mismatches\n", calls + sameCalls + montCalls, bad);
+	else printf("# done %ld Montgomery calls\n", montCalls);
 	return bad ? 1 : 0;
 }
 
@@ -754,6 +819,10 @@ static int runOOM(Plugin *p)
 	memset(ff600->bytes, 0xFF, 600);
 	mBig->bytes[0] |= 1;
 	Spec *invBig = specSI(montInv(mBig->bytes[0] | mBig->bytes[1] << 8 | mBig->bytes[2] << 16 | (uint32_t)mBig->bytes[3] << 24));
+	/* 700 digits: the result is a new LargeInteger, the kernel's scratch is malloc'ed */
+	Spec *mHeap = spec(K_LPI, 4 * 700, 0, 1), *aHeap = spec(K_LPI, 4 * 700, 0, 1), *bHeap = spec(K_LPI, 4 * 699, 1, 1);
+	mHeap->bytes[0] |= 1;
+	Spec *invHeap = specSI(montInv(mHeap->bytes[0] | mHeap->bytes[1] << 8 | mHeap->bytes[2] << 16 | (uint32_t)mHeap->bytes[3] << 24));
 	Case cases[] = {
 		{ "SI+SI", "primDigitAdd", s7, { s3 }, 1 },
 		{ "L+SI", "primDigitAdd", big, { s7 }, 1 },
@@ -784,6 +853,7 @@ static int runOOM(Plugin *p)
 		{ "BIG/SI", "primDigitDivNegative", big600, { s7, t }, 2 },
 		{ "BIG/BIG", "primDigitDivNegative", big1200, { big600, t }, 2 },
 		{ "montBIG", "primMontgomeryTimesModulo", s7, { s3, mBig, invBig }, 3 },
+		{ "montHEAP", "primMontgomeryTimesModulo", aHeap, { bHeap, mHeap, invHeap }, 3 },
 	};
 	int bad = 0;
 	for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {

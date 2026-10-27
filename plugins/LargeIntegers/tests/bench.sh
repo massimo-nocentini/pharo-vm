@@ -6,7 +6,8 @@
 # Runs st/bench.st (after st/lib.st) on a fresh copy of the Pharo 12 image:
 # ns per direct primitive call of multiply and divide from 64 to 262,144 bits,
 # the small operands where the kernels choose between the 32-bit loops and the
-# limb code, a few other small calls, and image expressions (see README.md).
+# limb code, a few other small calls, image expressions, and Montgomery products
+# and modular exponentiations (see README.md).
 # With [other-vm-dir] the two VMs alternate, run by run, and the table shows
 # the median of each and other/first.
 #
@@ -57,7 +58,7 @@ while test $i -le "$runs"; do
     v=1
     for dir in $dirs; do
         exe=$(echo $exes | cut -d' ' -f$v)
-        run "vm$v-$i" "$exe" "$dir" "LIH new benchKernels; benchSmall; benchImage." "$TESTS/st/lib.st" "$TESTS/st/bench.st"
+        run "vm$v-$i" "$exe" "$dir" "LIH new benchKernels; benchSmall; benchImage; benchMontgomery." "$TESTS/st/lib.st" "$TESTS/st/bench.st"
         echo "run $i, vm $v ($dir): $outcome, ${secs}s" >&2
         if test "$outcome" != OK; then
             tail -n 5 "$WORK/vm$v-$i/out" "$WORK/vm$v-$i/err" >&2

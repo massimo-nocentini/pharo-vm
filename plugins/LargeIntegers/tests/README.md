@@ -1,6 +1,6 @@
 # LargeIntegers plugin tests
 
-Tests and benchmark of the LargeIntegers plugin: the multiply and divide kernels
+Tests and benchmark of the LargeIntegers plugin: the multiply, divide and Montgomery kernels
 (`src/common/LargeIntegersKernels.c`), the glue that calls them
 (`src/common/LargeIntegers.c`, from `smalltalksrc/VMMaker/LargeIntegersPlugin.class.st`),
 and the crashes and undefined behaviour the rewrite removed.  The reference everywhere is
@@ -10,7 +10,7 @@ or read memory it did not own.
 
 | entry point | needs | checks | time |
 |---|---|---|---|
-| `run-c-tests.sh [scale]` | a C compiler, python3 | kernels against frozen loops and oracles; the plugin through a mock VM | ~30 s (scale 1), ~3 min (scale 10) |
+| `run-c-tests.sh [scale]` | a C compiler, python3 | kernels against frozen loops and oracles; the plugin through a mock VM | 30-80 s (scale 1), ~3 min (scale 10) |
 | `run-image-tests.sh <vm-dir> <image> [reference-vm-dir]` | a built VM, a Pharo 12 image, python3 | repros, differential drivers, SUnit, in the real VM | ~10 s |
 | `bench.sh <vm-dir> <image> [other-vm-dir]` | the same | ns per call, one or two VMs | 20-30 s per run and VM |
 
@@ -71,10 +71,37 @@ of the 64-bit Spur `interp.h`).
   alone (Knuth's algorithm D would fit on the stack): the 32-bit loop.  The scratch:
   `LI_STACK_LIMBS` limbs on the stack, one more malloc'ed, and a size larger than a
   `size_t` holds answered with no malloc (the 32-bit loop runs instead).
+- **kernels, Montgomery** (same program and builds): `liDigitMontgomery` against a frozen
+  copy of the plugin's Montgomery loop (`cDigitMontgomery:len:times:len:modulo:len:mInvModB:into:`,
+  inlined in `primMontgomeryTimesModulo` before the kernel), both into zero digits, the
+  operands untouched.  Every modulus of 1 to 300 digits through each path (the loop, CIOS,
+  REDC of a product, REDC of a square); 40,000 random cases up to 300 digits, half of them
+  with the thresholds forced down (CIOS from 1 digit, REDC from 1..9 limbs and for squares
+  from 1..5, Karatsuba and Karatsuba squaring inside it from 2..6 limbs); sizes straddling
+  each production threshold with every partial-limb offset; moduli all ones, 2^k - 1, with
+  a top digit FFFFFFFF, 1 or 0 (unnormalized), 2^(32n - 32) + 1, adversarial digits;
+  operands as long as the modulus and unreduced (all ones: T at or above 2^32n, the loop's
+  `lastDigit`), shorter, empty, 1, and the modulus itself (T = m: the subtraction leaves
+  0); x times itself through one pointer and through a copy; moduli of 513 to 5001
+  digits; a failing malloc (the loop runs; small moduli stay on the stack); one operand
+  of 1 or 2 digits, or of about half the modulus's limbs (where the product then REDC
+  takes over from CIOS), as first or as second operand, around each production
+  threshold.  And 10,000
+  cases with a wrong inverse (random, one bit flipped, 0) or an even modulus, at the same
+  thresholds, where the kernel must give the loop's own answer.  Mutations of the kernel
+  that the suite was checked to catch: no odd-digit-count shift and a wrong (or no) Newton
+  step for the 64-bit inverse (64-bit limbs), the comparison without the top limb (the
+  loop's `lastDigit`) or strict, no carry propagation in REDC, the top limb of CIOS
+  dropped, and a wrong inverse taken as right (64-bit limbs: with 32-bit limbs the
+  kernels take the loop's steps digit for digit, carries included, and give its answer
+  for any inverse).
 - **oracle**: the -O2 builds print 3000 products, 3000 squares (sizes around the squaring
-  thresholds of both limb sizes, up to 2500 digits) and 4000 quotients and remainders
-  (1000 of them over the Burnikel & Ziegler threshold, a third adversarial), which
-  `c/oracle.py` checks with Python's integers.
+  thresholds of both limb sizes, up to 2500 digits), 4000 quotients and remainders
+  (1000 of them over the Burnikel & Ziegler threshold, a third adversarial) and 3000
+  Montgomery products with the right inverse (moduli of 1 to 1000 digits around the
+  thresholds of both limb sizes, half of them at forced thresholds), which `c/oracle.py`
+  checks with Python's integers: for Montgomery, T = (a b + U m) / 2^32n with
+  U = -a b / m mod 2^32n, then T - m when T >= m, mod 2^32n.
 - **calls** (`c/plugin_harness.c calls`): the plugin as a shared object, driven through a
   mock `struct VirtualMachine` with Spur-shaped objects (byte bodies malloc'ed apart at their
   rounded size, so ASan sees any access outside an object): 84,773 calls of every primitive
@@ -86,22 +113,29 @@ of the 64-bit Spur `interp.h`).
   of a receiver by itself, one object (x * x, as `squared` sends it; the pairs above
   multiply equal digits held in two objects): the pool, and LargeIntegers of 19 to 709
   bytes around the squaring thresholds, of 1500 to 40,000 bytes, with top digits
-  FFFFFFFF, 80000000, 1, all ones.
+  FFFFFFFF, 80000000, 1, all ones.  Then 2016 Montgomery products with the right inverse,
+  as modular exponentiation makes them, over moduli of 1 to 2000 digits (both sides of the
+  128-digit stack buffer and of each threshold of the kernel; random, 2^k - 1, top digit
+  FFFFFFFF or 0): operands as long as the modulus and shorter, a negative receiver, x
+  times itself through one object (as `montgomeryRaisedTo:times:modulo:mInvModB:`
+  squares) and times a copy, the modulus times x, x times 1, and the same with a wrong
+  inverse.
   The answers must match `expected/mock-calls.sha256`, one SHA-256 per section and
   primitive (see `digest.py`), recorded from the plugin before the kernels (the
-  same-object section, added last, later, from the same source: the digests above it did
-  not change).
+  same-object and the Montgomery sections, added last, later, from the same source: the
+  digests above them did not change).
 - **ub**: the shapes that made that plugin write past an object (left shift of an
   unnormalized receiver), read the word below two empty operands (subtract) and read slot 0
   of an empty operand (Montgomery): right answers, no ASan report.
-- **oom**: every allocation of 28 calls fails in turn (60 injections, each in a forked
-  child): PrimErrNoMemory, the stack untouched, no crash.
+- **oom**: every allocation of 29 calls fails in turn (62 injections, each in a forked
+  child): PrimErrNoMemory, the stack untouched, no crash.  One of them a Montgomery
+  product of 700 digits, whose kernel scratch is malloc'ed.
 - **arity**: every primitive at every wrong argument count 0..4, the caller's frame filled
   with a word that is not an oop: PrimErrBadNumArgs, the stack untouched, that word never
   dereferenced (180 calls).
 
-`scale` (default 1, about 890,000 kernel cases per build) multiplies the random counts;
-`run-c-tests.sh 10` runs about 8.8 million per build; the cases depend only on the scale,
+`scale` (default 1, about 950,000 kernel cases per build) multiplies the random counts;
+`run-c-tests.sh 10` runs about 9.3 million per build; the cases depend only on the scale,
 not on the compiler.  `CC=gcc` or `CC=clang` picks the compiler; `--build DIR` keeps the
 build and logs.  Each test program runs under `timeout` when there is one, for
 `LI_TIMEOUT` seconds (300 x scale by default): a kernel that loops fails the run instead of
@@ -153,7 +187,15 @@ failure; a SmallInteger-only PRNG; operands built byte by byte) followed by a dr
   output must match `expected/image-diff.sha256` (54 digests, per section and operation).
 - **kernels** (`st/diff-kernels.st`): 6,297 multiplies and divisions over the kernel
   thresholds (Karatsuba at 192 bytes +-16, one-digit quotients, divisors around 24 digits,
-  exact divisions, operands up to 40,000 bytes), against `expected/image-kernels.sha256`.
+  exact divisions, operands up to 40,000 bytes), then 1,596 Montgomery products over the
+  thresholds of its kernel for both limb sizes (moduli of 5 to 300 digits, odd and even,
+  random, all ones, top digit 1): unreduced all-ones operands (T at or above 2^32n), x * x
+  through one object and through a copy, operands equal but for one digit (low, middle,
+  top), m * x, x * 1, operands of 1 digit and of about half the modulus in either order,
+  a wrong inverse, an even modulus, and squares whose REDC carries past its top limb;
+  against `expected/image-kernels.sha256`.  The Montgomery section was added after the
+  `done 6297 calls` line, whose digest, like every one above it, did not change; its
+  digests were recorded, as the others, from the plugin before the kernels.
 - **sunit** (`st/imagetests.st`): LargePositiveIntegerTest, LargeNegativeIntegerTest,
   IntegerTest, IntegerDigitLogicTest, SmallIntegerTest, NumberTest, FloatTest and
   FractionTest: no failure, no error.
@@ -170,8 +212,9 @@ Montgomery shapes), and passes li05, kernels and sunit.
 `st/bench.st`: ns per direct call of multiply and divide from 64 to 262,144 bits (n x n,
 squares x * x and x times a copy of x, 2n / n, n / n, n x SmallInteger, n / SmallInteger,
 unbalanced, short quotients over long divisors), the small operands where
-the kernels pick the 32-bit loops or the limb code, a few other small calls, and image
-expressions.  With a second VM the runs alternate (`LI_BENCH_RUNS`, 3 by default) and the
+the kernels pick the 32-bit loops or the limb code, a few other small calls, image
+expressions, and Montgomery products (a * b and x * x, moduli of 128 to 65,536 bits) with
+modular exponentiations.  With a second VM the runs alternate (`LI_BENCH_RUNS`, 3 by default) and the
 table gives the medians and their ratio:
 
 ```
@@ -227,6 +270,30 @@ same host; every other row within noise):
 | image `(3 raisedTo: 200000) squared` | 4.84 ms | 3.38 ms | 0.70 |
 | image 10 squarings of 3^200000 | 34.1 ms | 23.1 ms | 0.68 |
 
+The Montgomery kernel, against the plugin before it (built from the commit before, the rest
+of the VM the same; medians of 5 alternating runs, same host).  The other 201 rows run the
+same code on both sides: their ratios scatter from 0.74 to 1.19 with code placement and
+host noise (see above), geometric mean 0.99.
+
+| call, modulus bits | before (a * b / x * x) | after | ratio |
+|---|---|---|---|
+| mont 128 (4 digits: the 32-bit loop on both sides) | 146 / 145 | 148 / 144 | 1.01 / 1.00 |
+| mont 256 | 213 / 209 | 177 / 173 | 0.83 / 0.83 |
+| mont 512 | 477 / 467 | 265 / 278 | 0.55 / 0.60 |
+| mont 1024 | 1,648 / 1,668 | 572 / 522 | 0.35 / 0.31 |
+| mont 2048 | 5,478 / 5,490 | 1,796 / 1,510 | 0.33 / 0.27 |
+| mont 4096 | 22,567 / 22,795 | 6,160 / 5,302 | 0.27 / 0.23 |
+| mont 8192 | 86,878 / 87,030 | 21,846 / 18,972 | 0.25 / 0.22 |
+| mont 16384 | 343,790 / 342,361 | 77,893 / 69,487 | 0.23 / 0.20 |
+| mont 65536 | 5.43 ms / 5.46 ms | 1.05 ms / 0.98 ms | 0.19 / 0.18 |
+| image `base raisedTo: e modulo: m`, 1024 bits (RSA-like: base, e and odd m random) | 2.14 ms | 0.72 ms | 0.34 |
+| image `base raisedTo: e modulo: m`, 2048 bits | 13.1 ms | 3.81 ms | 0.29 |
+| image `base raisedTo: e modulo: m`, 4096 bits | 106.7 ms | 26.0 ms | 0.24 |
+| image `(3 raisedTo: 5000) raisedTo: (7 raisedTo: 600) modulo: (2 raisedTo: 4253) - 1` | 47.6 ms | 11.6 ms | 0.24 |
+
+The 128-bit row runs the same 32-bit loop as before, now one call away (see the C
+micro-benchmark below for the small moduli).
+
 ## Kernel thresholds
 
 Measured on the same host with `LI_TUNABLE` builds (32-bit limbs with `-DLI_LIMB_BITS=32` on
@@ -241,6 +308,9 @@ x86_64, not on a 32-bit host):
 | `LI_SQR_KARATSUBA_LIMBS` | 44 (88 digits) | 48 | schoolbook squaring is 0.52-0.55 of schoolbook multiplication from 20 limbs on (64-bit limbs; 0.61-0.75 from 12 with 32-bit limbs); one level of Karatsuba squaring over it: 1.01 at 38 limbs, 0.98 at 42, 0.97 at 47, 0.89 at 59 (64-bit); 1.02 at 42, 0.98 at 53 (32-bit); thresholds 36..48 within 2% (64-bit), 44..52 within 1% (32-bit) |
 | `LI_BZ_LIMBS` (Burnikel & Ziegler when divisor and quotient both have this many limbs; its recursion's base) | 48 (96 digits, 3072 bits) | 32 | below: 64-bit limbs 1.01-1.02 of Knuth D at 32..44 limbs with thresholds 24..40; 32-bit limbs 1.03-1.10 at 16..24 limbs with 16..24; at it: 0.95 and 0.92-0.98 |
 | `LI_BZ_QUOTIENT_LIMBS` (with a divisor of `LI_BZ_LIMBS` limbs, Burnikel & Ziegler for a shorter quotient of at least this many limbs, the divisor at least this many longer) | 24 | 12 | see below |
+| `LI_MONT_LOOP_DIGITS` (Montgomery: the 32-bit loop for moduli of fewer digits, CIOS from there) | 6 | 12 | 64-bit: CIOS / loop 1.25-1.29 at 4 digits; at 5, 0.92-0.98 with clang but 1.11-1.13 with gcc 13, and 1.06-1.16 (gcc 1.18-1.28) with an operand of 1 digit or of half the modulus; 0.75-0.79 at 6 (gcc 0.85-0.86; 0.92 and 1.01 with a 1-digit operand), 0.52-0.55 at 8. 32-bit, from the wasm build: 1.04 at 12 digits, 0.97 at 14, 0.95 at 16 (on x86_64 with 32-bit limbs already 0.99 at 7, 0.95 at 8); 12 so that squares take REDC from there (below) |
+| `LI_MONT_SQR_LIMBS` (Montgomery of x * x, the same digits, or of a product by an operand of at most half the modulus's limbs, rounded up: the square or the product, then REDC, from this many limbs) | 10 | 12 | 64-bit: square and REDC / CIOS 1.11-1.19 at 3 limbs, 1.00 at 8, 0.98-0.99 at 9, 0.92-1.02 at 10, 0.92 at 11, 0.89-0.93 at 12, 0.82-0.83 at 32, 0.60-0.61 at 1024. Wasm: 0.93 at 12 limbs, 0.88 at 16, 0.80 at 32, 0.57 at 1024. A 1-digit operand, product and REDC / CIOS: 64-bit 1.04-1.07 at 3-4 limbs, 0.97-1.04 at 4-6, 0.84-0.90 at 6-8, 0.78 at 17, 0.70 at 32; 32-bit (x86_64) 0.79 at 12, 0.74 at 33-64.  An operand of half the modulus, rounded up: 64-bit 0.96-1.02 at 6-7 limbs, 0.96 at 8, 0.92 at 10, 0.88 at 12; wasm 0.98 at 12 limbs, 0.94 at 13, 0.91 at 21, 0.87 at 33.  Of two thirds or three quarters: 0.95-1.05 either way, so CIOS keeps them |
+| `LI_MONT_MUL_LIMBS` (Montgomery of a * b: the product, then REDC, from this many limbs) | 36 | 72 | 64-bit: product and REDC / CIOS 1.03-1.08 at 12..28 limbs, 1.01-1.02 at 32-34, 0.94-0.95 at 36, 0.92-0.94 at 38..46, 0.97-0.99 at 48-50 (Karatsuba splitting at its own threshold), 0.89-0.94 at 52..64, 0.70 at 512. Wasm: 0.99-1.00 at 56..64 limbs, 0.96 at 72, 0.93 at 88, 0.88 at 128 (x86_64 with 32-bit limbs: 1.00 at 68, 0.98 at 72, 0.95 at 76) |
 
 The squaring thresholds come from a C micro-benchmark over `liDigitMultiply` (best of 7
 runs of 10 ms per size, one pinned core, clang 18 -O2), squares against products of two
@@ -309,10 +379,54 @@ before Burnikel & Ziegler, whose calls also allocate and shift): div 7680/6144 b
 96 limbs) 0.99, 18432/16384 (32 / 256) 0.96, 67072/65536 (24 / 1024) 0.95, 68096/65536
 (40 / 1024) 0.85.
 
+The Montgomery thresholds come from a C micro-benchmark over `liDigitMontgomery` (best of 7
+runs of 10 ms per size, one pinned core, clang 18 -O2 with `-mbranches-within-32B-boundaries`;
+the 32-bit limbs from the wasm build, emcc -m64 -sMEMORY64=2 -O2 under node 25), each path
+forced in turn on a modulus with its top bit set and operands as long as it.  The kernel at
+the production thresholds, as a fraction of the time of the loop it replaces, as it was in
+the plugin before the kernel (`primMontgomeryTimesModulo` of the commit before, cut out as
+a function; the wasm rows under node --no-liftoff, after a warm-up):
+
+| digits | 1 | 2..4 | 5 | 8 | 16 | 32 | 64 | 128 | 512 | 2048 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 64-bit limbs, a * b | 0.96 | 0.99-1.01 | 0.98 | 0.54 | 0.37 | 0.32 | 0.31 | 0.28 | 0.23 | 0.17 |
+| 64-bit limbs, x * x | 0.96 | 0.99-1.00 | 0.99 | 0.53 | 0.37 | 0.28 | 0.26 | 0.24 | 0.20 | 0.17 |
+| 64-bit limbs, 1 digit * b | 0.96 | 0.99 | 1.00 | 0.69 | 0.50 | 0.30 | 0.26 | 0.26 | 0.24 | 0.19 |
+| 64-bit limbs, a * 1 | 0.95 | 0.98-0.99 | 0.98 | 0.67 | 0.45 | 0.30 | 0.26 | 0.26 | 0.24 | 0.20 |
+| 64-bit limbs, half the digits * b | 0.95 | 0.98-0.99 | 0.99 | 0.63 | 0.41 | 0.32 | 0.30 | 0.29 | 0.25 | 0.19 |
+| 32-bit limbs (wasm), a * b | 1.07 | 0.99-1.03 | 0.99 | 1.00 | 0.96 | 0.91 | 0.90 | 0.80 | 0.58 | 0.43 |
+| 32-bit limbs (wasm), x * x | 1.07-1.19 | 0.99-1.03 | 1.01 | 1.01 | 0.85 | 0.73 | 0.72 | 0.65 | 0.54 | 0.42 |
+| 32-bit limbs (wasm), 1 digit * b | 1.05 | 0.99-1.00 | 1.00 | 0.99 | 0.76 | 0.65 | 0.62 | 0.62 | 0.60 | 0.50 |
+| 32-bit limbs (wasm), a * 1 | 1.06 | 1.03-1.06 | 1.04 | 1.02 | 0.74 | 0.65 | 0.62 | 0.62 | 0.60 | 0.51 |
+| 32-bit limbs (wasm), half the digits * b | 1.08 | 0.99-1.00 | 1.00 | 0.99 | 0.94 | 0.81 | 0.84 | 0.79 | 0.63 | 0.48 |
+
+Below `LI_MONT_LOOP_DIGITS` both sides run the same loop: `liDigitMontgomery` runs it
+itself (its one call is inlined there; the limb code, with its scratch on the stack, is a
+function apart), so the kernel costs one call more than the loop inlined in the
+primitive, about 0.5 ns, +5% at 1 digit in wasm (13 ns); in a wasm32 build (4-byte
+pointers) 1.01-1.05 from 1 to 8 digits.  In the image (medians of 21 paired, alternating
+runs pinned to one core, against the plugin before the kernel; a second copy of that
+plugin measured 0.995-1.005): direct calls with a SmallInteger or a 64-bit modulus 1.02,
+128-bit 1.01, a wrong inverse 1.01, 192-bit (6 digits, CIOS) 0.97; modular
+exponentiation with a SmallInteger modulus 1.02, with 64 and 128-bit moduli 1.00.  With
+the loop called from a function that also held the limb code's scratch frame, the
+direct calls measured 1.03-1.06.  A shorter operand
+is scanned second: CIOS goes over the longer one, and the product then REDC takes over
+from `LI_MONT_SQR_LIMBS` limbs when the shorter one has at most half the limbs.
+
+With 32-bit limbs CIOS is the loop's own algorithm over limbs in scratch memory; the gain
+is in the squares and in Karatsuba above.  REDC takes two rows per pass over the modulus:
+at 1024 limbs, 0.65 of CIOS (product and REDC) where one row per pass took 0.76.  CIOS
+with two limbs of the first operand per pass (four products) measured no faster (1.00) and
+was not kept.  With gcc 13 -O2 the CIOS loop is slower than clang's (0.47 of the 32-bit loop
+at 32 digits, against 0.33), and product and REDC overtake it from about 8 limbs; the
+thresholds are clang's, the compiler of these builds.
+
 ## Not covered
 
 A run on a 32-bit host, a big-endian host (only the emulated digit order), aarch64,
 Windows, macOS or wasm: the C tests assume a 64-bit host, and the image tests and the
-benchmark were run on x86_64 Linux only.  A real out-of-memory in the image, or a real
-malloc failure in the kernels (only injected ones).  The Smalltalk simulation of the
-plugin.
+benchmark were run on x86_64 Linux only (the thresholds of 32-bit limbs come from C
+micro-benchmarks built for wasm, not from the plugin in the wasm VM).  A real out-of-memory
+in the image, or a real malloc failure in the kernels (only injected ones).  The Smalltalk
+simulation of the plugin.  The thresholds of a plugin built with gcc.

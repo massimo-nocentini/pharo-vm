@@ -2,8 +2,10 @@
  primDigitDivNegative over the sizes where the C kernels change algorithm (one-limb
  streaming, the 32-bit loops for the smallest products and quotients, schoolbook over
  64-bit limbs, Karatsuba from 24 limbs = 192 bytes, the one-limb divisor, quotients of one
- digit, divisors around 24 digits), and big operands up to 40000 bytes.  Same output as
- diff.st.  run-image-tests.sh puts lib.st in front and sends runKernels."!
+ digit, divisors around 24 digits), and big operands up to 40000 bytes; then 1,596 calls
+ of primMontgomeryTimesModulo over the sizes where the Montgomery kernel changes path (the
+ loop, CIOS, the product or the square then REDC, odd and even digit counts).  Same output
+ as diff.st.  run-image-tests.sh puts lib.st in front and sends runKernels."!
 
 !LIH methodsFor: 'kernels'!
 opnd: bytes
@@ -85,10 +87,84 @@ runDivKernels
 		b := self opnd: p last.
 		self div: a by: b neg: false]
 !
+modulus: digits kind: kind
+	"an odd LargePositiveInteger of this many digits: #rnd random, #ff all ones, #one a top
+	 digit 1 (normalized: its top byte)"
+	| m |
+	m := self large: LargePositiveInteger
+		bytes: (kind == #one ifTrue: [digits * 4 - 3] ifFalse: [digits * 4])
+		mode: (kind == #ff ifTrue: [#ff] ifFalse: [#rnd]).
+	kind == #one ifTrue: [m basicAt: m basicSize put: 1].
+	m basicAt: 1 put: ((m basicAt: 1) bitOr: 1).
+	^m
+!
+copyOf: x changing: i
+	"a copy of x whose byte i differs (one digit of operands otherwise equal)"
+	| y |
+	y := self normalizedCopy: x.
+	y basicAt: i put: ((y basicAt: i) bitXor: 16r80).
+	^y
+!
+runMontKernels
+	"Moduli on both sides of each threshold of the Montgomery kernel, with 64-bit limbs (the
+	 loop below 6 digits, CIOS, the square then REDC from 10 limbs, the product then REDC
+	 from 36, a short operand then REDC from 10) and with 32-bit limbs (the loop below 12
+	 digits, the square from 12, the product from 72), odd digit counts (which 64-bit limbs
+	 shift by one digit) and even.  Operands as long as the modulus and unreduced: all ones
+	 makes T reach 2^32n or more (the loop's lastDigit).  x * x through one object and
+	 through a copy, operands equal but for their low, a middle or their top digit, m * x,
+	 x * 1, operands of 1 digit and of about half the modulus, a wrong inverse and an even
+	 modulus; squares whose REDC carries past its top limb."
+	| m inv a b f h |
+	self note: 'montgomery: kernel paths'.
+	#(5 6 7 11 12 13 19 20 21 23 24 25 71 72 73 143 144 145 299 300) do: [:n |
+		#(#rnd #ff #one) do: [:kind |
+			m := self modulus: n kind: kind.
+			inv := self montInv: (self lowDigit: m).
+			a := self large: LargePositiveInteger bytes: n * 4 mode: #rnd.
+			b := self large: LargePositiveInteger bytes: n * 4 mode: (self pick: #(#rnd #pat)).
+			f := self large: LargePositiveInteger bytes: n * 4 mode: #ff.
+			self mont: a times: b mod: m inv: inv.
+			self mont: f times: f mod: m inv: inv.
+			self mont: f times: (self normalizedCopy: f) mod: m inv: inv.
+			self mont: f times: a mod: m inv: inv.
+			self mont: a times: a mod: m inv: inv.
+			self mont: a times: (self normalizedCopy: a) mod: m inv: inv.
+			self mont: a times: (self copyOf: a changing: 1) mod: m inv: inv.
+			self mont: a times: (self copyOf: a changing: n * 2) mod: m inv: inv.
+			self mont: a times: (self copyOf: a changing: n * 4) mod: m inv: inv.
+			self mont: m times: a mod: m inv: inv.
+			self mont: m times: 1 mod: m inv: inv.
+			self mont: a times: 1 mod: m inv: inv.
+			self mont: 1 times: f mod: m inv: inv.
+			b := self large: LargePositiveInteger bytes: 4 mode: #rnd.
+			self mont: b times: a mod: m inv: inv.
+			self mont: f times: b mod: m inv: inv.
+			#(-1 0 1 2) do: [:d |
+				h := self large: LargePositiveInteger bytes: (n // 2 + d max: 1) * 4 mode: (self pick: #(#rnd #ff)).
+				self mont: h times: a mod: m inv: inv.
+				self mont: f times: h mod: m inv: inv].
+			self mont: a times: b mod: m inv: (inv bitXor: 4).
+			self mont: a times: a mod: m inv: (inv bitXor: 16r80000000).
+			self mont: a times: f mod: m - 1 inv: inv]].
+	"x = 2^32n - 2^k, k = 32 ((n - 1) // 2): x * x is just below 2^64n, with zero limbs up to
+	 the last row of REDC, whose carry, with an odd number of limbs, runs past the top limb
+	 (n odd with 32-bit limbs, n even with 64-bit limbs)"
+	#(21 22 73 74 145 146) do: [:n |
+		f := (1 bitShift: 32 * n) - (1 bitShift: 32 * (n - 1 // 2)).
+		#(#rnd #ff #one) do: [:kind |
+			m := self modulus: n kind: kind.
+			inv := self montInv: (self lowDigit: m).
+			self mont: f times: f mod: m inv: inv.
+			self mont: f times: (self normalizedCopy: f) mod: m inv: inv]]
+!
 runKernels
 	self runMulKernels.
 	self runDivKernels.
 	self note: 'done ', count printString, ' calls'.
+	"added later, after the note above, which keeps the digests recorded before it"
+	self runMontKernels.
+	self note: 'done ', count printString, ' calls, Montgomery included'.
 	Stdio stdout flush
 ! !
 

@@ -1,11 +1,12 @@
-/* LargeIntegersKernels.c: the multiply and divide kernels of the LargeIntegers plugin.
+/* LargeIntegersKernels.c: the multiply, divide and Montgomery kernels of the LargeIntegers
+ * plugin.
  *
  * LargeIntegers.c (generated from LargeIntegersPlugin.class.st by Slang, then adapted by
- * hand: see its header) calls liDigitMultiply()
- * and liDigitDiv() where the plugin used to run its schoolbook loops over 32-bit digits;
- * see LargeIntegersKernels.h for what each one computes.  The answers are digit for digit
- * those of the loops: quotient and remainder digits are unique, and so are the low resLen
- * digits of a product.
+ * hand: see its header) calls liDigitMultiply(), liDigitDiv() and liDigitMontgomery()
+ * where the plugin used to run its loops over 32-bit digits; see LargeIntegersKernels.h
+ * for what each one computes.  The answers are digit for digit those of the loops:
+ * quotient and remainder digits are unique, and so are the low resLen digits of a
+ * product and, when mInv is the inverse the image computes, a Montgomery product.
  *
  * Where the C compiler has 128-bit arithmetic on a 64-bit host, the kernels compute over
  * 64-bit limbs (two digits each), else over 32-bit limbs (one digit each):
@@ -25,13 +26,23 @@
  *   from the top half of the divisor (recursively, down to algorithm D) and corrected
  *   with the product of the rest (Karatsuba) and at most two add-backs.  A quotient of
  *   LI_BZ_QUOTIENT_LIMBS limbs or more over a divisor at least that much longer is one
- *   such block: algorithm D on the top of the divisor, then the product of the rest.
+ *   such block: algorithm D on the top of the divisor, then the product of the rest;
+ * - Montgomery multiplication, when mInv m = -1 mod 2^32: CIOS (the product and the
+ *   reduction interleaved, limb by limb, over the longer operand) from
+ *   LI_MONT_LOOP_DIGITS digits on, with mInv lifted to -1/m mod 2^64 by a Newton step;
+ *   from LI_MONT_MUL_LIMBS limbs on the full product (Karatsuba), or from
+ *   LI_MONT_SQR_LIMBS limbs the square (the squaring kernels) of the same digits or the
+ *   product by an operand of at most half the modulus's limbs, then Montgomery's REDC,
+ *   two rows per pass.  An odd digit count, with 64-bit limbs, takes the first operand
+ *   one digit higher.
  * The operands are copied into limbs in scratch memory (on the stack up to
  * LI_STACK_LIMBS limbs, else malloc'ed) and the results copied back as digits, so a
  * kernel reads and writes exactly the digits it is given.
- * The original 32-bit loops (liDigitMultiply32/liDigitDiv32) still run in place where
- * they are faster, for the smallest operands (LI_MUL_LOOP_DIGIT_PRODUCT,
- * LI_DIV_LOOP_QUOTIENT_DIGITS), and when the malloc fails: no new failure.
+ * The original 32-bit loops (liDigitMultiply32, liDigitDiv32, liDigitMontgomery32) still
+ * run in place where they are faster, for the smallest operands
+ * (LI_MUL_LOOP_DIGIT_PRODUCT, LI_DIV_LOOP_QUOTIENT_DIGITS, LI_MONT_LOOP_DIGITS), and when
+ * the malloc fails: no new failure.  The Montgomery loop also runs when mInv is not
+ * -1/m mod 2^32 (m even, or a wrong mInv), where its answer depends on its steps.
  *
  * Compile-time knobs, for tests and tuning: LI_LIMB_BITS (64 or 32), the thresholds
  * above, LI_STACK_LIMBS, LI_MALLOC/LI_FREE (the kernels never ask for more than a size_t
@@ -69,6 +80,15 @@ typedef unsigned long long liDLimb;
 # error "LI_LIMB_BITS must be 64 or 32"
 #endif
 #define LI_LB LI_LIMB_BITS
+
+/* Keeps a function with a large stack frame out of the one that calls it on a rare path. */
+#if defined(__GNUC__)
+# define LI_NOINLINE __attribute__((noinline))
+#elif defined(_MSC_VER)
+# define LI_NOINLINE __declspec(noinline)
+#else
+# define LI_NOINLINE
+#endif
 
 /* The thresholds were measured on an Intel Xeon Gold 6238R (x86_64) with clang 18 -O2;
    the 32-bit limb ones on the same host with LI_LIMB_BITS=32.
@@ -151,6 +171,39 @@ typedef unsigned long long liDLimb;
 #if LI_BZ_QUOTIENT_LIMBS < 1
 # error "LI_BZ_QUOTIENT_LIMBS must be at least 1"
 #endif
+/* Montgomery multiplication: the 32-bit loop for moduli of fewer than LI_MONT_LOOP_DIGITS
+   digits, which needs no copies; CIOS over limbs from there on; the full product then
+   REDC from LI_MONT_MUL_LIMBS limbs on, where Karatsuba has made the product cheaper
+   than its half of CIOS, and from LI_MONT_SQR_LIMBS for a square (the squaring kernels)
+   or a product by an operand of at most half as many limbs.  With 64-bit limbs, 6
+   digits rather than 5, where CIOS is 0.95 of the loop with clang but 1.11 with gcc and
+   1.1-1.3 for a short operand.  With 32-bit limbs, the thresholds of the wasm build
+   (emcc -m64 -sMEMORY64=2 -O2, node 25), where CIOS overtakes the loop later than on
+   x86_64 (8 digits there). */
+#if !defined(LI_MONT_LOOP_DIGITS)
+# if LI_LIMB_BITS == 64
+#  define LI_MONT_LOOP_DIGITS 6
+# else
+#  define LI_MONT_LOOP_DIGITS 12
+# endif
+#endif
+#if !defined(LI_MONT_MUL_LIMBS)
+# if LI_LIMB_BITS == 64
+#  define LI_MONT_MUL_LIMBS 36
+# else
+#  define LI_MONT_MUL_LIMBS 72
+# endif
+#endif
+#if !defined(LI_MONT_SQR_LIMBS)
+# if LI_LIMB_BITS == 64
+#  define LI_MONT_SQR_LIMBS 10
+# else
+#  define LI_MONT_SQR_LIMBS 12
+# endif
+#endif
+#if LI_MONT_LOOP_DIGITS < 1 || LI_MONT_MUL_LIMBS < 1 || LI_MONT_SQR_LIMBS < 1
+# error "LI_MONT_LOOP_DIGITS, LI_MONT_MUL_LIMBS and LI_MONT_SQR_LIMBS must be at least 1"
+#endif
 
 #if defined(LI_TUNABLE)
 sqInt liKaratsubaLimbs = LI_KARATSUBA_LIMBS;
@@ -160,6 +213,9 @@ sqInt liSqrKaratsubaLimbs = LI_SQR_KARATSUBA_LIMBS;
 sqInt liDivLoopQuotientDigits = LI_DIV_LOOP_QUOTIENT_DIGITS;
 sqInt liBZLimbs = LI_BZ_LIMBS;
 sqInt liBZQuotientLimbs = LI_BZ_QUOTIENT_LIMBS;
+sqInt liMontLoopDigits = LI_MONT_LOOP_DIGITS;
+sqInt liMontMulLimbs = LI_MONT_MUL_LIMBS;
+sqInt liMontSqrLimbs = LI_MONT_SQR_LIMBS;
 #else
 # define liKaratsubaLimbs LI_KARATSUBA_LIMBS
 # define liMulLoopDigitProduct LI_MUL_LOOP_DIGIT_PRODUCT
@@ -168,6 +224,9 @@ sqInt liBZQuotientLimbs = LI_BZ_QUOTIENT_LIMBS;
 # define liDivLoopQuotientDigits LI_DIV_LOOP_QUOTIENT_DIGITS
 # define liBZLimbs LI_BZ_LIMBS
 # define liBZQuotientLimbs LI_BZ_QUOTIENT_LIMBS
+# define liMontLoopDigits LI_MONT_LOOP_DIGITS
+# define liMontMulLimbs LI_MONT_MUL_LIMBS
+# define liMontSqrLimbs LI_MONT_SQR_LIMBS
 #endif
 
 /* Scratch limbs on the C stack; more are malloc'ed. */
@@ -315,6 +374,78 @@ liDigitDiv32(unsigned int *pDiv, sqInt divLen, unsigned int *pRem, sqInt remLen,
 			}
 		}
 		pQuo[quoLen - k] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(((unsigned int) q));
+	}
+}
+
+/* cDigitMontgomery:len:times:len:modulo:len:mInvModB:into:, adding into result digits
+   that start out all zero */
+static void
+liDigitMontgomery32(unsigned int *pFirst, sqInt firstLen, unsigned int *pSecond, sqInt secondLen,
+		unsigned int *pThird, sqInt thirdLen, unsigned int mInv, unsigned int *pRes)
+{
+	unsigned long long accum, accum2, accum3, u;
+	unsigned int lastDigit;
+	sqInt i, k, limit1, limit2, limit3;
+
+	limit1 = firstLen - 1;
+	limit2 = secondLen - 1;
+	limit3 = thirdLen - 1;
+	lastDigit = 0;
+	for (i = 0; i <= limit1; i += 1) {
+		accum3 = SQ_SWAP_4_BYTES_IF_BIGENDIAN(pFirst[i]);
+		accum3 = (accum3 * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pSecond[0]))) + (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[0]));
+		u = (accum3 * mInv) & 0xFFFFFFFFU;
+		accum2 = u * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[0]));
+		accum = (accum2 & 0xFFFFFFFFU) + (accum3 & 0xFFFFFFFFU);
+		accum = ((accum >> 32) + (accum2 >> 32)) + (accum3 >> 32);
+		for (k = 1; k <= limit2; k += 1) {
+			accum3 = SQ_SWAP_4_BYTES_IF_BIGENDIAN(pFirst[i]);
+			accum3 = (accum3 * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pSecond[k]))) + (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[k]));
+			accum2 = u * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[k]));
+			accum = (accum + (accum2 & 0xFFFFFFFFU)) + (accum3 & 0xFFFFFFFFU);
+			pRes[k - 1] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(accum & 0xFFFFFFFFU);
+			accum = ((accum >> 32) + (accum2 >> 32)) + (accum3 >> 32);
+		}
+		for (k = secondLen; k <= limit3; k += 1) {
+			accum2 = u * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[k]));
+			accum = (accum + (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[k]))) + (accum2 & 0xFFFFFFFFU);
+			pRes[k - 1] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(accum & 0xFFFFFFFFU);
+			accum = (accum >> 32) + (accum2 >> 32);
+		}
+		accum += lastDigit;
+		pRes[limit3] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(accum & 0xFFFFFFFFU);
+		lastDigit = accum >> 32;
+	}
+	for (i = firstLen; i <= limit3; i += 1) {
+		accum = SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[0]);
+		u = (accum * mInv) & 0xFFFFFFFFU;
+		accum += u * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[0]));
+		accum = accum >> 32;
+		for (k = 1; k <= limit3; k += 1) {
+			accum2 = u * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[k]));
+			accum = (accum + (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[k]))) + (accum2 & 0xFFFFFFFFU);
+			pRes[k - 1] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(accum & 0xFFFFFFFFU);
+			accum = (accum >> 32) + (accum2 >> 32);
+		}
+		accum += lastDigit;
+		pRes[limit3] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(accum & 0xFFFFFFFFU);
+		lastDigit = accum >> 32;
+	}
+	/* cDigitCompare:with:len: answers 1 when the digits at pThird are the larger */
+	k = 0;
+	for (i = limit3; i >= 0; i -= 1) {
+		if (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[i]) != SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[i])) {
+			k = SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[i]) < SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[i]) ? -1 : 1;
+			break;
+		}
+	}
+	if (!((lastDigit == 0) && (k == 1))) {
+		accum = 0;
+		for (i = 0; i <= limit3; i += 1) {
+			accum = (accum + (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[i]))) - (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[i]));
+			pRes[i] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(accum & 0xFFFFFFFFU);
+			accum = 0 - (accum >> 0x3F);
+		}
 	}
 }
 
@@ -1228,4 +1359,244 @@ liDigitDiv(unsigned int *pDiv, sqInt divLen, unsigned int *pRem, sqInt remLen, u
 	if (limbs != stackLimbs) {
 		LI_FREE(limbs);
 	}
+}
+
+
+/*** Montgomery multiplication ***/
+
+/* With B = 2^LI_LB, a, b and m of n limbs, m odd and mInv = -1/m mod B, both functions
+   below compute T = (a b + U m) / B^n, where U < B^n is the one value that makes
+   a b + U m a multiple of B^n (U = -a b / m mod B^n); as a, b < B^n and m < B^n,
+   T < B^n + m < 2 B^n, which t[0 .. n] holds. */
+
+/* t[0 .. n] := T by Coarsely Integrated Operand Scanning (Koc, Acar & Kaliski,
+   "Analyzing and comparing Montgomery multiplication algorithms", IEEE Micro 16(3),
+   1996): for each limb a_i, t := (t + a_i b + u m) / B with u = (t_0 + a_i b_0) mInv
+   mod B, which clears the low limb; the two products in one pass, with a carry each.
+   a has n limbs, b has bn <= n (the limbs above are zero); t overlaps none of a, b, m.
+   (Two limbs of a per pass, four products, measured no faster.) */
+static void
+liMontMul(liLimb *t, const liLimb *a, const liLimb *b, sqInt bn, const liLimb *m, sqInt n, liLimb mInv)
+{
+	liLimb ai, u, c1, c2;
+	liDLimb x, y;
+	sqInt i, j;
+
+	for (j = 0; j <= n; j += 1) {
+		t[j] = 0;
+	}
+	for (i = 0; i < n; i += 1) {
+		ai = a[i];
+		x = (liDLimb) ai * b[0] + t[0];
+		u = (liLimb) x * mInv;
+		y = (liDLimb) u * m[0] + (liLimb) x;
+		c1 = (liLimb) (x >> LI_LB);
+		c2 = (liLimb) (y >> LI_LB);
+		for (j = 1; j < bn; j += 1) {
+			x = (liDLimb) ai * b[j] + t[j] + c1;
+			y = (liDLimb) u * m[j] + (liLimb) x + c2;
+			c1 = (liLimb) (x >> LI_LB);
+			c2 = (liLimb) (y >> LI_LB);
+			t[j - 1] = (liLimb) y;
+		}
+		for (; j < n; j += 1) {
+			x = (liDLimb) t[j] + c1;
+			y = (liDLimb) u * m[j] + (liLimb) x + c2;
+			c1 = (liLimb) (x >> LI_LB);
+			c2 = (liLimb) (y >> LI_LB);
+			t[j - 1] = (liLimb) y;
+		}
+		/* t < 2 B^n before and after (t + a_i b + u m < 2 B^n + 2 (B - 1) B^n), so this
+		   sum is below 2 B */
+		x = (liDLimb) t[n] + c1 + c2;
+		t[n - 1] = (liLimb) x;
+		t[n] = (liLimb) (x >> LI_LB);
+	}
+}
+
+/* t[0 .. n] := (P + U m) / B^n for the 2n limbs P at p, which it overwrites, P < B^2n,
+   with a zero limb p[2n] above them; the same T when P = a b.  Montgomery's REDC
+   ("Modular multiplication without trial division", Math. Comp. 44 (1985)): rows u m,
+   each clearing the lowest limb left, two rows in each pass over m as CIOS does the
+   product and the reduction (and GMP's mpn_redc_2): u0 clears p[i], u1 then p[i + 1].
+   The carry out of a pass goes into p[i + n + 1] and up: P + U m < 2 B^2n. */
+static void
+liMontRedc(liLimb *t, liLimb *p, const liLimb *m, sqInt n, liLimb mInv)
+{
+	liLimb u0, u1, c1, c2, c, *r;
+	liDLimb x, y;
+	sqInt i, j;
+
+	for (i = 0; i + 1 < n; i += 2) {
+		r = p + i;
+		u0 = r[0] * mInv;
+		x = (liDLimb) u0 * m[0] + r[0];
+		x = (liDLimb) u0 * m[1] + r[1] + (liLimb) (x >> LI_LB);
+		u1 = (liLimb) x * mInv;
+		y = (liDLimb) u1 * m[0] + (liLimb) x;
+		c1 = (liLimb) (x >> LI_LB);
+		c2 = (liLimb) (y >> LI_LB);
+		/* r[j] += u0 m[j] + u1 m[j - 1], the carries of the two rows apart */
+		for (j = 2; j < n; j += 1) {
+			x = (liDLimb) u0 * m[j] + r[j] + c1;
+			y = (liDLimb) u1 * m[j - 1] + (liLimb) x + c2;
+			c1 = (liLimb) (x >> LI_LB);
+			c2 = (liLimb) (y >> LI_LB);
+			r[j] = (liLimb) y;
+		}
+		x = (liDLimb) r[n] + c1;
+		y = (liDLimb) u1 * m[n - 1] + (liLimb) x + c2;
+		r[n] = (liLimb) y;
+		/* the carry out of r[0 .. n] is at most B, as (u0 + u1 B) m + r[0 .. n] is below
+		   B^(n + 2) + B^(n + 1); with r[n + 1], below 2 B */
+		x = (liDLimb) (liLimb) (y >> LI_LB) + (liLimb) (x >> LI_LB) + r[n + 1];
+		r[n + 1] = (liLimb) x;
+		c = (liLimb) (x >> LI_LB);
+		for (j = n + 2; c != 0; j += 1) {
+			r[j] += c;
+			c = r[j] < c;
+		}
+	}
+	if (i < n) {
+		/* the last row of an odd n */
+		r = p + i;
+		c = liAddMul1(r, m, n, r[0] * mInv);
+		for (j = n; c != 0; j += 1) {
+			r[j] += c;
+			c = r[j] < c;
+		}
+	}
+	memmove(t, p + n, (size_t) (n + 1) * sizeof(liLimb));
+}
+
+/* liDigitMontgomery over limbs in scratch memory, for mInv = -1/m mod 2^32 and the shapes
+   the plugin passes; answers 0, pRes untouched, when the scratch cannot be allocated.  Kept
+   out of liDigitMontgomery, whose calls on small moduli then run the loop with no scratch
+   frame and no further call. */
+static LI_NOINLINE int
+liMontDigits(unsigned int *pFirst, sqInt firstLen, unsigned int *pSecond, sqInt secondLen,
+		unsigned int *pThird, sqInt thirdLen, unsigned int mInv, unsigned int *pRes)
+{
+	liLimb stackLimbs[LI_STACK_LIMBS];
+	liLimb *limbs, *a, *b, *m, *t, mInvL;
+	unsigned int *pSwap;
+	sqInt n, an, bn, skip, need, i, lSwap;
+	int square, redc;
+
+	if (firstLen == 0) {
+		/* a b = 0, so U = 0 and T = 0, below m */
+		for (i = 0; i < thirdLen; i += 1) {
+			pRes[i] = 0;
+		}
+		return 1;
+	}
+	if (firstLen < secondLen) {
+		/* a b = b a, and T is one value: a is the longer operand, which CIOS scans (the
+		   limbs of b above its own are zero, and its second pass skips their products) */
+		pSwap = pFirst; pFirst = pSecond; pSecond = pSwap;
+		lSwap = firstLen; firstLen = secondLen; secondLen = lSwap;
+	}
+	/* T for the n = thirdLen digits is (a b + U m) / 2^(32 thirdLen).  With 64-bit limbs and
+	   an odd thirdLen, 2^(32 thirdLen) is not a power of B: a is taken one digit higher,
+	   as a 2^32, and T is the same, from n = (thirdLen + 1) / 2 limbs:
+	   (a 2^32 b + U' m) / B^n = (a b + U m) / 2^(32 thirdLen) with U' = U 2^32, the one
+	   value below B^n that makes the sum a multiple of B^n. */
+	skip = LI_DIGITS_PER_LIMB == 2 ? thirdLen & 1 : 0;
+	n = liLimbsFor(thirdLen);
+	an = liLimbsFor(firstLen);
+	bn = liLimbsFor(secondLen);
+	/* the full product, and REDC, from liMontMulLimbs limbs on, where Karatsuba makes the
+	   product cheaper than its half of CIOS; from liMontSqrLimbs when the product costs
+	   at most about half of a full one: a square (x * x, as modular exponentiation does
+	   it mostly), or b at most half as long as m, rounded up (as the image's first and
+	   last products of an exponentiation, by a small base and by 1) */
+	square = n >= liMontSqrLimbs && firstLen == secondLen
+		&& (pFirst == pSecond
+			|| (pFirst[0] == pSecond[0] && memcmp(pFirst + 1, pSecond + 1, (size_t) (firstLen - 1) * sizeof(unsigned int)) == 0));
+	redc = square || n >= liMontMulLimbs || (n >= liMontSqrLimbs && 2 * bn <= n + 1);
+	need = redc
+		? n + an + (square ? 0 : bn) + (2 * n + 1) + (square ? liSqrScratch(an) : liMulScratch(an, bn))
+		: n + n + bn + (n + 1);
+	limbs = liScratch(need, stackLimbs);
+	if (limbs == 0) {
+		return 0;
+	}
+	m = limbs;
+	liLoad(m, pThird, thirdLen, 0);
+#if LI_LIMB_BITS == 64
+	/* -1/m mod 2^64 from -1/m mod 2^32 by one Newton step: if v m = 1 mod 2^32, then
+	   v (2 - v m) m = 1 - (v m - 1)^2 = 1 mod 2^64; with v = -mInv, -v (2 - v m) is
+	   mInv (2 + mInv m) */
+	mInvL = (liLimb) mInv * (2 + m[0] * (liLimb) mInv);
+#else
+	mInvL = mInv;
+#endif
+	a = m + n;
+	if (redc) {
+		b = square ? a : a + an;
+		t = a + an + (square ? 0 : bn);
+		liLoad(a, pFirst, firstLen, 0);
+		if (square) {
+			liSqr(t, a, an, t + 2 * n + 1);
+		}
+		else {
+			liLoad(b, pSecond, secondLen, 0);
+			liMul(t, a, an, b, bn, t + 2 * n + 1);
+		}
+		for (i = an + bn; i <= 2 * n; i += 1) {
+			t[i] = 0;
+		}
+#if LI_LIMB_BITS == 64
+		if (skip) {
+			/* a b 2^32 < 2^(64 thirdLen + 32) fits the 2n limbs */
+			for (i = 2 * n - 1; i > 0; i -= 1) {
+				t[i] = (t[i] << 32) | (t[i - 1] >> 32);
+			}
+			t[0] <<= 32;
+		}
+#endif
+		liMontRedc(t, t, m, n, mInvL);
+	}
+	else {
+		b = a + n;
+		t = b + bn;
+		liLoad(a, pFirst, firstLen, skip);
+		for (i = liLimbsFor(firstLen + skip); i < n; i += 1) {
+			a[i] = 0;
+		}
+		liLoad(b, pSecond, secondLen, 0);
+		liMontMul(t, a, b, bn, m, n, mInvL);
+	}
+	/* T - m when T >= m, as the loop: it subtracts m once (T may be 2m or more when a or
+	   b is not below m), and keeps thirdLen digits, dropping the borrow */
+	if (t[n] != 0 || liCmp(t, m, n) >= 0) {
+		liSubN(t, t, m, n);
+	}
+	liStore(pRes, thirdLen, t, n, 0);
+	if (limbs != stackLimbs) {
+		LI_FREE(limbs);
+	}
+	return 1;
+}
+
+void
+liDigitMontgomery(unsigned int *pFirst, sqInt firstLen, unsigned int *pSecond, sqInt secondLen,
+		unsigned int *pThird, sqInt thirdLen, unsigned int mInv, unsigned int *pRes)
+{
+	/* With mInv = -1/m mod 2^32 (so m is odd), T = (a b + U m) / 2^(32 thirdLen) is one
+	   value, whatever the steps that compute it (see LargeIntegersKernels.h).  Otherwise
+	   each step drops a nonzero low digit, and the answer depends on the steps: those
+	   over 64-bit limbs are not the loop's (those over 32-bit limbs are, carries
+	   included), so the loop runs.  It also runs for small moduli (liMontLoopDigits is at
+	   least 1, so thirdLen = 0 is one), on shapes the plugin never passes, and when the
+	   scratch memory cannot be allocated.  Its one call is this one, which the compilers
+	   inline: on a small modulus the primitive's call is the only one, as when the loop
+	   was in the primitive. */
+	if (thirdLen >= liMontLoopDigits
+		&& firstLen <= thirdLen && secondLen <= thirdLen && (firstLen == 0 || secondLen >= 1)
+		&& (unsigned int) (DIGIT(pThird[0]) * mInv) == 0xFFFFFFFFU
+		&& liMontDigits(pFirst, firstLen, pSecond, secondLen, pThird, thirdLen, mInv, pRes)) {
+		return;
+	}
+	liDigitMontgomery32(pFirst, firstLen, pSecond, secondLen, pThird, thirdLen, mInv, pRes);
 }

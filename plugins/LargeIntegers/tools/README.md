@@ -3,7 +3,7 @@
 `src/common/LargeIntegers.c` is checked in, but it is derived from
 `smalltalksrc/VMMaker/LargeIntegersPlugin.class.st`. `sync-c.sh` derives it again and either
 writes it or, with `--check`, reports whether the checked-in file is still exactly what the class
-generates. The multiply and divide kernels (`src/common/LargeIntegersKernels.c`,
+generates. The multiply, divide and Montgomery kernels (`src/common/LargeIntegersKernels.c`,
 `include/common/LargeIntegersKernels.h`) are hand-written C, and these tools do not touch them.
 
 | file | what it does |

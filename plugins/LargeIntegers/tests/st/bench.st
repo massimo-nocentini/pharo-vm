@@ -2,8 +2,10 @@
  primDigitDivNegative by operand size (best of 3 runs, each calibrated to about 40 ms; the
  'empty' row is the cost of the block loop itself), the small operands where the kernels
  dispatch between the 32-bit loops and the limb code, and end-to-end image expressions (ms
- for the slow ones).  One row per line: '<label> ns: <value>' or '<label> ms: <value>'.
- bench.sh puts lib.st in front and sends benchKernels, benchSmall and benchImage."!
+ for the slow ones), and Montgomery products (primMontgomeryTimesModulo, a * b and x * x, by
+ modulus size) with modular exponentiations.  One row per line: '<label> ns: <value>' or
+ '<label> ms: <value>'.  bench.sh puts lib.st in front and sends benchKernels, benchSmall,
+ benchImage and benchMontgomery."!
 
 !LIH methodsFor: 'bench'!
 nsPerCall: aBlock
@@ -100,4 +102,26 @@ benchImage
 	self rowMs: 'image (3 raisedTo: 200000) squared' ns: (self nsPerCall: [(3 raisedTo: 200000) squared]).
 	self rowMs: 'image 10 squarings of 3^200000' ns: (self nsPerCall: [| y | y := 3 raisedTo: 200000. 10 timesRepeat: [y * y]]).
 	self rowMs: 'image (7 raisedTo: 300000) // (3 raisedTo: 200000)' ns: (self nsPerCall: [(7 raisedTo: 300000) // (3 raisedTo: 200000)])
+!
+benchMontgomery
+	"Direct Montgomery products by modulus bits, a * b and x * x (one object, as modular
+	 exponentiation squares), operands as long as the modulus; then Integer>>raisedTo:modulo:,
+	 which takes Montgomery's method for odd moduli and exponents from 4096 on"
+	| a b m inv base e |
+	#(128 256 512 1024 2048 4096 8192 16384 65536) do: [:bits |
+		m := self large: LargePositiveInteger bytes: bits // 8 mode: #rnd.
+		m basicAt: 1 put: ((m basicAt: 1) bitOr: 1).
+		inv := self montInv: (self lowDigit: m).
+		a := self large: LargePositiveInteger bytes: bits // 8 mode: #rnd.
+		b := self large: LargePositiveInteger bytes: bits // 8 mode: #rnd.
+		self row: 'mont ', bits printString, 'b a * b' ns: (self nsPerCall: [a liMont: b mod: m inv: inv]).
+		self row: 'mont ', bits printString, 'b x * x' ns: (self nsPerCall: [a liMont: a mod: m inv: inv])].
+	#(1024 2048 4096) do: [:bits |
+		m := self large: LargePositiveInteger bytes: bits // 8 mode: #rnd.
+		m basicAt: 1 put: ((m basicAt: 1) bitOr: 1).
+		base := self large: LargePositiveInteger bytes: bits // 8 - 1 mode: #rnd.
+		e := self large: LargePositiveInteger bytes: bits // 8 mode: #rnd.
+		self rowMs: 'image ', bits printString, '-bit base raisedTo: e modulo: m (RSA-like)' ns: (self nsPerCall: [base raisedTo: e modulo: m])].
+	self rowMs: 'image (3 raisedTo: 5000) raisedTo: (7 raisedTo: 600) modulo: (2 raisedTo: 4253) - 1'
+		ns: (self nsPerCall: [(3 raisedTo: 5000) raisedTo: (7 raisedTo: 600) modulo: (2 raisedTo: 4253) - 1])
 ! !

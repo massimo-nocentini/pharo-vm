@@ -7,21 +7,23 @@
 # headers in tests/c/include standing in for the generated config.h and
 # interp.h, and runs (see README.md):
 #
-#   kernels  c/kernels_test.c: liDigitMultiply and liDigitDiv digit for digit
-#            against frozen copies of the plugin's original 32-bit loops and
-#            independent oracles, in eight builds: the host's limbs (64-bit on
+#   kernels  c/kernels_test.c: liDigitMultiply, liDigitDiv and liDigitMontgomery
+#            digit for digit against frozen copies of the plugin's original
+#            32-bit loops and independent oracles, in eight builds: the
+#            host's limbs (64-bit on
 #            x86_64 and aarch64), forced 32-bit limbs, and both with emulated
 #            big-endian digits, under ASan+UBSan; both limb sizes with every
 #            scratch buffer on the heap (LI_STACK_LIMBS=1), under ASan+UBSan;
 #            both limb sizes at -O2;
-#   oracle   the -O2 builds print products, squares, quotients and
-#            remainders, which c/oracle.py checks with Python's integers;
+#   oracle   the -O2 builds print products, squares, quotients, remainders
+#            and Montgomery products, which c/oracle.py checks with Python's
+#            integers;
 #   calls    c/plugin_harness.c drives the plugin through a mock VM: about
-#            85,000 calls whose answers must match expected/mock-calls.sha256,
+#            87,000 calls whose answers must match expected/mock-calls.sha256,
 #            recorded from the plugin as it was before the kernels;
 #   ub       the shapes that made that plugin write past an object or read
 #            outside one: right answers, no ASan report;
-#   oom      every allocation of 28 calls failed in turn: PrimErrNoMemory,
+#   oom      every allocation of 29 calls failed in turn: PrimErrNoMemory,
 #            stack untouched, no crash;
 #   arity    every primitive at every wrong argument count: PrimErrBadNumArgs
 #            without touching the caller's frame.

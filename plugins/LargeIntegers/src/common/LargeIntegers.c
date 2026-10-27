@@ -6,7 +6,8 @@
    that this file was first generated with; some functions the class has not
    changed since keep that output's text. Keep it equivalent to the class when
    changing either: see the class comment (C source).
-   The multiply and divide kernels are hand-written in LargeIntegersKernels.c.
+   The multiply, divide and Montgomery kernels are hand-written in
+   LargeIntegersKernels.c.
  */
 static char __buildInfo[] = "LargeIntegersPlugin (Pharo Slang, adapted to VMMaker.oscog-eem.2495 conventions)";
 
@@ -2066,20 +2067,11 @@ primMontgomeryDigitLength(void)
 EXPORT(sqInt)
 primMontgomeryTimesModulo(void)
 {
-	unsigned long long accum;
-	unsigned long long accum2;
-	unsigned long long accum3;
 	sqInt firstDigitLen;
 	sqInt firstInteger;
 	sqInt firstLen;
 	unsigned int firstSmall[2];
 	sqInt i;
-	sqInt i2;
-	sqInt k;
-	unsigned int lastDigit;
-	sqInt limit1;
-	sqInt limit2;
-	sqInt limit3;
 	unsigned int mInv;
 	sqInt mInverseInteger;
 	unsigned int *pFirst;
@@ -2096,7 +2088,6 @@ primMontgomeryTimesModulo(void)
 	sqInt thirdLen;
 	sqInt thirdModuloInteger;
 	unsigned int thirdSmall[2];
-	unsigned long long u;
 	sqInt _return_value;
 
 	secondOperandInteger = stackValue(2);
@@ -2173,58 +2164,7 @@ primMontgomeryTimesModulo(void)
 			}
 		}
 		/* begin cDigitMontgomery:len:times:len:modulo:len:mInvModB:into: */
-		limit1 = firstDigitLen - 1;
-		limit2 = secondDigitLen - 1;
-		limit3 = thirdDigitLen - 1;
-		lastDigit = 0;
-		for (i2 = 0; i2 <= limit1; i2 += 1) {
-			accum3 = SQ_SWAP_4_BYTES_IF_BIGENDIAN(pFirst[i2]);
-			accum3 = (accum3 * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pSecond[0]))) + (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[0]));
-			u = (accum3 * mInv) & 0xFFFFFFFFU;
-			accum2 = u * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[0]));
-			accum = (accum2 & 0xFFFFFFFFU) + (accum3 & 0xFFFFFFFFU);
-			accum = ((accum >> 32) + (accum2 >> 32)) + (accum3 >> 32);
-			for (k = 1; k <= limit2; k += 1) {
-				accum3 = SQ_SWAP_4_BYTES_IF_BIGENDIAN(pFirst[i2]);
-				accum3 = (accum3 * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pSecond[k]))) + (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[k]));
-				accum2 = u * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[k]));
-				accum = (accum + (accum2 & 0xFFFFFFFFU)) + (accum3 & 0xFFFFFFFFU);
-				pRes[k - 1] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(accum & 0xFFFFFFFFU);
-				accum = ((accum >> 32) + (accum2 >> 32)) + (accum3 >> 32);
-			}
-			for (k = secondDigitLen; k <= limit3; k += 1) {
-				accum2 = u * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[k]));
-				accum = (accum + (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[k]))) + (accum2 & 0xFFFFFFFFU);
-				pRes[k - 1] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(accum & 0xFFFFFFFFU);
-				accum = (accum >> 32) + (accum2 >> 32);
-			}
-			accum += lastDigit;
-			pRes[limit3] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(accum & 0xFFFFFFFFU);
-			lastDigit = accum >> 32;
-		}
-		for (i2 = firstDigitLen; i2 <= limit3; i2 += 1) {
-			accum = SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[0]);
-			u = (accum * mInv) & 0xFFFFFFFFU;
-			accum += u * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[0]));
-			accum = accum >> 32;
-			for (k = 1; k <= limit3; k += 1) {
-				accum2 = u * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[k]));
-				accum = (accum + (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[k]))) + (accum2 & 0xFFFFFFFFU);
-				pRes[k - 1] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(accum & 0xFFFFFFFFU);
-				accum = (accum >> 32) + (accum2 >> 32);
-			}
-			accum += lastDigit;
-			pRes[limit3] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(accum & 0xFFFFFFFFU);
-			lastDigit = accum >> 32;
-		}
-		if (!((lastDigit == 0) && ((cDigitComparewithlen(pThird, pRes, thirdDigitLen)) == 1))) {
-			accum = 0;
-			for (i2 = 0; i2 <= limit3; i2 += 1) {
-				accum = (accum + (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[i2]))) - (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[i2]));
-				pRes[i2] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(accum & 0xFFFFFFFFU);
-				accum = 0 - (accum >> 0x3F);
-			}
-		}
+		liDigitMontgomerylentimeslenmodulolenmInvModBinto(pFirst, firstDigitLen, pSecond, secondDigitLen, pThird, thirdDigitLen, mInv, pRes);
 		/* begin normalized:digits:len:negative: */
 		if (!prod) {
 			_return_value = normalizedIntegerFromlennegative(pRes, thirdDigitLen, 0);

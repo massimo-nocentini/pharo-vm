@@ -34,7 +34,7 @@ Every primitive first checks the number of arguments it was called with (interpr
 C source
 ---------
 
-The checked-in LargeIntegers.c is generated from this class by Pharo Slang, then adapted to the conventions of the VMMaker.oscog-eem.2495 output it was first generated with: no '_' prefix on locals, asOop: translated to integerObjectOf()/trueObject()/falseObject(), and the argument checks of the primitives written as that generator wrote them (the Pharo Slang ones are not usable as is). Some functions this class has not changed since then keep that output's text. Keep the C equivalent to this class when changing either. The multiply and divide kernels are hand-written C in LargeIntegersKernels.c.
+The checked-in LargeIntegers.c is generated from this class by Pharo Slang, then adapted to the conventions of the VMMaker.oscog-eem.2495 output it was first generated with: no '_' prefix on locals, asOop: translated to integerObjectOf()/trueObject()/falseObject(), and the argument checks of the primitives written as that generator wrote them (the Pharo Slang ones are not usable as is). Some functions this class has not changed since then keep that output's text. Keep the C equivalent to this class when changing either. The multiply, divide and Montgomery kernels are hand-written C in LargeIntegersKernels.c.
 
 
 History
@@ -50,6 +50,7 @@ v2.1
 - a division no longer allocates shifted and grown scratch copies of its operands: Knuth's algorithm D runs on C scratch memory, on the stack or malloc'ed (>>digitDivLarge:with:negative:, >>digitBuffer:stack:)
 - results of up to LIStackDigits digits are computed on the stack and allocated once, at their normalized size, or not at all when they fit a SmallInteger (>>normalized:digits:len:negative:, >>normalizedIntegerFrom:len:negative:); larger ones are computed into a LargeInteger and normalized as before. The deliberately unnormalized answers (the carry case of >>digitAddLarge:with:, the left shift, both halves of a division) keep their sizes
 - multiplication and division run C kernels, hand-written in LargeIntegersKernels.c (>>cDigitMultiply:len:with:len:into:len:, >>cDigitDiv:len:rem:len:quo:len:): over 64-bit limbs where the C compiler has 128-bit arithmetic, Karatsuba's algorithm for long products, Knuth's algorithm D with a precomputed reciprocal of the top divisor limb. They answer the digits of the 32-bit loops they replace (>>liDigitMultiply:len:with:len:into:len:, >>liDigitDiv:len:rem:len:quo:len:, kept for simulation)
+- so does Montgomery multiplication (>>cDigitMontgomery:len:times:len:modulo:len:mInvModB:into:), over 64-bit limbs where it can, interleaving the product and the reduction (CIOS), or for long operands multiplying (Karatsuba, squaring) and then reducing (REDC). For an mInv that is -1/m mod 2^32, as the image computes it, the answer is the one Montgomery product, and the same digits as the loop's (>>liDigitMontgomery:len:times:len:modulo:len:mInvModB:into:, kept for simulation); for any other mInv, which makes the loop's answer depend on its steps, the kernel runs that loop
 (the version string is unchanged: no answer of a primitive changes for valid input)
 
 v2.0
@@ -120,7 +121,7 @@ LargeIntegersPlugin class >> declareCVarsIn: cg [
 	cg var: 'andOpIndex' declareC: 'const int  andOpIndex = 0'.
 	cg var: 'orOpIndex' declareC: 'const int  orOpIndex = 1'.
 	cg var: 'xorOpIndex' declareC: 'const int  xorOpIndex = 2'.
-	"the multiply and divide kernels, hand-written C in LargeIntegersKernels.c"
+	"the multiply, divide and Montgomery kernels, hand-written C in LargeIntegersKernels.c"
 	cg addHeaderFile: '"LargeIntegersKernels.h"'
 ]
 
@@ -397,67 +398,14 @@ LargeIntegersPlugin >> cDigitMontgomery: pFirst
 				len: thirdLen
 				mInvModB: mInv
 				into: pRes [
-				
-	| u limit1 limit2 limit3 accum accum2 accum3 lastDigit |
+	"Store into the thirdLen 32-bit digits at pRes, which start out all zero, the Montgomery product of the firstLen digits at pFirst and the secondLen digits at pSecond modulo the thirdLen digits at pThird: their product plus multiples u * m of the modulus, u := low digit * mInv bitAnd: 16rFFFFFFFF, one per digit, each dropping a low digit, and then minus the modulus if the result is not below it.
+	 When mInv * m = -1 mod 2^32, as the image computes it, the digits dropped are zero and the result is (a * b + (U * m)) / (2 raisedTo: 32 * thirdLen) for the one U below (2 raisedTo: 32 * thirdLen) that makes the division exact: the C kernel liDigitMontgomery() of LargeIntegersKernels.c computes it over 64-bit limbs where the C compiler has 128-bit arithmetic, else over 32-bit digits, interleaving the product and the reduction, or for long operands, and for a short one, multiplying (Karatsuba, squaring) and then reducing. Otherwise the answer depends on the steps, and the kernel runs #liDigitMontgomery:len:times:len:modulo:len:mInvModB:into:, the loop it replaces."
 	<var: #pFirst type: #'unsigned int *'>
 	<var: #pSecond type: #'unsigned int *'>
 	<var: #pThird type: #'unsigned int *'>
 	<var: #mInv type: #'unsigned int'>
 	<var: #pRes type: #'unsigned int *'>
-	<var: #accum type: #'unsigned long long'>
-	<var: #accum2 type: #'unsigned long long'>
-	<var: #accum3 type: #'unsigned long long'>
-	<var: #u type: #'unsigned long long '>
-	<var: #lastDigit type: #'unsigned int '>
-	limit1 := firstLen - 1.
-	limit2 := secondLen - 1.
-	limit3 := thirdLen - 1.
-	lastDigit := 0.
-	0 to: limit1 do: 
-		[:i | 
-		accum3 := self cDigitOf: pFirst at: i.
-		accum3 := accum3*(self cDigitOf: pSecond at: 0) + (self cDigitOf: pRes at: 0).
-		u := accum3 * mInv bitAnd: 16rFFFFFFFF.
-		accum2 :=  u * (self cDigitOf: pThird at: 0).
-		accum := (accum2 bitAnd: 16rFFFFFFFF) + (accum3 bitAnd: 16rFFFFFFFF).
-		accum := (accum >> 32) + (accum2 >> 32) + (accum3 >> 32).
-		1 to: limit2 do: [:k |
-			accum3 := self cDigitOf: pFirst at: i.
-			accum3 := accum3*(self cDigitOf: pSecond at: k) + (self cDigitOf: pRes at: k).
-			accum2 :=  u * (self cDigitOf: pThird at: k).
-			accum := accum + (accum2 bitAnd: 16rFFFFFFFF) + (accum3 bitAnd: 16rFFFFFFFF).
-			self cDigitOf: pRes at: k-1 put: (accum bitAnd: 16rFFFFFFFF).
-			accum := (accum >> 32) + (accum2 >> 32) + (accum3 >> 32)].
-		secondLen to: limit3 do: [:k |
-			accum2 :=  u * (self cDigitOf: pThird at: k).
-			accum := accum + (self cDigitOf: pRes at: k) + (accum2 bitAnd: 16rFFFFFFFF).
-			self cDigitOf: pRes at: k-1 put: (accum bitAnd: 16rFFFFFFFF).
-			accum := (accum >> 32) + (accum2 >> 32)].
-		accum := accum + lastDigit.
-		self cDigitOf: pRes at: limit3 put: (accum bitAnd: 16rFFFFFFFF).
-		lastDigit := accum >> 32].
-	firstLen to: limit3 do: 
-		[:i | 
-		accum := (self cDigitOf: pRes at: 0).
-		u := accum * mInv bitAnd: 16rFFFFFFFF.
-		accum := accum + (u * (self cDigitOf: pThird at: 0)).
-		accum := accum >> 32.
-		1 to: limit3 do: [:k |
-			accum2 :=  u * (self cDigitOf: pThird at: k).
-			accum := accum + (self cDigitOf: pRes at: k) + (accum2 bitAnd: 16rFFFFFFFF).
-			self cDigitOf: pRes at: k-1 put: (accum bitAnd: 16rFFFFFFFF).
-			accum := (accum >> 32) + (accum2 >> 32)].
-		accum := accum + lastDigit.
-		self cDigitOf: pRes at: limit3 put: (accum bitAnd: 16rFFFFFFFF).
-		lastDigit := accum >> 32].
-	(lastDigit = 0 and: [(self cDigitCompare: pThird with: pRes len: thirdLen) = 1]) ifFalse: [
-		"self cDigitSub: pThird len: thirdLen with: pRes len: thirdLen into: pRes"
-		accum := 0.
-		0 to: limit3 do: 
-			[:i | 
-			accum := accum + (self cDigitOf: pRes at: i) - (self cDigitOf: pThird at: i).
-			self cDigitOf: pRes at: i put: (accum bitAnd: 16rFFFFFFFF).
-			accum := 0 - (accum >> 63)]].
+	self liDigitMontgomery: pFirst len: firstLen times: pSecond len: secondLen modulo: pThird len: thirdLen mInvModB: mInv into: pRes.
 	^0
 ]
 
@@ -1370,6 +1318,63 @@ LargeIntegersPlugin >> liDigitDiv: pDiv len: divLen rem: pRem len: remLen quo: p
 					self cDigitOf: pRem at: l - 1 put: (a bitAnd: 16rFFFFFFFF).
 					l := l + 1]].
 		self cDigitOf: pQuo at: quoLen - k put: (self cCoerceSimple: q to: #'unsigned int')].
+	^0
+]
+
+{ #category : 'C core' }
+LargeIntegersPlugin >> liDigitMontgomery: pFirst len: firstLen times: pSecond len: secondLen modulo: pThird len: thirdLen mInvModB: mInv into: pRes [
+	"The 32-bit loop that the C kernel liDigitMontgomery() of LargeIntegersKernels.c replaces, run in simulation; the kernel also runs it when mInv * m is not -1 mod 2^32. It adds into the thirdLen digits at pRes, which start out all zero. The kernel tests compare the two digit for digit."
+	| u limit1 limit2 limit3 accum accum2 accum3 lastDigit |
+	<doNotGenerate>
+	limit1 := firstLen - 1.
+	limit2 := secondLen - 1.
+	limit3 := thirdLen - 1.
+	lastDigit := 0.
+	0 to: limit1 do: 
+		[:i | 
+		accum3 := self cDigitOf: pFirst at: i.
+		accum3 := accum3*(self cDigitOf: pSecond at: 0) + (self cDigitOf: pRes at: 0).
+		u := accum3 * mInv bitAnd: 16rFFFFFFFF.
+		accum2 :=  u * (self cDigitOf: pThird at: 0).
+		accum := (accum2 bitAnd: 16rFFFFFFFF) + (accum3 bitAnd: 16rFFFFFFFF).
+		accum := (accum >> 32) + (accum2 >> 32) + (accum3 >> 32).
+		1 to: limit2 do: [:k |
+			accum3 := self cDigitOf: pFirst at: i.
+			accum3 := accum3*(self cDigitOf: pSecond at: k) + (self cDigitOf: pRes at: k).
+			accum2 :=  u * (self cDigitOf: pThird at: k).
+			accum := accum + (accum2 bitAnd: 16rFFFFFFFF) + (accum3 bitAnd: 16rFFFFFFFF).
+			self cDigitOf: pRes at: k-1 put: (accum bitAnd: 16rFFFFFFFF).
+			accum := (accum >> 32) + (accum2 >> 32) + (accum3 >> 32)].
+		secondLen to: limit3 do: [:k |
+			accum2 :=  u * (self cDigitOf: pThird at: k).
+			accum := accum + (self cDigitOf: pRes at: k) + (accum2 bitAnd: 16rFFFFFFFF).
+			self cDigitOf: pRes at: k-1 put: (accum bitAnd: 16rFFFFFFFF).
+			accum := (accum >> 32) + (accum2 >> 32)].
+		accum := accum + lastDigit.
+		self cDigitOf: pRes at: limit3 put: (accum bitAnd: 16rFFFFFFFF).
+		lastDigit := accum >> 32].
+	firstLen to: limit3 do: 
+		[:i | 
+		accum := (self cDigitOf: pRes at: 0).
+		u := accum * mInv bitAnd: 16rFFFFFFFF.
+		accum := accum + (u * (self cDigitOf: pThird at: 0)).
+		accum := accum >> 32.
+		1 to: limit3 do: [:k |
+			accum2 :=  u * (self cDigitOf: pThird at: k).
+			accum := accum + (self cDigitOf: pRes at: k) + (accum2 bitAnd: 16rFFFFFFFF).
+			self cDigitOf: pRes at: k-1 put: (accum bitAnd: 16rFFFFFFFF).
+			accum := (accum >> 32) + (accum2 >> 32)].
+		accum := accum + lastDigit.
+		self cDigitOf: pRes at: limit3 put: (accum bitAnd: 16rFFFFFFFF).
+		lastDigit := accum >> 32].
+	(lastDigit = 0 and: [(self cDigitCompare: pThird with: pRes len: thirdLen) = 1]) ifFalse: [
+		"self cDigitSub: pThird len: thirdLen with: pRes len: thirdLen into: pRes"
+		accum := 0.
+		0 to: limit3 do: 
+			[:i | 
+			accum := accum + (self cDigitOf: pRes at: i) - (self cDigitOf: pThird at: i).
+			self cDigitOf: pRes at: i put: (accum bitAnd: 16rFFFFFFFF).
+			accum := 0 - (accum >> 63)]].
 	^0
 ]
 

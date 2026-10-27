@@ -18,8 +18,9 @@
 #              lines put back as the SKIP-LI0x lines the old plugin printed,
 #              must match expected/image-diff.sha256 (digests recorded from
 #              the plugin before the kernels);
-#   kernels    st/diff-kernels.st, 6,297 multiplies and divisions over the
-#              kernel thresholds, against expected/image-kernels.sha256;
+#   kernels    st/diff-kernels.st, 6,297 multiplies and divisions and 1,596
+#              Montgomery products over the kernel thresholds, against
+#              expected/image-kernels.sha256;
 #   sunit      st/imagetests.st: the image's integer test classes.
 #
 # With [reference-vm-dir], diff and kernels also run on that VM (without the
@@ -155,7 +156,7 @@ differential() {   # NAME DRIVER SELECTOR DIGESTS
         grep 'MISMATCH' "$WORK/$name/out" | head -n 10 | sed 's/^/   /'
         return
     fi
-    calls=$(sed -n 's/^# done \([0-9]*\) calls$/\1/p' "$WORK/$name/out")
+    calls=$(sed -n 's/^# done \([0-9]*\) calls.*$/\1/p' "$WORK/$name/out" | tail -n 1)
     if ! python3 -I "$TESTS/digest.py" --compare "$digests" < "$WORK/$name/out.skip" > "$WORK/$name/digests"; then
         fail "$name" "the output differs from $4"
         head -n 20 "$WORK/$name/digests" | sed 's/^/   /'

@@ -23,3 +23,6 @@ a90ede5d82ab81723e0fefec2b51a6aa24874569c181c5b40389f2365a2a6e97 1 divide: top d
 38cd0cb1f540bab8ada31c6b9bd3ad0c2e46a7d78bcc0a246b39bb5eca6ce1ed 1 divide: big | (section)
 1d899cfed9e8456852a52bdeb62183707ba3d79e12b8448700189d6b89637ef1 7 divide: big | div+
 467b0ec83116745777f843d78405be5d52c42117d86e53bc8b3fa1c6bff7ab57 1 done 6297 calls | (section)
+5034f2c81d51f8dbbcdac07025fe59949912c484faa63e8b40591f1200fb0ac2 1 montgomery: kernel paths | (section)
+a763453ad42f179ef60544f4fceeab0876f29dbef1401d6a50f9bf922bd26469 1596 montgomery: kernel paths | mont
+51d53a57e2b1be078120271c8020a215800f94be53c36a7aa5994bb2b5120f0c 1 done 7893 calls, Montgomery included | (section)

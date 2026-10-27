@@ -1,4 +1,4 @@
-/* kernels_test.c: unit tests of the LargeIntegers multiply and divide kernels.
+/* kernels_test.c: unit tests of the LargeIntegers multiply, divide and Montgomery kernels.
  *
  * Compiles src/common/LargeIntegersKernels.c into this program (#include, so that the
  * thresholds are variables and malloc can be made to fail) and compares liDigitMultiply()
@@ -9,6 +9,10 @@
  * one pointer or a copy) take their own kernels, and have their own cases; so do
  * divisions that take Burnikel & Ziegler's recursion (LI_BZ_LIMBS, LI_BZ_QUOTIENT_LIMBS),
  * whose liDivRemBZ is also called directly, on limbs, with the contract of liDivRem.
+ * liDigitMontgomery() is compared with a frozen copy of the plugin's Montgomery loop, for
+ * the right inverse (the limb kernels) and for wrong ones and even moduli (the loop
+ * again), and in mode `dump` with T = (a b + U m) / 2^32n, T - m when T >= m, from
+ * Python's integers.
  *
  * Build variants (run-c-tests.sh): LI_LIMB_BITS=64 (the default on x86_64 and aarch64)
  * or 32, FAKE_BIGENDIAN (SQ_SWAP_4_BYTES_IF_BIGENDIAN swaps: digits are stored
@@ -16,7 +20,7 @@
  * or -O2.
  *
  * usage: kernels_test [scale]      run every test; scale multiplies the random counts
- *        kernels_test dump N       print N multiply and N divide vectors for oracle.py
+ *        kernels_test dump N       print N multiply, N divide and N Montgomery vectors for oracle.py
  * Exit status 0 when every check holds.
  */
 #include <stdint.h>
@@ -183,6 +187,90 @@ static void frozen_div(unsigned int *pDiv, long divLen, unsigned int *pRem, long
 			}
 		}
 		pQuo[quoDigitLen - k] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(((unsigned int) q));
+	}
+}
+
+/* A frozen copy of the C that Pharo Slang generated for
+   LargeIntegersPlugin>>cDigitMontgomery:len:times:len:modulo:len:mInvModB:into: (inlined in
+   primMontgomeryTimesModulo of src/common/LargeIntegers.c before liDigitMontgomery was
+   added), with the cDigitCompare:with:len: it calls (cDigitComparewithlen) and sqInt
+   locals as long.  liDigitMontgomery32 in LargeIntegersKernels.c holds the same loop.
+   Do not edit them. */
+static long frozen_compare(unsigned int *pFirst, unsigned int *pSecond, long len)
+{
+	unsigned int firstDigit, secondDigit;
+	long ix;
+
+	ix = len - 1;
+	while (ix >= 0) {
+		if (((secondDigit = pSecond[ix])) != ((firstDigit = pFirst[ix]))) {
+			if ((SQ_SWAP_4_BYTES_IF_BIGENDIAN(secondDigit)) < (SQ_SWAP_4_BYTES_IF_BIGENDIAN(firstDigit))) return 1;
+			else return -1;
+		}
+		ix -= 1;
+	}
+	return 0;
+}
+
+/* cDigitMontgomery:len:times:len:modulo:len:mInvModB:into:; pRes starts out all zero */
+static void frozen_mont(unsigned int *pFirst, long firstDigitLen, unsigned int *pSecond, long secondDigitLen,
+	unsigned int *pThird, long thirdDigitLen, unsigned int mInv, unsigned int *pRes)
+{
+	unsigned long long accum, accum2, accum3, u;
+	unsigned int lastDigit;
+	long i2, k, limit1, limit2, limit3;
+
+	limit1 = firstDigitLen - 1;
+	limit2 = secondDigitLen - 1;
+	limit3 = thirdDigitLen - 1;
+	lastDigit = 0;
+	for (i2 = 0; i2 <= limit1; i2 += 1) {
+		accum3 = SQ_SWAP_4_BYTES_IF_BIGENDIAN(pFirst[i2]);
+		accum3 = (accum3 * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pSecond[0]))) + (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[0]));
+		u = (accum3 * mInv) & 0xFFFFFFFFU;
+		accum2 = u * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[0]));
+		accum = (accum2 & 0xFFFFFFFFU) + (accum3 & 0xFFFFFFFFU);
+		accum = ((accum >> 32) + (accum2 >> 32)) + (accum3 >> 32);
+		for (k = 1; k <= limit2; k += 1) {
+			accum3 = SQ_SWAP_4_BYTES_IF_BIGENDIAN(pFirst[i2]);
+			accum3 = (accum3 * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pSecond[k]))) + (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[k]));
+			accum2 = u * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[k]));
+			accum = (accum + (accum2 & 0xFFFFFFFFU)) + (accum3 & 0xFFFFFFFFU);
+			pRes[k - 1] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(accum & 0xFFFFFFFFU);
+			accum = ((accum >> 32) + (accum2 >> 32)) + (accum3 >> 32);
+		}
+		for (k = secondDigitLen; k <= limit3; k += 1) {
+			accum2 = u * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[k]));
+			accum = (accum + (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[k]))) + (accum2 & 0xFFFFFFFFU);
+			pRes[k - 1] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(accum & 0xFFFFFFFFU);
+			accum = (accum >> 32) + (accum2 >> 32);
+		}
+		accum += lastDigit;
+		pRes[limit3] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(accum & 0xFFFFFFFFU);
+		lastDigit = accum >> 32;
+	}
+	for (i2 = firstDigitLen; i2 <= limit3; i2 += 1) {
+		accum = SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[0]);
+		u = (accum * mInv) & 0xFFFFFFFFU;
+		accum += u * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[0]));
+		accum = accum >> 32;
+		for (k = 1; k <= limit3; k += 1) {
+			accum2 = u * (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[k]));
+			accum = (accum + (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[k]))) + (accum2 & 0xFFFFFFFFU);
+			pRes[k - 1] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(accum & 0xFFFFFFFFU);
+			accum = (accum >> 32) + (accum2 >> 32);
+		}
+		accum += lastDigit;
+		pRes[limit3] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(accum & 0xFFFFFFFFU);
+		lastDigit = accum >> 32;
+	}
+	if (!((lastDigit == 0) && ((frozen_compare(pThird, pRes, thirdDigitLen)) == 1))) {
+		accum = 0;
+		for (i2 = 0; i2 <= limit3; i2 += 1) {
+			accum = (accum + (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pRes[i2]))) - (SQ_SWAP_4_BYTES_IF_BIGENDIAN(pThird[i2]));
+			pRes[i2] = SQ_SWAP_4_BYTES_IF_BIGENDIAN(accum & 0xFFFFFFFFU);
+			accum = 0 - (accum >> 0x3F);
+		}
 	}
 }
 
@@ -912,6 +1000,297 @@ static void checkAddBacks(const char *what)
 	memset(nAddBack, 0, sizeof nAddBack);
 }
 
+/* ---------------------------------------------------------------- Montgomery */
+
+static long nMont, nMontSqr, nMontWrong;
+
+/* -1/m0 mod 2^32 for an odd m0, as the image computes mInv */
+static u32 montInv(u32 m0)
+{
+	u32 x = 1;
+	for (int i = 0; i < 5; i++) x *= 2 - m0 * x;
+	return 0 - x;
+}
+
+/* An odd modulus of n digits: 0 random, 1 all ones (2^32n - 1), 2 2^k - 1 with k bits in
+   the top digit, 3 top digit FFFFFFFF, 4 top digit 0 (unnormalized: the plugin takes the
+   digit count from the byte size), 5 top digit 1, 6 adversarial digits, 7 2^(32n - 32) + 1
+   (all zero but the ends) */
+static void montModulus(u32 *m, long n, int kind)
+{
+	kind %= 8;
+	switch (kind) {
+	case 1: case 2: fill(m, n, 2); break;
+	case 6: fill(m, n, 1); break;
+	case 7: memset(m, 0, n * 4); PUT(m, n - 1, 1); break;
+	default: fill(m, n, 0); break;
+	}
+	if (kind == 2) PUT(m, n - 1, (u32) (0xFFFFFFFFu >> rndBelow(32)));
+	if (kind == 3) PUT(m, n - 1, 0xFFFFFFFFu);
+	if (kind == 4 && n > 1) PUT(m, n - 1, 0);
+	if (kind == 5 && n > 1) PUT(m, n - 1, 1);
+	PUT(m, 0, GET(m, 0) | 1);
+}
+
+/* One Montgomery product, as the plugin calls it: a (fl digits), b (sl digits) and m (n
+   digits), the kernel against the frozen loop, both into n zero digits, the operands
+   untouched.  aMode/bMode: fill() modes, or 5 for a copy of m (fl = n), 6 for all ones,
+   7 for 1.  share: 0 two operands, 1 b is a (one pointer, as x * x), 2 b a copy of a.
+   inv: 0 the right inverse; 1 a random one, 2 the right one with one bit flipped, 3 zero,
+   4 an even m (with the inverse of m + 1): the loop's own answer.  Answer the result in
+   res (n digits) when it is not NULL. */
+static void montCase(long n, long fl, long sl, int aMode, int bMode, int mKind, int share, int inv, u32 *res)
+{
+	u32 *m = dalloc(n), *a, *b, *r1 = dalloc(n), *r2 = dalloc(n), *a0, *b0, *m0, mInv;
+
+	if (aMode == 5) fl = n;
+	if (fl > n) fl = n;
+	if (sl > n) sl = n;
+	if (share) sl = fl;
+	if (fl > 0 && sl == 0) sl = 1;
+	montModulus(m, n, mKind);
+	a = dalloc(fl);
+	if (aMode == 5) memcpy(a, m, n * 4);
+	else if (aMode == 6) fill(a, fl, 2);
+	else if (aMode == 7) { memset(a, 0, fl * 4); if (fl) PUT(a, 0, 1); }
+	else fill(a, fl, aMode);
+	if (share == 1) b = a;
+	else {
+		b = dalloc(sl);
+		if (share == 2) memcpy(b, a, fl * 4);
+		else if (bMode == 6) fill(b, sl, 2);
+		else if (bMode == 7) { memset(b, 0, sl * 4); if (sl) PUT(b, 0, 1); }
+		else fill(b, sl, bMode % 5);
+	}
+	mInv = montInv(GET(m, 0));
+	switch (inv) {
+	case 1: mInv = (u32) rnd(); break;
+	case 2: mInv ^= 1u << rndBelow(32); break;
+	case 3: mInv = 0; break;
+	case 4: PUT(m, 0, GET(m, 0) + 1); mInv = montInv(GET(m, 0) + 1); break;
+	}
+	a0 = dalloc(fl); b0 = dalloc(sl); m0 = dalloc(n);
+	memcpy(a0, a, fl * 4); memcpy(b0, b, sl * 4); memcpy(m0, m, n * 4);
+	memset(r1, 0, n * 4);
+	memset(r2, 0, n * 4);
+	frozen_mont(a0, fl, b0, sl, m0, n, mInv, r1);
+	liDigitMontgomery(a, fl, b, sl, m, n, mInv, r2);
+	CHECK(!memcmp(r1, r2, n * 4), "mont %ld digits, %ld x %ld, modes %d/%d, modulus %d, share %d, inverse %d, thresholds %ld/%ld/%ld",
+		n, fl, sl, aMode, bMode, mKind, share, inv, (long) liMontLoopDigits, (long) liMontMulLimbs, (long) liMontSqrLimbs);
+	CHECK(!memcmp(a, a0, fl * 4) && !memcmp(b, b0, sl * 4) && !memcmp(m, m0, n * 4), "mont %ld changed an operand", n);
+	if (res) memcpy(res, r1, n * 4);
+	nMont++;
+	nMontSqr += share != 0;
+	nMontWrong += inv != 0 && GET(m, 0) * mInv != 0xFFFFFFFFu;
+	free(m); free(a); if (share != 1) free(b); free(r1); free(r2); free(a0); free(b0); free(m0);
+}
+
+/* the random draws of a case in a fixed order (see mulRandomCase); n digits, operands
+   mostly of n digits */
+static void montRandomCase(long n, int wrong)
+{
+	long fl = rnd() % 4 ? n : rndBelow(n + 1);
+	long sl = rnd() % 4 ? n : 1 + rndBelow(n);
+	int aMode = (int) (rnd() % 8), bMode = (int) (rnd() % 8), mKind = (int) rnd();
+	int share = rnd() % 3 ? 0 : 1 + (int) (rnd() % 2);
+	int inv = wrong ? 1 + (int) (rnd() % 4) : 0;
+	montCase(n, fl, sl, aMode, bMode, mKind, share, inv, NULL);
+}
+
+static void montForceThresholds(void)
+{
+	static const long loops[] = { 1, 2, 3, 5 }, muls[] = { 1, 2, 3, 4, 6, 9 }, sqrs[] = { 1, 2, 3, 5 }, kara[] = { 2, 3, 4, 6 };
+	liMontLoopDigits = loops[rnd() % 4];
+	liMontMulLimbs = muls[rnd() % 6];
+	liMontSqrLimbs = sqrs[rnd() % 4];
+	liKaratsubaLimbs = rnd() % 2 ? kara[rnd() % 4] : LI_KARATSUBA_LIMBS;
+	liSqrKaratsubaLimbs = rnd() % 2 ? kara[rnd() % 4] : LI_SQR_KARATSUBA_LIMBS;
+	liSqrBasecaseLimbs = rnd() % 2 ? 1 + rndBelow(3) : LI_SQR_BASECASE_LIMBS;
+}
+
+static void montProductionThresholds(void)
+{
+	liMontLoopDigits = LI_MONT_LOOP_DIGITS;
+	liMontMulLimbs = LI_MONT_MUL_LIMBS;
+	liMontSqrLimbs = LI_MONT_SQR_LIMBS;
+	liKaratsubaLimbs = LI_KARATSUBA_LIMBS;
+	liSqrKaratsubaLimbs = LI_SQR_KARATSUBA_LIMBS;
+	liSqrBasecaseLimbs = LI_SQR_BASECASE_LIMBS;
+}
+
+/* random sizes up to 300 digits (most up to 40): the right inverse, at the production
+   thresholds and forced ones (CIOS from 1 digit, REDC from 1 limb, Karatsuba inside it);
+   a quarter of them with a wrong inverse or an even modulus */
+static void testMontRandom(long count)
+{
+	for (long c = 0; c < count; c++) {
+		long n = c % 5 ? 1 + rndBelow(40) : 1 + rndBelow(300);
+		if (c % 2) montForceThresholds();
+		else montProductionThresholds();
+		montRandomCase(n, c % 4 == 3);
+	}
+	montProductionThresholds();
+	printf("mont random + forced thresholds: %ld cases\n", count);
+}
+
+/* every size from 1 to 300 digits, odd and even, with each path's thresholds */
+static void testMontSizes(void)
+{
+	long n0 = nMont;
+	for (long n = 1; n <= 300; n++)
+		for (int k = 0; k < 4; k++) {
+			montProductionThresholds();
+			if (k == 1) { liMontLoopDigits = 1; liMontMulLimbs = liMontSqrLimbs = 1 << 30; }   /* CIOS */
+			if (k == 2) { liMontLoopDigits = 1; liMontMulLimbs = liMontSqrLimbs = 1; }         /* REDC */
+			/* one draw per statement (see mulRandomCase) */
+			int aMode = (int) (rnd() % 5), bMode = (int) (rnd() % 5), mKind = (int) rnd();
+			montCase(n, n, n, aMode, bMode, mKind, k == 3, 0, NULL);
+			if (k == 2) {
+				int share = 1 + (int) (rnd() % 2);
+				montCase(n, n, n, aMode, 0, mKind, share, 0, NULL);
+			}
+		}
+	montProductionThresholds();
+	printf("mont sizes 1..300 digits, loop / CIOS / REDC / square: %ld cases\n", nMont - n0);
+}
+
+/* sizes straddling the production thresholds, every partial-limb offset */
+static void testMontThreshold(long reps)
+{
+	long D = LI_DIGITS_PER_LIMB, n0 = nMont;
+	long centres[] = { LI_MONT_SQR_LIMBS, LI_MONT_MUL_LIMBS, LI_SQR_KARATSUBA_LIMBS, LI_KARATSUBA_LIMBS, 2 * LI_KARATSUBA_LIMBS };
+	montProductionThresholds();
+	for (long d = LI_MONT_LOOP_DIGITS - 3; d <= LI_MONT_LOOP_DIGITS + 3; d++)
+		for (long r = 0; r < 4 * reps; r++)
+			if (d >= 1) montRandomCase(d, 0);
+	for (unsigned c = 0; c < sizeof centres / sizeof *centres; c++)
+		for (long l = centres[c] - 3; l <= centres[c] + 3; l++)
+			for (long r = 0; r < reps; r++)
+				for (int ds = 0; ds < D; ds++) {
+					long n = l * D - ds;
+					if (n < 1) continue;
+					int aMode = (int) (rnd() % 8), bMode = (int) (rnd() % 8), mKind = (int) rnd();
+					int share = 1 + (int) (rnd() % 2);
+					long fl = 1 + rndBelow(n), sl = 1 + rndBelow(n);
+					montCase(n, n, n, aMode, bMode, mKind, 0, 0, NULL);
+					montCase(n, n, n, aMode % 7, 0, mKind + 1, share, 0, NULL);
+					montCase(n, fl, sl, aMode % 5, bMode % 5, mKind + 2, 0, 0, NULL);
+				}
+	printf("mont threshold straddle (loop below %d digits, square REDC from %d, REDC from %d limbs): %ld cases\n",
+		LI_MONT_LOOP_DIGITS, LI_MONT_SQR_LIMBS, LI_MONT_MUL_LIMBS, nMont - n0);
+}
+
+/* moduli 2^k - 1 and with a top digit FFFFFFFF, 1 or 0; operands all ones (T at or above
+   2^32n: the loop's lastDigit), m itself (T = m: the subtraction leaves 0), 1 (taking a
+   value out of Montgomery form), 0 and short; squares of all ones */
+static void testMontPatterns(void)
+{
+	long n0 = nMont;
+	montProductionThresholds();
+	static const long sizes[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 19, 20, 21, 23, 24, 25, 31, 32, 33,
+		47, 48, 49, 63, 64, 65, 71, 72, 73, 95, 96, 97, 127, 128, 129, 143, 144, 145, 199, 255, 256, 257, 300 };
+	for (unsigned i = 0; i < sizeof sizes / sizeof *sizes; i++) {
+		long n = sizes[i];
+		for (int mk = 0; mk < 8; mk++) {
+			u32 r[300];
+			montCase(n, n, n, 6, 6, mk, 0, 0, NULL);          /* all ones */
+			montCase(n, n, n, 6, 0, mk, 1, 0, NULL);          /* all ones squared */
+			montCase(n, n, n, 5, 0, mk, 0, 0, r);             /* m b: T = m */
+			for (long k = 0; k < n; k++) CHECK(GET(r, k) == 0, "mont m * b, modulus %d, %ld digits: not 0", mk, n);
+			montCase(n, n, 1, 0, 7, mk, 0, 0, NULL);          /* x * 1 */
+			montCase(n, 0, 0, 0, 0, mk, 0, 0, NULL);          /* empty operands */
+			long fl = 1 + rndBelow(n), sl = 1 + rndBelow(n);
+			montCase(n, 0, sl, 0, 0, mk, 0, 0, NULL);
+			montCase(n, fl, sl, 6, 6, mk, 0, 0, NULL);
+			montCase(n, n, n, 3, 3, mk, 0, 0, NULL);          /* sparse digits */
+		}
+	}
+	printf("mont patterns: %ld cases\n", nMont - n0);
+}
+
+/* a wrong inverse or an even modulus: the loop's answer, at every threshold */
+static void testMontWrongInverse(long count)
+{
+	long n0 = nMont;
+	for (long c = 0; c < count; c++) {
+		long n = c % 4 ? 1 + rndBelow(40) : 1 + rndBelow(300);
+		if (c % 2) montForceThresholds();
+		else montProductionThresholds();
+		montRandomCase(n, 1);
+	}
+	montProductionThresholds();
+	printf("mont wrong inverse or even modulus: %ld cases\n", nMont - n0);
+}
+
+static void testMontLarge(void)
+{
+	static const long sizes[] = { 513, 1000, 1001, 2000, 2001, 5000, 5001 };
+	long n0 = nMont;
+	montProductionThresholds();
+	for (unsigned i = 0; i < sizeof sizes / sizeof *sizes; i++) {
+		long n = sizes[i];
+		montCase(n, n, n, 0, 0, (int) i, 0, 0, NULL);
+		montCase(n, n, n, (int) i % 5, 0, (int) i + 1, 1, 0, NULL);
+		montCase(n, n, n, 6, 0, 3, 2, 0, NULL);
+		if (n < 3000) {
+			montCase(n, n / 3, n, 4, 1, (int) i + 2, 0, 0, NULL);
+			montCase(n, n, n, 0, 0, (int) i, 0, 2, NULL);
+		}
+	}
+	printf("mont large: %ld cases up to %ld digits\n", nMont - n0, sizes[sizeof sizes / sizeof *sizes - 1]);
+}
+
+/* the scratch malloc fails: the loop runs instead; small ones stay on the stack */
+static void testMontNoMemory(void)
+{
+	long before = mallocCalls;
+	montProductionThresholds();
+	mallocFails = 1;
+	montCase(8, 8, 8, 0, 0, 0, 0, 0, NULL);
+	CHECK(LI_STACK_LIMBS < 16 || mallocCalls == before, "a small Montgomery product asked for scratch memory");
+	before = mallocCalls;
+	montCase(700, 700, 700, 0, 1, 0, 0, 0, NULL);          /* REDC */
+	montCase(1200, 1200, 1200, 2, 0, 3, 1, 0, NULL);       /* REDC, square */
+	liMontMulLimbs = liMontSqrLimbs = 1 << 30;
+	montCase(701, 701, 333, 0, 1, 0, 0, 0, NULL);          /* CIOS */
+	montProductionThresholds();
+	mallocFails = 0;
+	CHECK(mallocCalls - before == 3, "the large Montgomery products did not ask for scratch memory (%ld)", mallocCalls - before);
+	printf("mont with failing malloc: 3 cases\n");
+}
+
+/* one operand shorter than the other, in either order (the kernel scans the longer one),
+   at the production thresholds: of 1 or 2 digits, and of about half the modulus, where the
+   product then REDC takes over from CIOS (from LI_MONT_SQR_LIMBS limbs, for a shorter
+   operand of at most half the modulus's limbs, rounded up); odd and even digit counts;
+   operands all ones; and a wrong inverse on the same shapes */
+static void testMontShort(void)
+{
+	long D = LI_DIGITS_PER_LIMB, n0 = nMont;
+	long centres[] = { LI_MONT_LOOP_DIGITS, LI_MONT_SQR_LIMBS * D, LI_MONT_MUL_LIMBS * D, 2 * LI_MONT_MUL_LIMBS * D + 1 };
+	montProductionThresholds();
+	for (unsigned c = 0; c < sizeof centres / sizeof *centres; c++)
+		for (long n = centres[c] - 3; n <= centres[c] + 3; n++) {
+			long limbs = (n + D - 1) / D;
+			long shorts[] = { 1, 2, (limbs / 2 - 1) * D, limbs / 2 * D, (limbs + 1) / 2 * D, (limbs + 1) / 2 * D + 1,
+				(limbs / 2 + 1) * D + 1, n - 1 };
+			if (n < 1) continue;
+			for (unsigned k = 0; k < sizeof shorts / sizeof *shorts; k++) {
+				long sl = shorts[k];
+				if (sl < 1 || sl > n) continue;
+				int aMode = (int) (rnd() % 5), bMode = (int) (rnd() % 5), mKind = (int) rnd();
+				montCase(n, n, sl, aMode, bMode, mKind, 0, 0, NULL);
+				montCase(n, sl, n, aMode, bMode, mKind + 1, 0, 0, NULL);
+				montCase(n, sl, n, 6, 6, mKind + 2, 0, 0, NULL);
+				montCase(n, n, sl, 6, 6, mKind + 3, 0, 0, NULL);
+				montCase(n, sl, sl, aMode, 6, mKind + 4, 0, 0, NULL);
+				montCase(n, sl, n - (n > sl), bMode, aMode, mKind + 5, 0, 0, NULL);
+				montCase(n, sl, n, aMode, bMode, mKind + 6, 0, 2, NULL);
+			}
+		}
+	printf("mont short operands, either order: %ld cases\n", nMont - n0);
+}
+
 /* ---------------------------------------------------------------- dump for oracle.py */
 
 static void hex(const u32 *d, long n)
@@ -996,11 +1375,44 @@ static void dumpDivBZ(long n)
 	liBZQuotientLimbs = qthr0;
 }
 
+/* Montgomery products with the right inverse, for oracle.py: around the thresholds of both
+   limb sizes, up to 1000 digits, odd and even, squares, short operands, all-ones
+   operands and special moduli */
+static void dumpMont(long count)
+{
+	static const long sz[] = { 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 19, 20, 21, 23, 24, 25, 47, 48, 49, 71, 72, 73,
+		87, 88, 89, 143, 144, 145, 300, 1000 };
+	for (long c = 0; c < count; c++) {
+		long n = sz[rnd() % 32];
+		if (c % 2) montForceThresholds();
+		else montProductionThresholds();
+		long fl = rnd() % 4 ? n : rndBelow(n + 1);
+		long sl = rnd() % 4 ? n : 1 + rndBelow(n);
+		int aMode = (int) (rnd() % 7), bMode = (int) (rnd() % 8), mKind = (int) rnd();
+		int share = rnd() % 3 ? 0 : 1 + (int) (rnd() % 2);
+		u32 *a = dalloc(n), *b = dalloc(n), *m = dalloc(n), *r = dalloc(n);
+		if (share) sl = fl;
+		if (fl > 0 && sl == 0) sl = 1;
+		montModulus(m, n, mKind);
+		if (aMode == 5) { fl = n; if (share) sl = n; memcpy(a, m, n * 4); }
+		else fill(a, fl, aMode == 6 ? 2 : aMode);
+		if (share == 1) memcpy(b, a, fl * 4);
+		else if (share == 2) memcpy(b, a, fl * 4);
+		else fill(b, sl, bMode == 6 ? 2 : bMode % 5);
+		memset(r, 0, n * 4);
+		liDigitMontgomery(a, fl, share == 1 ? a : b, sl, m, n, montInv(GET(m, 0)), r);
+		printf("G"); hex(a, fl); hex(b, sl); hex(m, n); printf(" %ld", n); hex(r, n); printf("\n");
+		free(a); free(b); free(m); free(r);
+	}
+	montProductionThresholds();
+}
+
 int main(int argc, char **argv)
 {
 	if (argc > 2 && !strcmp(argv[1], "dump")) {
 		dump(atol(argv[2]));
 		dumpDivBZ(atol(argv[2]) / 3);
+		dumpMont(atol(argv[2]));
 		return fails != 0;
 	}
 	long scale = argc > 1 ? atol(argv[1]) : 1;
@@ -1050,8 +1462,18 @@ int main(int argc, char **argv)
 	testDivBZDirect(10000 * scale);
 	checkAddBacks("liDivRemBZ direct");
 	testDivBZNoMemory();
+	printf("-- Montgomery: LI_MONT_LOOP_DIGITS=%d LI_MONT_MUL_LIMBS=%d LI_MONT_SQR_LIMBS=%d\n", LI_MONT_LOOP_DIGITS, LI_MONT_MUL_LIMBS, LI_MONT_SQR_LIMBS);
+	testMontSizes();
+	testMontRandom(40000 * scale);
+	testMontThreshold(scale);
+	testMontPatterns();
+	testMontWrongInverse(10000 * scale);
+	testMontLarge();
+	testMontNoMemory();
+	testMontShort();
 	testScratchLimit();
-	printf("totals: %ld multiplies (%ld squares), %ld divisions (%ld + %ld through a failing malloc)\n", nMul, nSqr, nDiv, nFallbackMul, nFallbackDiv);
+	printf("totals: %ld multiplies (%ld squares), %ld divisions (%ld + %ld through a failing malloc), %ld Montgomery (%ld squares, %ld with a wrong inverse or an even modulus)\n",
+		nMul, nSqr, nDiv, nFallbackMul, nFallbackDiv, nMont, nMontSqr, nMontWrong);
 	printf("%s: %d failures\n", fails ? "FAILED" : "OK", fails);
 	return fails != 0;
 }
