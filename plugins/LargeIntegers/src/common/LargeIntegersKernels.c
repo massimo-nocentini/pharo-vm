@@ -55,8 +55,8 @@
 #include <string.h>
 
 #include "sqConfig.h"
-#include "sqPlatformSpecific.h"
 #include "memoryAccess.h"	/* sqInt, SQ_SWAP_4_BYTES_IF_BIGENDIAN */
+#include "sqPlatformSpecific.h"	/* after sqInt: the macOS one uses it, includes nothing for it */
 
 #include "LargeIntegersKernels.h"
 

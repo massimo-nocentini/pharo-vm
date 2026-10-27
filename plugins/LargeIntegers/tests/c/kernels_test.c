@@ -30,8 +30,10 @@
 
 #include "config.h"
 #include "sqConfig.h"
-#include "sqPlatformSpecific.h"
 #include "memoryAccess.h"
+/* LargeIntegersKernels.c includes sqConfig.h again, which the one of macOS refuses
+   while SQ_CONFIG_DONE is defined (it only defines macros: a second pass is harmless) */
+#undef SQ_CONFIG_DONE
 #ifdef FAKE_BIGENDIAN
 # undef SQ_SWAP_4_BYTES_IF_BIGENDIAN
 # define SQ_SWAP_4_BYTES_IF_BIGENDIAN(x) SQ_SWAP_4_BYTES(x)
