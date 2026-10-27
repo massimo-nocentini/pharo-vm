@@ -1,7 +1,8 @@
 /* sjText.h -- the pure C99 helpers of the SimdJSONPlugin (sjText.c): the
  * value-end scanner, transcoding of Smalltalk sources to UTF-8 and of
  * UTF-8 strings back to Smalltalk characters, the exponent gate and the
- * number-token enumerator, Spur object sizes, and the key set.
+ * number-token enumerator, Spur object sizes, the key set, and the output
+ * buffer and texts of the writer.
  *
  * No VM header and no simdjson header: the glue (C), the engine (C++) and
  * the test harness all use these functions.  JSON white space is the
@@ -42,6 +43,25 @@ typedef struct sj_keyset sj_keyset;                     /* open addressing on UT
 sj_keyset *sj_keyset_new(size_t hint);                  /* NULL on C OOM */
 void       sj_keyset_free(sj_keyset *k);
 int64_t    sj_keyset_index(sj_keyset *k, const char *utf8, size_t n, int *isNew);  /* 1-based; -1 on C OOM */
+
+/* Writing (primitiveWrite): a growable output buffer of UTF-8, and the
+   texts of NeoJSONWriter, byte for byte.  The appenders answer 0, or -1 on
+   C OOM (the buffer is then marked failed and keeps its contents). */
+typedef struct sj_out { char *p; size_t n, cap; } sj_out;
+void     sj_out_free(sj_out *o);
+int      sj_out_reserve(sj_out *o, size_t more);
+int      sj_out_bytes(sj_out *o, const char *s, size_t n);
+int      sj_out_char(sj_out *o, char c);
+int      sj_out_int64(sj_out *o, int64_t v);
+int      sj_out_magnitude(sj_out *o, const uint8_t *le, size_t n, int negative);  /* a LargeInteger's bytes */
+int      sj_out_string(sj_out *o, const void *src, int encoding, size_t n, int asciiOnly);
+         /* "..." as NeoJSONWriter>>writeString:, from Latin-1 (SJ_ENC_LATIN1) or code points
+            (SJ_ENC_UTF32); -2 for a code point beyond U+10FFFF */
+size_t   sj_float_to_pharo(double v, const char *shortest, size_t n, char *dst);
+         /* the shortest round-trip text of a finite double in printf's %g layout ("1e+15",
+            "1.5e-05", "100.0") as Float>>printOn: lays it out ("1.0e15", "1.5e-5", "100.0"),
+            a tie between two shortest digit strings rounded up; dst holds n + 32 bytes */
+size_t   sj_utf8_chars(const char *s, size_t n);       /* code points of well-formed UTF-8 */
 
 #ifdef __cplusplus
 }

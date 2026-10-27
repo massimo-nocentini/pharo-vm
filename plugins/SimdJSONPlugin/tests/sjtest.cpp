@@ -24,6 +24,10 @@
  *   T8  edges: BOM, blanks, depth, {} and [], white space after a value,
  *       messages; with SJ_SLOW=1, an array of 16,777,216 elements
  *   T10 (--report) the cost of parse, gate, enumeration, measure and walk
+ *   T11 the texts of the writer: strings and their escapes (Latin-1,
+ *       code points, asciiOnly), integers of any size against a decimal
+ *       conversion of their own, and doubles: Float>>printOn:'s layout,
+ *       its rounding of ties, and the round trip of random bit patterns
  *
  * Usage: sjtest [--corpus DIR] [--only T1,T2,...] [--slow] [--report]
  * DIR is the jsonexamples directory (default: $SJ_CORPUS); without it the
@@ -1697,6 +1701,141 @@ report()
 	}
 }
 
+/*** T11: the texts of the writer ***/
+
+static std::string
+outText(sj_out &o)
+{
+	std::string text(o.p ? o.p : "", o.n);
+	sj_out_free(&o);
+	return text;
+}
+
+static std::string
+writeLatin1(const std::string &s, int asciiOnly)
+{
+	sj_out o = {nullptr, 0, 0};
+	CHECK(sj_out_string(&o, s.data(), SJ_ENC_LATIN1, s.size(), asciiOnly) == 0);
+	return outText(o);
+}
+
+static std::string
+writeWide(const std::u32string &s, int asciiOnly, int *rc = nullptr)
+{
+	sj_out o = {nullptr, 0, 0};
+	int r = sj_out_string(&o, s.data(), SJ_ENC_UTF32, s.size(), asciiOnly);
+	if (rc) *rc = r; else CHECK(r == 0);
+	return outText(o);
+}
+
+static std::string
+printDouble(double v)
+{
+	char text[SJ_DOUBLE_CHARS];
+	size_t n = sj_print_double(v, text);
+	CHECK(n > 0);
+	return std::string(text, n);
+}
+
+/* The decimal digits of a little-endian magnitude, by doubling and adding
+   in base 10: slow, and written differently from sj_out_magnitude */
+static std::string
+decimalOf(const std::vector<uint8_t> &le)
+{
+	std::vector<int> digits{0};
+	for (size_t i = le.size(); i-- > 0;) {
+		for (int bit = 7; bit >= 0; bit--) {
+			int carry = (le[i] >> bit) & 1;
+			for (int &d : digits) {
+				int v = 2 * d + carry;
+				d = v % 10;
+				carry = v / 10;
+			}
+			if (carry) digits.push_back(carry);
+		}
+	}
+	std::string text;
+	for (size_t i = digits.size(); i-- > 0;) text += char('0' + digits[i]);
+	return text;
+}
+
+static void
+testWriter()
+{
+	std::string controls;
+	for (int c = 0; c < 32; c++) controls += char(c);
+	CHECK(writeLatin1("", 0) == "\"\"");
+	CHECK(writeLatin1("a\"b\\c/d", 0) == "\"a\\\"b\\\\c/d\"");
+	CHECK(writeLatin1(controls, 0) == "\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000B"
+		"\\f\\r\\u000E\\u000F\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001A\\u001B"
+		"\\u001C\\u001D\\u001E\\u001F\"");
+	CHECK(writeLatin1("\x7f\xe9\xff", 0) == "\"\x7f\xc3\xa9\xc3\xbf\"");
+	CHECK(writeLatin1("~\x7f\xe9", 1) == "\"~\\u007F\\u00E9\"");
+	CHECK(writeWide(std::u32string{'a', 0x20AC, 0x1D11E}, 0) == "\"a\xe2\x82\xac\xf0\x9d\x84\x9e\"");
+	CHECK(writeWide(std::u32string{0xD800, 0x10FFFF}, 0) == "\"\xed\xa0\x80\xf4\x8f\xbf\xbf\"");
+	CHECK(writeWide(std::u32string{0xE9, 0x20AC, 0x1D11E, 0xD800, 0x10FFFF}, 1)
+		== "\"\\u00E9\\u20AC\\uD834\\uDD1E\\uD800\\uDBFF\\uDFFF\"");
+	int rc = 0;
+	writeWide(std::u32string{'a', 0x110000}, 0, &rc);
+	CHECK(rc == -2);
+	writeWide(std::u32string{0x110000}, 1, &rc);
+	CHECK(rc == -2);
+	{	/* runs longer than the first buffer, and every byte value */
+		std::string all, expected = "\"";
+		for (int i = 0; i < 20000; i++) all += char(i % 256);
+		for (unsigned char c : all) {
+			char u[8];
+			if (c == '"') expected += "\\\"";
+			else if (c == '\\') expected += "\\\\";
+			else if (c == 8) expected += "\\b";
+			else if (c == 9) expected += "\\t";
+			else if (c == 10) expected += "\\n";
+			else if (c == 12) expected += "\\f";
+			else if (c == 13) expected += "\\r";
+			else if (c < 32) { snprintf(u, sizeof u, "\\u%04X", c); expected += u; }
+			else if (c < 128) expected += char(c);
+			else { expected += char(0xC0 | (c >> 6)); expected += char(0x80 | (c & 0x3F)); }
+		}
+		CHECK(writeLatin1(all, 0) == expected + "\"");
+	}
+
+	sj_out o = {nullptr, 0, 0};
+	CHECK(sj_out_int64(&o, 0) == 0 && sj_out_char(&o, ' ') == 0 && sj_out_int64(&o, INT64_MIN) == 0
+		&& sj_out_char(&o, ' ') == 0 && sj_out_int64(&o, INT64_MAX) == 0);
+	CHECK(outText(o) == "0 -9223372036854775808 9223372036854775807");
+	std::mt19937_64 random(20261027);
+	for (int i = 0; i < 3000; i++) {
+		std::vector<uint8_t> le(1 + random() % (i < 2000 ? 24 : 300));
+		for (auto &b : le) b = uint8_t(random());
+		if (i % 7 == 0) le.push_back(0);	/* not normalized */
+		bool negative = i % 2;
+		sj_out m = {nullptr, 0, 0};
+		CHECK(sj_out_magnitude(&m, le.data(), le.size(), negative) == 0);
+		std::string expected = decimalOf(le);
+		if (negative && expected != "0") expected = "-" + expected;
+		CHECKF(outText(m) == expected, "magnitude of %zu bytes", le.size());
+	}
+
+	struct { double v; const char *text; } spelled[] = {
+		{0.0, "0.0"}, {-0.0, "-0.0"}, {1.0, "1.0"}, {100.0, "100.0"}, {0.1, "0.1"}, {123456.789, "123456.789"},
+		{999999.0, "999999.0"}, {1e6, "1.0e6"}, {1234567.0, "1.234567e6"}, {123456789012345.0, "1.23456789012345e14"},
+		{1e15, "1.0e15"}, {1e22, "1.0e22"}, {1e-3, "0.001"}, {1.5e-4, "0.00015"}, {1e-4, "0.0001"}, {1e-5, "1.0e-5"},
+		{2.5e-7, "2.5e-7"}, {5e-324, "5.0e-324"}, {1.7976931348623157e308, "1.7976931348623157e308"},
+		{-2.4902358169137062e14, "-2.4902358169137063e14"}};	/* a tie: Pharo rounds it up */
+	for (auto &e : spelled)
+		CHECKF(printDouble(e.v) == e.text, "%.17g spelled %s, not %s", e.v, printDouble(e.v).c_str(), e.text);
+	for (int i = 0; i < 300000; i++) {
+		uint64_t bits = random();
+		double v;
+		memcpy(&v, &bits, sizeof v);
+		if (!std::isfinite(v)) continue;
+		std::string text = printDouble(v);
+		CHECKF(strtod(text.c_str(), nullptr) == v, "%.17g spelled %s", v, text.c_str());
+		CHECKF(text.find('.') != std::string::npos && text.find('+') == std::string::npos, "%s", text.c_str());
+	}
+}
+
+
 /*** main ***/
 
 static bool
@@ -1729,7 +1868,7 @@ main(int argc, char **argv)
 		printf("sjtest: no corpus (--corpus DIR or SJ_CORPUS): the corpus checks are skipped\n");
 	struct { const char *name; void (*run)(); } tests[] = {
 		{"T1", [] { testScannerCases(); testScannerFuzz(); }}, {"T2", testNumberTokens}, {"T3", testNumberPolicy},
-		{"T4", testTranscoding}, {"T5", testKeys}, {"T6", testMeasure}, {"T7", testIdempotence}};
+		{"T4", testTranscoding}, {"T5", testKeys}, {"T6", testMeasure}, {"T7", testIdempotence}, {"T11", testWriter}};
 	for (auto &t : tests) {
 		if (!selected(only, t.name)) continue;
 		currentTest = t.name;

@@ -2,7 +2,7 @@
 # run-c-tests.sh - C-level tests of the SimdJSONPlugin engine
 #
 # Builds tests/sjtest.cpp with sjEngine.cpp, sjText.c and the simdjson
-# amalgamation, and runs it (checks T1-T8, see sjtest.cpp) with
+# amalgamation, and runs it (checks T1-T8 and T11, see sjtest.cpp) with
 #
 #   clang++ -O2
 #   g++ -O2 -fsanitize=address,undefined

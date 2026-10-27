@@ -3,7 +3,8 @@
  * engine (sjEngine.cpp, C++17, the only file that includes simdjson.h).
  *
  * The engine parses one JSON value of a Smalltalk source object and walks
- * it, calling back the builder of the glue for every object to allocate.
+ * it, calling back the builder of the glue for every object to allocate;
+ * for the writer it only formats doubles.
  * The primitive contract is in docs/SimdJSON.md, section "Primitive contract".
  */
 
@@ -77,6 +78,11 @@ void        sj_release(int free_parser);
 const char *sj_error_message(int code);   /* static string, or NULL */
 void        sj_get_info(sj_info *info);
 void        sj_note_number_text(void);     /* counter, called by the builder */
+/* The text of a finite double as Float>>printOn: (and NeoJSONWriter) spells
+   it, from simdjson's shortest round-trip digits, into dst of at least
+   SJ_DOUBLE_CHARS bytes; answers its length, or 0 on C OOM. */
+enum { SJ_DOUBLE_CHARS = 64 };
+size_t      sj_print_double(double v, char *dst);
 #ifdef __cplusplus
 }
 #endif

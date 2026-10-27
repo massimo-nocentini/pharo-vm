@@ -1,7 +1,8 @@
 /* sjEngine.cpp -- the C++17 engine of the SimdJSONPlugin (see sjBridge.h)
  *
  * sj_read parses one JSON value of a source with simdjson's DOM and walks
- * it, calling the builder of SimdJSONPlugin.c for every Smalltalk object.
+ * it, calling the builder of SimdJSONPlugin.c for every Smalltalk object;
+ * sj_print_double formats the doubles of primitiveWrite.
  * It includes no VM header.  Only simdjson's public API is used, and no
  * std:: container, string or throwing allocation: the plugin is compiled
  * with -fno-exceptions, so a failed allocation must be an answer.
@@ -801,4 +802,20 @@ extern "C" void
 sj_note_number_text(void)
 {
 	stats[NUMBER_TEXTS]++;
+}
+
+/* simdjson's string_builder writes the shortest round-trip digits of a
+ * double; one builder, made on the first call, is cleared for each. */
+extern "C" size_t
+sj_print_double(double v, char *dst)
+{
+	static simdjson::builder::string_builder numbers(SJ_DOUBLE_CHARS);
+	std::string_view text;
+
+	numbers.clear();
+	numbers.append(v);
+	if (numbers.view().get(text) || text.size() > SJ_DOUBLE_CHARS - 32) {
+		return 0;
+	}
+	return sj_float_to_pharo(v, text.data(), text.size(), dst);
 }

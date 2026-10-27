@@ -3,6 +3,7 @@
 The SimdJSONPlugin parses JSON with [simdjson](https://github.com/simdjson/simdjson) 5.0.5, and `plugins/SimdJSONPlugin/st/SimdJSON.st` gives Pharo 15 a reader with the API of NeoJSON's `NeoJSONReader` on top of it: `SimdJSONReader`, which needs no NeoJSON.
 The plugin builds the whole value of a JSON document in one primitive call: Dictionaries and Arrays built in C when the reader is configured as NeoJSON's defaults, or else a tree that the reader turns into the configured classes, or walks for NeoJSON's mappings.
 Values, number classes, string classes and stream positions are NeoJSON's, with the exceptions listed below; the errors are classes of its own.
+`SimdJSONWriter` writes JSON as NeoJSON's `NeoJSONWriter` does, byte for byte, with a primitive that walks the value in C (see Writing).
 The plugin builds natively (Cog and Stack VMs) and in the WebAssembly VMs, where it is a builtin plugin.
 
 Files, in `plugins/SimdJSONPlugin`:
@@ -100,6 +101,32 @@ The stream given to `on:` decides how the input is read:
 Errors: `SimdJSONParseError` (with simdjson's error `code`, the `position` of the value and simdjson's message, or NeoJSON's message for an error of its rules), `SimdJSONResourceError` (C memory, the input cap, no plugin), `SimdJSONMappingNotFound`, and `OutOfMemory`; the first three are subclasses of `Error`, where NeoJSON raises `NeoJSONParseError` and `NeoJSONMappingNotFound`.
 When a read at the top level fails (`nextAs:`, `nextListAs:`, `parseMap`...), the reader and the stream are back before the value when the handler runs, so the handler can read it again: `[ reader nextAs: Point ] on: Error do: [ :e | reader next ]`.
 
+## Writing
+
+`SimdJSONWriter` answers NeoJSONWriter's protocol for writing values:
+
+    SimdJSONWriter toString: aDictionary.                           "a ByteString, or a WideString"
+    SimdJSONWriter toStringPretty: anArray.
+    SimdJSONWriter toBytes: aValue.                                 "UTF-8, at once"
+    (SimdJSONWriter on: aWriteStream) prettyPrint: true; nextPut: aValue.
+
+| selector | |
+|---|---|
+| `on:`, `toString:`, `toStringPretty:`, `nextPut:`, `close` | as NeoJSONWriter; `nextPut:` writes the bytes of UTF-8 on a binary stream, characters on any other |
+| `prettyPrint:`, `asciiOnly:`, `newLine:`, `writeNil:` | as NeoJSONWriter: a newline and a tab per level, `"key" : value`, `[ ]` and `{ }` for the empty ones; `\uXXXX` above 126 (a surrogate pair above U+FFFF); the line end (`OSPlatform current lineEnding`); `writeNil:` is for the object mappings |
+| `toBytes:`, `bytesFor:`, `stringFor:` | the JSON of a value as UTF-8 bytes or as a String, without a stream |
+| `nonFiniteAsNull:` | true writes NaN and the infinities as `null`; by default they signal `SimdJSONWriteError` |
+
+The output is NeoJSONWriter's, character for character, which `SimdJSONCompatTests` checks on the corpus and on edge values, plain, pretty and `asciiOnly`:
+
+- **Numbers**: integers of any size as `printString`; Floats as `Float>>printOn:` prints them (`0.1`, `100.0`, `1.0e6`, `1.0e-5`, `-0.0`): the shortest digits that read back as the same Float, which simdjson's port of Dragonbox computes, laid out by Pharo's rule (fixed notation from 0.001 up to 999999.9...), and a tie between two shortest digit strings rounded up, as Pharo does (Dragonbox rounds it to even).
+- **Strings**: `"` and `\` escaped, the control characters as `\b \t \n \f \r` or `\u00XX` with NeoJSON's uppercase hex digits, `/` and DEL as they are; Symbols too.
+- **Collections**: Array and OrderedCollection as lists, Dictionary as an object in the order of `keysAndValuesDo:`; a key that is not a String or a Symbol signals `SimdJSONWriteError` ('JSON key names in objects must be strings', as NeoJSON).
+- **NaN and infinities** are not JSON: NeoJSONWriter writes `Float nan` and `Float infinity`, `SimdJSONWriter` signals `SimdJSONWriteError` (code 2) or writes `null` with `nonFiniteAsNull: true`.
+- A value nested deeper than 1024 levels, a cycle most likely, signals `SimdJSONWriteError` (code 3), where NeoJSONWriter recurses until the stack is exhausted; a WideString character beyond U+10FFFF signals it with NeoJSON's message (code 4).
+
+The plugin writes nil, Booleans, SmallIntegers, LargeIntegers, Floats, ByteString, WideString, ByteSymbol, WideSymbol, Array, OrderedCollection and Dictionary (of exactly these classes); the objects of any other class, a Fraction, a Set, an OrderedDictionary, an instance of a subclass or a mapped object, are left to the image (holes, see Primitive contract), which writes none of them yet: they signal `SimdJSONWriteError` with the code `#unsupported`.
+
 ## Semantics against NeoJSON
 
 - **Numbers** are NeoJSON's by default: integers of any size; `1e2` is the Integer 100, `1e-2` the Fraction 1/100, `1e308` a LargePositiveInteger; a number with a fraction and no exponent is the same Float as NeoJSON's, bit for bit.
@@ -141,8 +168,9 @@ When a read at the top level fails (`nextAs:`, `nextListAs:`, `parseMap`...), th
 
 ## Primitive contract
 
-The module `SimdJSONPlugin` has four primitives; `SimdJSON.st` calls them from the class side of `SimdJSONReader`.
+The module `SimdJSONPlugin` has five primitives; `SimdJSON.st` calls them from the class side of `SimdJSONReader`, and `primitiveWrite` from that of `SimdJSONWriter`.
 `primitiveInfo` answers the protocol version first, and the image uses the plugin only when it is the one it speaks (`SimdJSONReader protocol`, 2).
+`primitiveWrite` came later, without a change of the protocol, since the reading primitives did not change: on a plugin without it, writing signals `SimdJSONResourceError`.
 
 `primRead: source from: start to: stop flags: flags budget: budget maxUnits: maxUnits objectClass: objClass associationClass: assocClassOrNil wideStringClass: wideClass hashSeed: seed dictLayout: layout` (`primitiveRead`, 11 arguments) reads the JSON value at `start` in `source`:
 
@@ -180,6 +208,32 @@ The primitive fails only with `PrimErrBadNumArgs`, `PrimErrBadArgument` or `Prim
 | `primitiveErrorMessage` | a code | simdjson's message of an `error_code`, the plugin's for 1001 and 1002, else nil |
 | `primitiveRelease` | a Boolean | nil; drops the kept parse, and with true frees the parser and the input buffer |
 
+`primWrite: value flags: flags newLine: aByteString maxDepth: depth maxBytes: maxBytes classes: classes layout: layout` (`primitiveWrite`, 7 arguments) writes the JSON of `value` as NeoJSONWriter writes it:
+
+| argument | |
+|---|---|
+| `value` | any object |
+| `flags` | the sum of 1 `PRETTY`, 2 `ASCII_ONLY`, 4 `BYTES` (answer a ByteArray of UTF-8, else the narrowest String) and 8 `NON_FINITE_NULL` (`SimdJSONWriter flagPretty`...) |
+| `aByteString` | the line end of `PRETTY` |
+| `depth` | the deepest level written (`SimdJSONWriter maxDepth`, 1024) |
+| `maxBytes` | the largest output, -1 for none |
+| `classes` | `{ ByteSymbol. WideString. WideSymbol. Dictionary. Association. OrderedCollection }`, the classes the VM's proxy does not name |
+| `layout` | `SimdJSONReader dictLayout`, then the 0-based slots of OrderedCollection `array`, `firstIndex` and `lastIndex` in bits 16 to 27 (`SimdJSONWriter writeLayout`) |
+
+It answers `{ status. output. holes. code. culprit }`:
+
+| status | output | code, culprit |
+|---|---|---|
+| 0 OK | the JSON | 0, nil |
+| 1 OVER_BUDGET | nil | the bytes the output needs: its allocation failed, so the image grows memory by that much and calls the primitive again |
+| 2 ERROR | nil | 1 a key that is not a String or a Symbol, 2 a NaN or an infinity, 3 a value deeper than `depth`, 4 a character beyond U+10FFFF; the culprit |
+| 3 TOO_LARGE | nil | 0, nil |
+
+`holes` is nil, or an Array `position1 object1 level1 position2...` of the objects whose class the walk does not know: each is left out of the output, to be written by the image at `position` (the units, bytes or characters, of the output before it) at the indentation `level`.
+The walk reads objects and allocates nothing, so the oops it records stay valid: the output and the holes are allocated at the end.
+It follows the forwarders that `become:` leaves (as when a ByteString that gets a wide character becomes a WideString) by their header, since the proxy has no call for them, and it only enters an object whose class it knows exactly (an Association too), so a forwarder anywhere else is a hole.
+The primitive fails only with `PrimErrBadNumArgs` or `PrimErrBadArgument`, `PrimErrNoMemory` (the five slots of the answer, or the holes) and `PrimErrNoCMemory`.
+
 ## Tests
 
     sh plugins/SimdJSONPlugin/tests/run-c-tests.sh --simdjson <simdjson tree> --corpus <simdjson-data>    # C: clang++, g++ with ASan and UBSan, em++
@@ -187,8 +241,9 @@ The primitive fails only with `PrimErrBadNumArgs`, `PrimErrBadArgument` or `Prim
     sh plugins/SimdJSONPlugin/tests/run-st-tests.sh build/build/vm <Pharo 15 image or zip> compat         # also SimdJSON-NeoTests, against NeoJSON
 
 `run-st-tests.sh <vm-dir> <image.zip or .image> [compat]` works on a copy of the image: it checks that every `.st` file is ASCII with one method a `methodsFor:` section, files them in, checks the banner of `SimdJSON.st`, runs each package with a JUnit file and summarises it.
-Its environment: `NEOJSON_DIR` (compat: a clone of NeoJSON), `SJ_CORPUS` (the `jsonexamples` directory of simdjson-data, for the corpus and jsonchecker tests), `SJ_SLOW` (runs `SimdJSONSlowTests`: 2 million boxed Floats, and an `OutOfMemory` at a capped old space), `SJ_NUM_TOKENS` (random number tokens, 100000 by default), `SJ_WORK_DIR` (where the image copy goes, else a new directory in `TMPDIR`) and `SJ_TIMEOUT` (seconds a step may take, 3600 by default).
-`compat` loads NeoJSON from `NEOJSON_DIR` (`st/load-neojson.st`) before `SimdJSON.st`, only to compare with it: `SimdJSONCompatTests` reads the semantics table, random number tokens and the corpus (`SJ_CORPUS`) with both readers and requires the same values, classes and stream positions, an error where NeoJSON has one, and a `SimdJSONParseError` only where NeoJSON is lenient, never on an RFC 8259 input of its list; then NeoJSON's own test classes run against `SimdJSONReader` (as `SJ<name>`, expecting SimdJSON's errors), but `testIntegers`, which only NeoJSON's leniency passes.
+Its environment: `NEOJSON_DIR` (compat: a clone of NeoJSON), `SJ_CORPUS` (the `jsonexamples` directory of simdjson-data, for the corpus and jsonchecker tests), `SJ_SLOW` (runs `SimdJSONSlowTests`: 2 million boxed Floats, and an `OutOfMemory` at a capped old space, reading and writing), `SJ_NUM_TOKENS` (random number tokens, 100000 by default), `SJ_WORK_DIR` (where the image copy goes, else a new directory in `TMPDIR`) and `SJ_TIMEOUT` (seconds a step may take, 3600 by default).
+`compat` loads NeoJSON from `NEOJSON_DIR` (`st/load-neojson.st`) before `SimdJSON.st`, only to compare with it: `SimdJSONCompatTests` reads the semantics table, random number tokens and the corpus (`SJ_CORPUS`) with both readers and requires the same values, classes and stream positions, an error where NeoJSON has one, and a `SimdJSONParseError` only where NeoJSON is lenient, never on an RFC 8259 input of its list; it writes 2,000 edge values and the corpus with both writers, plain, pretty, `asciiOnly` and with CR LF, and requires the same characters; then NeoJSON's own test classes run against `SimdJSONReader` (as `SJ<name>`, expecting SimdJSON's errors), but `testIntegers`, which only NeoJSON's leniency passes.
+`SimdJSONWriterTests` compares the Floats with `printString` on 40,000 random values, and T11 of `run-c-tests.sh` the C texts of the writer: the escapes, integers of up to 300 bytes against a decimal conversion of its own, the spelling of Floats, and the round trip of 300,000 random doubles.
 In the WebAssembly build, lane 68 of `make wasm-check` runs the suite with the node and the web VMs (see docs/WebAssembly.md).
 
 ## Benchmarks
@@ -543,6 +598,7 @@ In `primitiveInfo`'s statistics `gateHits` counts the gate's openings, and `enum
 ## Licences
 
 - simdjson is under the Apache License 2.0 or the MIT licence, at the user's choice: both texts are installed as `LICENSE.simdjson` and `LICENSE.simdjson-MIT`, next to the plugin on Linux and Windows (`build/vm`, the `lib` directory of the Linux zip) and in `Pharo.app/Contents/Resources` on macOS, and go into the `THIRD-PARTY-NOTICES.txt` of the WebAssembly VMs, with those of libc++ and libc++abi (Apache License 2.0 with LLVM exceptions), which the plugin links there.
+- The doubles of the writer go through simdjson's port of Dragonbox (Junekey Jeon), which simdjson's sources carry under the Boost Software License 1.0.
 - The mapper, the mapping classes and the number parser of `SimdJSON.st` are ports of NeoJSON, under its MIT licence (Copyright (C) 2012 Sven Van Caekenberghe), which the file carries.
 - The benchmark corpus is not part of this repository: `fetch-corpus.sh` downloads it, and its files keep the terms of their sources.
 
@@ -550,7 +606,7 @@ This is not legal advice.
 
 ## Limitations
 
-- Reading only: there is no writer; NeoJSONWriter or STON writes JSON.
+- The writer writes plain data only (see Writing): no Fractions, no other collections, no object mappings yet.
 - Pharo 15 only: `SimdJSON.st` is written in the class syntax and chunk format of Pharo 15.
 - Only Dictionaries and Arrays are built in C; OrderedDictionary, NeoJSONObject, SmallDictionary and OrderedCollection go through the tree.
 - A value is parsed whole: a stream other than a ReadStream on a String or a ByteArray is read to its end first, and the web VM does not return to its page during a primitive call.

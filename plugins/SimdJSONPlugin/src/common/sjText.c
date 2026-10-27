@@ -6,6 +6,7 @@
  * every index here is a unit index.
  */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -637,4 +638,356 @@ sj_keyset_index(sj_keyset *k, const char *utf8, size_t n, int *isNew)
 	k->table[i] = (uint32_t)++k->count;
 	*isNew = 1;
 	return (int64_t)k->count;
+}
+
+
+/*** Writing ***/
+
+void
+sj_out_free(sj_out *o)
+{
+	free(o->p);
+	o->p = NULL;
+	o->n = o->cap = 0;
+}
+
+int
+sj_out_reserve(sj_out *o, size_t more)
+{
+	size_t cap;
+	char *grown;
+
+	if (more <= o->cap - o->n)
+		return 0;
+	if (more > SIZE_MAX / 2 - o->n)
+		return -1;
+	cap = o->cap ? o->cap : 4096;
+	while (cap - o->n < more)
+		cap *= 2;
+	if (!(grown = realloc(o->p, cap)))
+		return -1;
+	o->p = grown;
+	o->cap = cap;
+	return 0;
+}
+
+int
+sj_out_bytes(sj_out *o, const char *s, size_t n)
+{
+	if (sj_out_reserve(o, n))
+		return -1;
+	memcpy(o->p + o->n, s, n);
+	o->n += n;
+	return 0;
+}
+
+int
+sj_out_char(sj_out *o, char c)
+{
+	if (o->n == o->cap && sj_out_reserve(o, 1))
+		return -1;
+	o->p[o->n++] = c;
+	return 0;
+}
+
+static int
+outUInt64(sj_out *o, uint64_t v, int negative)
+{
+	char digits[21];
+	int i = 21;
+
+	do {
+		digits[--i] = (char)('0' + v % 10);
+		v /= 10;
+	} while (v);
+	if (negative)
+		digits[--i] = '-';
+	return sj_out_bytes(o, digits + i, (size_t)(21 - i));
+}
+
+int
+sj_out_int64(sj_out *o, int64_t v)
+{
+	return v < 0 ? outUInt64(o, 0 - (uint64_t)v, 1) : outUInt64(o, (uint64_t)v, 0);
+}
+
+/* The decimal digits of a magnitude of any size (LargePositiveInteger and
+ * LargeNegativeInteger hold it in little-endian bytes): 32-bit limbs,
+ * divided by 10^9 until nothing is left, quadratic but only on numbers of
+ * more than 64 bits. */
+int
+sj_out_magnitude(sj_out *o, const uint8_t *le, size_t n, int negative)
+{
+	uint32_t *limbs;
+	uint32_t *chunks;
+	size_t nlimbs, nchunks = 0, i;
+	uint64_t small = 0;
+	char nine[10];
+	int k, rc = 0;
+
+	while (n > 0 && le[n - 1] == 0)
+		n--;
+	if (n <= 8) {
+		for (i = n; i > 0; i--)
+			small = (small << 8) | le[i - 1];
+		return outUInt64(o, small, negative && small != 0);
+	}
+	nlimbs = (n + 3) / 4;
+	limbs = calloc(nlimbs, sizeof *limbs);
+	chunks = malloc((nlimbs * 10 / 9 + 2) * sizeof *chunks);	/* 2^32 < 10^9 * 4.3 */
+	if (!limbs || !chunks) {
+		free(limbs);
+		free(chunks);
+		return -1;
+	}
+	for (i = 0; i < n; i++)
+		limbs[i / 4] |= (uint32_t)le[i] << (8 * (i % 4));
+	while (nlimbs > 0) {
+		uint64_t rem = 0;
+
+		for (i = nlimbs; i > 0; i--) {
+			uint64_t cur = (rem << 32) | limbs[i - 1];
+
+			limbs[i - 1] = (uint32_t)(cur / 1000000000u);
+			rem = cur % 1000000000u;
+		}
+		chunks[nchunks++] = (uint32_t)rem;
+		while (nlimbs > 0 && limbs[nlimbs - 1] == 0)
+			nlimbs--;
+	}
+	if (negative)
+		rc = sj_out_char(o, '-');
+	if (!rc)
+		rc = outUInt64(o, chunks[nchunks - 1], 0);
+	for (i = nchunks - 1; !rc && i > 0; i--) {
+		for (k = 8; k >= 0; k--) {
+			nine[k] = (char)('0' + chunks[i - 1] % 10);
+			chunks[i - 1] /= 10;
+		}
+		rc = sj_out_bytes(o, nine, 9);
+	}
+	free(limbs);
+	free(chunks);
+	return rc;
+}
+
+/* NeoJSONWriter>>escapeChar: and escapeUnicode4:, with its uppercase hex */
+static int
+outEscape(sj_out *o, uint32_t c)
+{
+	static const char hex[] = "0123456789ABCDEF";
+	char u[6];
+
+	switch (c) {
+	case '"': return sj_out_bytes(o, "\\\"", 2);
+	case '\\': return sj_out_bytes(o, "\\\\", 2);
+	case 8: return sj_out_bytes(o, "\\b", 2);
+	case 12: return sj_out_bytes(o, "\\f", 2);
+	case 10: return sj_out_bytes(o, "\\n", 2);
+	case 13: return sj_out_bytes(o, "\\r", 2);
+	case 9: return sj_out_bytes(o, "\\t", 2);
+	}
+	u[0] = '\\';
+	u[1] = 'u';
+	u[2] = hex[(c >> 12) & 15];
+	u[3] = hex[(c >> 8) & 15];
+	u[4] = hex[(c >> 4) & 15];
+	u[5] = hex[c & 15];
+	return sj_out_bytes(o, u, 6);
+}
+
+static int
+outUtf8(sj_out *o, uint32_t c)
+{
+	char b[4];
+
+	if (c < 0x80)
+		return sj_out_char(o, (char)c);
+	if (c < 0x800) {
+		b[0] = (char)(0xC0 | (c >> 6));
+		b[1] = (char)(0x80 | (c & 0x3F));
+		return sj_out_bytes(o, b, 2);
+	}
+	if (c < 0x10000) {	/* surrogates too: NeoJSON writes the character as it is */
+		b[0] = (char)(0xE0 | (c >> 12));
+		b[1] = (char)(0x80 | ((c >> 6) & 0x3F));
+		b[2] = (char)(0x80 | (c & 0x3F));
+		return sj_out_bytes(o, b, 3);
+	}
+	b[0] = (char)(0xF0 | (c >> 18));
+	b[1] = (char)(0x80 | ((c >> 12) & 0x3F));
+	b[2] = (char)(0x80 | ((c >> 6) & 0x3F));
+	b[3] = (char)(0x80 | (c & 0x3F));
+	return sj_out_bytes(o, b, 4);
+}
+
+/* NeoJSONWriter>>doesCodePointNeedEscaping: is c < 32, " and \, and with
+ * asciiOnly c > 126; the other characters go out as UTF-8.  Runs of
+ * characters that need nothing are copied at once. */
+#define plainByte(c, asciiOnly) ((c) >= 32 && (c) != '"' && (c) != '\\' && (c) < ((asciiOnly) ? 127 : 128))
+
+int
+sj_out_string(sj_out *o, const void *src, int encoding, size_t n, int asciiOnly)
+{
+	size_t i = 0, run;
+	uint32_t c;
+
+	if (sj_out_reserve(o, n + 2) || sj_out_char(o, '"'))
+		return -1;
+	while (i < n) {
+		if (encoding == SJ_ENC_LATIN1) {
+			const uint8_t *s = (const uint8_t *)src;
+
+			for (run = i; run < n && plainByte(s[run], asciiOnly); run++) {
+			}
+			if (run > i && sj_out_bytes(o, (const char *)s + i, run - i))
+				return -1;
+			if ((i = run) == n)
+				break;
+			c = s[i++];
+		} else {
+			c = ((const uint32_t *)src)[i++];
+		}
+		if (c < 32 || c == '"' || c == '\\' || (asciiOnly && c > 126 && c <= 0xFFFF)) {
+			if (outEscape(o, c))
+				return -1;
+		} else if (c > 0x10FFFF) {
+			return -2;
+		} else if (asciiOnly && c > 0xFFFF) {
+			c -= 0x10000;
+			if (outEscape(o, 0xD800 + (c >> 10)) || outEscape(o, 0xDC00 + (c & 0x3FF)))
+				return -1;
+		} else if (outUtf8(o, c)) {
+			return -1;
+		}
+	}
+	return sj_out_char(o, '"');
+}
+
+/* Whether |v| is exactly odd x 10^t, odd being 10 D + 5: the midpoint of
+ * the digits D and D + 1.  With |v| = m 2^q, m odd, and odd x 5^t x 2^t
+ * (t >= 0) or odd / 5^-t / 2^-t (t < 0), the powers of 2 and the odd parts
+ * must match; integers of 64 bits suffice, as m < 2^53 and odd < 10^18. */
+static int
+isMidpoint(double v, uint64_t odd, int t)
+{
+	uint64_t bits, m, x;
+	int q, i;
+
+	memcpy(&bits, &v, sizeof bits);
+	m = bits & 0xFFFFFFFFFFFFFull;
+	q = (int)((bits >> 52) & 0x7FF);
+	if (q) {
+		m |= 1ull << 52;
+		q -= 1075;
+	} else {
+		q = -1074;
+	}
+	if (!m)
+		return 0;
+	while (!(m & 1)) {
+		m >>= 1;
+		q++;
+	}
+	if (q != t)
+		return 0;
+	x = t >= 0 ? odd : m;
+	for (i = 0; i < (t >= 0 ? t : -t); i++) {
+		if (x > UINT64_MAX / 5)
+			return 0;
+		x *= 5;
+	}
+	return t >= 0 ? x == m : x == odd;
+}
+
+/* Float>>absPrintExactlyOn:base: lays the shortest digits d1..dn of a
+ * value 0.d1..dn x 10^k out in fixed notation when -3 <= k <= 6 ("0.001",
+ * "123.0", "1000000.0" is "1.0e6"), else as "d1.d2..dn" (".0" when n is 1),
+ * "e" and k - 1.  simdjson's text (Dragonbox) gives the same shortest
+ * digits, in printf's %g layout ("1e+15", "1.5e-05", "0.0001", "100.0"),
+ * but for a tie between two shortest digit strings: Dragonbox takes the
+ * even one, Pharo the upper one (r * 2 >= s). */
+size_t
+sj_float_to_pharo(double v, const char *s, size_t n, char *dst)
+{
+	char digits[32];
+	size_t i = 0, k = 0, nd = 0, intDigits = 0, zerosAfterPoint = 0;
+	int exp10, sawPoint = 0, sawDigit = 0, e = 0, eNegative = 0;
+
+	if (i < n && s[i] == '-')
+		dst[k++] = s[i++];
+	for (; i < n && s[i] != 'e' && s[i] != 'E'; i++) {
+		if (s[i] == '.') {
+			sawPoint = 1;
+		} else if (s[i] == '0' && !sawDigit) {
+			if (sawPoint)
+				zerosAfterPoint++;
+		} else if (nd < sizeof digits) {
+			sawDigit = 1;
+			digits[nd++] = s[i];
+			if (!sawPoint)
+				intDigits++;
+		}
+	}
+	if (i < n) {
+		for (i++; i < n && (s[i] == '+' || s[i] == '-'); i++)
+			eNegative = s[i] == '-';
+		for (; i < n; i++)
+			e = 10 * e + (s[i] - '0');
+	}
+	while (nd > 1 && digits[nd - 1] == '0') {	/* zeros of the layout, as in "100.0" */
+		nd--;
+	}
+	if (nd == 0 || (nd == 1 && digits[0] == '0')) {	/* zero, which Float>>printOn: spells itself */
+		memcpy(dst + k, "0.0", 3);
+		return k + 3;
+	}
+	exp10 = (eNegative ? -e : e) + (intDigits ? (int)intDigits : -(int)zerosAfterPoint);
+	if (nd <= 17 && (digits[nd - 1] - '0') % 2 == 0) {
+		uint64_t d = 0;
+
+		for (i = 0; i < nd; i++)
+			d = 10 * d + (uint64_t)(digits[i] - '0');
+		if (isMidpoint(v, 10 * d + 5, exp10 - (int)nd - 1))
+			digits[nd - 1]++;
+	}
+	if (exp10 >= -3 && exp10 <= 6) {
+		if (exp10 <= 0) {
+			dst[k++] = '0';
+			dst[k++] = '.';
+			for (i = 0; i < (size_t)-exp10; i++)
+				dst[k++] = '0';
+			memcpy(dst + k, digits, nd);
+			return k + nd;
+		}
+		for (i = 0; i < nd || i < (size_t)exp10; i++) {
+			if (i == (size_t)exp10)
+				dst[k++] = '.';
+			dst[k++] = i < nd ? digits[i] : '0';
+		}
+		if (nd <= (size_t)exp10) {
+			dst[k++] = '.';
+			dst[k++] = '0';
+		}
+		return k;
+	}
+	dst[k++] = digits[0];
+	dst[k++] = '.';
+	if (nd == 1) {
+		dst[k++] = '0';
+	} else {
+		memcpy(dst + k, digits + 1, nd - 1);
+		k += nd - 1;
+	}
+	return k + (size_t)sprintf(dst + k, "e%d", exp10 - 1);
+}
+
+size_t
+sj_utf8_chars(const char *s, size_t n)
+{
+	size_t i, count = 0;
+
+	for (i = 0; i < n; i++)
+		count += ((uint8_t)s[i] & 0xC0) != 0x80;
+	return count;
 }

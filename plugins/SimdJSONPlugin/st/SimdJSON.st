@@ -2,6 +2,8 @@
 SimdJSONPlugin of this VM (plugins/SimdJSONPlugin, docs/SimdJSON.md), with the API of
 NeoJSONReader and no other dependency: NeoJSON need not be in the image, and when it is,
 SimdJSONReader still has no NeoJSON class in its hierarchy and sends nothing to NeoJSON.
+SimdJSONWriter writes JSON as NeoJSONWriter does, byte for byte, through the plugin's
+primitiveWrite.
 
 SimdJSONReader is a subclass of SimdJSONMapper, a port of NeoJSON's mapper and mapping
 classes (the reading side).  It is strict RFC 8259: what simdjson refuses, NeoJSON's
@@ -62,6 +64,7 @@ g := Smalltalk globals.
 (Error << #SimdJSONParseError slots: { #code. #position }; tag: 'Errors'; package: 'SimdJSON') install.
 (Error << #SimdJSONResourceError slots: { #code }; tag: 'Errors'; package: 'SimdJSON') install.
 (Error << #SimdJSONMappingNotFound slots: { #object. #collection }; tag: 'Errors'; package: 'SimdJSON') install.
+(Error << #SimdJSONWriteError slots: { #code. #culprit }; tag: 'Errors'; package: 'SimdJSON') install.
 (Object << #SimdJSONMapper slots: { #mappings }; tag: 'Mapping'; package: 'SimdJSON') install.
 (Object << #SimdJSONMapping tag: 'Mapping'; package: 'SimdJSON') install.
 ((g at: #SimdJSONMapping) << #SimdJSONObjectMapping slots: { #subjectClass. #properties. #allowNil };
@@ -77,6 +80,9 @@ g := Smalltalk globals.
 	sharedVariables: { #Statistics. #SessionToken. #PluginInfo. #NativeVerdict. #NativeEnabled.
 		#MaxInputUnits. #TestHooks };
 	tag: 'Core'; package: 'SimdJSON') install.
+((g at: #SimdJSONMapper) << #SimdJSONWriter
+	slots: #( #writeStream #prettyPrint #asciiOnly #newLine #writeNil #nonFiniteAsNull #level );
+	tag: 'Writing'; package: 'SimdJSON') install.
 Transcript show: 'SimdJSON: SimdJSONReader loaded, a subclass of ', (g at: #SimdJSONReader) superclass name; cr.
 !
 
@@ -1607,4 +1613,268 @@ signalError: code at: unitIndex
 		code: code;
 		position: unitIndex;
 		signal: 'simdjson: ', (self class errorMessageFor: code)
+! !
+
+!SimdJSONWriteError methodsFor: 'accessing'!
+code
+	"1 a key that is not a string, 2 a NaN or an infinity, 3 too deep a value, 4 a code point
+	beyond U+10FFFF, #unsupported an object that the plugin leaves to the image"
+
+	^ code
+! !
+
+!SimdJSONWriteError methodsFor: 'accessing'!
+code: anObject
+	code := anObject
+! !
+
+!SimdJSONWriteError methodsFor: 'accessing'!
+culprit
+	"The object that could not be written"
+
+	^ culprit
+! !
+
+!SimdJSONWriteError methodsFor: 'accessing'!
+culprit: anObject
+	culprit := anObject
+! !
+
+!SimdJSONWriter class methodsFor: 'instance creation'!
+on: aWriteStream
+	"A stream of characters gets a String, a binary stream the bytes of UTF-8"
+
+	^ self new
+		on: aWriteStream;
+		yourself
+! !
+
+!SimdJSONWriter class methodsFor: 'convenience'!
+toString: anObject
+	"What NeoJSONWriter toString: answers, the same characters"
+
+	^ self new stringFor: anObject
+! !
+
+!SimdJSONWriter class methodsFor: 'convenience'!
+toStringPretty: anObject
+	^ self new
+		prettyPrint: true;
+		stringFor: anObject
+! !
+
+!SimdJSONWriter class methodsFor: 'convenience'!
+toBytes: anObject
+	"The UTF-8 bytes of toString:, made at once"
+
+	^ self new bytesFor: anObject
+! !
+
+!SimdJSONWriter class methodsFor: 'configuration'!
+maxDepth
+	"The deepest nesting the plugin writes: deeper, the value is likely a cycle"
+
+	^ 1024
+! !
+
+!SimdJSONWriter class methodsFor: 'configuration'!
+writeClasses
+	"The classes that primitiveWrite knows besides those of the VM's proxy"
+
+	^ { ByteSymbol. WideString. WideSymbol. Dictionary. Association. OrderedCollection }
+! !
+
+!SimdJSONWriter class methodsFor: 'configuration'!
+writeLayout
+	"The 0-based slots, 4 bits each: SimdJSONReader dictLayout (Dictionary tally and array,
+	Association key and value), then OrderedCollection array, firstIndex and lastIndex"
+
+	| indexes |
+	indexes := #( #array #firstIndex #lastIndex ) collect: [ :each |
+		(OrderedCollection allInstVarNames indexOf: each) - 1 ].
+	(indexes anySatisfy: [ :each | each < 0 or: [ each > 15 ] ])
+		ifTrue: [ ^ SimdJSONResourceError new signal: 'the slots of OrderedCollection are not array, firstIndex and lastIndex' ].
+	^ SimdJSONReader dictLayout
+		+ (indexes first << 16) + (indexes second << 20) + (indexes third << 24)
+! !
+
+!SimdJSONWriter class methodsFor: 'primitives'!
+flagPretty
+	^ 1
+! !
+
+!SimdJSONWriter class methodsFor: 'primitives'!
+flagAsciiOnly
+	^ 2
+! !
+
+!SimdJSONWriter class methodsFor: 'primitives'!
+flagBytes
+	"primWrite: flag: a ByteArray of UTF-8, else the narrowest String"
+
+	^ 4
+! !
+
+!SimdJSONWriter class methodsFor: 'primitives'!
+flagNonFiniteNull
+	^ 8
+! !
+
+!SimdJSONWriter class methodsFor: 'primitives'!
+primWrite: value flags: flags newLine: aByteString maxDepth: depth maxBytes: bytes
+		classes: classes layout: layout
+	"The JSON of value, as { status. output. holes. code. culprit }; docs/SimdJSON.md,
+	Primitive contract, has the whole contract"
+
+	<primitive: 'primitiveWrite' module: 'SimdJSONPlugin' error: ec>
+	^ SimdJSONFailure on: ec
+! !
+
+!SimdJSONWriter methodsFor: 'initialize-release'!
+initialize
+	super initialize.
+	prettyPrint := asciiOnly := writeNil := nonFiniteAsNull := false.
+	newLine := OSPlatform current lineEnding.
+	level := 0
+! !
+
+!SimdJSONWriter methodsFor: 'initialize-release'!
+on: aWriteStream
+	writeStream := aWriteStream
+! !
+
+!SimdJSONWriter methodsFor: 'initialize-release'!
+close
+	writeStream ifNotNil: [
+		writeStream close.
+		writeStream := nil ]
+! !
+
+!SimdJSONWriter methodsFor: 'initialize-release'!
+prettyPrint: aBoolean
+	"Newlines and a tab per level, and a space around the colon of a key, as NeoJSONWriter"
+
+	prettyPrint := aBoolean
+! !
+
+!SimdJSONWriter methodsFor: 'initialize-release'!
+asciiOnly: aBoolean
+	"Escape every character above 126 as \uXXXX (a surrogate pair beyond U+FFFF)"
+
+	asciiOnly := aBoolean
+! !
+
+!SimdJSONWriter methodsFor: 'initialize-release'!
+newLine: aString
+	"The line end of pretty printing; OSPlatform current lineEnding by default"
+
+	newLine := aString
+! !
+
+!SimdJSONWriter methodsFor: 'initialize-release'!
+writeNil: aBoolean
+	"Whether the object mappings write the properties whose value is nil"
+
+	writeNil := aBoolean
+! !
+
+!SimdJSONWriter methodsFor: 'initialize-release'!
+nonFiniteAsNull: aBoolean
+	"true: NaN and the infinities are written null; false (the default): they signal
+	SimdJSONWriteError, since JSON has no such number (NeoJSONWriter writes Float nan)"
+
+	nonFiniteAsNull := aBoolean
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+nextPut: anObject
+	"Write the JSON of anObject on the stream given to on:"
+
+	writeStream nextPutAll: (((writeStream respondsTo: #isBinary) and: [ writeStream isBinary ])
+		ifTrue: [ self bytesFor: anObject ]
+		ifFalse: [ self stringFor: anObject ])
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+stringFor: anObject
+	"The JSON of anObject, a ByteString or a WideString"
+
+	^ self write: anObject bytes: false
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+bytesFor: anObject
+	"The JSON of anObject in UTF-8"
+
+	^ self write: anObject bytes: true
+! !
+
+!SimdJSONWriter methodsFor: 'private'!
+flagsBytes: aBoolean
+	| class |
+	class := self class.
+	^ (prettyPrint ifTrue: [ class flagPretty ] ifFalse: [ 0 ])
+		+ (asciiOnly ifTrue: [ class flagAsciiOnly ] ifFalse: [ 0 ])
+		+ (aBoolean ifTrue: [ class flagBytes ] ifFalse: [ 0 ])
+		+ (nonFiniteAsNull ifTrue: [ class flagNonFiniteNull ] ifFalse: [ 0 ])
+! !
+
+!SimdJSONWriter methodsFor: 'private'!
+prim: anObject flags: flags
+	(SimdJSONReader testHook: #pluginMissing) == true ifTrue: [ ^ SimdJSONFailure on: nil ].
+	^ self class
+		primWrite: anObject flags: flags newLine: newLine asString asByteString
+		maxDepth: self class maxDepth maxBytes: -1
+		classes: self class writeClasses layout: self class writeLayout
+! !
+
+!SimdJSONWriter methodsFor: 'private'!
+write: anObject bytes: aBoolean
+	"One call of primitiveWrite; when the output did not fit in object memory, grow it by
+	what the output needs and call it once more"
+
+	| flags r |
+	flags := self flagsBytes: aBoolean.
+	r := self prim: anObject flags: flags.
+	(r class ~~ SimdJSONFailure and: [ (r at: 1) = 1 ]) ifTrue: [
+		SimdJSONReader count: #grows.
+		Smalltalk growMemoryByAtLeast: (r at: 4) + 1048576.
+		r := self prim: anObject flags: flags.
+		(r class ~~ SimdJSONFailure and: [ (r at: 1) = 1 ]) ifTrue: [ ^ OutOfMemory signal ] ].
+	r class == SimdJSONFailure ifTrue: [ ^ self failed: r ].
+	(r at: 1) = 2 ifTrue: [ ^ self signalError: (r at: 4) culprit: (r at: 5) ].
+	(r at: 1) = 3 ifTrue: [
+		^ SimdJSONResourceError new code: #tooLarge; signal: 'the JSON exceeds the cap of SimdJSONWriter' ].
+	(r at: 3) ifNotNil: [ :holes |
+		^ SimdJSONWriteError new
+			code: #unsupported;
+			culprit: (holes at: 2);
+			signal: 'SimdJSONWriter cannot write ', (holes at: 2) class name,
+				' yet: the plugin writes nil, Booleans, Integers, Floats, Strings, Symbols, Array, OrderedCollection and Dictionary' ].
+	^ r at: 2
+! !
+
+!SimdJSONWriter methodsFor: 'private'!
+failed: aFailure
+	aFailure isUnavailable ifTrue: [
+		^ SimdJSONResourceError new
+			code: #'not found';
+			signal: 'SimdJSONPlugin not available, or without primitiveWrite' ].
+	aFailure isNoCMemory ifTrue: [
+		^ SimdJSONResourceError new
+			code: #'insufficient C memory';
+			signal: 'SimdJSONPlugin: out of C memory' ].
+	aFailure isNoMemory ifTrue: [ ^ OutOfMemory signal ].
+	^ self primitiveFailed
+! !
+
+!SimdJSONWriter methodsFor: 'private'!
+signalError: code culprit: anObject
+	^ SimdJSONWriteError new
+		code: code;
+		culprit: anObject;
+		signal: (code = 1 ifTrue: [ 'JSON key names in objects must be strings' ]
+			ifFalse: [ code = 2 ifTrue: [ 'JSON has no NaN or Infinity: ', anObject printString ]
+			ifFalse: [ code = 3 ifTrue: [ 'nesting deeper than ', self class maxDepth printString, ' (a cycle?)' ]
+			ifFalse: [ 'Character Unicode code point outside encoder range' ] ] ])
 ! !

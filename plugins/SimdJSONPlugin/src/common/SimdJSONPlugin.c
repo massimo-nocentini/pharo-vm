@@ -1,7 +1,8 @@
 /* SimdJSONPlugin.c -- the VM side of the SimdJSONPlugin: the module
- * functions, the four primitives of plugins/SimdJSONPlugin/st/SimdJSON.st,
- * and the builder (sjBridge.h) through which src/cxx/sjEngine.cpp makes the
- * objects of a JSON value.  This file never includes simdjson.h, and the
+ * functions, the five primitives of plugins/SimdJSONPlugin/st/SimdJSON.st,
+ * the builder (sjBridge.h) through which src/cxx/sjEngine.cpp makes the
+ * objects of a JSON value, and the walk of primitiveWrite, which writes the
+ * JSON of a value.  This file never includes simdjson.h, and the
  * engine never includes a VM header.
  *
  * Natively it is the shared library libSimdJSONPlugin.so, whose module
@@ -39,7 +40,7 @@
 # define EXPORT(returnType) static returnType
 #endif
 
-#define SJ_PROTOCOL 2	/* 2: primitiveRead takes maxUnits, status 3 TOO_LARGE */
+#define SJ_PROTOCOL 2	/* 2: primitiveRead takes maxUnits, status 3 TOO_LARGE; primitiveWrite came later without a change of the read contract */
 #define SJ_PLUGIN_VERSION "SimdJSONPlugin 1.0"
 #ifndef SJ_SIMDJSON_VERSION
 # define SJ_SIMDJSON_VERSION "5.0.5"	/* the release cmake/simdjson.cmake pins */
@@ -68,6 +69,7 @@ EXPORT(sqInt) primitiveErrorMessage(void);
 EXPORT(sqInt) primitiveInfo(void);
 EXPORT(sqInt) primitiveRead(void);
 EXPORT(sqInt) primitiveRelease(void);
+EXPORT(sqInt) primitiveWrite(void);
 EXPORT(sqInt) setInterpreter(struct VirtualMachine *anInterpreter);
 EXPORT(sqInt) shutdownModule(void);
 
@@ -828,6 +830,508 @@ primitiveRelease(void)
 }
 
 
+/*** The walk of primitiveWrite ***/
+
+/* An object the walk leaves to the image: its JSON goes at byte `at` of
+ * the output, written at the indentation level `level`. */
+typedef struct { sqInt object; size_t at; sqInt level; } Hole;
+
+enum { SJW_PRETTY = 1, SJW_ASCII_ONLY = 2, SJW_BYTES = 4, SJW_NON_FINITE_NULL = 8 };
+enum { SJW_OK = 0, SJW_OVER_BUDGET = 1, SJW_ERROR = 2, SJW_TOO_LARGE = 3 };
+enum { SJW_ERR_KEY = 1, SJW_ERR_NON_FINITE = 2, SJW_ERR_DEPTH = 3, SJW_ERR_CODE_POINT = 4 };
+enum { SJW_C_OOM = -1, SJW_FAILED = -2, SJW_OVER = -3 };	/* walk answers besides 0 */
+
+static sj_out output;
+static Hole *holes;
+static size_t holeCount, holeCapacity;
+static char *newLine;
+static size_t newLineSize;
+static int writeFlags, maxDepth, errorCode;
+static int64_t maxBytes;
+static sqInt culprit;
+static sqInt byteSymbolClass, wideSymbolClass, dictionaryClass, writerAssociationClass, orderedCollectionClass;
+static int ocArrayIndex, ocFirstIndex, ocLastIndex;
+
+static void
+freeWriteState(void)
+{
+	sj_out_free(&output);
+	free(holes);
+	holes = NULL;
+	holeCount = holeCapacity = 0;
+	free(newLine);
+	newLine = NULL;
+	newLineSize = 0;
+}
+
+static int
+fail(int code, sqInt object)
+{
+	errorCode = code;
+	culprit = object;
+	return SJW_FAILED;
+}
+
+/* The appenders answer -1 on C OOM; maxBytes is checked once per value */
+static int
+emit(const char *s, size_t n)
+{
+	return sj_out_bytes(&output, s, n) ? SJW_C_OOM : 0;
+}
+
+static int
+newlineIndent(sqInt level)
+{
+	sqInt i;
+
+	if (!(writeFlags & SJW_PRETTY)) {
+		return 0;
+	}
+	if (emit(newLine, newLineSize)) {
+		return SJW_C_OOM;
+	}
+	for (i = 0; i < level; i++) {
+		if (sj_out_char(&output, '\t')) {
+			return SJW_C_OOM;
+		}
+	}
+	return 0;
+}
+
+static int
+addHole(sqInt object, sqInt level)
+{
+	if (holeCount == holeCapacity) {
+		size_t capacity = holeCapacity ? 2 * holeCapacity : 16;
+		Hole *grown = realloc(holes, capacity * sizeof(Hole));
+
+		if (!grown) {
+			return SJW_C_OOM;
+		}
+		holes = grown;
+		holeCapacity = capacity;
+	}
+	holes[holeCount].object = object;
+	holes[holeCount].at = output.n;
+	holes[holeCount].level = level;
+	holeCount++;
+	return 0;
+}
+
+/* The object a reference stands for: become: leaves forwarders, as when a
+ * ByteString that gets a wide character becomes a WideString, and the
+ * proxy has no call for them.  A Spur forwarder has the class index 8 in
+ * the low 22 bits of its 64-bit header and its referent in its first slot
+ * (SpurMemoryManager>>followForwarded:). */
+static sqInt
+follow(sqInt oop)
+{
+	while (!interpreterProxy->isImmediate(oop) && (*(const uint64_t *)(uintptr_t)oop & 0x3FFFFF) == 8) {
+		oop = interpreterProxy->fetchPointerofObject(0, oop);
+	}
+	return oop;
+}
+
+static int
+isStringClass(sqInt aClass)
+{
+	return aClass == interpreterProxy->classString() || aClass == byteSymbolClass
+		|| aClass == wideStringClass || aClass == wideSymbolClass;
+}
+
+static int
+writeString(sqInt string, sqInt aClass)
+{
+	int rc;
+
+	if (aClass == interpreterProxy->classString() || aClass == byteSymbolClass) {
+		rc = sj_out_string(&output, interpreterProxy->firstIndexableField(string), SJ_ENC_LATIN1,
+			(size_t)interpreterProxy->byteSizeOf(string), writeFlags & SJW_ASCII_ONLY);
+	} else {
+		rc = sj_out_string(&output, interpreterProxy->firstIndexableField(string), SJ_ENC_UTF32,
+			(size_t)interpreterProxy->byteSizeOf(string) / 4, writeFlags & SJW_ASCII_ONLY);
+	}
+	return rc == -2 ? fail(SJW_ERR_CODE_POINT, string) : rc ? SJW_C_OOM : 0;
+}
+
+static int writeValue(sqInt value, sqInt level);
+
+/* NeoJSONWriter>>writeListStreamingDo: and writeMapStreamingDo: with
+ * NeoJSONStreamingWriter: each element after a newline and the indentation
+ * of level + 1 (pretty), separated by commas, then a newline and the
+ * indentation of level, or a space when there was none */
+static int
+closeContainer(size_t count, sqInt level, char close)
+{
+	int rc;
+
+	if (count) {
+		if ((rc = newlineIndent(level))) {
+			return rc;
+		}
+	} else if ((writeFlags & SJW_PRETTY) && sj_out_char(&output, ' ')) {
+		return SJW_C_OOM;
+	}
+	return sj_out_char(&output, close) ? SJW_C_OOM : 0;
+}
+
+static int
+separate(size_t index, sqInt level)
+{
+	if (index && sj_out_char(&output, ',')) {
+		return SJW_C_OOM;
+	}
+	return newlineIndent(level + 1);
+}
+
+static int
+writeElements(sqInt array, sqInt first0, sqInt stop0, sqInt level)
+{
+	sqInt i;
+	int rc;
+
+	if (sj_out_char(&output, '[')) {
+		return SJW_C_OOM;
+	}
+	for (i = first0; i < stop0; i++) {
+		if ((rc = separate((size_t)(i - first0), level))
+		 || (rc = writeValue(follow(interpreterProxy->fetchPointerofObject(i, array)), level + 1))) {
+			return rc;
+		}
+	}
+	return closeContainer((size_t)(stop0 - first0), level, ']');
+}
+
+/* A Dictionary whose array is an Array of nils and Associations, in the
+ * order of keysAndValuesDo:; else the image writes it (answers 1). */
+static int
+writeDictionary(sqInt dictionary, sqInt level)
+{
+	sqInt array = follow(interpreterProxy->fetchPointerofObject(arrayIndex, dictionary));
+	sqInt nilOop = interpreterProxy->nilObject();
+	sqInt size, i, element, key;
+	size_t count = 0;
+	int rc;
+
+	if (interpreterProxy->isImmediate(array) || interpreterProxy->fetchClassOf(array) != interpreterProxy->classArray()) {
+		return 1;
+	}
+	size = interpreterProxy->slotSizeOf(array);
+	for (i = 0; i < size; i++) {
+		element = follow(interpreterProxy->fetchPointerofObject(i, array));
+		if (element != nilOop
+		 && (interpreterProxy->isImmediate(element) || interpreterProxy->fetchClassOf(element) != writerAssociationClass)) {
+			return 1;
+		}
+	}
+	if (sj_out_char(&output, '{')) {
+		return SJW_C_OOM;
+	}
+	for (i = 0; i < size; i++) {
+		element = follow(interpreterProxy->fetchPointerofObject(i, array));
+		if (element == nilOop) {
+			continue;
+		}
+		key = follow(interpreterProxy->fetchPointerofObject(keyIndex, element));
+		if (interpreterProxy->isImmediate(key) || !isStringClass(interpreterProxy->fetchClassOf(key))) {
+			return fail(SJW_ERR_KEY, key);
+		}
+		if ((rc = separate(count++, level))
+		 || (rc = writeString(key, interpreterProxy->fetchClassOf(key)))
+		 || ((writeFlags & SJW_PRETTY) && sj_out_char(&output, ' '))
+		 || sj_out_char(&output, ':')
+		 || ((writeFlags & SJW_PRETTY) && sj_out_char(&output, ' '))) {
+			return rc ? rc : SJW_C_OOM;
+		}
+		if ((rc = writeValue(follow(interpreterProxy->fetchPointerofObject(valueIndex, element)), level + 1))) {
+			return rc;
+		}
+	}
+	return closeContainer(count, level, '}');
+}
+
+static int
+writeOrderedCollection(sqInt collection, sqInt level)
+{
+	sqInt array = follow(interpreterProxy->fetchPointerofObject(ocArrayIndex, collection));
+	sqInt first = interpreterProxy->fetchPointerofObject(ocFirstIndex, collection);
+	sqInt last = interpreterProxy->fetchPointerofObject(ocLastIndex, collection);
+
+	if (interpreterProxy->isImmediate(array) || interpreterProxy->fetchClassOf(array) != interpreterProxy->classArray()
+	 || !interpreterProxy->isIntegerObject(first) || !interpreterProxy->isIntegerObject(last)) {
+		return 1;
+	}
+	first = interpreterProxy->integerValueOf(first);
+	last = interpreterProxy->integerValueOf(last);
+	if (first < 1 || last < first - 1 || last > interpreterProxy->slotSizeOf(array)) {
+		return 1;
+	}
+	return writeElements(array, first - 1, last, level);
+}
+
+/* NeoJSONWriter>>nextPut: on the values whose class the walk knows
+ * exactly: nil, Booleans, Integers, Floats, the four string classes, Array,
+ * OrderedCollection and Dictionary, through forwarders.  Any other object
+ * (a Fraction, a Set, an instance of a subclass) is a hole. */
+static int
+writeValue(sqInt value, sqInt level)
+{
+	char text[SJ_DOUBLE_CHARS];
+	sqInt aClass;
+	size_t n;
+	double d;
+	int rc;
+
+	if (maxBytes >= 0 && output.n > (uint64_t)maxBytes) {
+		return SJW_OVER;
+	}
+	if (value == interpreterProxy->nilObject()) {
+		return emit("null", 4);
+	}
+	if (value == interpreterProxy->trueObject()) {
+		return emit("true", 4);
+	}
+	if (value == interpreterProxy->falseObject()) {
+		return emit("false", 5);
+	}
+	if (interpreterProxy->isIntegerObject(value)) {
+		return sj_out_int64(&output, interpreterProxy->integerValueOf(value)) ? SJW_C_OOM : 0;
+	}
+	if (interpreterProxy->isFloatObject(value)) {
+		d = interpreterProxy->floatValueOf(value);
+		if (d - d != 0) {	/* NaN or an infinity */
+			return writeFlags & SJW_NON_FINITE_NULL ? emit("null", 4) : fail(SJW_ERR_NON_FINITE, value);
+		}
+		if (!(n = sj_print_double(d, text))) {
+			return SJW_C_OOM;
+		}
+		return emit(text, n);
+	}
+	if (interpreterProxy->isImmediate(value)) {
+		return addHole(value, level);
+	}
+	if (level > maxDepth) {
+		return fail(SJW_ERR_DEPTH, value);
+	}
+	aClass = interpreterProxy->fetchClassOf(value);
+	if (isStringClass(aClass)) {
+		return writeString(value, aClass);
+	}
+	if (aClass == interpreterProxy->classLargePositiveInteger() || aClass == interpreterProxy->classLargeNegativeInteger()) {
+		return sj_out_magnitude(&output, interpreterProxy->firstIndexableField(value),
+			(size_t)interpreterProxy->byteSizeOf(value), aClass == interpreterProxy->classLargeNegativeInteger())
+			? SJW_C_OOM : 0;
+	}
+	if (aClass == interpreterProxy->classArray()) {
+		return writeElements(value, 0, interpreterProxy->slotSizeOf(value), level);
+	}
+	rc = 1;
+	if (aClass == dictionaryClass) {
+		rc = writeDictionary(value, level);
+	} else if (aClass == orderedCollectionClass) {
+		rc = writeOrderedCollection(value, level);
+	}
+	return rc == 1 ? addHole(value, level) : rc;
+}
+
+/* The classes argument of primitiveWrite, { ByteSymbol. WideString.
+ * WideSymbol. Dictionary. Association. OrderedCollection }, and its layout:
+ * the 4-bit 0-based slots of Dictionary tally and array, Association key
+ * and value (dictLayout), then OrderedCollection array, firstIndex and
+ * lastIndex. */
+static sqInt
+writeClassArguments(sqInt classes, sqInt layoutOop)
+{
+	sqInt format, layout, i;
+
+	if (interpreterProxy->isImmediate(classes)
+	 || interpreterProxy->fetchClassOf(classes) != interpreterProxy->classArray()
+	 || interpreterProxy->slotSizeOf(classes) != 6
+	 || !isIntegerAtLeast(layoutOop, 0)) {
+		return PrimErrBadArgument;
+	}
+	for (i = 0; i < 6; i++) {
+		if (classFormat(interpreterProxy->fetchPointerofObject(i, classes)) < 0) {
+			return PrimErrBadArgument;
+		}
+	}
+	byteSymbolClass = interpreterProxy->fetchPointerofObject(0, classes);
+	wideStringClass = interpreterProxy->fetchPointerofObject(1, classes);
+	wideSymbolClass = interpreterProxy->fetchPointerofObject(2, classes);
+	dictionaryClass = interpreterProxy->fetchPointerofObject(3, classes);
+	writerAssociationClass = interpreterProxy->fetchPointerofObject(4, classes);
+	orderedCollectionClass = interpreterProxy->fetchPointerofObject(5, classes);
+	layout = interpreterProxy->integerValueOf(layoutOop);
+	tallyIndex = (int)(layout & 15);
+	arrayIndex = (int)((layout >> 4) & 15);
+	keyIndex = (int)((layout >> 8) & 15);
+	valueIndex = (int)((layout >> 12) & 15);
+	ocArrayIndex = (int)((layout >> 16) & 15);
+	ocFirstIndex = (int)((layout >> 20) & 15);
+	ocLastIndex = (int)((layout >> 24) & 15);
+	if (layout > 0xFFFFFFF) {
+		return PrimErrBadArgument;
+	}
+	format = classFormat(byteSymbolClass);
+	if (instSpecOf(format) < 16 || fixedFieldsOf(format) != 0) {
+		return PrimErrBadArgument;
+	}
+	format = classFormat(wideStringClass);
+	if (instSpecOf(format) != firstLongFormat || fixedFieldsOf(format) != 0) {
+		return PrimErrBadArgument;
+	}
+	format = classFormat(wideSymbolClass);
+	if (instSpecOf(format) != firstLongFormat || fixedFieldsOf(format) != 0) {
+		return PrimErrBadArgument;
+	}
+	format = classFormat(dictionaryClass);
+	if (instSpecOf(format) != nonIndexablePointerFormat
+	 || fixedFieldsOf(format) <= (tallyIndex > arrayIndex ? tallyIndex : arrayIndex)) {
+		return PrimErrBadArgument;
+	}
+	format = classFormat(writerAssociationClass);
+	if (instSpecOf(format) != nonIndexablePointerFormat
+	 || fixedFieldsOf(format) <= (keyIndex > valueIndex ? keyIndex : valueIndex)) {
+		return PrimErrBadArgument;
+	}
+	format = classFormat(orderedCollectionClass);
+	if (instSpecOf(format) != nonIndexablePointerFormat
+	 || fixedFieldsOf(format) <= ocArrayIndex || fixedFieldsOf(format) <= ocFirstIndex
+	 || fixedFieldsOf(format) <= ocLastIndex) {
+		return PrimErrBadArgument;
+	}
+	return 0;
+}
+
+/* The output: a ByteArray of the UTF-8 bytes, or the narrowest String of
+ * their characters; then the holes, { position. object. level } flat, where
+ * position counts the units of the output before the hole.  Answers 0 when
+ * an allocation failed (the VM retries after a GC). */
+static sqInt
+writeOutput(void)
+{
+	sqInt oop;
+
+	if (writeFlags & SJW_BYTES) {
+		if ((oop = instantiate(interpreterProxy->classByteArray(), output.n)) && output.n) {
+			memcpy(interpreterProxy->firstIndexableField(oop), output.p, output.n);
+		}
+		return oop;
+	}
+	return bString(output.p, output.n);
+}
+
+static sqInt
+writeHoles(void)
+{
+	sqInt array;
+	size_t i, units = 0, from = 0;
+
+	if (!holeCount) {
+		return interpreterProxy->nilObject();
+	}
+	if (!(array = instantiate(interpreterProxy->classArray(), 3 * holeCount))) {
+		return 0;
+	}
+	for (i = 0; i < holeCount; i++) {
+		units += writeFlags & SJW_BYTES ? holes[i].at - from : sj_utf8_chars(output.p + from, holes[i].at - from);
+		from = holes[i].at;
+		interpreterProxy->storePointerofObjectwithValue((sqInt)(3 * i), array, interpreterProxy->integerObjectOf((sqInt)units));
+		interpreterProxy->storePointerofObjectwithValue((sqInt)(3 * i + 1), array, holes[i].object);
+		interpreterProxy->storePointerofObjectwithValue((sqInt)(3 * i + 2), array, interpreterProxy->integerObjectOf(holes[i].level));
+	}
+	return array;
+}
+
+
+/*	SimdJSONWriter class>>primWrite: value flags: flags newLine: aString
+		maxDepth: depth maxBytes: maxBytes classes: classes layout: layout
+	<primitive: 'primitiveWrite' module: 'SimdJSONPlugin' error: ec>
+	Write the JSON of value as NeoJSONWriter writes it, and answer { status.
+	output. holes. code. culprit }.  The walk reads objects and allocates
+	nothing; the output, a ByteArray of UTF-8 (flag BYTES) or the narrowest
+	String, is allocated at the end.  Status OK answers it with the holes
+	(nil, or { position. object. level } flat): the objects whose class the
+	walk does not know, left for the image to write at those positions.
+	ERROR answers a code and the culprit (1 a key that is not a string, 2 a
+	NaN or an infinity, 3 a value deeper than depth, 4 a code point beyond
+	U+10FFFF), OVER_BUDGET the bytes the output needs when its allocation
+	failed, TOO_LARGE an output over maxBytes (-1 none).  The primitive fails
+	only on bad arguments, PrimErrNoMemory on the small objects of the
+	answer, and PrimErrNoCMemory. */
+EXPORT(sqInt)
+primitiveWrite(void)
+{
+	sqInt flags, depth, bytes, lineEnd, result, out, holeArray, error, need;
+	int rc;
+
+	if (interpreterProxy->methodArgumentCount() != 7) {
+		return interpreterProxy->primitiveFailFor(PrimErrBadNumArgs);
+	}
+	lineEnd = interpreterProxy->stackValue(4);
+	if (!isIntegerAtLeast(interpreterProxy->stackValue(5), 0)
+	 || !isIntegerAtLeast(interpreterProxy->stackValue(3), 0)
+	 || !isIntegerAtLeast(interpreterProxy->stackValue(2), -1)
+	 || interpreterProxy->isImmediate(lineEnd)
+	 || interpreterProxy->fetchClassOf(lineEnd) != interpreterProxy->classString()) {
+		return interpreterProxy->primitiveFailFor(PrimErrBadArgument);
+	}
+	flags = interpreterProxy->integerValueOf(interpreterProxy->stackValue(5));
+	depth = interpreterProxy->integerValueOf(interpreterProxy->stackValue(3));
+	bytes = interpreterProxy->integerValueOf(interpreterProxy->stackValue(2));
+	if (flags > (SJW_PRETTY | SJW_ASCII_ONLY | SJW_BYTES | SJW_NON_FINITE_NULL) || depth > 100000) {
+		return interpreterProxy->primitiveFailFor(PrimErrBadArgument);
+	}
+	if ((error = writeClassArguments(interpreterProxy->stackValue(1), interpreterProxy->stackValue(0)))) {
+		return interpreterProxy->primitiveFailFor(error);
+	}
+	if (!(result = instantiate(interpreterProxy->classArray(), 5))) {
+		return 0;
+	}
+	writeFlags = (int)flags;
+	maxDepth = (int)depth;
+	maxBytes = bytes;
+	errorCode = 0;
+	culprit = interpreterProxy->nilObject();
+	newLineSize = (size_t)interpreterProxy->byteSizeOf(lineEnd);
+	if (!(newLine = malloc(newLineSize + 1))) {
+		return interpreterProxy->primitiveFailFor(PrimErrNoCMemory);
+	}
+	memcpy(newLine, interpreterProxy->firstIndexableField(lineEnd), newLineSize);
+
+	rc = writeValue(follow(interpreterProxy->stackValue(6)), 0);
+	if (rc == 0 && maxBytes >= 0 && output.n > (uint64_t)maxBytes) {
+		rc = SJW_OVER;
+	}
+	if (rc == SJW_C_OOM) {
+		freeWriteState();
+		return interpreterProxy->primitiveFailFor(PrimErrNoCMemory);
+	}
+	out = holeArray = interpreterProxy->nilObject();
+	need = 0;
+	if (rc == 0) {
+		if (!(out = writeOutput())) {
+			/* the output did not fit: the image grows memory by its size */
+			interpreterProxy->primitiveFailFor(0);
+			need = (sqInt)(writeFlags & SJW_BYTES ? sj_spur_bytes(output.n) : sj_spur_words32(output.n));
+			out = interpreterProxy->nilObject();
+			rc = SJW_OVER_BUDGET;
+		} else if (!(holeArray = writeHoles())) {
+			freeWriteState();
+			return 0;
+		}
+	}
+	interpreterProxy->storePointerofObjectwithValue(0, result, interpreterProxy->integerObjectOf(
+		rc == 0 ? SJW_OK : rc == SJW_FAILED ? SJW_ERROR : rc == SJW_OVER ? SJW_TOO_LARGE : SJW_OVER_BUDGET));
+	interpreterProxy->storePointerofObjectwithValue(1, result, out);
+	interpreterProxy->storePointerofObjectwithValue(2, result, holeArray);
+	interpreterProxy->storePointerofObjectwithValue(3, result, interpreterProxy->integerObjectOf(
+		rc == SJW_OVER_BUDGET ? need : errorCode));
+	interpreterProxy->storePointerofObjectwithValue(4, result, culprit);
+	freeWriteState();
+	return interpreterProxy->methodReturnValue(result);
+}
+
 #ifdef SQUEAK_BUILTIN_PLUGIN
 
 static char _m[] = "SimdJSONPlugin";
@@ -838,6 +1342,7 @@ void* SimdJSONPlugin_exports[][3] = {
 	{(void*)_m, "primitiveInfo\000\000", (void*)primitiveInfo},
 	{(void*)_m, "primitiveRead\000\000", (void*)primitiveRead},
 	{(void*)_m, "primitiveRelease\000\000", (void*)primitiveRelease},
+	{(void*)_m, "primitiveWrite\000\000", (void*)primitiveWrite},
 	{(void*)_m, "setInterpreter", (void*)setInterpreter},
 	{(void*)_m, "shutdownModule", (void*)shutdownModule},
 	{NULL, NULL, NULL}
@@ -849,5 +1354,6 @@ EXPORT(signed char) primitiveErrorMessageAccessorDepth = 0;
 EXPORT(signed char) primitiveInfoAccessorDepth = 0;
 EXPORT(signed char) primitiveReadAccessorDepth = 0;
 EXPORT(signed char) primitiveReleaseAccessorDepth = 0;
+EXPORT(signed char) primitiveWriteAccessorDepth = 0;
 
 #endif /* ifdef SQUEAK_BUILTIN_PLUGIN */

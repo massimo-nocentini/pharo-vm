@@ -12,6 +12,9 @@ SimdJSON-NeoTests.st compares the reader with NeoJSON itself.
 	SimdJSONMemoryTests   the budget of primitiveRead, the exact need, and
 	                      the grow of the reader
 	SimdJSONMappingTests  nextAs: and the mapper protocol of NeoJSON
+	SimdJSONWriterTests   SimdJSONWriter: the texts of NeoJSONWriter (numbers,
+	                      strings, escapes, pretty printing), streams, bytes,
+	                      forwarders and errors
 	SimdJSONSlowTests     a 16 MB document of 2M boxed floats, and a cap of
 	                      old space (OutOfMemory, the VM lives on); skipped
 	                      unless the environment has SJ_SLOW
@@ -42,6 +45,7 @@ g := Smalltalk globals.
 ((g at: #SimdJSONTestCase) << #SimdJSONMemoryTests tag: 'Tests'; package: 'SimdJSON-Tests') install.
 ((g at: #SimdJSONTestCase) << #SimdJSONMappingTests tag: 'Tests'; package: 'SimdJSON-Tests') install.
 ((g at: #SimdJSONTestCase) << #SimdJSONSlowTests tag: 'Tests'; package: 'SimdJSON-Tests') install.
+((g at: #SimdJSONTestCase) << #SimdJSONWriterTests tag: 'Tests'; package: 'SimdJSON-Tests') install.
 "The methods of an older SimdJSON-Tests.st that are gone"
 { #SimdJSONTestCase -> #( #isNeo #parseErrorClass #mappingNotFoundClass ).
   #SimdJSONReaderTests -> #( #testMode #testObjectFromString ) } do: [ :each |
@@ -1519,6 +1523,25 @@ testOutOfMemoryAtCap
 	Smalltalk garbageCollect.
 	self assert: (self read: '{"a":[1,2.5,"x",null,true]}') size equals: 1! !
 
+!SimdJSONSlowTests methodsFor: 'tests'!
+testWriteOutOfMemoryAtCap
+	"An output of 2 million Floats that old space, capped, cannot hold: the primitive answers
+	 what it needs, growing fails, and the writer signals OutOfMemory; uncapped, it writes"
+
+	| floats cap result |
+	floats := (1 to: 2000000) collect: [ :i | i / 7.0 ].
+	Smalltalk garbageCollect.
+	cap := Smalltalk vm parameterAt: 67.
+	[ Smalltalk vm parameterAt: 67 put: (Smalltalk vm parameterAt: 1) + (8 * 1024 * 1024).
+	  result := [ SimdJSONWriter toBytes: floats ]
+		on: OutOfMemory
+		do: [ :error | error return: #outOfMemory ] ]
+		ensure: [ Smalltalk vm parameterAt: 67 put: cap ].
+	self assert: result equals: #outOfMemory.
+	result := SimdJSONWriter toBytes: floats.
+	self assert: (result copyFrom: 1 to: 21) asString equals: '[0.14285714285714285,'.
+	self assert: (SimdJSONReader fromBytes: result) size equals: 2000000! !
+
 !SimdJSONTestObject methodsFor: 'accessing'!
 id
 
@@ -1567,3 +1590,264 @@ neoJsonMapping: mapper
 	mapper mapAllInstVarsFor: Point.
 	mapper for: #SimdJSONTestStamp customDo: [ :mapping | mapping decoder: [ :string | string asNumber ] ].
 	mapper for: #SimdJSONTestTags customDo: [ :mapping | mapping listOfType: OrderedCollection ]! !
+
+!SimdJSONWriterTests methodsFor: 'helpers'!
+write: anObject
+
+	^ SimdJSONWriter toString: anObject! !
+
+!SimdJSONWriterTests methodsFor: 'helpers'!
+writeError: aBlock
+	"The SimdJSONWriteError that aBlock signals, or nil"
+
+	^ [ aBlock value. nil ]
+		on: SimdJSONWriteError
+		do: [ :error | error return: error ]! !
+
+!SimdJSONWriterTests methodsFor: 'helpers'!
+float: hi low: lo
+	"A BoxedFloat64 of the bits hi (the sign, the exponent and the top of the mantissa) and lo"
+
+	^ (Float new: 2)
+		basicAt: 1 put: hi;
+		basicAt: 2 put: lo;
+		yourself! !
+
+!SimdJSONWriterTests methodsFor: 'helpers'!
+mapOf: aDictionary
+	"The JSON of a Dictionary of String keys and Integer values, in the order of
+	 keysAndValuesDo:, as NeoJSONWriter writes it"
+
+	^ String streamContents: [ :stream |
+		| first |
+		first := true.
+		stream nextPut: ${.
+		aDictionary keysAndValuesDo: [ :key :value |
+			first ifFalse: [ stream nextPut: $, ].
+			first := false.
+			stream nextPut: $"; nextPutAll: key; nextPutAll: '":'; print: value ].
+		stream nextPut: $} ]! !
+
+!SimdJSONWriterTests methodsFor: 'tests - values'!
+testLiterals
+
+	self assert: (self write: nil) equals: 'null'.
+	self assert: (self write: true) equals: 'true'.
+	self assert: (self write: false) equals: 'false'.
+	{ 0. 1. -1. 42. SmallInteger maxVal. SmallInteger minVal. SmallInteger maxVal + 1. SmallInteger minVal - 1.
+	  2 raisedTo: 63. (2 raisedTo: 63) negated. (2 raisedTo: 64) - 1. 2 raisedTo: 64. (2 raisedTo: 64) negated.
+	  (2 raisedTo: 200) - 1. (10 raisedTo: 50) negated. 10 raisedTo: 18. 10 raisedTo: 27. (10 raisedTo: 36) + 1 }
+		do: [ :each | self assert: (self write: each) equals: each printString ]! !
+
+!SimdJSONWriterTests methodsFor: 'tests - values'!
+testFloats
+	"Float>>printOn:, as NeoJSONWriter writes them"
+
+	{ 0.0. -0.0. 1.0. -1.0. 100.0. 0.1. 1.5. 123456.789. 1.0e15. 1.0e16. 1.0e20. 1.0e22. 123456789012345.0.
+	  1234567890123456.0. 1.0e-4. 1.0e-5. 1.0e-7. 2.5e-3. Float fminDenormalized. Float fmin. Float fmax.
+	  Float pi. Float e negated. 1.0e100. 1.0e-100. 1.7976931348623157e308. 4.9e-324 }
+		do: [ :each | self assert: (self write: each) equals: each printString ]! !
+
+!SimdJSONWriterTests methodsFor: 'tests - values'!
+testRandomFloats
+	"20000 doubles of random bits, boxed and as the VM normalizes them, and 20000 decimals"
+
+	| random float |
+	random := Random seed: 20261027.
+	20000 timesRepeat: [
+		float := self float: (random nextInteger: 16r100000000) - 1 low: (random nextInteger: 16r100000000) - 1.
+		float isFinite ifTrue: [
+			self assert: (self write: float) equals: float printString.
+			self assert: (self write: { float * 1 }) equals: '[' , float printString , ']' ] ].
+	20000 timesRepeat: [
+		float := (random nextInteger: 100000000) / ((10 raisedTo: (random nextInteger: 12)) / 1.0).
+		self assert: (self write: float) equals: float printString ]! !
+
+!SimdJSONWriterTests methodsFor: 'tests - values'!
+testNonFinite
+	"JSON has no NaN or infinity: an error, or null with nonFiniteAsNull:"
+
+	{ Float nan. Float infinity. Float negativeInfinity } do: [ :each |
+		| error |
+		error := self writeError: [ self write: { 1. each } ].
+		self assert: error notNil.
+		self assert: error code equals: 2.
+		self assert: error culprit isNaN equals: each isNaN.
+		self assert: (SimdJSONWriter new nonFiniteAsNull: true; stringFor: { 1. each }) equals: '[1,null]' ]! !
+
+!SimdJSONWriterTests methodsFor: 'tests - strings'!
+testStrings
+
+	| controls |
+	self assert: (self write: '') equals: '""'.
+	self assert: (self write: 'abc') equals: '"abc"'.
+	self assert: (self write: 'a"b\c/d') equals: '"a\"b\\c/d"'.
+	self assert: (self write: #foo) equals: '"foo"'.
+	controls := String new: 32.
+	1 to: 32 do: [ :i | controls at: i put: (Character value: i - 1) ].
+	self
+		assert: (self write: controls)
+		equals: '"\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\t\n\u000B\f\r\u000E\u000F\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001A\u001B\u001C\u001D\u001E\u001F"'.
+	self
+		assert: (self write: (self string: #( 127 233 255 )))
+		equals: '"' , (self string: #( 127 233 255 )) , '"'.
+	self
+		assert: (self write: (self string: #( 97 8364 16r1D11E 16rD800 )))
+		equals: '"' , (self string: #( 97 8364 16r1D11E 16rD800 )) , '"'.
+	self assert: (self write: (self string: #( 8364 ))) class equals: WideString.
+	self assert: (self write: (self string: #( 8364 )) asSymbol) equals: '"' , (self string: #( 8364 )) , '"'! !
+
+!SimdJSONWriterTests methodsFor: 'tests - strings'!
+testAsciiOnly
+
+	| writer |
+	writer := SimdJSONWriter new asciiOnly: true; yourself.
+	self
+		assert: (writer stringFor: (self string: #( 97 126 127 233 8364 16r1D11E 16rD800 34 10 )))
+		equals: '"a~\u007F\u00E9\u20AC\uD834\uDD1E\uD800\"\n"'.
+	self assert: (writer stringFor: (self string: #( 233 ))) class equals: ByteString! !
+
+!SimdJSONWriterTests methodsFor: 'tests - strings'!
+testCodePointOutOfRange
+
+	| string error |
+	string := self string: #( 97 16r10FFFF ).
+	self assert: (self write: string) equals: '"' , string , '"'.
+	string := WideString new: 1.
+	string at: 1 put: (Character value: 16r110000).
+	error := self writeError: [ self write: { string } ].
+	self assert: error code equals: 4.
+	self assert: error culprit equals: string.
+	self assert: error messageText equals: 'Character Unicode code point outside encoder range'! !
+
+!SimdJSONWriterTests methodsFor: 'tests - structures'!
+testStructures
+
+	| collection |
+	self assert: (self write: #()) equals: '[]'.
+	self assert: (self write: Dictionary new) equals: '{}'.
+	self assert: (self write: OrderedCollection new) equals: '[]'.
+	self assert: (self write: #( 1 #( 2 #() ) 'x' #y nil )) equals: '[1,[2,[]],"x","y",null]'.
+	collection := OrderedCollection withAll: #( 1 2 3 ).
+	collection removeFirst.
+	self assert: (self write: collection) equals: '[2,3]'.
+	collection := OrderedCollection new.
+	1 to: 20 do: [ :i | collection addFirst: i ].
+	self assert: (self write: collection) equals: '[20,19,18,17,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1]'.
+	self
+		assert: (self write: { Dictionary new at: 'a' put: (OrderedCollection with: #( 1 ) with: Dictionary new); yourself })
+		equals: '[{"a":[[1],{}]}]'! !
+
+!SimdJSONWriterTests methodsFor: 'tests - structures'!
+testDictionaryOrder
+	"The order of keysAndValuesDo:, through growth and removals"
+
+	| dictionary |
+	dictionary := Dictionary new.
+	1 to: 300 do: [ :i | dictionary at: 'k' , i printString put: i ].
+	1 to: 300 by: 7 do: [ :i | dictionary removeKey: 'k' , i printString ].
+	self assert: (self write: dictionary) equals: (self mapOf: dictionary).
+	dictionary := Dictionary new.
+	dictionary at: #sym put: 1; at: (self string: #( 8364 )) put: 2.
+	self assert: (SimdJSONReader fromString: (self write: dictionary)) equals:
+		(Dictionary new at: 'sym' put: 1; at: (self string: #( 8364 )) put: 2; yourself)! !
+
+!SimdJSONWriterTests methodsFor: 'tests - structures'!
+testPretty
+
+	| writer tab lf |
+	tab := String with: Character tab.
+	lf := String with: Character lf.
+	writer := SimdJSONWriter new prettyPrint: true; newLine: lf; yourself.
+	self assert: (writer stringFor: #()) equals: '[ ]'.
+	self assert: (writer stringFor: Dictionary new) equals: '{ }'.
+	self assert: (writer stringFor: 1) equals: '1'.
+	self
+		assert: (writer stringFor: { 1. Dictionary new at: 'a' put: #( 2 ); yourself. #() })
+		equals: '[' , lf , tab , '1,' , lf , tab , '{' , lf , tab , tab , '"a" : [' , lf , tab , tab , tab , '2'
+			, lf , tab , tab , ']' , lf , tab , '},' , lf , tab , '[ ]' , lf , ']'.
+	writer newLine: (String with: Character cr with: Character lf).
+	self
+		assert: (writer stringFor: #( 1 ))
+		equals: '[' , (String with: Character cr with: Character lf) , tab , '1' , (String with: Character cr with: Character lf) , ']'.
+	self
+		assert: (SimdJSONWriter toStringPretty: #( 1 ))
+		equals: '[' , OSPlatform current lineEnding , tab , '1' , OSPlatform current lineEnding , ']'! !
+
+!SimdJSONWriterTests methodsFor: 'tests - structures'!
+testForwarders
+	"A ByteString that gets a wide character becomes a WideString through a forwarder"
+
+	| string dictionary |
+	string := 'abc' copy.
+	string at: 2 put: (Character value: 8364).
+	self assert: (self write: { string }) equals: '["' , string , '"]'.
+	string := 'key' copy.
+	dictionary := Dictionary new.
+	dictionary at: string put: 1.
+	string at: 1 put: (Character value: 8364).
+	self assert: (self write: dictionary) equals: '{"' , string , '":1}'! !
+
+!SimdJSONWriterTests methodsFor: 'tests - output'!
+testBytes
+
+	| value |
+	value := { 'a'. self string: #( 233 8364 16r1D11E ). 1.5 }.
+	self assert: (SimdJSONWriter toBytes: value) class equals: ByteArray.
+	self assert: (SimdJSONWriter toBytes: value) equals: (self write: value) utf8Encoded.
+	self assert: (SimdJSONWriter toBytes: #()) equals: '[]' asByteArray! !
+
+!SimdJSONWriterTests methodsFor: 'tests - output'!
+testStreams
+
+	| stream writer |
+	stream := WriteStream on: String new.
+	writer := SimdJSONWriter on: stream.
+	writer nextPut: #( 1 2 ).
+	writer nextPut: (self string: #( 8364 )).
+	self assert: stream contents equals: '[1,2]"' , (self string: #( 8364 )) , '"'.
+	stream := WriteStream on: ByteArray new.
+	(SimdJSONWriter on: stream) nextPut: { self string: #( 233 ) }.
+	self assert: stream contents equals: ('["' , (self string: #( 233 )) , '"]') utf8Encoded! !
+
+!SimdJSONWriterTests methodsFor: 'tests - output'!
+testRoundTrip
+
+	| value |
+	value := SimdJSONReader fromString: self probeJSON.
+	self assert: (SimdJSONReader fromString: (self write: value)) equals: value.
+	self assert: (SimdJSONReader fromString: (SimdJSONWriter toStringPretty: value)) equals: value.
+	self assert: (SimdJSONReader fromBytes: (SimdJSONWriter toBytes: value)) equals: value.
+	value := { (2 raisedTo: 100) negated. 0.1. -0.0. 'a"\' , (self string: #( 0 31 233 8364 16r1D11E )). nil. true }.
+	self assert: (SimdJSONReader fromString: (self write: value)) equals: value.
+	self assert: (SimdJSONReader fromString: (SimdJSONWriter new asciiOnly: true; stringFor: value)) equals: value! !
+
+!SimdJSONWriterTests methodsFor: 'tests - errors'!
+testErrors
+
+	| error cycle |
+	error := self writeError: [ self write: (Dictionary new at: 1 put: 2; yourself) ].
+	self assert: error code equals: 1.
+	self assert: error culprit equals: 1.
+	self assert: error messageText equals: 'JSON key names in objects must be strings'.
+	cycle := Array new: 1.
+	cycle at: 1 put: cycle.
+	error := self writeError: [ self write: cycle ].
+	self assert: error code equals: 3.
+	self assert: (error messageText includesSubstring: 'a cycle')! !
+
+!SimdJSONWriterTests methodsFor: 'tests - errors'!
+testUnsupported
+	"What the plugin leaves to the image, which phase 1 does not write yet"
+
+	{ 1 / 3. Set new. $a. Object new. OrderedDictionary new. 1 @ 2 } do: [ :each |
+		| error |
+		error := self writeError: [ self write: { 1. each } ].
+		self assert: error code equals: #unsupported.
+		self assert: error culprit equals: each ]! !
+
+!SimdJSONWriterTests methodsFor: 'tests - errors'!
+testPluginMissing
+
+	SimdJSONReader testHook: #pluginMissing value: true.
+	self should: [ self write: #( 1 ) ] raise: SimdJSONResourceError! !
