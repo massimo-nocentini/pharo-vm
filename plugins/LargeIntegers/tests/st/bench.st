@@ -50,6 +50,11 @@ benchKernels
 		b := self large: LargePositiveInteger bytes: p last // 8 mode: #rnd.
 		self row: 'mul ', p first printString, 'x', p last printString, 'b' ns: (self nsPerCall: [a liMul: b neg: false]).
 		self row: 'div ', p last printString, '/', p first printString, 'b' ns: (self nsPerCall: [b liDiv: a neg: false])].
+	"short quotients over long divisors: #(divisor bits, quotient bits)"
+	#(#(6144 1536) #(16384 2048) #(65536 1536) #(65536 2560)) do: [:p |
+		a := self large: LargePositiveInteger bytes: p first // 8 mode: #rnd.
+		b := self large: LargePositiveInteger bytes: p first + p last // 8 mode: #rnd.
+		self row: 'div ', (p first + p last) printString, '/', p first printString, 'b' ns: (self nsPerCall: [b liDiv: a neg: false])].
 	self row: 'mul SI x SI' ns: (self nsPerCall: [si liMul: si neg: false]).
 	self row: 'div SI / SI' ns: (self nsPerCall: [si liDiv: 1000003 neg: false])
 !

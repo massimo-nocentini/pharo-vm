@@ -42,13 +42,39 @@ of the 64-bit Spur `interp.h`).
   digits; top digit FFFFFFFF, 80000000 or 1, up to two zero digits above it
   (unnormalized); sizes up to 10000 digits; a failing malloc; operands equal but for one
   digit (a product, not a square); operands untouched.  Every random suite runs twice, with and
-  without the dispatch to the 32-bit loops for the smallest operands.  Six builds: the
+  without the dispatch to the 32-bit loops for the smallest operands.  Eight builds: the
   host's limbs (64-bit on x86_64 and aarch64), forced 32-bit limbs, and both with digits
   stored byte-swapped as on a big-endian host (`FAKE_BIGENDIAN`), under ASan+UBSan (when the
-  compiler can, UBSan reports fatal); both limb sizes again at -O2.
+  compiler can, UBSan reports fatal); both limb sizes with `LI_STACK_LIMBS=1`, so that
+  every scratch buffer is malloc'ed at the size the kernels compute and ASan checks that
+  bound, under ASan+UBSan; both limb sizes again at -O2.
+- **kernels, recursive division** (same program and builds): Burnikel & Ziegler's
+  division against the frozen loop (quotient and the whole remainder buffer) and the
+  reconstruction.  Divisors of `LI_BZ_LIMBS` - 1, `LI_BZ_LIMBS`, + 1, 2x - 1, 2x, 2x + 1,
+  3x + 2 and 5x + 3 limbs, quotients of 1, 2, vn - 1, vn, vn + 1, 3vn + 5 and 10vn limbs,
+  every partial-limb offset of both; short quotients of `LI_BZ_QUOTIENT_LIMBS` - 1, + 0,
+  + 1 limbs, and divisors that many limbs longer than the quotient, over divisors of 2
+  `LI_BZ_QUOTIENT_LIMBS` - 1 to 3 `LI_BZ_LIMBS` limbs; the recursion forced at thresholds
+  2..9 limbs (short quotients from 1..6, Karatsuba sometimes at 2..6) on 40,000 small
+  operands; operands up to 20,000 digits; dividends `q*v + r` built to make the estimates
+  too large: divisors 80000000 over zeros or FFFFFFFF digits, all FFFFFFFF, ones in the
+  low half; quotients of all-ones digits; `r = v - 1`, 0, `v - small`.  `liDivRemBZ` also
+  called directly, on limbs, with the contract of Knuth's algorithm D (the dividend's top
+  vn limbs below the divisor) rather than `liDigitDiv`'s (its top limb below the
+  divisor's): 10,000 dividends whose top limbs equal the divisor's down to a lower limb,
+  half of them a top block whose quotient reaches B^qb and is corrected, a path
+  `liDigitDiv` never takes; against Knuth's algorithm D and `u = q v + r`, `r < v`.  A test
+  hook (`LI_DIV_ADDBACK`) counts the add-backs of each correction loop: every loop must
+  run, some twice, none three times (at scale 1 about 6,800 (64-bit limbs) and 6,100
+  (32-bit limbs) add-backs at the production thresholds, 280,000 and 535,000 forced, and
+  63,000 and 65,000 in the direct calls).  A failing malloc for the recursion's scratch
+  alone (Knuth's algorithm D would fit on the stack): the 32-bit loop.  The scratch:
+  `LI_STACK_LIMBS` limbs on the stack, one more malloc'ed, and a size larger than a
+  `size_t` holds answered with no malloc (the 32-bit loop runs instead).
 - **oracle**: the -O2 builds print 3000 products, 3000 squares (sizes around the squaring
-  thresholds of both limb sizes, up to 2500 digits) and 3000 quotients and remainders,
-  which `c/oracle.py` checks with Python's integers.
+  thresholds of both limb sizes, up to 2500 digits) and 4000 quotients and remainders
+  (1000 of them over the Burnikel & Ziegler threshold, a third adversarial), which
+  `c/oracle.py` checks with Python's integers.
 - **calls** (`c/plugin_harness.c calls`): the plugin as a shared object, driven through a
   mock `struct VirtualMachine` with Spur-shaped objects (byte bodies malloc'ed apart at their
   rounded size, so ASan sees any access outside an object): 84,773 calls of every primitive
@@ -74,8 +100,8 @@ of the 64-bit Spur `interp.h`).
   with a word that is not an oop: PrimErrBadNumArgs, the stack untouched, that word never
   dereferenced (180 calls).
 
-`scale` (default 1, about 860,000 kernel cases per build) multiplies the random counts;
-`run-c-tests.sh 10` runs about 8.5 million per build; the cases depend only on the scale,
+`scale` (default 1, about 890,000 kernel cases per build) multiplies the random counts;
+`run-c-tests.sh 10` runs about 8.8 million per build; the cases depend only on the scale,
 not on the compiler.  `CC=gcc` or `CC=clang` picks the compiler; `--build DIR` keeps the
 build and logs.  Each test program runs under `timeout` when there is one, for
 `LI_TIMEOUT` seconds (300 x scale by default): a kernel that loops fails the run instead of
@@ -143,7 +169,7 @@ Montgomery shapes), and passes li05, kernels and sunit.
 
 `st/bench.st`: ns per direct call of multiply and divide from 64 to 262,144 bits (n x n,
 squares x * x and x times a copy of x, 2n / n, n / n, n x SmallInteger, n / SmallInteger,
-unbalanced), the small operands where
+unbalanced, short quotients over long divisors), the small operands where
 the kernels pick the 32-bit loops or the limb code, a few other small calls, and image
 expressions.  With a second VM the runs alternate (`LI_BENCH_RUNS`, 3 by default) and the
 table gives the medians and their ratio:
@@ -173,7 +199,20 @@ alternating runs; "before" is the plugin before the kernels):
 
 Every other call on operands up to 128 bytes is 0.73-1.02 of before (add and sub gain
 most, left shift and bit logic are at parity), except `normalize`, which allocates nothing
-and pays the argument-count check: about +2.5 ns, +5%.  Above about 1 us, rows vary by 10% or more on a busy host.
+and pays the argument-count check: about +2.5 ns, +5%.  Above about 1 us, rows vary by 10%
+or more on a busy host.
+
+In C micro-benchmarks on this Xeon (Cascade Lake), code placement alone moves the time of
+products, squares and divisions of operands below 32 digits by 10-25% either way between
+two builds of the same code (the jump-conditional-code erratum): build both sides with
+`-mbranches-within-32B-boundaries`, or compare in the image, before acting on such a
+difference.
+
+The recursive division (Burnikel & Ziegler, from 48 64-bit limbs) against the kernels
+before it, same host and settings: div 32768/16384 bits 0.75, 65536/32768 0.61,
+131072/65536 0.48 (1.02 ms to 0.49 ms), 524288/262144 0.28 (16.0 ms to 4.5 ms), image
+`(7 raisedTo: 300000) // (3 raisedTo: 200000)` 0.39 (47.9 ms to 18.8 ms); the rows below
+3072 bits run the same code as before.
 
 The squaring kernels, against the same plugin without them (medians of 3 alternating runs,
 same host; every other row within noise):
@@ -200,6 +239,8 @@ x86_64, not on a 32-bit host):
 | `LI_DIV_LOOP_QUOTIENT_DIGITS` (the 32-bit loop for quotients up to it, divisor < 24 digits) | 1 | 2 | 1, 2 and 3 equal within noise in the image |
 | `LI_SQR_BASECASE_LIMBS` (squares of at least this many limbs take the squaring kernels) | 3 | 11 | 64-bit: below 3 limbs the one-limb stream and the 32-bit loop run first; 6 digits: square 26.2 ns, product 32.6. 32-bit, from the wasm build (emcc -m64 -sMEMORY64=2 -O2, node 25), square/loop for one pointer and a copy: 8 digits 1.03 / 1.13, 10 1.01 / 1.04-1.08, 11 0.89-0.91 / 0.97, 12 0.90 / 0.97, 14 0.83 / 0.88, 16 0.85 (copy); on x86_64 with 32-bit limbs the square wins from 8 (0.95) |
 | `LI_SQR_KARATSUBA_LIMBS` | 44 (88 digits) | 48 | schoolbook squaring is 0.52-0.55 of schoolbook multiplication from 20 limbs on (64-bit limbs; 0.61-0.75 from 12 with 32-bit limbs); one level of Karatsuba squaring over it: 1.01 at 38 limbs, 0.98 at 42, 0.97 at 47, 0.89 at 59 (64-bit); 1.02 at 42, 0.98 at 53 (32-bit); thresholds 36..48 within 2% (64-bit), 44..52 within 1% (32-bit) |
+| `LI_BZ_LIMBS` (Burnikel & Ziegler when divisor and quotient both have this many limbs; its recursion's base) | 48 (96 digits, 3072 bits) | 32 | below: 64-bit limbs 1.01-1.02 of Knuth D at 32..44 limbs with thresholds 24..40; 32-bit limbs 1.03-1.10 at 16..24 limbs with 16..24; at it: 0.95 and 0.92-0.98 |
+| `LI_BZ_QUOTIENT_LIMBS` (with a divisor of `LI_BZ_LIMBS` limbs, Burnikel & Ziegler for a shorter quotient of at least this many limbs, the divisor at least this many longer) | 24 | 12 | see below |
 
 The squaring thresholds come from a C micro-benchmark over `liDigitMultiply` (best of 7
 runs of 10 ms per size, one pinned core, clang 18 -O2), squares against products of two
@@ -224,6 +265,49 @@ that comparison, 1 to 4 ns more than before.  Measured with
 `-mbranches-within-32B-boundaries` on both sides: without it, the alignment of the
 unchanged 32-bit loop moved the time of products of 4 to 24 digits by up to 25% either
 way between two builds of the same code (the Xeon's jump-alignment erratum).
+
+The recursive division against Knuth's algorithm D (`liBZLimbs` set past every size), ns
+per `liDigitDiv` of a random 2n-limb dividend by an n-limb divisor, or 10n by n; a C
+program that includes `LargeIntegersKernels.c` with `LI_TUNABLE`, best of 4 runs pinned
+to one core, clang 18 -O2 (gcc 13 -O2 for the last column):
+
+| n limbs | 64-bit 2n/n: Knuth D | BZ/Knuth D | 10n/n | 32-bit 2n/n | 10n/n | 64-bit 2n/n, gcc |
+|---|---|---|---|---|---|---|
+| 48 | 3,176 | 0.95 | 0.95 | 0.88 | 0.88 | 0.80 |
+| 64 | 5,359 | 0.92 | 0.94 | 0.78 | 0.81 | 0.78 |
+| 128 | 20,656 | 0.77 | 0.77 | 0.68 | 0.69 | 0.61 |
+| 256 | 76,724 | 0.65 | 0.66 | 0.57 | 0.57 | 0.47 |
+| 1024 | 1,160,104 | 0.42 | 0.42 | 0.36 | 0.36 | 0.28 |
+| 4096 | 18,337,563 | 0.25 | 0.25 | 0.21 | 0.21 | 0.16 |
+| 10000 | 109,149,964 | 0.18 | | 0.15 | | 0.11 |
+
+Quotients of 48..65 limbs (64-bit) by divisors of 48..2048 limbs: 0.67-0.98; of 101 or 201
+limbs: 0.46-0.99; with 32-bit limbs, quotients of 32..201 limbs: 0.39-0.94.  No shape
+measured slower than Knuth D at or above the thresholds.
+
+A quotient shorter than `LI_BZ_LIMBS` is one top block: Knuth D on the top of the divisor,
+then the product of the quotient with the rest.  Measured against Knuth D alone with
+production builds (constant thresholds) in one program, best of 7 alternating runs pinned
+to one core: on x86_64 with clang 18 -O2 and `-mbranches-within-32B-boundaries`, in wasm
+with emcc -m64 -sMEMORY64=2 -O2 under node 25; quotient / divisor limbs:
+
+| limbs | 64-bit | | 32-bit (x86_64) | | 32-bit (wasm) |
+|---|---|---|---|---|---|
+| 24 / 48, 64 | 0.97, 1.01 | 12 / 32, 48 | 0.85, 0.82 | 12 / 32, 48 | 0.95, 0.90 |
+| 24 / 96, 256, 1000 | 0.90, 0.89, 0.89 | 12 / 96, 1000 | 0.74, 0.73 | 12 / 96, 1000 | 0.81, 0.74 |
+| 28 / 56, 96, 1000 | 0.95, 0.88, 0.84 | 24 / 48, 64 | 0.85, 0.82 | 24 / 48, 64 | 0.92, 0.88 |
+| 32 / 64, 96, 1000 | 0.93, 0.87, 0.84 | 24 / 200, 1000 | 0.75, 0.78 | 24 / 200, 1000 | 0.74, 0.73 |
+| 40 / 80, 512, 1000 | 0.86, 0.80, 0.78 | 32 / 64, 1000 | 0.80, 0.66 | 30 / 60 | 0.96 |
+
+Lower thresholds: with 64-bit limbs, quotients of 16..20 limbs are 0.91-1.16 (the product
+with the rest is schoolbook below `LI_KARATSUBA_LIMBS`); with 32-bit limbs, quotients of
+8 limbs gain from 40-limb divisors on (0.96 wasm, 0.88 x86_64), but are 0.995 at 8 / 32
+and 1.015 at 24 / 32 on wasm.  Without the condition on the divisor's length: 1.03 at
+30 / 48, 1.04 at 40 / 48, 1.00 at 36 / 56 and 40 / 64 (64-bit), 1.02 at 28 / 32 (32-bit,
+x86_64).  In the image (`bench.sh`, medians of 5 alternating runs, against the plugin
+before Burnikel & Ziegler, whose calls also allocate and shift): div 7680/6144 bits (24 /
+96 limbs) 0.99, 18432/16384 (32 / 256) 0.96, 67072/65536 (24 / 1024) 0.95, 68096/65536
+(40 / 1024) 0.85.
 
 ## Not covered
 

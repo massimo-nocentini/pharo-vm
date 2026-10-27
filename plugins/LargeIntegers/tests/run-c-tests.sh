@@ -9,11 +9,13 @@
 #
 #   kernels  c/kernels_test.c: liDigitMultiply and liDigitDiv digit for digit
 #            against frozen copies of the plugin's original 32-bit loops and
-#            independent oracles, in six builds: the host's limbs (64-bit on
+#            independent oracles, in eight builds: the host's limbs (64-bit on
 #            x86_64 and aarch64), forced 32-bit limbs, and both with emulated
-#            big-endian digits, under ASan+UBSan; both limb sizes at -O2;
-#   oracle   the -O2 builds print 3000 products and quotients, which
-#            c/oracle.py checks with Python's integers;
+#            big-endian digits, under ASan+UBSan; both limb sizes with every
+#            scratch buffer on the heap (LI_STACK_LIMBS=1), under ASan+UBSan;
+#            both limb sizes at -O2;
+#   oracle   the -O2 builds print products, squares, quotients and
+#            remainders, which c/oracle.py checks with Python's integers;
 #   calls    c/plugin_harness.c drives the plugin through a mock VM: about
 #            85,000 calls whose answers must match expected/mock-calls.sha256,
 #            recorded from the plugin as it was before the kernels;
@@ -61,7 +63,7 @@ while test $# -gt 0; do
         case $1 in --build) build=$2 ;; *) reference=$2 ;; esac
         shift ;;
     --record) record=1 ;;
-    -h|--help) sed -n '2,48p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,50p' "$0"; exit 0 ;;
     -*) echo "run-c-tests: unknown option $1" >&2; exit 2 ;;
     *) scale=$1 ;;
     esac
@@ -144,6 +146,9 @@ compile kernels_test $CC $SAN $INC -o "$build/kernels_test" "$kt" & pids="$pids 
 compile kernels_test32 $CC $SAN $INC -DLI_LIMB_BITS=32 -o "$build/kernels_test32" "$kt" & pids="$pids $!"
 compile kernels_test_be $CC $SAN $INC -DFAKE_BIGENDIAN -o "$build/kernels_test_be" "$kt" & pids="$pids $!"
 compile kernels_test_be32 $CC $SAN $INC -DFAKE_BIGENDIAN -DLI_LIMB_BITS=32 -o "$build/kernels_test_be32" "$kt" & pids="$pids $!"
+# every scratch buffer malloc'ed at its computed size, so that ASan checks the bounds
+compile kernels_heap $CC $SAN $INC -DLI_STACK_LIMBS=1 -o "$build/kernels_heap" "$kt" & pids="$pids $!"
+compile kernels_heap32 $CC $SAN $INC -DLI_STACK_LIMBS=1 -DLI_LIMB_BITS=32 -o "$build/kernels_heap32" "$kt" & pids="$pids $!"
 compile kernels_fast $CC -O2 $INC -o "$build/kernels_fast" "$kt" & pids="$pids $!"
 compile kernels_fast32 $CC -O2 $INC -DLI_LIMB_BITS=32 -o "$build/kernels_fast32" "$kt" & pids="$pids $!"
 # the plugin as the VM loads it: a shared object; -w: its warnings are the build's business
@@ -161,9 +166,9 @@ for pid in $pids; do
 done
 test $built = 1 || exit 2
 
-# --- kernels: the four sanitized builds in parallel, then the -O2 ones
+# --- kernels: all the builds in parallel
 pids=
-for k in kernels_test kernels_test32 kernels_test_be kernels_test_be32 kernels_fast kernels_fast32; do
+for k in kernels_test kernels_test32 kernels_test_be kernels_test_be32 kernels_heap kernels_heap32 kernels_fast kernels_fast32; do
     $limit "$build/$k" "$scale" > "$build/$k.log" 2>&1 &
     pids="$pids $!:$k"
 done

@@ -6,7 +6,9 @@
  * before the kernels existed, and with independent oracles: a base-256 schoolbook
  * multiply, the reconstruction a = q*b + r with known q and r, and (mode `dump`)
  * Python's big integers (oracle.py).  Squares (the same digits as both operands, through
- * one pointer or a copy) take their own kernels, and have their own cases.
+ * one pointer or a copy) take their own kernels, and have their own cases; so do
+ * divisions that take Burnikel & Ziegler's recursion (LI_BZ_LIMBS, LI_BZ_QUOTIENT_LIMBS),
+ * whose liDivRemBZ is also called directly, on limbs, with the contract of liDivRem.
  *
  * Build variants (run-c-tests.sh): LI_LIMB_BITS=64 (the default on x86_64 and aarch64)
  * or 32, FAKE_BIGENDIAN (SQ_SWAP_4_BYTES_IF_BIGENDIAN swaps: digits are stored
@@ -37,6 +39,9 @@ static void *testMalloc(size_t n) { mallocCalls++; return mallocFails ? NULL : m
 #define LI_MALLOC testMalloc
 #define LI_FREE free
 #define LI_TUNABLE 1
+/* the add-backs of the Burnikel & Ziegler steps, [step][k - 1] (k = 3 counts the third and later) */
+static long nAddBack[3][3];
+#define LI_DIV_ADDBACK(step, k) (nAddBack[step][(k) < 3 ? (k) - 1 : 2]++)
 #include "LargeIntegersKernels.c"
 
 typedef uint32_t u32;
@@ -558,6 +563,9 @@ static void testDivNoMemory(void)
 	long before = mallocCalls;
 	mallocFails = 1;
 	testDivReconstruct(1, 1, 1);   /* small: on the stack, malloc not called */
+	/* (unless the build makes LI_STACK_LIMBS tiny: run-c-tests.sh's heap builds) */
+	CHECK(LI_STACK_LIMBS < 16 || mallocCalls == before, "a small division asked for scratch memory");
+	before = mallocCalls;
 	long an = 3000, bn = 1100;
 	u32 *a = dalloc(an), *b = dalloc(bn);
 	fill(a, an, 0); fill(b, bn, 1); normalizeTop(a, an); normalizeTop(b, bn);
@@ -601,6 +609,307 @@ static void testReciprocal(long count)
 	}
 	fails += bad > 0;
 	printf("reciprocal: %ld divisors, %ld wrong\n", n, bad);
+}
+
+/* ---------------------------------------------------------------- divide: Burnikel & Ziegler */
+
+/* Divisors that make the estimates from the top half of a divisor too large: a top digit
+   of 0x80000000 over zeros and ones, all ones, ones or zeros in the low half */
+static void bzDivisor(u32 *b, long bn, int kind)
+{
+	long i;
+	switch (kind % 7) {
+	case 0: for (i = 0; i < bn; i++) PUT(b, i, 0); break;
+	case 1: case 2: for (i = 0; i < bn; i++) PUT(b, i, 0xFFFFFFFFu); break;
+	case 3: for (i = 0; i < bn; i++) PUT(b, i, i < bn / 2 ? 0xFFFFFFFFu : 0); break;
+	case 4: fill(b, bn, (int) rnd()); for (i = 0; i < bn / 2; i++) PUT(b, i, 0xFFFFFFFFu); break;
+	case 5: fill(b, bn, (int) rnd()); for (i = 0; i < bn / 2; i++) PUT(b, i, 0); break;
+	default: fill(b, bn, (int) rnd()); break;
+	}
+	if (kind % 7 < 4 && kind % 7 != 2) PUT(b, bn - 1, 0x80000000u);
+	if (kind % 7 >= 4) PUT(b, bn - 1, GET(b, bn - 1) | 0x80000000u);
+	normalizeTop(b, bn);
+}
+
+/* Quotients with the largest digits: all ones, ones over random digits or zeros */
+static void bzQuotient(u32 *q, long qn, int kind)
+{
+	long i;
+	switch (kind % 5) {
+	case 0: for (i = 0; i < qn; i++) PUT(q, i, 0xFFFFFFFFu); break;
+	case 1: fill(q, qn, 0); for (i = qn / 2; i < qn; i++) PUT(q, i, 0xFFFFFFFFu); break;
+	case 2: for (i = 0; i < qn; i++) PUT(q, i, i < qn / 2 ? 0 : 0xFFFFFFFFu); break;
+	case 3: for (i = 0; i < qn; i++) PUT(q, i, 0xFFFFFFFFu - (u32) rndBelow(3)); break;
+	default: fill(q, qn, (int) rnd()); break;
+	}
+}
+
+/* a = q0 * b + r0 with r0 = b - 1, 0, b - 1 - small, or random below b: divide a by b,
+   compare with the frozen loop (divCase) and with q0 and r0 */
+static void bzReconstruct(const u32 *b, long bn, const u32 *q0, long qn, int rKind)
+{
+	long an = bn + qn, i;
+	u32 *r0 = dalloc(bn), *a = dalloc(an + 1);
+	u64 cy;
+	memcpy(r0, b, bn * 4);
+	switch (rKind % 4) {
+	case 0:   /* b - 1 */
+		for (i = 0; i < bn; i++) { if (GET(r0, i)) { PUT(r0, i, GET(r0, i) - 1); break; } PUT(r0, i, 0xFFFFFFFFu); }
+		break;
+	case 1: memset(r0, 0, bn * 4); break;
+	case 2:   /* b - 1 - small, or 0 when b is smaller */
+		cy = 1 + (u64) rndBelow(1000);
+		for (i = 0; i < bn; i++) { u64 d = GET(r0, i); PUT(r0, i, (u32) (d - cy)); cy = d < cy; }
+		if (cy) memset(r0, 0, bn * 4);
+		break;
+	default:
+		fill(r0, bn - 1, (int) rnd());
+		PUT(r0, bn - 1, (u32) rndBelow(GET(b, bn - 1)));
+		break;
+	}
+	memset(a, 0, (an + 1) * 4);
+	frozen_mul((unsigned int *) q0, qn, (unsigned int *) b, bn, a, an);
+	cy = 0;
+	for (i = 0; i < an; i++) { cy += (u64) GET(a, i) + (i < bn ? GET(r0, i) : 0); PUT(a, i, (u32) cy); cy >>= 32; }
+	PUT(a, an, (u32) cy);
+	long aan = an + 1;
+	while (aan > 0 && GET(a, aan - 1) == 0) aan--;
+	if (aan >= bn) {
+		long quoLen = aan - bn + 1;
+		u32 *q = dalloc(quoLen), *r = dalloc(bn);
+		divCase(a, aan, b, bn, q, r);
+		for (i = 0; i < quoLen || i < qn; i++) {
+			u32 got = i < quoLen ? GET(q, i) : 0, want = i < qn ? GET(q0, i) : 0;
+			if (got != want) { CHECK(0, "BZ reconstruct quotient digit %ld of %ld/%ld (thr %ld)", i, aan, bn, (long) liBZLimbs); break; }
+		}
+		CHECK(!memcmp(r, r0, bn * 4), "BZ reconstruct remainder %ld/%ld (thr %ld)", aan, bn, (long) liBZLimbs);
+		free(q); free(r);
+	}
+	free(r0); free(a);
+}
+
+/* one adversarial division: a quotient of qn digits by a divisor of bn digits */
+static void bzAdversarial(long bn, long qn)
+{
+	u32 *b = dalloc(bn), *q0 = dalloc(qn);
+	int bKind = (int) rnd(), qKind = (int) rnd(), rKind = (int) rnd();
+	bzDivisor(b, bn, bKind);
+	bzQuotient(q0, qn, qKind);
+	bzReconstruct(b, bn, q0, qn, rKind);
+	free(b); free(q0);
+}
+
+/* one random division of an by bn digits, the top digits of a sometimes those of b */
+static void bzRandom(long bn, long an)
+{
+	u32 *a = dalloc(an), *b = dalloc(bn);
+	fill(a, an, (int) rnd()); fill(b, bn, (int) rnd());
+	normalizeTop(a, an); normalizeTop(b, bn);
+	if (rnd() % 4 == 0) {
+		long k = 1 + rndBelow(bn);
+		for (long i = 0; i < k; i++) PUT(a, an - 1 - i, GET(b, bn - 1 - i));
+	}
+	divCase(a, an, b, bn, NULL, NULL);
+	free(a); free(b);
+}
+
+/* divisors of LI_BZ_LIMBS - 1 .. 5 x LI_BZ_LIMBS + 3 limbs (odd sizes among them),
+   quotients of 1, 2, vn - 1, vn, vn + 1, 3vn + 5 and 10vn limbs, every partial-limb
+   offset of both; random and adversarial */
+static void testDivBZThreshold(long reps)
+{
+	long T = LI_BZ_LIMBS, D = LI_DIGITS_PER_LIMB, n = 0;
+	long vls[] = { T - 1, T, T + 1, 2 * T - 1, 2 * T, 2 * T + 1, 3 * T + 2, 5 * T + 3 };
+	for (unsigned i = 0; i < sizeof vls / sizeof *vls; i++) {
+		long vl = vls[i];
+		long qls[] = { 1, 2, vl - 1, vl, vl + 1, 3 * vl + 5, 10 * vl };
+		for (unsigned j = 0; j < sizeof qls / sizeof *qls; j++)
+			for (long r = 0; r < reps; r++)
+				for (int ds = 0; ds < D; ds++)
+					for (int dq = 0; dq < D; dq++) {
+						long bn = vl * D - ds, qn = qls[j] * D - dq;
+						bzRandom(bn, bn + qn - 1);
+						bzAdversarial(bn, qn);
+						n += 2;
+					}
+	}
+	printf("div BZ threshold straddle (T=%ld limbs): %ld cases\n", T, n);
+}
+
+/* short quotients around LI_BZ_QUOTIENT_LIMBS (Tq) over divisors of 2Tq - 1 .. 3T limbs,
+   and divisors Tq - 1, Tq and Tq + 1 limbs longer than the quotient, every partial-limb
+   offset of both; random and adversarial */
+static void testDivBZShortQuotient(long reps)
+{
+	long T = LI_BZ_LIMBS, Tq = LI_BZ_QUOTIENT_LIMBS, D = LI_DIGITS_PER_LIMB, n = 0;
+	long vls[] = { 2 * Tq - 1, 2 * Tq, 2 * Tq + 1, T, T + 1, 3 * T };
+	for (unsigned i = 0; i < sizeof vls / sizeof *vls; i++) {
+		long vl = vls[i];
+		long qls[] = { Tq - 1, Tq, Tq + 1, vl - Tq - 1, vl - Tq, vl - Tq + 1 };
+		for (unsigned j = 0; j < sizeof qls / sizeof *qls; j++) {
+			if (qls[j] < 1) continue;
+			for (long r = 0; r < reps; r++)
+				for (int ds = 0; ds < D; ds++)
+					for (int dq = 0; dq < D; dq++) {
+						long bn = vl * D - ds, qn = qls[j] * D - dq;
+						bzRandom(bn, bn + qn - 1);
+						bzAdversarial(bn, qn);
+						n += 2;
+					}
+		}
+	}
+	printf("div BZ short quotients (Tq=%ld limbs): %ld cases\n", Tq, n);
+}
+
+/* the recursion at thresholds 2..9 limbs, sometimes with Karatsuba at 2..6 limbs, on small
+   random and adversarial operands: every split, odd halves, top blocks of 1 .. vn limbs */
+static void testDivBZForced(long count)
+{
+	long thr0 = liBZLimbs, qthr0 = liBZQuotientLimbs, kara0 = liKaratsubaLimbs;
+	for (long c = 0; c < count; c++) {
+		static const long thr[] = { 2, 3, 4, 5, 6, 9 }, kara[] = { 2, 3, 4, 6 };
+		liBZLimbs = thr[rnd() % 6];
+		liBZQuotientLimbs = rnd() % 2 ? qthr0 : 1 + rndBelow(6);
+		liKaratsubaLimbs = rnd() % 3 ? kara0 : kara[rnd() % 4];
+		long bn = 1 + rndBelow(70);
+		long qn = 1 + (rnd() % 4 ? rndBelow(2 * bn + 4) : rndBelow(12 * bn));
+		if (c & 1) bzAdversarial(bn, qn);
+		else bzRandom(bn, bn + qn - 1);
+	}
+	liBZLimbs = thr0;
+	liBZQuotientLimbs = qthr0;
+	liKaratsubaLimbs = kara0;
+	printf("div BZ forced at 2..9 limbs (short quotients from 1..6): %ld cases\n", count);
+}
+
+/* operands up to 20000 digits, at the production thresholds */
+static void testDivBZLarge(void)
+{
+	static const long shapes[][2] = { { 16385, 8192 }, { 8193, 4096 }, { 20000, 2000 }, { 12000, 7001 }, { 5000, 4900 }, { 9999, 333 } };
+	for (unsigned i = 0; i < sizeof shapes / sizeof *shapes; i++) {
+		long an = shapes[i][0], bn = shapes[i][1];
+		bzRandom(bn, an);
+		bzAdversarial(bn, an - bn + 1);
+	}
+	printf("div BZ large: %ld shapes, random and adversarial\n", (long) (sizeof shapes / sizeof *shapes));
+}
+
+/* the scratch of the recursion alone sends a division to malloc (Knuth's algorithm D
+   would run on the stack): when the malloc fails, the 32-bit loop answers */
+static void testDivBZNoMemory(void)
+{
+	long D = LI_DIGITS_PER_LIMB, vl = (long) LI_STACK_LIMBS / 4 - 2, before;
+	if (vl < LI_BZ_LIMBS) vl = LI_BZ_LIMBS;   /* a tiny LI_STACK_LIMBS: on the heap anyway */
+	before = mallocCalls;
+	mallocFails = 1;
+	bzAdversarial(vl * D, vl * D);
+	bzRandom(vl * D, 2 * vl * D);
+	bzRandom(2 * LI_BZ_LIMBS * D, 22 * LI_BZ_LIMBS * D);
+	mallocFails = 0;
+	CHECK(mallocCalls - before == 3, "the BZ divisions did not ask for scratch memory (%ld)", mallocCalls - before);
+	nFallbackDiv += 3;
+	printf("div BZ with failing malloc: 3 cases\n");
+}
+
+/* limbs at their exact size, for ASan */
+static liLimb *lalloc(long n) { return malloc((n ? n : 1) * sizeof(liLimb)); }
+static void limbFill(liLimb *x, long n, int mode)
+{
+	for (long i = 0; i < n; i++) {
+		switch (mode % 4) {
+		case 0: x[i] = (liLimb) rnd(); break;
+		case 1: x[i] = ~(liLimb) 0; break;
+		case 2: x[i] = rnd() % 3 ? 0 : (liLimb) rnd(); break;
+		default: x[i] = rnd() % 2 ? ~(liLimb) 0 : (liLimb) patDigit() << (LI_LB - 32); break;
+		}
+	}
+}
+
+/* liDivRemBZ called directly with liDivRem's contract, the top vn limbs of u below v, where
+   liDigitDiv has the top limb of u below v's: dividends whose top limbs equal the divisor's
+   down to a lower limb, so that the top block's quotient (qb < vn limbs) reaches B^qb and
+   is corrected, which liDigitDiv never needs.  Against Knuth's algorithm D (liDivRem) and
+   the reconstruction u = q v + r with r < v; thresholds forced or at production. */
+static void testDivBZDirect(long count)
+{
+	long thr0 = liBZLimbs, kara0 = liKaratsubaLimbs, nTop = 0;
+	for (long c = 0; c < count; c++) {
+		static const long thr[] = { 2, 3, 4, 5, 6, 9 }, kara[] = { 2, 3, 4, 6 };
+		int prod = c % 8 == 0;
+		liBZLimbs = prod ? thr0 : thr[rnd() % 6];
+		liKaratsubaLimbs = prod || rnd() % 3 ? kara0 : kara[rnd() % 4];
+		long vn = prod ? thr0 + rndBelow(3 * thr0) : 1 + rndBelow(40);
+		long qn = 1 + (rnd() % 2 ? rndBelow(vn) : rndBelow(3 * vn + 3)), un = vn + qn, i, p;
+		long qb = qn % vn == 0 ? vn : qn % vn;
+		liLimb *v = lalloc(vn), *u = lalloc(un), *u0 = lalloc(un), *u1 = lalloc(un), *q = lalloc(qn), *q1 = lalloc(qn);
+		liLimb *t = lalloc(un), *scratch = lalloc(liDivRemBZScratch(qn, vn)), cy;
+		limbFill(v, vn, (int) rnd());
+		v[vn - 1] |= (liLimb) 1 << (LI_LB - 1);
+		limbFill(u, qn, (int) rnd());
+		/* the top vn limbs of u: v's above limb p, below v's at p (the lowest nonzero limb of
+		   v at or above the chosen one), anything under it; p = 0 most often */
+		p = rnd() % 2 ? 0 : rndBelow(vn);
+		while (v[p] == 0) p++;
+		for (i = vn - 1; i > p; i--) u[qn + i] = v[i];
+		u[qn + p] = (liLimb) rnd() % v[p];
+		limbFill(u + qn, p, (int) rnd());
+		if (rnd() % 4 == 0) {
+			/* liDigitDiv's contract instead: the top limb below v's */
+			limbFill(u + qn, vn, (int) rnd());
+			u[un - 1] = (liLimb) rnd() % v[vn - 1];
+		}
+		memcpy(u0, u, un * sizeof(liLimb));
+		memcpy(u1, u, un * sizeof(liLimb));
+		if (qb < vn && liCmp(u + un - qb, v + vn - qb, qb) >= 0) nTop++;
+		liDivRemBZ(q, u, un, v, vn, scratch);
+		liDivRem(q1, u1, un, v, vn);
+		CHECK(!memcmp(q, q1, qn * sizeof(liLimb)) && !memcmp(u, u1, un * sizeof(liLimb)),
+			"liDivRemBZ against liDivRem %ld/%ld limbs (thr %ld)", un, vn, (long) liBZLimbs);
+		for (i = vn; i < un && u[i] == 0; i++) ;
+		CHECK(i == un && liCmp(u, v, vn) < 0, "liDivRemBZ remainder %ld/%ld limbs (thr %ld)", un, vn, (long) liBZLimbs);
+		if (qn >= vn) liMulBasecase(t, q, qn, v, vn); else liMulBasecase(t, v, vn, q, qn);
+		cy = liAddN(t, t, u, vn);
+		cy = liAdd1(t + vn, t + vn, qn, cy);
+		CHECK(cy == 0 && !memcmp(t, u0, un * sizeof(liLimb)), "liDivRemBZ q v + r %ld/%ld limbs (thr %ld)", un, vn, (long) liBZLimbs);
+		free(v); free(u); free(u0); free(u1); free(q); free(q1); free(t); free(scratch);
+		nDiv++;
+	}
+	liBZLimbs = thr0;
+	liKaratsubaLimbs = kara0;
+	CHECK(nTop > count / 20, "too few top blocks whose quotient reached B^qb (%ld)", nTop);
+	printf("div liDivRemBZ direct: %ld cases, %ld top blocks with a quotient of B^qb or more\n", count, nTop);
+}
+
+/* the scratch never asks for more bytes than a size_t holds, and stays on the stack up to
+   LI_STACK_LIMBS limbs */
+static void testScratchLimit(void)
+{
+	liLimb stackLimbs[1], *p;
+	unsigned long long most = (unsigned long long) (((size_t) -1) / sizeof(liLimb));
+	long before = mallocCalls;
+	CHECK(liScratch(LI_STACK_LIMBS, stackLimbs) == stackLimbs, "LI_STACK_LIMBS limbs not on the stack");
+	p = liScratch(LI_STACK_LIMBS + 1, stackLimbs);
+	CHECK(p != 0 && p != stackLimbs && mallocCalls == before + 1, "LI_STACK_LIMBS + 1 limbs not malloc'ed");
+	if (p != stackLimbs) free(p);
+	before = mallocCalls;
+	if (sizeof(sqInt) == 8 && most < 0x7FFFFFFFFFFFFFFFull) {
+		CHECK(liScratch((sqInt) (most + 1), stackLimbs) == 0 && liScratch((sqInt) 0x7FFFFFFFFFFFFFFFull, stackLimbs) == 0,
+			"a scratch larger than a size_t holds did not answer 0");
+	}
+	CHECK(mallocCalls == before, "a scratch larger than a size_t holds called malloc");
+	printf("scratch: stack, heap and over-size_t limits\n");
+}
+
+/* every add-back loop of the recursion ran, some twice, none three times; restart the counts */
+static void checkAddBacks(const char *what)
+{
+	printf("div BZ add-backs, %s [step][once, twice, more]: %ld %ld %ld / %ld %ld %ld / %ld %ld %ld\n", what,
+		nAddBack[0][0], nAddBack[0][1], nAddBack[0][2], nAddBack[1][0], nAddBack[1][1], nAddBack[1][2],
+		nAddBack[2][0], nAddBack[2][1], nAddBack[2][2]);
+	CHECK(nAddBack[0][0] > 0 && nAddBack[1][0] > 0 && nAddBack[2][0] > 0, "an add-back loop never ran");
+	CHECK(nAddBack[0][1] + nAddBack[1][1] + nAddBack[2][1] > 0, "no step needed two add-backs");
+	CHECK(nAddBack[0][2] + nAddBack[1][2] + nAddBack[2][2] == 0, "a step needed more than two add-backs");
+	memset(nAddBack, 0, sizeof nAddBack);
 }
 
 /* ---------------------------------------------------------------- dump for oracle.py */
@@ -657,10 +966,41 @@ static void dump(long n)
 	}
 }
 
+/* divisions over the Burnikel & Ziegler threshold, at the production one and forced */
+static void dumpDivBZ(long n)
+{
+	long thr0 = liBZLimbs, qthr0 = liBZQuotientLimbs, D = LI_DIGITS_PER_LIMB;
+	for (long c = 0; c < n; c++) {
+		static const long thr[] = { 2, 3, 5 };
+		liBZLimbs = c % 4 ? thr0 : thr[rnd() % 3];
+		liBZQuotientLimbs = c % 4 ? qthr0 : 1 + rndBelow(4);
+		long bn = liBZLimbs * D - 1 + rndBelow(4 * liBZLimbs * D);
+		long qn = 1 + (rnd() % 2 ? rndBelow(2 * bn) : rndBelow(10 * bn));
+		long an = bn + qn - 1;
+		u32 *a = dalloc(an), *b = dalloc(bn), *q = dalloc(qn), *rr = dalloc(bn);
+		if (c % 3) {
+			fill(a, an, (int) rnd()); fill(b, bn, (int) rnd());
+		}
+		else {
+			/* the largest quotient for this divisor: the add-backs */
+			bzDivisor(b, bn, (int) rnd());
+			for (long i = 0; i < an; i++) PUT(a, i, i < bn - 1 ? 0 : 0xFFFFFFFFu);
+			PUT(a, an - 1, GET(b, bn - 1) - 1);
+		}
+		normalizeTop(a, an); normalizeTop(b, bn);
+		divCase(a, an, b, bn, q, rr);
+		printf("D"); hex(a, an); hex(b, bn); hex(q, qn); hex(rr, bn); printf("\n");
+		free(a); free(b); free(q); free(rr);
+	}
+	liBZLimbs = thr0;
+	liBZQuotientLimbs = qthr0;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc > 2 && !strcmp(argv[1], "dump")) {
 		dump(atol(argv[2]));
+		dumpDivBZ(atol(argv[2]) / 3);
 		return fails != 0;
 	}
 	long scale = argc > 1 ? atol(argv[1]) : 1;
@@ -699,6 +1039,18 @@ int main(int argc, char **argv)
 	testDivLarge();
 	testDivNoMemory();
 	testDivOffContract();
+	printf("-- Burnikel & Ziegler: LI_BZ_LIMBS=%d LI_BZ_QUOTIENT_LIMBS=%d\n", LI_BZ_LIMBS, LI_BZ_QUOTIENT_LIMBS);
+	memset(nAddBack, 0, sizeof nAddBack);
+	testDivBZThreshold(2 * scale);
+	testDivBZShortQuotient(2 * scale);
+	testDivBZLarge();
+	checkAddBacks("production thresholds");
+	testDivBZForced(20000 * scale);
+	checkAddBacks("forced thresholds");
+	testDivBZDirect(10000 * scale);
+	checkAddBacks("liDivRemBZ direct");
+	testDivBZNoMemory();
+	testScratchLimit();
 	printf("totals: %ld multiplies (%ld squares), %ld divisions (%ld + %ld through a failing malloc)\n", nMul, nSqr, nDiv, nFallbackMul, nFallbackDiv);
 	printf("%s: %d failures\n", fails ? "FAILED" : "OK", fails);
 	return fails != 0;

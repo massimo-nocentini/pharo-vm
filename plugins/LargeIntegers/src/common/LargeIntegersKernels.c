@@ -19,6 +19,13 @@
  * - division: Knuth's algorithm D, each quotient limb estimated with the Moller-Granlund
  *   2-by-1 division by a precomputed reciprocal of the top divisor limb, then corrected
  *   with the next divisor limb as Knuth does; a single-limb divisor takes a plain loop.
+ *   Once the divisor and the quotient both have LI_BZ_LIMBS limbs, Burnikel & Ziegler's
+ *   recursive division in GMP's divide-and-conquer shape (mpn_dcpi1_div_qr): the quotient
+ *   in blocks of the divisor's length, top block first, each block's halves estimated
+ *   from the top half of the divisor (recursively, down to algorithm D) and corrected
+ *   with the product of the rest (Karatsuba) and at most two add-backs.  A quotient of
+ *   LI_BZ_QUOTIENT_LIMBS limbs or more over a divisor at least that much longer is one
+ *   such block: algorithm D on the top of the divisor, then the product of the rest.
  * The operands are copied into limbs in scratch memory (on the stack up to
  * LI_STACK_LIMBS limbs, else malloc'ed) and the results copied back as digits, so a
  * kernel reads and writes exactly the digits it is given.
@@ -27,7 +34,9 @@
  * LI_DIV_LOOP_QUOTIENT_DIGITS), and when the malloc fails: no new failure.
  *
  * Compile-time knobs, for tests and tuning: LI_LIMB_BITS (64 or 32), the thresholds
- * above, LI_STACK_LIMBS, LI_MALLOC/LI_FREE, LI_TUNABLE (makes the thresholds variables).
+ * above, LI_STACK_LIMBS, LI_MALLOC/LI_FREE (the kernels never ask for more than a size_t
+ * holds: the 32-bit loop runs instead), LI_TUNABLE (makes the thresholds variables),
+ * LI_DIV_ADDBACK (counts the add-backs of the recursive division).
  */
 
 #include "config.h"
@@ -115,6 +124,33 @@ typedef unsigned long long liDLimb;
 #if !defined(LI_DIV_LOOP_DIVISOR_DIGITS)
 # define LI_DIV_LOOP_DIVISOR_DIGITS 24
 #endif
+/* Burnikel & Ziegler's recursive division when the divisor and the quotient both have at
+   least this many limbs, and in its recursion down to this many; Knuth's algorithm D below. */
+#if !defined(LI_BZ_LIMBS)
+# if LI_LIMB_BITS == 64
+#  define LI_BZ_LIMBS 48
+# else
+#  define LI_BZ_LIMBS 32
+# endif
+#endif
+#if LI_BZ_LIMBS < 2
+# error "LI_BZ_LIMBS must be at least 2"
+#endif
+/* ... and when the divisor has LI_BZ_LIMBS limbs and the quotient fewer, but at least this
+   many, with at least this many more limbs in the divisor: algorithm D on the top of the
+   divisor, then the product of the quotient with the rest of the divisor.  With 64-bit
+   limbs that product takes Karatsuba from here; with 32-bit limbs even its schoolbook is
+   faster than the multiply-and-subtract rows of algorithm D. */
+#if !defined(LI_BZ_QUOTIENT_LIMBS)
+# if LI_LIMB_BITS == 64
+#  define LI_BZ_QUOTIENT_LIMBS 24
+# else
+#  define LI_BZ_QUOTIENT_LIMBS 12
+# endif
+#endif
+#if LI_BZ_QUOTIENT_LIMBS < 1
+# error "LI_BZ_QUOTIENT_LIMBS must be at least 1"
+#endif
 
 #if defined(LI_TUNABLE)
 sqInt liKaratsubaLimbs = LI_KARATSUBA_LIMBS;
@@ -122,12 +158,16 @@ sqInt liMulLoopDigitProduct = LI_MUL_LOOP_DIGIT_PRODUCT;
 sqInt liSqrBasecaseLimbs = LI_SQR_BASECASE_LIMBS;
 sqInt liSqrKaratsubaLimbs = LI_SQR_KARATSUBA_LIMBS;
 sqInt liDivLoopQuotientDigits = LI_DIV_LOOP_QUOTIENT_DIGITS;
+sqInt liBZLimbs = LI_BZ_LIMBS;
+sqInt liBZQuotientLimbs = LI_BZ_QUOTIENT_LIMBS;
 #else
 # define liKaratsubaLimbs LI_KARATSUBA_LIMBS
 # define liMulLoopDigitProduct LI_MUL_LOOP_DIGIT_PRODUCT
 # define liSqrBasecaseLimbs LI_SQR_BASECASE_LIMBS
 # define liSqrKaratsubaLimbs LI_SQR_KARATSUBA_LIMBS
 # define liDivLoopQuotientDigits LI_DIV_LOOP_QUOTIENT_DIGITS
+# define liBZLimbs LI_BZ_LIMBS
+# define liBZQuotientLimbs LI_BZ_QUOTIENT_LIMBS
 #endif
 
 /* Scratch limbs on the C stack; more are malloc'ed. */
@@ -145,6 +185,21 @@ static sqInt
 liLimbsFor(sqInt digits)
 {
 	return (digits + LI_DIGITS_PER_LIMB - 1) / LI_DIGITS_PER_LIMB;
+}
+
+/* Answer need scratch limbs: stackLimbs (LI_STACK_LIMBS of them) when they are enough, else
+   malloc'ed ones, or 0 when the malloc fails or need limbs are more bytes than a size_t
+   holds (with a 32-bit size_t, operands of a few hundred MB). */
+static liLimb *
+liScratch(sqInt need, liLimb *stackLimbs)
+{
+	if (need <= LI_STACK_LIMBS) {
+		return stackLimbs;
+	}
+	if ((unsigned long long) need > (unsigned long long) (((size_t) -1) / sizeof(liLimb))) {
+		return 0;
+	}
+	return (liLimb *) LI_MALLOC((size_t) need * sizeof(liLimb));
 }
 
 
@@ -746,7 +801,7 @@ liMulDigits(unsigned int *pA, sqInt aDigits, unsigned int *pB, sqInt bDigits, un
 	an = liLimbsFor(aDigits);
 	bn = liLimbsFor(bDigits);
 	need = square ? an + (an + an) + liSqrScratch(an) : an + bn + (an + bn) + liMulScratch(an, bn);
-	limbs = need <= LI_STACK_LIMBS ? stackLimbs : (liLimb *) LI_MALLOC(need * sizeof(liLimb));
+	limbs = liScratch(need, stackLimbs);
 	if (limbs == 0) {
 		liDigitMultiply32(pB, bDigits, pA, aDigits, pRes, resLen);
 		return;
@@ -882,9 +937,9 @@ liDiv2by1(liLimb *pr, liLimb nh, liLimb nl, liLimb d, liLimb di)
 	return q;
 }
 
-/* Knuth's algorithm D.  v has vn < un limbs and its top bit set; u has un limbs and
-   u[un - 1] < v[vn - 1], so that the quotient has un - vn limbs.  Store them at q, leave
-   the remainder in u[0 .. vn) and zeros in u[vn .. un). */
+/* Knuth's algorithm D.  v has vn < un limbs and its top bit set; u has un limbs, its top
+   vn limbs below v (as when u[un - 1] < v[vn - 1]), so that the quotient has un - vn
+   limbs.  Store them at q, leave the remainder in u[0 .. vn) and zeros in u[vn .. un). */
 static void
 liDivRem(liLimb *q, liLimb *u, sqInt un, const liLimb *v, sqInt vn)
 {
@@ -932,12 +987,196 @@ liDivRem(liLimb *q, liLimb *u, sqInt un, const liLimb *v, sqInt vn)
 	}
 }
 
+/* Divide-and-conquer division: Burnikel & Ziegler, "Fast recursive division", MPI-I-98-1-022
+   (1998), in the shape of GMP's mpn_dcpi1_div_qr_n and mpn_dcpi1_div_qr: the divisor is
+   cut into uneven halves instead of being padded to a block size times a power of two,
+   and Knuth's algorithm D divides below liBZLimbs.  Each half of a quotient is one D3n2n
+   step: the top 2k limbs of the partial remainder divided (recursively: D2n1n) by the top
+   k limbs of the divisor, then the product of that quotient with the rest of the divisor
+   subtracted (liMul, Karatsuba), then the divisor added back while the remainder is
+   negative.  The estimate from the top k limbs of a normalized divisor is never too small
+   and at most 2 too large, so there are at most two add-backs: Knuth's theorem 4.3.1B with
+   the base B^k, whose proof holds without its clamp of the estimate to B^k - 1 (the
+   recursion does not clamp: a block's estimate may reach B^k), because the top k limbs of
+   the partial remainder never exceed the divisor's.  With V = V1 B^m + V0 (V1 its top k
+   limbs, B^k / 2 <= V1, V0 < B^m) and A = A1 B^m + A0 with A1 < (V1 + 1) B^k, the
+   estimate floor(A1 / V1) exceeds floor(A / V) by less than 1 + A1 V0 / (V1 V) < 1 + B^k / V1
+   <= 3.  The cost is a small multiple of a multiplication, against Knuth's quadratic loop. */
+
+/* Tests count the add-backs: LI_DIV_ADDBACK(step, k) runs before the k-th one of a step */
+#if !defined(LI_DIV_ADDBACK)
+# define LI_DIV_ADDBACK(step, k) ((void) (k))
+#endif
+
+/* Answer -1, 0 or 1 as a[0 .. n) is below, equal to or above b[0 .. n) */
+static int
+liCmp(const liLimb *a, const liLimb *b, sqInt n)
+{
+	sqInt i;
+
+	for (i = n - 1; i >= 0; i -= 1) {
+		if (a[i] != b[i]) {
+			return a[i] < b[i] ? -1 : 1;
+		}
+	}
+	return 0;
+}
+
+/* r[0 .. n) := a[0 .. n) - c, answer the borrow (r may be a) */
+static liLimb
+liSub1(liLimb *r, const liLimb *a, sqInt n, liLimb c)
+{
+	liLimb ai;
+	sqInt i;
+
+	for (i = 0; i < n; i += 1) {
+		ai = a[i];
+		r[i] = ai - c;
+		c = ai < c;
+	}
+	return c;
+}
+
+/* The scratch limbs liDivRem2n(q, u, v, n, scratch) uses */
+static sqInt
+liDivRem2nScratch(sqInt n)
+{
+	sqInt lo = n / 2, hi = n - lo, need, other;
+
+	if (n < liBZLimbs) {
+		return 0;
+	}
+	/* the product of a half quotient and a half divisor, and liMul's scratch above it;
+	   the recursive divisions run before it, in the same limbs */
+	need = n + liMulScratch(hi, lo);
+	if ((other = liDivRem2nScratch(hi)) > need) {
+		need = other;
+	}
+	if ((other = liDivRem2nScratch(lo)) > need) {
+		need = other;
+	}
+	return need;
+}
+
+/* Divide the 2n limbs at u by the n limbs at v (top bit set): store the low n limbs of
+   the quotient at q and answer its limb n (0 or 1), leave the remainder in u[0 .. n) and
+   zeros in u[n .. 2n).  Burnikel & Ziegler's D2n1n (GMP's mpn_dcpi1_div_qr_n): with
+   n = hi + lo, hi = lo or lo + 1, the quotient limbs q[lo .. n) from u[lo .. 2n), then
+   q[0 .. lo) from the remainder and u[0 .. lo), each one D3n2n step.  Below liBZLimbs,
+   Knuth's algorithm D, after subtracting v once if the top n limbs of u reach it. */
+static liLimb
+liDivRem2n(liLimb *q, liLimb *u, const liLimb *v, sqInt n, liLimb *scratch)
+{
+	sqInt lo = n / 2, hi = n - lo, k;
+	liLimb qh, ql, cy, *t = scratch;
+
+	if (n < liBZLimbs) {
+		qh = liCmp(u + n, v, n) >= 0;
+		if (qh) {
+			liSubN(u + n, u + n, v, n);
+		}
+		liDivRem(q, u, 2 * n, v, n);
+		return qh;
+	}
+
+	/* q[lo .. n) (and qh): u[2lo .. 2n) by v[lo .. n), leaving the remainder in
+	   u[2lo .. n + lo); then u[lo .. n + lo) -= q[lo .. n) v[0 .. lo) */
+	qh = liDivRem2n(q + lo, u + 2 * lo, v + lo, hi, scratch);
+	liMul(t, q + lo, hi, v, lo, t + n);
+	cy = liSubN(u + lo, u + lo, t, n);
+	if (qh) {
+		cy += liSubN(u + n, u + n, v, lo);
+	}
+	for (k = 1; cy != 0; k += 1) {
+		LI_DIV_ADDBACK(0, k);
+		qh -= liSub1(q + lo, q + lo, hi, 1);
+		cy -= liAddN(u + lo, u + lo, v, n);
+	}
+
+	/* q[0 .. lo): u[hi .. n + lo) by v[hi .. n), leaving the remainder in u[hi .. n);
+	   then u[0 .. n) -= q[0 .. lo) v[0 .. hi); the quotient is below B^lo */
+	ql = liDivRem2n(q, u + hi, v + hi, lo, scratch);
+	liMul(t, v, hi, q, lo, t + n);
+	cy = liSubN(u, u, t, n);
+	if (ql) {
+		cy += liSubN(u + lo, u + lo, v, hi);
+	}
+	for (k = 1; cy != 0; k += 1) {
+		LI_DIV_ADDBACK(1, k);
+		liSub1(q, q, lo, 1);
+		cy -= liAddN(u, u, v, n);
+	}
+	return qh;
+}
+
+/* The scratch limbs liDivRemBZ(q, u, vn + qn, v, vn, scratch) uses */
+static sqInt
+liDivRemBZScratch(sqInt qn, sqInt vn)
+{
+	sqInt qb = qn % vn == 0 ? vn : qn % vn, big, need, other;
+
+	need = liDivRem2nScratch(qb);
+	if (qb < vn) {
+		big = qb > vn - qb ? qb : vn - qb;
+		if ((other = vn + liMulScratch(big, vn - big)) > need) {
+			need = other;
+		}
+	}
+	if (qn > qb && (other = liDivRem2nScratch(vn)) > need) {
+		need = other;
+	}
+	return need;
+}
+
+/* Burnikel & Ziegler's division with the contract of liDivRem, and the
+   liDivRemBZScratch(un - vn, vn) limbs at scratch.  The quotient is cut into blocks of
+   vn limbs from the bottom and computed top block first (GMP's mpn_dcpi1_div_qr).  The
+   top block has qb = 1 .. vn limbs: a D3n2n step with the top 2qb limbs of u and the
+   top qb limbs of v (a quotient shorter than v needs no more of it for its estimate),
+   then the rest of v.  Every other block divides 2vn limbs of the partial remainder by
+   v (D2n1n), whose top vn limbs are the previous remainder, below v. */
+static void
+liDivRemBZ(liLimb *q, liLimb *u, sqInt un, const liLimb *v, sqInt vn, liLimb *scratch)
+{
+	sqInt qn = un - vn, qb, j, k;
+	liLimb qh, cy;
+
+	qb = qn % vn == 0 ? vn : qn % vn;
+	j = qn - qb;
+	/* q[j .. qn) (and qh): u[j + vn - qb .. un) by v[vn - qb .. vn), leaving the
+	   remainder in u[j + vn - qb .. j + vn); then u[j .. j + vn) -= q[j .. qn) v[0 .. vn - qb) */
+	qh = liDivRem2n(q + j, u + j + vn - qb, v + vn - qb, qb, scratch);
+	if (qb < vn) {
+		if (qb >= vn - qb) {
+			liMul(scratch, q + j, qb, v, vn - qb, scratch + vn);
+		}
+		else {
+			liMul(scratch, v, vn - qb, q + j, qb, scratch + vn);
+		}
+		cy = liSubN(u + j, u + j, scratch, vn);
+		if (qh) {
+			/* the top qb limbs of u reached those of v: possible with liDivRem's contract,
+			   not through liDigitDiv, whose dividend's top limb is below the divisor's */
+			cy += liSubN(u + j + qb, u + j + qb, v, vn - qb);
+		}
+		for (k = 1; cy != 0; k += 1) {
+			LI_DIV_ADDBACK(2, k);
+			qh -= liSub1(q + j, q + j, qb, 1);
+			cy -= liAddN(u + j, u + j, v, vn);
+		}
+	}
+	/* qh is 0 here: the top vn limbs of u were below v */
+	for (j -= vn; j >= 0; j -= vn) {
+		liDivRem2n(q + j, u + j, v, vn, scratch);
+	}
+}
+
 void
 liDigitDiv(unsigned int *pDiv, sqInt divLen, unsigned int *pRem, sqInt remLen, unsigned int *pQuo, sqInt quoLen)
 {
 	liLimb stackLimbs[LI_STACK_LIMBS];
 	liLimb *limbs, *u, *v, *q;
-	sqInt dl, skip, un, vn, need;
+	sqInt dl, skip, un, vn, need, bz;
 
 	dl = divLen - 1;
 	if (!(dl >= 1 && quoLen >= 1 && quoLen == remLen - divLen + 1
@@ -960,7 +1199,15 @@ liDigitDiv(unsigned int *pDiv, sqInt divLen, unsigned int *pRem, sqInt remLen, u
 	vn = liLimbsFor(dl + skip);
 	un = liLimbsFor(remLen + skip);
 	need = vn + un + (un - vn);
-	limbs = need <= LI_STACK_LIMBS ? stackLimbs : (liLimb *) LI_MALLOC(need * sizeof(liLimb));
+	/* Burnikel & Ziegler when both the divisor and the quotient have liBZLimbs limbs, or the
+	   divisor liBZLimbs and the quotient liBZQuotientLimbs, with the divisor at least
+	   liBZQuotientLimbs longer */
+	bz = vn >= liBZLimbs
+		&& (un - vn >= liBZLimbs || (un - vn >= liBZQuotientLimbs && vn - (un - vn) >= liBZQuotientLimbs));
+	if (bz) {
+		need += liDivRemBZScratch(un - vn, vn);
+	}
+	limbs = liScratch(need, stackLimbs);
 	if (limbs == 0) {
 		liDigitDiv32(pDiv, divLen, pRem, remLen, pQuo, quoLen);
 		return;
@@ -970,7 +1217,12 @@ liDigitDiv(unsigned int *pDiv, sqInt divLen, unsigned int *pRem, sqInt remLen, u
 	q = u + un;
 	liLoad(v, pDiv, dl, skip);
 	liLoad(u, pRem, remLen, skip);
-	liDivRem(q, u, un, v, vn);
+	if (bz) {
+		liDivRemBZ(q, u, un, v, vn, q + (un - vn));
+	}
+	else {
+		liDivRem(q, u, un, v, vn);
+	}
 	liStore(pQuo, quoLen, q, un - vn, 0);
 	liStore(pRem, remLen, u, vn, skip);
 	if (limbs != stackLimbs) {
