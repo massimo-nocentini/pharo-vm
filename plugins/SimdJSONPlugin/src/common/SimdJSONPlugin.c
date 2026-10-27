@@ -836,7 +836,7 @@ primitiveRelease(void)
  * the output, written at the indentation level `level`. */
 typedef struct { sqInt object; size_t at; sqInt level; } Hole;
 
-enum { SJW_PRETTY = 1, SJW_ASCII_ONLY = 2, SJW_BYTES = 4, SJW_NON_FINITE_NULL = 8 };
+enum { SJW_PRETTY = 1, SJW_ASCII_ONLY = 2, SJW_BYTES = 4, SJW_NON_FINITE_NULL = 8, SJW_FLOAT_HOLES = 16 };
 enum { SJW_OK = 0, SJW_OVER_BUDGET = 1, SJW_ERROR = 2, SJW_TOO_LARGE = 3 };
 enum { SJW_ERR_KEY = 1, SJW_ERR_NON_FINITE = 2, SJW_ERR_DEPTH = 3, SJW_ERR_CODE_POINT = 4 };
 enum { SJW_C_OOM = -1, SJW_FAILED = -2, SJW_OVER = -3 };	/* walk answers besides 0 */
@@ -1098,6 +1098,9 @@ writeValue(sqInt value, sqInt level)
 		return sj_out_int64(&output, interpreterProxy->integerValueOf(value)) ? SJW_C_OOM : 0;
 	}
 	if (interpreterProxy->isFloatObject(value)) {
+		if (writeFlags & SJW_FLOAT_HOLES) {	/* the image has a float printer of its own */
+			return addHole(value, level);
+		}
 		d = interpreterProxy->floatValueOf(value);
 		if (d - d != 0) {	/* NaN or an infinity */
 			return writeFlags & SJW_NON_FINITE_NULL ? emit("null", 4) : fail(SJW_ERR_NON_FINITE, value);
@@ -1245,14 +1248,16 @@ writeHoles(void)
 
 
 /*	SimdJSONWriter class>>primWrite: value flags: flags newLine: aString
-		maxDepth: depth maxBytes: maxBytes classes: classes layout: layout
+		level: level maxDepth: depth maxBytes: maxBytes classes: classes layout: layout
 	<primitive: 'primitiveWrite' module: 'SimdJSONPlugin' error: ec>
 	Write the JSON of value as NeoJSONWriter writes it, and answer { status.
 	output. holes. code. culprit }.  The walk reads objects and allocates
 	nothing; the output, a ByteArray of UTF-8 (flag BYTES) or the narrowest
-	String, is allocated at the end.  Status OK answers it with the holes
-	(nil, or { position. object. level } flat): the objects whose class the
-	walk does not know, left for the image to write at those positions.
+	String, is allocated at the end; value is written at the indentation
+	level (pretty), as a part of what the image writes.  Status OK answers
+	it with the holes (nil, or { position. object. level } flat): the
+	objects whose class the walk does not know, and the Floats with flag
+	FLOAT_HOLES, left for the image to write at those positions.
 	ERROR answers a code and the culprit (1 a key that is not a string, 2 a
 	NaN or an infinity, 3 a value deeper than depth, 4 a code point beyond
 	U+10FFFF), OVER_BUDGET the bytes the output needs when its allocation
@@ -1262,24 +1267,27 @@ writeHoles(void)
 EXPORT(sqInt)
 primitiveWrite(void)
 {
-	sqInt flags, depth, bytes, lineEnd, result, out, holeArray, error, need;
+	sqInt flags, startLevel, depth, bytes, lineEnd, result, out, holeArray, error, need;
 	int rc;
 
-	if (interpreterProxy->methodArgumentCount() != 7) {
+	if (interpreterProxy->methodArgumentCount() != 8) {
 		return interpreterProxy->primitiveFailFor(PrimErrBadNumArgs);
 	}
-	lineEnd = interpreterProxy->stackValue(4);
-	if (!isIntegerAtLeast(interpreterProxy->stackValue(5), 0)
+	lineEnd = interpreterProxy->stackValue(5);
+	if (!isIntegerAtLeast(interpreterProxy->stackValue(6), 0)
+	 || !isIntegerAtLeast(interpreterProxy->stackValue(4), 0)
 	 || !isIntegerAtLeast(interpreterProxy->stackValue(3), 0)
 	 || !isIntegerAtLeast(interpreterProxy->stackValue(2), -1)
 	 || interpreterProxy->isImmediate(lineEnd)
 	 || interpreterProxy->fetchClassOf(lineEnd) != interpreterProxy->classString()) {
 		return interpreterProxy->primitiveFailFor(PrimErrBadArgument);
 	}
-	flags = interpreterProxy->integerValueOf(interpreterProxy->stackValue(5));
+	flags = interpreterProxy->integerValueOf(interpreterProxy->stackValue(6));
+	startLevel = interpreterProxy->integerValueOf(interpreterProxy->stackValue(4));
 	depth = interpreterProxy->integerValueOf(interpreterProxy->stackValue(3));
 	bytes = interpreterProxy->integerValueOf(interpreterProxy->stackValue(2));
-	if (flags > (SJW_PRETTY | SJW_ASCII_ONLY | SJW_BYTES | SJW_NON_FINITE_NULL) || depth > 100000) {
+	if (flags > (SJW_PRETTY | SJW_ASCII_ONLY | SJW_BYTES | SJW_NON_FINITE_NULL | SJW_FLOAT_HOLES)
+	 || depth > 100000 || startLevel > 100000) {
 		return interpreterProxy->primitiveFailFor(PrimErrBadArgument);
 	}
 	if ((error = writeClassArguments(interpreterProxy->stackValue(1), interpreterProxy->stackValue(0)))) {
@@ -1299,7 +1307,7 @@ primitiveWrite(void)
 	}
 	memcpy(newLine, interpreterProxy->firstIndexableField(lineEnd), newLineSize);
 
-	rc = writeValue(follow(interpreterProxy->stackValue(6)), 0);
+	rc = writeValue(follow(interpreterProxy->stackValue(7)), startLevel);
 	if (rc == 0 && maxBytes >= 0 && output.n > (uint64_t)maxBytes) {
 		rc = SJW_OVER;
 	}

@@ -5,7 +5,7 @@ small value with primitiveWrite: prints 'SimdJSONPlugin <platform> <implementati
 
 | info layout written ok |
 Object compile: 'sjCiInfo <primitive: ''primitiveInfo'' module: ''SimdJSONPlugin''> ^ nil' classified: 'probe'.
-Object compile: 'sjCiWrite: v flags: f newLine: n maxDepth: d maxBytes: b classes: c layout: l
+Object compile: 'sjCiWrite: v flags: f newLine: n level: e maxDepth: d maxBytes: b classes: c layout: l
 	<primitive: ''primitiveWrite'' module: ''SimdJSONPlugin''> ^ nil' classified: 'probe'.
 info := nil sjCiInfo.
 layout := ((Dictionary allInstVarNames indexOf: #tally) - 1)
@@ -17,7 +17,7 @@ layout := ((Dictionary allInstVarNames indexOf: #tally) - 1)
 	+ (((OrderedCollection allInstVarNames indexOf: #lastIndex) - 1) << 24).
 written := nil
 	sjCiWrite: { 1. 'a'. 0.5. Dictionary new at: 'k' put: nil; yourself }
-	flags: 0 newLine: (String with: Character lf) maxDepth: 1024 maxBytes: -1
+	flags: 0 newLine: (String with: Character lf) level: 0 maxDepth: 1024 maxBytes: -1
 	classes: { ByteSymbol. WideString. WideSymbol. Dictionary. Association. OrderedCollection }
 	layout: layout.
 ok := info notNil and: [ written notNil and: [ (written at: 2) = '[1,"a",0.5,{"k":null}]' ] ].

@@ -2,8 +2,10 @@
 SimdJSONPlugin of this VM (plugins/SimdJSONPlugin, docs/SimdJSON.md), with the API of
 NeoJSONReader and no other dependency: NeoJSON need not be in the image, and when it is,
 SimdJSONReader still has no NeoJSON class in its hierarchy and sends nothing to NeoJSON.
-SimdJSONWriter writes JSON as NeoJSONWriter does, byte for byte, through the plugin's
-primitiveWrite.
+SimdJSONWriter writes JSON as NeoJSONWriter does, byte for byte, with its protocol and
+the writing side of the mappings: the plugin's primitiveWrite writes the plain data (nil,
+Booleans, numbers, strings, Array, OrderedCollection, Dictionary), and leaves the other
+objects to the writer, which writes them as NeoJSONWriter would.
 
 SimdJSONReader is a subclass of SimdJSONMapper, a port of NeoJSON's mapper and mapping
 classes (the reading side).  It is strict RFC 8259: what simdjson refuses, NeoJSON's
@@ -81,8 +83,14 @@ g := Smalltalk globals.
 		#MaxInputUnits. #TestHooks };
 	tag: 'Core'; package: 'SimdJSON') install.
 ((g at: #SimdJSONMapper) << #SimdJSONWriter
-	slots: #( #writeStream #prettyPrint #asciiOnly #newLine #writeNil #nonFiniteAsNull #level );
+	slots: #( #writeStream #prettyPrint #asciiOnly #newLine #writeNil #nonFiniteAsNull #level
+		#floatPrinter #binary #classes #layout #plainClasses #ownWriters );
 	tag: 'Writing'; package: 'SimdJSON') install.
+(Object << #SimdJSONStreamingWriter slots: { #jsonWriter. #first }; tag: 'Writing'; package: 'SimdJSON') install.
+"The methods of an older SimdJSON.st that are gone"
+#( #write:bytes: #prim:flags: ) do: [ :selector |
+	((g at: #SimdJSONWriter) includesSelector: selector)
+		ifTrue: [ (g at: #SimdJSONWriter) removeSelector: selector ] ].
 Transcript show: 'SimdJSON: SimdJSONReader loaded, a subclass of ', (g at: #SimdJSONReader) superclass name; cr.
 !
 
@@ -525,7 +533,7 @@ decoder: block
 
 !SimdJSONCustomMapping methodsFor: 'mapping'!
 encoder: block
-	"Kept for the mappings written for NeoJSON; this port has no writer"
+	"Set a writer block that converts anObject into the representation that is written"
 
 	self writer: [ :jsonWriter :anObject | | representation |
 		representation := block value: anObject.
@@ -626,7 +634,9 @@ schemaName: schema
 
 !SimdJSONCustomMapping methodsFor: 'accessing'!
 writer: block
-	"Stored and never used: this port only reads"
+	"Set the writer to block, a 2 argument block that, given a jsonWriter and the object to
+	write, writes the object that I represent; without it the jsonWriter writes the object
+	by its class"
 
 	writer := block
 ! !
@@ -1618,7 +1628,7 @@ signalError: code at: unitIndex
 !SimdJSONWriteError methodsFor: 'accessing'!
 code
 	"1 a key that is not a string, 2 a NaN or an infinity, 3 too deep a value, 4 a code point
-	beyond U+10FFFF, #unsupported an object that the plugin leaves to the image"
+	beyond U+10FFFF"
 
 	^ code
 ! !
@@ -1642,7 +1652,7 @@ culprit: anObject
 
 !SimdJSONWriter class methodsFor: 'instance creation'!
 on: aWriteStream
-	"A stream of characters gets a String, a binary stream the bytes of UTF-8"
+	"A stream of characters gets characters, a binary stream the bytes of UTF-8"
 
 	^ self new
 		on: aWriteStream;
@@ -1672,7 +1682,7 @@ toBytes: anObject
 
 !SimdJSONWriter class methodsFor: 'configuration'!
 maxDepth
-	"The deepest nesting the plugin writes: deeper, the value is likely a cycle"
+	"The deepest nesting written: deeper, the value is likely a cycle"
 
 	^ 1024
 ! !
@@ -1698,6 +1708,14 @@ writeLayout
 		+ (indexes first << 16) + (indexes second << 20) + (indexes third << 24)
 ! !
 
+!SimdJSONWriter class methodsFor: 'configuration'!
+plainClasses
+	"The classes whose instances primitiveWrite writes itself"
+
+	^ (self writeClasses copyWithout: Association) ,
+		{ ByteString. Array. LargePositiveInteger. LargeNegativeInteger. BoxedFloat64. SmallFloat64 }
+! !
+
 !SimdJSONWriter class methodsFor: 'primitives'!
 flagPretty
 	^ 1
@@ -1721,7 +1739,14 @@ flagNonFiniteNull
 ! !
 
 !SimdJSONWriter class methodsFor: 'primitives'!
-primWrite: value flags: flags newLine: aByteString maxDepth: depth maxBytes: bytes
+flagFloatHoles
+	"primWrite: flag: leave the Floats to the image (a floatPrinter of its own)"
+
+	^ 16
+! !
+
+!SimdJSONWriter class methodsFor: 'primitives'!
+primWrite: value flags: flags newLine: aByteString level: level maxDepth: depth maxBytes: bytes
 		classes: classes layout: layout
 	"The JSON of value, as { status. output. holes. code. culprit }; docs/SimdJSON.md,
 	Primitive contract, has the whole contract"
@@ -1733,14 +1758,15 @@ primWrite: value flags: flags newLine: aByteString maxDepth: depth maxBytes: byt
 !SimdJSONWriter methodsFor: 'initialize-release'!
 initialize
 	super initialize.
-	prettyPrint := asciiOnly := writeNil := nonFiniteAsNull := false.
+	prettyPrint := asciiOnly := writeNil := nonFiniteAsNull := binary := false.
 	newLine := OSPlatform current lineEnding.
 	level := 0
 ! !
 
 !SimdJSONWriter methodsFor: 'initialize-release'!
 on: aWriteStream
-	writeStream := aWriteStream
+	writeStream := aWriteStream.
+	binary := (aWriteStream respondsTo: #isBinary) and: [ aWriteStream isBinary ]
 ! !
 
 !SimdJSONWriter methodsFor: 'initialize-release'!
@@ -1786,27 +1812,301 @@ nonFiniteAsNull: aBoolean
 	nonFiniteAsNull := aBoolean
 ! !
 
+!SimdJSONWriter methodsFor: 'initialize-release'!
+floatPrinter: anObject
+	"An object that answers printFloat:on:, which then writes every Float; nil (the default)
+	writes them as Float>>printOn: does, in the plugin"
+
+	floatPrinter := anObject
+! !
+
+!SimdJSONWriter methodsFor: 'accessing'!
+writeNil
+	"Whether the object mappings write the properties whose value is nil"
+
+	^ writeNil
+! !
+
+!SimdJSONWriter methodsFor: 'accessing'!
+level
+	"The indentation level of what is written next"
+
+	^ level
+! !
+
 !SimdJSONWriter methodsFor: 'writing'!
 nextPut: anObject
 	"Write the JSON of anObject on the stream given to on:"
 
-	writeStream nextPutAll: (((writeStream respondsTo: #isBinary) and: [ writeStream isBinary ])
-		ifTrue: [ self bytesFor: anObject ]
-		ifFalse: [ self stringFor: anObject ])
+	(self isPlain: anObject)
+		ifTrue: [ self writePlain: anObject ]
+		ifFalse: [ self writeOther: anObject ]
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+nextPut: anObject as: schema
+	"Write anObject with the mapping of schema"
+
+	(schema isNil or: [ anObject isNil ]) ifTrue: [ ^ self nextPut: anObject ].
+	^ (self mappingFor: schema) writeObject: anObject on: self
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+nextPutAll: aCollection
+	"Each element as JSON, followed by a newline: NDJSON, or JSON Lines"
+
+	aCollection do: [ :each |
+		self nextPut: each.
+		self newline ]
 ! !
 
 !SimdJSONWriter methodsFor: 'writing'!
 stringFor: anObject
 	"The JSON of anObject, a ByteString or a WideString"
 
-	^ self write: anObject bytes: false
+	^ self output: anObject bytes: false
 ! !
 
 !SimdJSONWriter methodsFor: 'writing'!
 bytesFor: anObject
 	"The JSON of anObject in UTF-8"
 
-	^ self write: anObject bytes: true
+	^ self output: anObject bytes: true
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+writeNull
+	self emit: 'null'
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+writeBoolean: aBoolean
+	self emit: (aBoolean ifTrue: [ 'true' ] ifFalse: [ 'false' ])
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+writeInteger: anInteger
+	self emit: anInteger printString
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+writeFloat: aFloat
+	aFloat isFinite ifFalse: [
+		nonFiniteAsNull ifTrue: [ ^ self writeNull ].
+		^ self signalError: 2 culprit: aFloat ].
+	floatPrinter ifNotNil: [
+		^ self emit: (String streamContents: [ :stream | floatPrinter printFloat: aFloat on: stream ]) ].
+	self writePlain: aFloat
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+writeString: aString
+	"Escaped by the plugin, as NeoJSONWriter escapes"
+
+	self writePlain: ((self plainClasses includes: aString class)
+		ifTrue: [ aString ]
+		ifFalse: [ String withAll: aString ])
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+writeList: aCollection
+	self writeListStreamingDo: [ :listWriter |
+		aCollection do: [ :each | listWriter writeElement: each ] ]
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+writeMap: aDictionary
+	self writeMapStreamingDo: [ :mapWriter |
+		aDictionary keysAndValuesDo: [ :key :value | mapWriter writeKey: key value: value ] ]
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+writeListStreamingDo: aBlock
+	"aBlock gets a SimdJSONStreamingWriter, whose writeElement: writes each element"
+
+	self emit: '['.
+	self writeStreamingDo: aBlock.
+	self emit: ']'
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+writeMapStreamingDo: aBlock
+	"aBlock gets a SimdJSONStreamingWriter, whose writeKey:value: writes each entry"
+
+	self emit: '{'.
+	self writeStreamingDo: aBlock.
+	self emit: '}'
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+writeStreamingDo: aBlock
+	| streamingWriter |
+	streamingWriter := SimdJSONStreamingWriter on: self.
+	self indentedDo: [ aBlock value: streamingWriter ].
+	streamingWriter wasUsed
+		ifTrue: [ self newlineIndent ]
+		ifFalse: [ self prettyPrintSpace ]
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+writeObject: anObject
+	"Write anObject with the mapping of its class (SimdJSONMappingNotFound if none)"
+
+	(self mappingFor: anObject class) writeObject: anObject on: self
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+encodeKey: key
+	key isString ifFalse: [ ^ self signalError: 1 culprit: key ].
+	self nextPut: key.
+	self prettyPrintSpace.
+	self emit: ':'.
+	self prettyPrintSpace
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+encodeKey: key value: value
+	self encodeKey: key.
+	self nextPut: value
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+encodeKey: key value: value as: valueSchema
+	self encodeKey: key.
+	self nextPut: value as: valueSchema
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+newline
+	self emit: newLine
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+newlineIndent
+	prettyPrint ifTrue: [
+		self newline.
+		level > 0 ifTrue: [ self emit: (String new: level withAll: Character tab) ] ]
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+prettyPrintSpace
+	prettyPrint ifTrue: [ self emit: ' ' ]
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+listElementSeparator
+	self emit: ','.
+	self newlineIndent
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+mapElementSeparator
+	self emit: ','.
+	self newlineIndent
+! !
+
+!SimdJSONWriter methodsFor: 'writing'!
+indentedDo: aBlock
+	level := level + 1.
+	level > self class maxDepth ifTrue: [
+		level := level - 1.
+		^ self signalError: 3 culprit: nil ].
+	aBlock value.
+	level := level - 1
+! !
+
+!SimdJSONWriter methodsFor: 'private'!
+emit: aString
+	"ASCII text of the writer itself"
+
+	writeStream nextPutAll: (binary ifTrue: [ aString asByteArray ] ifFalse: [ aString ])
+! !
+
+!SimdJSONWriter methodsFor: 'private'!
+plainClasses
+	^ plainClasses ifNil: [ plainClasses := self class plainClasses asIdentitySet ]
+! !
+
+!SimdJSONWriter methodsFor: 'private'!
+isPlain: anObject
+	"Whether the plugin writes anObject itself: an instance of one of plainClasses, but a
+	Float when there is a floatPrinter"
+
+	^ (self plainClasses includes: anObject class)
+		and: [ floatPrinter isNil or: [ anObject isFloat not ] ]
+! !
+
+!SimdJSONWriter methodsFor: 'private'!
+hasOwnWriter: anObject
+	"Whether the class of anObject writes itself with neoJsonOn: (NeoJSON's protocol), with a
+	method of its own rather than one of NeoJSON's, whose output is this writer's"
+
+	ownWriters ifNil: [ ownWriters := IdentityDictionary new ].
+	^ ownWriters at: anObject class ifAbsentPut: [
+		(anObject class lookupSelector: #neoJsonOn:)
+			ifNil: [ false ]
+			ifNotNil: [ :method | (method package name asString beginsWith: 'Neo-JSON') not ] ]
+! !
+
+!SimdJSONWriter methodsFor: 'private'!
+writeOther: anObject
+	"NeoJSON's neoJsonOn: of anObject, which the plugin does not write: nil, Booleans and
+	SmallIntegers, any other Number as a Float, any other String, dictionaries as maps, any
+	other collection as a list, and any other object with its mapping"
+
+	(self hasOwnWriter: anObject) ifTrue: [ ^ anObject neoJsonOn: self ].
+	anObject ifNil: [ ^ self writeNull ].
+	(anObject == true or: [ anObject == false ]) ifTrue: [ ^ self writeBoolean: anObject ].
+	anObject isInteger ifTrue: [ ^ self writeInteger: anObject ].
+	anObject isNumber ifTrue: [ ^ self writeFloat: anObject asFloat ].
+	(anObject isKindOf: String) ifTrue: [ ^ self writeString: anObject ].
+	anObject isDictionary ifTrue: [ ^ self writeMap: anObject ].
+	anObject isCollection ifTrue: [ ^ self writeList: anObject ].
+	^ self writeObject: anObject
+! !
+
+!SimdJSONWriter methodsFor: 'private'!
+writePlain: anObject
+	self emitOutput: (self prim: anObject bytes: binary)
+! !
+
+!SimdJSONWriter methodsFor: 'private'!
+emitOutput: r
+	"The output of a call of primitiveWrite on the stream, with its holes written in"
+
+	| output holes from |
+	output := r at: 2.
+	(holes := r at: 3) ifNil: [ ^ writeStream nextPutAll: output ].
+	from := 0.
+	1 to: holes size by: 3 do: [ :i | | saved |
+		writeStream nextPutAll: (output copyFrom: from + 1 to: (holes at: i)).
+		saved := level.
+		level := holes at: i + 2.
+		self writeOther: (holes at: i + 1).
+		level := saved.
+		from := holes at: i ].
+	writeStream nextPutAll: (output copyFrom: from + 1 to: output size)
+! !
+
+!SimdJSONWriter methodsFor: 'private'!
+output: anObject bytes: aBoolean
+	"The JSON of anObject at once: the output of the plugin when it wrote all of it, else
+	that output with its holes written in, on a stream of its own"
+
+	| r stream savedStream savedBinary |
+	(self isPlain: anObject) ifTrue: [
+		r := self prim: anObject bytes: aBoolean.
+		(r at: 3) ifNil: [ ^ r at: 2 ] ].
+	stream := (aBoolean ifTrue: [ ByteArray ] ifFalse: [ String ]) new writeStream.
+	savedStream := writeStream.
+	savedBinary := binary.
+	writeStream := stream.
+	binary := aBoolean.
+	[ r ifNil: [ self writeOther: anObject ] ifNotNil: [ self emitOutput: r ] ]
+		ensure: [
+			writeStream := savedStream.
+			binary := savedBinary ].
+	^ stream contents
 ! !
 
 !SimdJSONWriter methodsFor: 'private'!
@@ -1817,41 +2117,37 @@ flagsBytes: aBoolean
 		+ (asciiOnly ifTrue: [ class flagAsciiOnly ] ifFalse: [ 0 ])
 		+ (aBoolean ifTrue: [ class flagBytes ] ifFalse: [ 0 ])
 		+ (nonFiniteAsNull ifTrue: [ class flagNonFiniteNull ] ifFalse: [ 0 ])
+		+ (floatPrinter ifNil: [ 0 ] ifNotNil: [ class flagFloatHoles ])
 ! !
 
 !SimdJSONWriter methodsFor: 'private'!
-prim: anObject flags: flags
+callPrim: anObject flags: flags
 	(SimdJSONReader testHook: #pluginMissing) == true ifTrue: [ ^ SimdJSONFailure on: nil ].
 	^ self class
-		primWrite: anObject flags: flags newLine: newLine asString asByteString
+		primWrite: anObject flags: flags newLine: newLine asString asByteString level: level
 		maxDepth: self class maxDepth maxBytes: -1
-		classes: self class writeClasses layout: self class writeLayout
+		classes: (classes ifNil: [ classes := self class writeClasses ])
+		layout: (layout ifNil: [ layout := self class writeLayout ])
 ! !
 
 !SimdJSONWriter methodsFor: 'private'!
-write: anObject bytes: aBoolean
-	"One call of primitiveWrite; when the output did not fit in object memory, grow it by
-	what the output needs and call it once more"
+prim: anObject bytes: aBoolean
+	"One call of primitiveWrite, answering its result of status OK; when the output did not
+	fit in object memory, grow it by what the output needs and call it once more"
 
 	| flags r |
 	flags := self flagsBytes: aBoolean.
-	r := self prim: anObject flags: flags.
+	r := self callPrim: anObject flags: flags.
 	(r class ~~ SimdJSONFailure and: [ (r at: 1) = 1 ]) ifTrue: [
 		SimdJSONReader count: #grows.
 		Smalltalk growMemoryByAtLeast: (r at: 4) + 1048576.
-		r := self prim: anObject flags: flags.
+		r := self callPrim: anObject flags: flags.
 		(r class ~~ SimdJSONFailure and: [ (r at: 1) = 1 ]) ifTrue: [ ^ OutOfMemory signal ] ].
 	r class == SimdJSONFailure ifTrue: [ ^ self failed: r ].
 	(r at: 1) = 2 ifTrue: [ ^ self signalError: (r at: 4) culprit: (r at: 5) ].
 	(r at: 1) = 3 ifTrue: [
 		^ SimdJSONResourceError new code: #tooLarge; signal: 'the JSON exceeds the cap of SimdJSONWriter' ].
-	(r at: 3) ifNotNil: [ :holes |
-		^ SimdJSONWriteError new
-			code: #unsupported;
-			culprit: (holes at: 2);
-			signal: 'SimdJSONWriter cannot write ', (holes at: 2) class name,
-				' yet: the plugin writes nil, Booleans, Integers, Floats, Strings, Symbols, Array, OrderedCollection and Dictionary' ].
-	^ r at: 2
+	^ r
 ! !
 
 !SimdJSONWriter methodsFor: 'private'!
@@ -1877,4 +2173,93 @@ signalError: code culprit: anObject
 			ifFalse: [ code = 2 ifTrue: [ 'JSON has no NaN or Infinity: ', anObject printString ]
 			ifFalse: [ code = 3 ifTrue: [ 'nesting deeper than ', self class maxDepth printString, ' (a cycle?)' ]
 			ifFalse: [ 'Character Unicode code point outside encoder range' ] ] ])
+! !
+
+!SimdJSONStreamingWriter class methodsFor: 'instance creation'!
+on: aJSONWriter
+	^ self new
+		on: aJSONWriter;
+		yourself
+! !
+
+!SimdJSONStreamingWriter methodsFor: 'initialize-release'!
+initialize
+	super initialize.
+	first := true
+! !
+
+!SimdJSONStreamingWriter methodsFor: 'initialize-release'!
+on: aJSONWriter
+	jsonWriter := aJSONWriter
+! !
+
+!SimdJSONStreamingWriter methodsFor: 'testing'!
+wasUsed
+	^ first not
+! !
+
+!SimdJSONStreamingWriter methodsFor: 'private'!
+separate
+	first
+		ifTrue: [
+			jsonWriter newlineIndent.
+			first := false ]
+		ifFalse: [ jsonWriter listElementSeparator ]
+! !
+
+!SimdJSONStreamingWriter methodsFor: 'writing'!
+writeElement: value
+	self separate.
+	jsonWriter nextPut: value
+! !
+
+!SimdJSONStreamingWriter methodsFor: 'writing'!
+writeElement: value as: valueSchema
+	self separate.
+	jsonWriter nextPut: value as: valueSchema
+! !
+
+!SimdJSONStreamingWriter methodsFor: 'writing'!
+writeKey: key value: value
+	self separate.
+	jsonWriter encodeKey: key value: value
+! !
+
+!SimdJSONStreamingWriter methodsFor: 'writing'!
+writeKey: key value: value as: valueSchema
+	self separate.
+	jsonWriter encodeKey: key value: value as: valueSchema
+! !
+
+!SimdJSONStreamingWriter methodsFor: 'accessing'!
+writeNil
+	^ jsonWriter writeNil
+! !
+
+!SimdJSONMapping methodsFor: 'writing'!
+writeObject: anObject on: jsonWriter
+	self subclassResponsibility
+! !
+
+!SimdJSONObjectMapping methodsFor: 'writing'!
+writeObject: anObject on: jsonWriter
+	jsonWriter writeMapStreamingDo: [ :jsonMapWriter |
+		properties do: [ :each | each writeObject: anObject on: jsonMapWriter ] ]
+! !
+
+!SimdJSONCustomMapping methodsFor: 'writing'!
+writeObject: anObject on: jsonWriter
+	"The writer block, else anObject as the writer writes it by its class"
+
+	writer
+		ifNil: [ jsonWriter nextPut: anObject ]
+		ifNotNil: [ writer value: jsonWriter value: anObject ]
+! !
+
+!SimdJSONPropertyMapping methodsFor: 'writing'!
+writeObject: anObject on: jsonMapWriter
+	| value |
+	value := getter value: anObject.
+	(value notNil or: [ jsonMapWriter writeNil ])
+		ifTrue: [ jsonMapWriter writeKey: propertyName value: value as: valueSchema ]
 ! !

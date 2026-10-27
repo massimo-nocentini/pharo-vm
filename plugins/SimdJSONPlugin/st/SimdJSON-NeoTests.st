@@ -19,11 +19,12 @@ in does not matter.
 	                           corpus and the jsonchecker files next to it.
 	                           SimdJSONWriter against NeoJSONWriter, the same
 	                           characters, plain, pretty and asciiOnly, on
-	                           edge values and on the corpus.
-	SimdJSONNeoTestGenerator   subclasses NeoJSON's reader tests as SJ<name>,
-	                           with every method that reads JSON recompiled to
-	                           read it with SimdJSONReader, and to expect
-	                           SimdJSON's errors; a test that only NeoJSON's
+	                           edge values (Fractions, Sets, OrderedDictionary,
+	                           NeoJSONObject...) and on the corpus.
+	SimdJSONNeoTestGenerator   subclasses NeoJSON's reader and writer tests as
+	                           SJ<name>, with every method that reads or writes
+	                           JSON recompiled to do it with SimdJSONReader and
+	                           SimdJSONWriter, and to expect SimdJSON's errors; a test that only NeoJSON's
 	                           leniency passes is skipped (lenientTests).  The
 	                           last chunk of this file runs it.
 	                           SimdJSONNeoTestGenerator report runs those
@@ -446,12 +447,11 @@ writerConfigurations
 !SimdJSONCompatTests methodsFor: 'writing'!
 isLeftOut: anObject
 	"Whether SimdJSONWriter refuses anObject by design: a NaN or an infinity, which
-	 NeoJSONWriter writes as Float nan or Float infinity, not JSON; or an object that
-	 only the Smalltalk side will write (phase 2), a Fraction"
+	 NeoJSONWriter writes as Float nan or Float infinity, not JSON"
 
 	^ [ SimdJSONWriter toString: anObject. false ]
 		on: SimdJSONWriteError
-		do: [ :error | error return: (#( 2 #unsupported ) includes: error code) ]! !
+		do: [ :error | error return: error code = 2 ]! !
 
 !SimdJSONCompatTests methodsFor: 'writing'!
 writeDifferenceOn: anObject named: aString
@@ -480,7 +480,10 @@ testWriterValues
 		(2 raisedTo: 300) + 1. 0.0. -0.0. 0.1. 1.0e6. 999999.9. 1.0e-4. 9.999e-5. 1.0e300. Float fmax. Float fminDenormalized.
 		#(). Dictionary new. OrderedCollection new. #sym. (self string: #( 8364 )) asSymbol.
 		self string: ((0 to: 160) asArray , #( 233 255 256 8232 8364 16rD800 16rDFFF 16rFFFF 16r10000 16r1D11E 16r10FFFF )).
-		{ #( 1 #( 2 #( 3 ) ) ). Dictionary new at: 'k' put: (OrderedCollection with: 1 with: 'v'); yourself } }.
+		{ #( 1 #( 2 #( 3 ) ) ). Dictionary new at: 'k' put: (OrderedCollection with: 1 with: 'v'); yourself }.
+		1 / 3. (2 raisedTo: 100) / 3. 3 / 2 asScaledDecimal: 2. Set with: 1 / 2. (1 to: 4). #[ 1 255 ].
+		OrderedDictionary new at: 'z' put: (Bag with: 1); at: 'a' put: (IdentityDictionary new at: #k put: 1 / 4; yourself); yourself.
+		(Smalltalk globals at: #NeoJSONObject) new at: #x put: 1; at: #y put: { 2 / 5 }; yourself }.
 	1000 timesRepeat: [
 		values add: ((random nextInteger: 1000000000) / (10 raisedTo: (random nextInteger: 20))) asFloat.
 		values add: ((random nextInteger: 1000000000) * (10 raisedTo: (random nextInteger: 300))) asFloat negated ].
@@ -501,8 +504,8 @@ testWriterValues
 
 !SimdJSONCompatTests methodsFor: 'tests'!
 testWriterCorpus
-	"Each file of jsonexamples, read with Floats for the numbers with an exponent (phase 1
-	 writes no Fraction), written by both writers in every configuration"
+	"The value NeoJSONReader reads of each file of jsonexamples (Fractions included), written
+	 by both writers in every configuration"
 
 	| directory differences files |
 	directory := self corpusDirectory.
@@ -511,7 +514,7 @@ testWriterCorpus
 	differences := OrderedCollection new.
 	files do: [ :file |
 		| value neoMs sjMs |
-		value := (SimdJSONReader on: file contents readStream) exactNumbers: false; next.
+		value := self neoReaderClass fromString: file contents.
 		(self writeDifferenceOn: value named: file basename) ifNotNil: [ :difference | differences add: difference ].
 		neoMs := Time millisecondsToRun: [ self neoWriterClass toString: value ].
 		sjMs := Time millisecondsToRun: [ SimdJSONWriter toString: value ].
@@ -520,9 +523,9 @@ testWriterCorpus
 
 !SimdJSONNeoTestGenerator class methodsFor: 'accessing'!
 classNames
-	"NeoJSON's test classes that read JSON"
+	"NeoJSON's test classes that read or write JSON"
 
-	^ #( #NeoJSONReaderTests #NeoJSONMappingTests #NeoJSONExamplesTests #NeoJSONWriteReadTests
+	^ #( #NeoJSONReaderTests #NeoJSONWriterTests #NeoJSONMappingTests #NeoJSONExamplesTests #NeoJSONWriteReadTests
 		#NeoJSONWriteReadMockStreamTests #NeoJSONWriteReadAsciiOnlyTests
 		#NeoJSONWriteReadPrettyPrintedTests #NeoJSONObjectTests )! !
 
@@ -585,12 +588,12 @@ selectorsToRewriteIn: aClass
 
 !SimdJSONNeoTestGenerator class methodsFor: 'generating'!
 rewrite: source
-	"NeoJSONObject fromString:, and the identifiers NeoJSONReader, NeoJSONParseError and
-	 NeoJSONMappingNotFound, for SimdJSON's"
+	"NeoJSONObject fromString:, and the identifiers NeoJSONReader, NeoJSONWriter,
+	 NeoJSONParseError and NeoJSONMappingNotFound, for SimdJSON's"
 
 	| result |
 	result := source copyReplaceAll: 'NeoJSONObject fromString:' with: 'SimdJSONNeoTestGenerator objectFromString:'.
-	#( #( 'NeoJSONReader' 'SimdJSONReader' ) #( 'NeoJSONParseError' 'SimdJSONParseError' )
+	#( #( 'NeoJSONReader' 'SimdJSONReader' ) #( 'NeoJSONWriter' 'SimdJSONWriter' ) #( 'NeoJSONParseError' 'SimdJSONParseError' )
 	   #( 'NeoJSONMappingNotFound' 'SimdJSONMappingNotFound' ) ) do: [ :pair |
 		result := self replaceIdentifier: pair first with: pair last in: result ].
 	^ result! !

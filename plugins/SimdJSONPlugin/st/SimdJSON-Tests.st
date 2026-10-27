@@ -14,7 +14,9 @@ SimdJSON-NeoTests.st compares the reader with NeoJSON itself.
 	SimdJSONMappingTests  nextAs: and the mapper protocol of NeoJSON
 	SimdJSONWriterTests   SimdJSONWriter: the texts of NeoJSONWriter (numbers,
 	                      strings, escapes, pretty printing), streams, bytes,
-	                      forwarders and errors
+	                      forwarders, the objects the plugin leaves to the
+	                      image (holes), mappings, writers of their own, the
+	                      streaming protocol and errors
 	SimdJSONSlowTests     a 16 MB document of 2M boxed floats, and a cap of
 	                      old space (OutOfMemory, the VM lives on); skipped
 	                      unless the environment has SJ_SLOW
@@ -40,6 +42,10 @@ g := Smalltalk globals.
 (Object << #SimdJSONTestStream
 	slots: { #stream. #closed };
 	tag: 'Support'; package: 'SimdJSON-Tests') install.
+(Object << #SimdJSONTestOwnWriter
+	slots: { #value };
+	tag: 'Support'; package: 'SimdJSON-Tests') install.
+(Object << #SimdJSONTestFloatPrinter tag: 'Support'; package: 'SimdJSON-Tests') install.
 ((g at: #SimdJSONTestCase) << #SimdJSONReaderTests tag: 'Tests'; package: 'SimdJSON-Tests') install.
 ((g at: #SimdJSONTestCase) << #SimdJSONNativeTests tag: 'Tests'; package: 'SimdJSON-Tests') install.
 ((g at: #SimdJSONTestCase) << #SimdJSONMemoryTests tag: 'Tests'; package: 'SimdJSON-Tests') install.
@@ -1836,18 +1842,182 @@ testErrors
 	self assert: error code equals: 3.
 	self assert: (error messageText includesSubstring: 'a cycle')! !
 
-!SimdJSONWriterTests methodsFor: 'tests - errors'!
-testUnsupported
-	"What the plugin leaves to the image, which phase 1 does not write yet"
+!SimdJSONWriterTests methodsFor: 'tests - objects'!
+testOtherObjects
+	"What the plugin leaves to the image, written as NeoJSONWriter writes it"
 
-	{ 1 / 3. Set new. $a. Object new. OrderedDictionary new. 1 @ 2 } do: [ :each |
-		| error |
-		error := self writeError: [ self write: { 1. each } ].
-		self assert: error code equals: #unsupported.
-		self assert: error culprit equals: each ]! !
+	self assert: (self write: 1 / 4) equals: '0.25'.
+	self assert: (self write: { 1 / 3. 3 / 2. 2 }) equals: '[0.3333333333333333,1.5,2]'.
+	self assert: (self write: (3 / 2 asScaledDecimal: 2)) equals: '1.5'.
+	self assert: (self write: (Set with: 7)) equals: '[7]'.
+	self assert: (self write: (1 to: 3)) equals: '[1,2,3]'.
+	self assert: (self write: #[ 1 2 ]) equals: '[1,2]'.
+	self assert: (self write: (Bag with: 'x')) equals: '["x"]'.
+	self
+		assert: (self write: (OrderedDictionary new at: 'b' put: 1; at: 'a' put: 2; yourself))
+		equals: '{"b":1,"a":2}'.
+	self assert: (self write: (IdentityDictionary new at: #k put: 1 / 2; yourself)) equals: '{"k":0.5}'.
+	self assert: (self write: (SmallDictionary new at: 'k' put: nil; yourself)) equals: '{"k":null}'.
+	{ $a. Object new. 1 @ 2 } do: [ :each |
+		self should: [ self write: { 1. each } ] raise: SimdJSONMappingNotFound ]! !
+
+!SimdJSONWriterTests methodsFor: 'tests - objects'!
+testHolesLikePlainValues
+	"An object the image writes in the middle of the plugin's output gives the same text as
+	its plain equivalent, at every level, in every configuration and in bytes"
+
+	| wide holed plain |
+	wide := self string: #( 233 8364 16r1D11E ).
+	holed := Dictionary new
+		at: 'a' put: (Set with: (Dictionary new at: 'b' put: 1 / 2; at: wide put: (OrderedDictionary new at: 'c' put: { 3 / 4 }; yourself); yourself));
+		at: 'd' put: { wide. 1 / 8. #( 1 2 ) asOrderedCollection. (1 to: 2) };
+		yourself.
+	plain := Dictionary new
+		at: 'a' put: { Dictionary new at: 'b' put: 0.5; at: wide put: (Dictionary new at: 'c' put: #( 0.75 ); yourself); yourself };
+		at: 'd' put: { wide. 0.125. #( 1 2 ) asOrderedCollection. #( 1 2 ) };
+		yourself.
+	{ [ :w | w ]. [ :w | w prettyPrint: true; newLine: (String with: Character lf) ]. [ :w | w asciiOnly: true ].
+	  [ :w | w prettyPrint: true; asciiOnly: true; newLine: (String with: Character cr with: Character lf) ] } do: [ :configure |
+		| writer |
+		writer := SimdJSONWriter new.
+		configure value: writer.
+		self assert: (writer stringFor: holed) equals: (writer stringFor: plain).
+		self assert: (writer bytesFor: holed) equals: (writer bytesFor: plain).
+		self assert: (writer bytesFor: holed) equals: (writer stringFor: plain) utf8Encoded ].
+	self assert: (SimdJSONReader fromString: (self write: holed)) equals: (SimdJSONReader fromString: (self write: plain))! !
+
+!SimdJSONWriterTests methodsFor: 'tests - objects'!
+testPrettyHoles
+
+	| writer tab lf |
+	tab := String with: Character tab.
+	lf := String with: Character lf.
+	writer := SimdJSONWriter new prettyPrint: true; newLine: lf; yourself.
+	self
+		assert: (writer stringFor: (Dictionary new at: 'a' put: (Set with: (1 / 2)); yourself))
+		equals: '{' , lf , tab , '"a" : [' , lf , tab , tab , '0.5' , lf , tab , ']' , lf , '}'.
+	self assert: (writer stringFor: Set new) equals: '[ ]'.
+	self assert: (writer stringFor: { OrderedDictionary new }) equals: '[' , lf , tab , '{ }' , lf , ']'! !
+
+!SimdJSONWriterTests methodsFor: 'tests - objects'!
+testMappings
+
+	| writer object |
+	writer := SimdJSONWriter new.
+	writer mapInstVarsFor: Point.
+	self assert: (writer stringFor: 1 @ 2) equals: '{"x":1,"y":2}'.
+	self assert: (writer stringFor: { 1 @ 2. nil }) equals: '[{"x":1,"y":2},null]'.
+	object := SimdJSONReader
+		fromString: '{"id":7,"name":"seven","points":[{"x":1,"y":2},{"x":3,"y":4}],"created-at":"1234","tags":["a","b"]}'
+		as: SimdJSONTestObject.
+	self
+		assert: (SimdJSONWriter toString: object)
+		equals: '{"id":7,"name":"seven","points":[{"x":1,"y":2},{"x":3,"y":4}],"created-at":1234,"tags":["a","b"]}'.
+	object name: nil.
+	self assert: ((SimdJSONWriter toString: object) includesSubstring: '"name"') not.
+	self assert: ((SimdJSONWriter new writeNil: true; stringFor: object) includesSubstring: '"name":null').
+	self
+		should: [ SimdJSONWriter toString: { 1 @ 2 } ]
+		raise: SimdJSONMappingNotFound
+		withExceptionDo: [ :error | self assert: error messageText equals: 'No mapping found for Point in SimdJSONWriter' ]! !
+
+!SimdJSONWriterTests methodsFor: 'tests - objects'!
+testCustomMappings
+
+	| stream writer |
+	stream := WriteStream on: String new.
+	writer := SimdJSONWriter on: stream.
+	writer for: #Pair customDo: [ :mapping | mapping encoder: [ :point | { point x. point y } ] ].
+	writer for: #Pairs customDo: [ :mapping | mapping listOfElementSchema: #Pair ].
+	writer for: #Counts customDo: [ :mapping | mapping mapWithValueSchema: #Pair ].
+	writer nextPut: (3 @ 4) as: #Pair.
+	writer nextPut: { 1 @ 2. 5 @ 6 } as: #Pairs.
+	writer nextPut: (Dictionary new at: 'p' put: 7 @ 8; yourself) as: #Counts.
+	writer nextPut: nil as: #Pair.
+	self assert: stream contents equals: '[3,4][[1,2],[5,6]]{"p":[7,8]}null'! !
+
+!SimdJSONWriterTests methodsFor: 'tests - objects'!
+testOwnWriters
+	"A class that writes itself with neoJsonOn:, NeoJSON's protocol"
+
+	| own |
+	own := SimdJSONTestOwnWriter new value: 3.
+	self assert: (self write: own) equals: '{"own":3}'.
+	self assert: (self write: { own. own }) equals: '[{"own":3},{"own":3}]'.
+	self
+		assert: (SimdJSONWriter new prettyPrint: true; newLine: (String with: Character lf); stringFor: { own })
+		equals: '[' , (String with: Character lf with: Character tab) , '{' , (String with: Character lf) , (String new: 2 withAll: Character tab)
+			, '"own" : 3' , (String with: Character lf with: Character tab) , '}' , (String with: Character lf) , ']'! !
+
+!SimdJSONWriterTests methodsFor: 'tests - objects'!
+testFloatPrinter
+
+	| writer |
+	writer := SimdJSONWriter new floatPrinter: SimdJSONTestFloatPrinter new; yourself.
+	self assert: (writer stringFor: { 1.0. 2.5. 1 / 3. 7. 'x' }) equals: '[1.00,2.50,0.33,7,"x"]'.
+	self assert: (writer stringFor: 0.125) equals: '0.13'! !
+
+!SimdJSONWriterTests methodsFor: 'tests - output'!
+testStreamingProtocol
+
+	| stream writer lf |
+	lf := String with: Character lf.
+	stream := WriteStream on: String new.
+	writer := SimdJSONWriter on: stream.
+	writer writeMapStreamingDo: [ :map |
+		map writeKey: 'a' value: 1.
+		map writeKey: #b value: #( 1 2 ).
+		map writeKey: 'c' value: (1 / 2) ].
+	writer writeListStreamingDo: [ :list |
+		list writeElement: 'x'.
+		list writeElement: (Set with: true) ].
+	writer writeNull; writeBoolean: false; writeInteger: (2 raisedTo: 70); writeFloat: 0.5; writeString: #sym.
+	self assert: stream contents equals: '{"a":1,"b":[1,2],"c":0.5}["x",[true]]nullfalse11805916207174113034240.5"sym"'.
+	stream := WriteStream on: String new.
+	(SimdJSONWriter on: stream) newLine: lf; nextPutAll: { 1. 'x'. Set new. Dictionary new }.
+	self assert: stream contents equals: '1' , lf , '"x"' , lf , '[]' , lf , '{}' , lf.
+	stream := WriteStream on: ByteArray new.
+	(SimdJSONWriter on: stream) nextPut: { 1 / 2. self string: #( 233 8364 ) }.
+	self assert: stream contents equals: ('[0.5,"' , (self string: #( 233 8364 )) , '"]') utf8Encoded! !
+
+!SimdJSONWriterTests methodsFor: 'tests - errors'!
+testErrorsInTheImage
+	"The errors of the objects that the image writes, as those of the plugin"
+
+	| cycle error |
+	error := self writeError: [ self write: (OrderedDictionary new at: 1 put: 2; yourself) ].
+	self assert: error code equals: 1.
+	self assert: error messageText equals: 'JSON key names in objects must be strings'.
+	error := self writeError: [ self write: (Set with: Float nan) ].
+	self assert: error code equals: 2.
+	self assert: (SimdJSONWriter new nonFiniteAsNull: true; stringFor: (Set with: Float infinity)) equals: '[null]'.
+	cycle := IdentitySet new.
+	cycle add: cycle.
+	error := self writeError: [ self write: cycle ].
+	self assert: error code equals: 3.
+	cycle := OrderedCollection new.
+	cycle add: (Set with: cycle).
+	error := self writeError: [ self write: cycle ].
+	self assert: error code equals: 3! !
 
 !SimdJSONWriterTests methodsFor: 'tests - errors'!
 testPluginMissing
 
 	SimdJSONReader testHook: #pluginMissing value: true.
 	self should: [ self write: #( 1 ) ] raise: SimdJSONResourceError! !
+
+!SimdJSONTestOwnWriter methodsFor: 'accessing'!
+value: anObject
+
+	value := anObject! !
+
+!SimdJSONTestOwnWriter methodsFor: 'writing'!
+neoJsonOn: aWriter
+	"NeoJSON's protocol of an object that writes itself"
+
+	aWriter writeMapStreamingDo: [ :map | map writeKey: 'own' value: value ]! !
+
+!SimdJSONTestFloatPrinter methodsFor: 'printing'!
+printFloat: aFloat on: aStream
+
+	aStream nextPutAll: (aFloat printShowingDecimalPlaces: 2)! !
