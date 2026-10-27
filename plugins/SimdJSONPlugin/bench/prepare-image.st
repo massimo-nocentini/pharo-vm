@@ -4,8 +4,8 @@
 	SJ_PLUGIN_DIR=<repository>/plugins/SimdJSONPlugin \
 	pharo --headless <copy>.image --no-default-preferences st --save --quit prepare-image.st
 
- It files in st/SimdJSON.st, which must come up in neo mode (NeoJSON loaded first), then
- bench/SJBenchMapping.st and bench/SJBench.st, and fails before anything is saved when a class
+ It files in st/SimdJSON.st, whose SimdJSONReader must be a subclass of SimdJSONMapper (NeoJSON is
+ only compared with), then bench/SJBenchMapping.st and bench/SJBench.st, and fails before anything is saved when a class
  is missing or a method uses an undeclared variable.  The st command of Pharo 15 takes nothing
  but its file, so the directory comes in the environment.  The saved image runs on every VM."
 
@@ -23,8 +23,8 @@ dir := (environment
 (dir / 'bench' / 'SJBench.st') fileIn.
 
 reader := Smalltalk globals at: #SimdJSONReader ifAbsent: [ nil ].
-(reader notNil and: [ reader mode == #neo ]) ifFalse: [
-	Stdio stderr nextPutAll: 'prepare-image: SimdJSONReader is not in neo mode'; lf; flush.
+(reader notNil and: [ reader superclass name == #SimdJSONMapper ]) ifFalse: [
+	Stdio stderr nextPutAll: 'prepare-image: SimdJSONReader is not a subclass of SimdJSONMapper'; lf; flush.
 	Smalltalk exitFailure ].
 undeclared := (#( 'SimdJSON' 'SimdJSON-Bench' ) flatCollect: [ :name | name asPackage methods ])
 	select: [ :method | method usesUndeclareds ].
@@ -40,7 +40,7 @@ undeclared ifNotEmpty: [
 info := [ reader pluginAvailable ifTrue: [ reader pluginInfo ] ifFalse: [ nil ] ]
 	on: Error do: [ :e | nil ].
 Stdio stdout
-	nextPutAll: 'prepare-image: SimdJSON in neo mode, SimdJSON-Bench loaded, plugin: ';
+	nextPutAll: 'prepare-image: SimdJSON and SimdJSON-Bench loaded, plugin: ';
 	nextPutAll: (info ifNil: [ 'not available' ] ifNotNil: [ (info at: 2) , ' simdjson ' , (info at: 3) ]);
 	lf;
 	flush.

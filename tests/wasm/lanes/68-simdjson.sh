@@ -7,10 +7,11 @@
 #   builtin  Smalltalk vm listBuiltinModules has 'SimdJSONPlugin (i)';
 #   load     plugins/SimdJSONPlugin/st/SimdJSON.st, then SimdJSON-Tests.st,
 #            filed in and saved: the checks below run on copies of that image;
-#   info     SimdJSON.st is in standalone mode (the stock image has no
-#            NeoJSON), and the plugin answers its platform, 'emscripten', the
-#            implementation of simdjson, 'fallback' (simdjson has no kernel
-#            for WebAssembly), and the version of simdjson, '5.0.5';
+#   info     SimdJSONReader is a subclass of SimdJSONMapper (SimdJSON.st
+#            needs no NeoJSON), and the plugin answers its platform,
+#            'emscripten', the implementation of simdjson, 'fallback'
+#            (simdjson has no kernel for WebAssembly), and the version of
+#            simdjson, '5.0.5';
 #   suite    tests/wasm/st/simdjson-lane.st runs the package SimdJSON-Tests
 #            but SimdJSONSlowTests: no failure and no error;
 #   cap      a document of 17 MiB, one string, is refused with a
@@ -170,8 +171,8 @@ if ! test -f "$loaded/Pharo.image"; then
 fi
 
 fresh info "$loaded"
-expect info "#(#standalone true 'emscripten' 'fallback' '5.0.5')" $P eval \
-    "{ SimdJSONReader mode. SimdJSONReader pluginAvailable. SimdJSONReader platform. SimdJSONReader implementationName. SimdJSONReader simdjsonVersion }"
+expect info "#(#SimdJSONMapper true 'emscripten' 'fallback' '5.0.5')" $P eval \
+    "{ SimdJSONReader superclass name. SimdJSONReader pluginAvailable. SimdJSONReader platform. SimdJSONReader implementationName. SimdJSONReader simdjsonVersion }"
 
 fresh suite "$loaded"
 if run suite suite; then

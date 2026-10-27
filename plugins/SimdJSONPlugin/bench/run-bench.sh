@@ -128,7 +128,7 @@ echo "run-bench: preparing $out/image/sjbench.image from $image"
 if ! (cd "$out/image" && env SJ_PLUGIN_DIR="$plugin" LD_LIBRARY_PATH="$native/build/vm" \
 	"$native/build/vm/pharo" --headless sjbench.image --no-default-preferences \
 	st --save --quit "$bench/prepare-image.st") > "$out/prepare.log" 2>&1 \
-   || ! grep -q '^prepare-image: SimdJSON in neo mode' "$out/prepare.log"; then
+   || ! grep -q '^prepare-image: SimdJSON and SimdJSON-Bench loaded' "$out/prepare.log"; then
     cat "$out/prepare.log" >&2
     die "preparing the image failed (log: $out/prepare.log)"
 fi

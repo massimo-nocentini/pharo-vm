@@ -1,26 +1,30 @@
-"SimdJSON-NeoTests.st - the tests of SimdJSON.st against NeoJSON, in the package
-SimdJSON-NeoTests
+"SimdJSON-NeoTests.st - SimdJSONReader against NeoJSON, in the package SimdJSON-NeoTests
 
-Neo mode only: NeoJSON with its tests (load-neojson.st) is in the image, and
-SimdJSON.st was filed in after it.
+NeoJSON with its tests (load-neojson.st) is in the image, only to be compared with:
+SimdJSONReader uses none of it.  The order in which NeoJSON and SimdJSON.st were filed
+in does not matter.
 
 	SimdJSONCompatTests        SimdJSONReader against NeoJSONReader, value for
 	                           value: equal values with the same classes of
-	                           numbers, strings and collections, the same error
-	                           class and message, the same position of the
-	                           stream afterwards.  The inputs are NeoJSON's
-	                           semantics (its leniency and its errors), random
-	                           number tokens, and, when the environment has
-	                           SJ_CORPUS (the jsonexamples directory of
-	                           simdjson-data), the corpus and the jsonchecker
-	                           files next to it.  No RFC 8259 input may need
-	                           the fallback.
+	                           numbers, strings and collections, the same
+	                           position of the stream afterwards, and an error
+	                           where NeoJSON has one.  What NeoJSON reads by its
+	                           leniency (01, 1., a control character in a
+	                           string), SimdJSONReader refuses with a
+	                           SimdJSONParseError: no RFC 8259 input of
+	                           validInputs may be refused.  The inputs are
+	                           NeoJSON's semantics, random number tokens, and,
+	                           when the environment has SJ_CORPUS (the
+	                           jsonexamples directory of simdjson-data), the
+	                           corpus and the jsonchecker files next to it.
 	SimdJSONNeoTestGenerator   subclasses NeoJSON's reader tests as SJ<name>,
 	                           with every method that reads JSON recompiled to
-	                           read it with SimdJSONReader; the last chunk of
-	                           this file runs it.  SimdJSONNeoTestGenerator
-	                           report runs those classes and prints what passed
-	                           and how many values NeoJSON read again.
+	                           read it with SimdJSONReader, and to expect
+	                           SimdJSON's errors; a test that only NeoJSON's
+	                           leniency passes is skipped (lenientTests).  The
+	                           last chunk of this file runs it.
+	                           SimdJSONNeoTestGenerator report runs those
+	                           classes and prints what passed.
 
 	pharo --headless X.image --no-default-preferences st --save --quit SimdJSON-NeoTests.st
 	pharo --headless X.image --no-default-preferences test --fail-on-failure SimdJSON-NeoTests
@@ -32,6 +36,10 @@ classes are named through Smalltalk globals."
 "Classes"
 (TestCase << #SimdJSONCompatTests tag: 'Compat'; package: 'SimdJSON-NeoTests') install.
 (Object << #SimdJSONNeoTestGenerator tag: 'Generator'; package: 'SimdJSON-NeoTests') install.
+"The methods of an older SimdJSON-NeoTests.st that are gone"
+#( #testNoFallbackOnValidInput #fallbacksDuring: ) do: [ :selector |
+	((Smalltalk globals at: #SimdJSONCompatTests) includesSelector: selector)
+		ifTrue: [ (Smalltalk globals at: #SimdJSONCompatTests) removeSelector: selector ] ].
 !
 
 !SimdJSONCompatTests methodsFor: 'running'!
@@ -43,8 +51,9 @@ defaultTimeLimit
 setUp
 
 	super setUp.
-	SimdJSONReader mode == #neo
-		ifFalse: [ self fail: 'file in SimdJSON.st again after NeoJSON' ].
+	(Smalltalk globals includesKey: #NeoJSONReader)
+		ifFalse: [ self fail: 'NeoJSON is not loaded (load-neojson.st)' ].
+	self assert: SimdJSONReader superclass name equals: #SimdJSONMapper.
 	SimdJSONReader nativeDictionariesWork! !
 
 !SimdJSONCompatTests methodsFor: 'accessing'!
@@ -105,7 +114,7 @@ semanticInputs
 
 !SimdJSONCompatTests methodsFor: 'accessing'!
 validInputs
-	"RFC 8259 values that simdjson reads itself: none of them may need NeoJSON again"
+	"RFC 8259 values: SimdJSONReader may refuse none of them"
 
 	^ #( '{"a":1,"b":[1,2]}' '[1,2,3]' '{}' '[]' '123' '-123' '0' '-0' '-0.0' '0.0'
 		'12345678901234567890123456789' '18446744073709551616' '-9223372036854775809'
@@ -123,10 +132,10 @@ operations
 	^ {
 		#next -> [ :reader | reader next ].
 		#next3 -> [ :reader |
-			(1 to: 3) collect: [ :i |
+			#reads -> ((1 to: 3) collect: [ :i |
 				reader atEnd
 					ifTrue: [ #atEnd ]
-					ifFalse: [ self outcomeOf: [ reader next ] ] ] ].
+					ifFalse: [ self outcomeOf: [ reader next ] ] ]) ].
 		#upToEnd -> [ :reader | reader upToEnd ].
 		#failIfNotAtEnd -> [ :reader | | value | value := reader next. reader failIfNotAtEnd. value ] }! !
 
@@ -181,7 +190,8 @@ same: a as: b
 
 !SimdJSONCompatTests methodsFor: 'comparing'!
 differenceOn: input operation: operation configuration: configuration
-	"nil, or what differs between NeoJSONReader and SimdJSONReader on input"
+	"nil, or what differs between NeoJSONReader and SimdJSONReader on input: the stream
+	 positions are compared when SimdJSONReader refused nothing"
 
 	| streams outcomes |
 	streams := { input readStream. input readStream }.
@@ -189,14 +199,49 @@ differenceOn: input operation: operation configuration: configuration
 		self outcomeOf: [
 			operation value value: ((configuration value at: i) value:
 				(({ self neoReaderClass. SimdJSONReader } at: i) on: (streams at: i))) ] ].
-	((self same: outcomes first as: outcomes last)
-		and: [ streams first position = streams last position ])
+	((self compatible: outcomes first with: outcomes last)
+		and: [ (self hasRefusal: outcomes last) or: [ streams first position = streams last position ] ])
 		ifTrue: [ ^ nil ].
 	^ String streamContents: [ :stream |
 		stream
 			print: input; space; nextPutAll: operation key; space; nextPutAll: configuration key;
 			nextPutAll: ': neo '; print: outcomes first; nextPutAll: ' at '; print: streams first position;
 			nextPutAll: ', sj '; print: outcomes last; nextPutAll: ' at '; print: streams last position ]! !
+
+!SimdJSONCompatTests methodsFor: 'comparing'!
+isRefusal: outcome
+	"Whether outcome is a SimdJSONParseError"
+
+	^ outcome isArray and: [ outcome first == #error and: [ (outcome at: 2) == SimdJSONParseError ] ]! !
+
+!SimdJSONCompatTests methodsFor: 'comparing'!
+hasRefusal: outcome
+	"Whether outcome is a SimdJSONParseError, or the reads of next3 have one"
+
+	(self isRefusal: outcome) ifTrue: [ ^ true ].
+	^ outcome first == #value
+		and: [ outcome last isAssociation
+		and: [ outcome last value anySatisfy: [ :each | self isRefusal: each ] ] ]! !
+
+!SimdJSONCompatTests methodsFor: 'comparing'!
+compatible: neo with: sj
+	"Whether sj, the outcome of SimdJSONReader, agrees with neo, NeoJSONReader's: the same
+	 value, an error for an error (NeoJSON's are its own classes), or a SimdJSONParseError
+	 for a value that NeoJSON reads by its leniency.  The reads of next3 are compared one by
+	 one up to the first refusal, after which the two readers are no longer at the same
+	 place"
+
+	(self isRefusal: sj) ifTrue: [ ^ true ].
+	neo first == #error ifTrue: [ ^ sj first == #error ].
+	sj first == #error ifTrue: [ ^ false ].
+	(neo last isAssociation and: [ sj last isAssociation ]) ifFalse: [ ^ self same: neo as: sj ].
+	neo last value with: sj last value do: [ :a :b |
+		(a == #atEnd or: [ b == #atEnd ])
+			ifTrue: [ a == b ifFalse: [ ^ false ] ]
+			ifFalse: [
+				(self isRefusal: b) ifTrue: [ ^ true ].
+				(self compatible: a with: b) ifFalse: [ ^ false ] ] ].
+	^ true! !
 
 !SimdJSONCompatTests methodsFor: 'comparing'!
 assertNoDifferences: differences
@@ -214,14 +259,6 @@ log: aString
 	"A line of the report on the Transcript"
 
 	Transcript show: 'SimdJSON-NeoTests: ' , aString; cr! !
-
-!SimdJSONCompatTests methodsFor: 'helpers'!
-fallbacksDuring: aBlock
-
-	| before |
-	before := SimdJSONReader statistics at: #fallbacks.
-	aBlock value.
-	^ (SimdJSONReader statistics at: #fallbacks) - before! !
 
 !SimdJSONCompatTests methodsFor: 'helpers'!
 randomToken: random
@@ -262,14 +299,31 @@ testSemantics
 	self assertNoDifferences: differences! !
 
 !SimdJSONCompatTests methodsFor: 'tests'!
-testNoFallbackOnValidInput
+testValidInputs
+	"Each RFC 8259 value of validInputs, read as NeoJSON reads it, and never refused"
 
-	| fallbacks |
-	fallbacks := OrderedCollection new.
+	| differences |
+	differences := OrderedCollection new.
 	self validInputs do: [ :input |
-		(self fallbacksDuring: [ [ SimdJSONReader fromString: input ] on: Error do: [ :error | error return: nil ] ]) = 0
-			ifFalse: [ fallbacks add: input ] ].
-	self assert: fallbacks isEmpty description: [ 'NeoJSON read again: ' , fallbacks asArray printString ]! !
+		| neo sj |
+		neo := self outcomeOf: [ self neoReaderClass fromString: input ].
+		sj := self outcomeOf: [ SimdJSONReader fromString: input ].
+		(self same: neo as: sj) ifFalse: [
+			differences add: input printString , ': neo ' , neo printString , ', sj ' , sj printString ] ].
+	self assertNoDifferences: differences! !
+
+!SimdJSONCompatTests methodsFor: 'tests'!
+testLeniencies
+	"The inputs that NeoJSON reads and SimdJSONReader refuses: none of validInputs"
+
+	| refused |
+	refused := self semanticInputs select: [ :input |
+		(self outcomeOf: [ self neoReaderClass fromString: input ]) first == #value
+			and: [ self isRefusal: (self outcomeOf: [ SimdJSONReader fromString: input ]) ] ].
+	self log: 'leniencies of NeoJSON that SimdJSONReader refuses: ' , refused size printString , ' '
+		, refused asArray printString.
+	self assert: refused notEmpty.
+	self assert: (refused noneSatisfy: [ :each | self validInputs includes: each ])! !
 
 !SimdJSONCompatTests methodsFor: 'tests'!
 testPositions
@@ -278,18 +332,21 @@ testPositions
 	inputs := { '[1]  [2] tail'. '"' , (self string: #( 8364 )) , '"  [2] tail'. '"' , (self string: #( 233 )) , '"  [2] tail'.
 		'1e2 , 3'. '{"a":1}' , (String with: Character lf) , 'x' }.
 	inputs do: [ :input |
-		| streams readers |
+		| streams readers neo sj |
 		streams := { input readStream. input readStream }.
 		readers := { self neoReaderClass on: streams first. SimdJSONReader on: streams last }.
 		self assert: (self same: readers first next as: readers last next).
 		self assert: streams first position equals: streams last position.
-		self assert: (self same: (self outcomeOf: [ readers first next ]) as: (self outcomeOf: [ readers last next ])).
-		self assert: streams first position equals: streams last position.
-		self assert: streams first upToEnd equals: streams last upToEnd ]! !
+		neo := self outcomeOf: [ readers first next ].
+		sj := self outcomeOf: [ readers last next ].
+		self assert: (self compatible: neo with: sj).
+		(neo first == #value and: [ sj first == #value ]) ifTrue: [
+			self assert: streams first position equals: streams last position.
+			self assert: streams first upToEnd equals: streams last upToEnd ] ]! !
 
 !SimdJSONCompatTests methodsFor: 'tests'!
 testMockStream
-	"A stream with only next, peek, atEnd: NeoJSON reads it, one value at a time"
+	"A stream with only next, peek, atEnd: the reader reads it to its end first"
 
 	| mock reader |
 	mock := (Smalltalk globals at: #NeoJSONMockStream) on: '[1] {"a":2e1} 3' readStream.
@@ -301,30 +358,32 @@ testMockStream
 
 !SimdJSONCompatTests methodsFor: 'tests'!
 testRandomNumbers
-	"S2-num: random number tokens, value and class, or error and message, as NeoJSON reads
-	 them (SJ_NUM_TOKENS of them, 100000 by default)"
+	"S2-num: random number tokens, value and class as NeoJSON reads them, an error where
+	 NeoJSON has one, or a refusal where simdjson's range ends (SJ_NUM_TOKENS of them,
+	 100000 by default)"
 
-	| random count differences fallbacks |
+	| random count differences refusals |
 	random := Random seed: 20261021.
 	count := (OSEnvironment current at: 'SJ_NUM_TOKENS' ifAbsent: [ nil ])
 		ifNil: [ 100000 ]
 		ifNotNil: [ :string | string asNumber ].
 	differences := OrderedCollection new.
-	fallbacks := self fallbacksDuring: [
-		count timesRepeat: [
-			| token neo sj |
-			token := self randomToken: random.
-			neo := self outcomeOf: [ self neoReaderClass fromString: token ].
-			sj := self outcomeOf: [ SimdJSONReader fromString: token ].
-			(self same: neo as: sj) ifFalse: [
-				differences add: token , ': neo ' , neo printString , ', sj ' , sj printString ] ] ].
+	refusals := 0.
+	count timesRepeat: [
+		| token neo sj |
+		token := self randomToken: random.
+		neo := self outcomeOf: [ self neoReaderClass fromString: token ].
+		sj := self outcomeOf: [ SimdJSONReader fromString: token ].
+		(neo first == #value and: [ self isRefusal: sj ]) ifTrue: [ refusals := refusals + 1 ].
+		(self compatible: neo with: sj) ifFalse: [
+			differences add: token , ': neo ' , neo printString , ', sj ' , sj printString ] ].
 	self log: 'random numbers: ' , count printString , ' tokens, ' , differences size printString , ' differences, '
-		, fallbacks printString , ' read again by NeoJSON'.
+		, refusals printString , ' refused by simdjson and read by NeoJSON'.
 	self assertNoDifferences: differences! !
 
 !SimdJSONCompatTests methodsFor: 'tests'!
 testCorpus
-	"The 30 files of jsonexamples, as Strings and as UTF-8 bytes: no difference, no fallback"
+	"The 30 files of jsonexamples, as Strings and as UTF-8 bytes: no difference"
 
 	| directory differences files |
 	directory := self corpusDirectory.
@@ -333,25 +392,23 @@ testCorpus
 	self assert: files notEmpty.
 	differences := OrderedCollection new.
 	files do: [ :file |
-		| text bytes neo fallbacks millis |
+		| text bytes neo millis |
 		text := file contents.
 		bytes := file binaryReadStreamDo: [ :stream | stream upToEnd ].
 		neo := self neoReaderClass fromString: text.
 		millis := Time millisecondsToRun: [
-			fallbacks := self fallbacksDuring: [
-				(self same: neo as: (SimdJSONReader fromString: text))
-					ifFalse: [ differences add: file basename , ' (String)' ].
-				(self same: neo as: (SimdJSONReader fromBytes: bytes))
-					ifFalse: [ differences add: file basename , ' (bytes)' ] ] ].
-		fallbacks = 0 ifFalse: [ differences add: file basename , ': ' , fallbacks printString , ' fallbacks' ].
-		self log: file basename , ' ' , bytes size printString , ' bytes, ' , fallbacks printString , ' fallbacks, '
-			, millis printString , ' ms' ].
+			(self same: neo as: (SimdJSONReader fromString: text))
+				ifFalse: [ differences add: file basename , ' (String)' ].
+			(self same: neo as: (SimdJSONReader fromBytes: bytes))
+				ifFalse: [ differences add: file basename , ' (bytes)' ] ].
+		self log: file basename , ' ' , bytes size printString , ' bytes, ' , millis printString , ' ms' ].
 	self assertNoDifferences: differences! !
 
 !SimdJSONCompatTests methodsFor: 'tests'!
 testJsonChecker
-	"The pass and fail files of simdjson-data's jsonchecker, next to SJ_CORPUS: the same
-	 outcome as NeoJSON, a value then nothing after it, or the same error"
+	"The pass and fail files of simdjson-data's jsonchecker, next to SJ_CORPUS: the outcome
+	 of NeoJSON, a value then nothing after it, or an error, else a refusal where NeoJSON is
+	 lenient"
 
 	| directory differences count |
 	directory := self corpusDirectory.
@@ -383,6 +440,16 @@ generatedClasses
 		collect: [ :each | Smalltalk globals at: ('SJ' , each) asSymbol ifAbsent: [ nil ] ]
 		thenSelect: [ :each | each notNil ]! !
 
+!SimdJSONNeoTestGenerator class methodsFor: 'accessing'!
+lenientTests
+	"The tests of NeoJSON, by class, that read an input which only NeoJSON's leniency
+	 accepts, and which SimdJSONReader refuses: testIntegers reads 00123, -0123 and 00,
+	 with leading zeros"
+
+	^ Dictionary new
+		at: #NeoJSONReaderTests put: #( #testIntegers );
+		yourself! !
+
 !SimdJSONNeoTestGenerator class methodsFor: 'generating'!
 generate
 	"Make SJ<name> for each of the classNames, and answer them"
@@ -394,7 +461,8 @@ generate
 
 !SimdJSONNeoTestGenerator class methodsFor: 'generating'!
 generateFor: aClass
-	"A subclass of aClass that inherits its tests and reads with SimdJSONReader"
+	"A subclass of aClass that inherits its tests and reads with SimdJSONReader; its tests
+	 that only NeoJSON's leniency passes are skipped"
 
 	| class |
 	class := (aClass << ('SJ' , aClass name) asSymbol
@@ -403,6 +471,10 @@ generateFor: aClass
 	class class compile: 'shouldInheritSelectors' , String cr , String tab , '^ true' classified: 'testing'.
 	(self selectorsToRewriteIn: aClass) do: [ :each |
 		class compile: (self rewrite: (aClass lookupSelector: each) sourceCode) classified: 'simdjson' ].
+	(self lenientTests at: aClass name ifAbsent: [ #() ]) do: [ :each |
+		class
+			compile: each , String cr , String tab , '^ self skip: ''NeoJSON reads this input by its leniency'''
+			classified: 'simdjson' ].
 	^ class! !
 
 !SimdJSONNeoTestGenerator class methodsFor: 'generating'!
@@ -420,12 +492,26 @@ selectorsToRewriteIn: aClass
 
 !SimdJSONNeoTestGenerator class methodsFor: 'generating'!
 rewrite: source
-	"NeoJSONObject fromString: and the identifier NeoJSONReader, for SimdJSONReader"
+	"NeoJSONObject fromString:, and the identifiers NeoJSONReader, NeoJSONParseError and
+	 NeoJSONMappingNotFound, for SimdJSON's"
 
-	^ self
-		replaceIdentifier: 'NeoJSONReader'
-		with: 'SimdJSONReader'
-		in: (source copyReplaceAll: 'NeoJSONObject fromString:' with: 'SimdJSONReader objectFromString:')! !
+	| result |
+	result := source copyReplaceAll: 'NeoJSONObject fromString:' with: 'SimdJSONNeoTestGenerator objectFromString:'.
+	#( #( 'NeoJSONReader' 'SimdJSONReader' ) #( 'NeoJSONParseError' 'SimdJSONParseError' )
+	   #( 'NeoJSONMappingNotFound' 'SimdJSONMappingNotFound' ) ) do: [ :pair |
+		result := self replaceIdentifier: pair first with: pair last in: result ].
+	^ result! !
+
+!SimdJSONNeoTestGenerator class methodsFor: 'reading'!
+objectFromString: aString
+	"What NeoJSONObject fromString: answers, read by SimdJSONReader: NeoJSONObjects with
+	 Symbol keys, and NeoJSONArrays"
+
+	^ (SimdJSONReader on: aString readStream)
+		mapClass: (Smalltalk globals at: #NeoJSONObject);
+		listClass: (Smalltalk globals at: #NeoJSONArray);
+		propertyNamesAsSymbols: true;
+		next! !
 
 !SimdJSONNeoTestGenerator class methodsFor: 'generating'!
 replaceIdentifier: old with: new in: source
@@ -452,21 +538,20 @@ isIdentifierAt: index size: size in: source
 
 !SimdJSONNeoTestGenerator class methodsFor: 'reporting'!
 report
-	"Run the generated classes; print, for each, what passed and how many values NeoJSON
-	 read again, then answer the total"
+	"Run the generated classes; print, for each, what passed of what ran and what was
+	 skipped, then answer the total"
 
 	| out run passed |
 	out := Stdio stdout.
 	run := passed := 0.
 	self generatedClasses do: [ :class |
 		| result |
-		SimdJSONReader resetStatistics.
 		result := class buildSuite run.
 		out
 			nextPutAll: class name; nextPutAll: ': ';
 			print: result passedCount; nextPut: $/; print: result runCount;
-			nextPutAll: ' passed, fallbacks ';
-			print: (SimdJSONReader statistics at: #fallbacks); lf.
+			nextPutAll: ' passed, ';
+			print: result skippedCount; nextPutAll: ' skipped (lenient)'; lf.
 		result failures , result errors do: [ :each |
 			out nextPutAll: '    failed: '; nextPutAll: each selector; lf ].
 		run := run + result runCount.

@@ -1,22 +1,17 @@
 "SimdJSON.st - a JSON reader for Pharo 15 whose parsing is done by simdjson, in the
 SimdJSONPlugin of this VM (plugins/SimdJSONPlugin, docs/SimdJSON.md), with the API of
-NeoJSONReader.
+NeoJSONReader and no other dependency: NeoJSON need not be in the image, and when it is,
+SimdJSONReader still has no NeoJSON class in its hierarchy and sends nothing to NeoJSON.
 
-Two modes, chosen when this file is filed in:
-
-	neo         NeoJSON is in the image (file this in after it): SimdJSONReader is a
-	            subclass of NeoJSONReader.  NeoJSON's own mapping classes run over the
-	            values the plugin answers, and whatever simdjson refuses (simdjson is
-	            strict RFC 8259, NeoJSON is lenient) is read again by NeoJSON's code,
-	            so values, errors and stream positions are NeoJSON's.
-	standalone  a stock image: SimdJSONReader is a subclass of SimdJSONMapper, a port
-	            of NeoJSON's mapper and mapping classes (reader side), and it is
-	            strict RFC 8259.
-
-SimdJSONReader mode answers which.  Filing this in again is harmless, and it switches
-to neo mode when NeoJSON was loaded in the meantime:
+SimdJSONReader is a subclass of SimdJSONMapper, a port of NeoJSON's mapper and mapping
+classes (the reading side).  It is strict RFC 8259: what simdjson refuses, NeoJSON's
+leniencies included (01, 1., a control character in a string), raises
+SimdJSONParseError.  File it in with:
 
 	pharo --headless Pharo.image --no-default-preferences st --save --quit SimdJSON.st
+
+Filing it in again is harmless; over an older SimdJSON.st whose SimdJSONReader was a
+subclass of NeoJSONReader (its neo mode), the class is made again.
 
 The primitive (primitiveRead) answers a whole value at a time: either Dictionaries and
 Arrays built in C, when the reader is configured as NeoJSON's defaults, or a tree of
@@ -49,20 +44,22 @@ of NeoJSON (https://github.com/svenvc/NeoJSON), under its MIT licence:
 	OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 The file is in the chunk format that Pharo 15 reads: every class in the first chunk, one
-method per section of methods, ASCII only, and no method names a NeoJSON class (they go
-through Smalltalk globals, or super)."
+method per section of methods, ASCII only, and no method names a NeoJSON class."
 !
-"SimdJSON: classes.  Superclasses are chosen now (neo mode when NeoJSON is loaded).
- Every class goes through the globals: Pharo 15 compiles the whole DoIt first, and a
- literal reference to a class this DoIt creates is an undeclared variable."
-| g neo |
+"SimdJSON: classes.  Every class goes through the globals: Pharo 15 compiles the whole
+ DoIt first, and a literal reference to a class this DoIt creates is an undeclared
+ variable.  A SimdJSONReader of an older SimdJSON.st (a NeoJSONReader in neo mode, or with
+ the slots of its fallback) is removed first, so that none of its methods is recompiled
+ against the slots of this one"
+| g |
 g := Smalltalk globals.
-neo := g includesKey: #NeoJSONReader.
+(g at: #SimdJSONReader ifAbsent: [ nil ]) ifNotNil: [ :old |
+	(old superclass name == #SimdJSONMapper and: [ (old slotNames includes: #delegating) not ])
+		ifFalse: [ old removeFromSystem ] ].
 (Object << #SimdJSONFlatMap layout: VariableLayout; tag: 'Core'; package: 'SimdJSON') install.
 (Object << #SimdJSONFailure slots: { #ec }; tag: 'Core'; package: 'SimdJSON') install.
 (Object << #SimdJSONNumberParser slots: { #readStream }; tag: 'Core'; package: 'SimdJSON') install.
-((neo ifTrue: [ g at: #NeoJSONParseError ] ifFalse: [ Error ]) << #SimdJSONParseError
-	slots: { #code. #position }; tag: 'Errors'; package: 'SimdJSON') install.
+(Error << #SimdJSONParseError slots: { #code. #position }; tag: 'Errors'; package: 'SimdJSON') install.
 (Error << #SimdJSONResourceError slots: { #code }; tag: 'Errors'; package: 'SimdJSON') install.
 (Error << #SimdJSONMappingNotFound slots: { #object. #collection }; tag: 'Errors'; package: 'SimdJSON') install.
 (Object << #SimdJSONMapper slots: { #mappings }; tag: 'Mapping'; package: 'SimdJSON') install.
@@ -73,14 +70,14 @@ neo := g includesKey: #NeoJSONReader.
 	tag: 'Mapping'; package: 'SimdJSON') install.
 (Object << #SimdJSONPropertyMapping slots: { #propertyName. #valueSchema. #getter. #setter };
 	tag: 'Mapping'; package: 'SimdJSON') install.
-((neo ifTrue: [ g at: #NeoJSONReader ] ifFalse: [ g at: #SimdJSONMapper ]) << #SimdJSONReader
-	slots: #( #source #streamKind #index #stop #delegating #depth #pending #hasPending #topStart
-		#multi #strict #exactNumbers #nativeDictionaries #keyTable #numberReader #originalStream ) ,
-		(neo ifTrue: [ #() ] ifFalse: [ #( #readStream #mapClass #listClass #propertyNamesAsSymbols ) ]);
+((g at: #SimdJSONMapper) << #SimdJSONReader
+	slots: #( #readStream #mapClass #listClass #propertyNamesAsSymbols #source #streamKind #index
+		#stop #depth #pending #hasPending #topStart #multi #exactNumbers #nativeDictionaries
+		#keyTable #originalStream );
 	sharedVariables: { #Statistics. #SessionToken. #PluginInfo. #NativeVerdict. #NativeEnabled.
 		#MaxInputUnits. #TestHooks };
 	tag: 'Core'; package: 'SimdJSON') install.
-Transcript show: 'SimdJSON: ', (neo ifTrue: [ 'neo mode (NeoJSONReader subclass)' ] ifFalse: [ 'standalone mode' ]); cr.
+Transcript show: 'SimdJSON: SimdJSONReader loaded, a subclass of ', (g at: #SimdJSONReader) superclass name; cr.
 !
 
 !SimdJSONFailure class methodsFor: 'instance creation'!
@@ -669,9 +666,9 @@ valueSchema: schemaName
 !SimdJSONReader class methodsFor: 'instance creation'!
 on: aReadStream
 	"A ReadStream on a String or a ByteArray (UTF-8) is read by the plugin; any other
-	stream that answers #next #peek #atEnd is read by NeoJSON in neo mode, and read to its
-	end here in standalone mode (on: waits for the end of a socket stream, and what is read
-	from that stream afterwards is not seen by the reader); close closes it in both modes"
+	stream that answers #next #atEnd (or #upToEnd) is read to its end here (on: waits for
+	the end of a socket stream, and what is read from that stream afterwards is not seen
+	by the reader); close closes it"
 
 	^ self new
 		on: aReadStream;
@@ -703,35 +700,6 @@ fromBytes: aByteArray
 !SimdJSONReader class methodsFor: 'convenience'!
 fromBytes: aByteArray as: schema
 	^ (self onBytes: aByteArray) nextAs: schema
-! !
-
-!SimdJSONReader class methodsFor: 'convenience'!
-objectFromString: aString
-	"What NeoJSONObject fromString: answers: NeoJSONObjects with Symbol keys, NeoJSONArrays"
-
-	self mode == #neo
-		ifFalse: [ ^ SimdJSONResourceError signal: 'objectFromString: needs NeoJSON' ].
-	^ (self on: aString readStream)
-		mapClass: (Smalltalk globals at: #NeoJSONObject);
-		listClass: (Smalltalk globals at: #NeoJSONArray);
-		propertyNamesAsSymbols: true;
-		next
-! !
-
-!SimdJSONReader class methodsFor: 'testing'!
-mode
-	"#neo when I am a NeoJSONReader, which NeoJSON loaded before this file made me"
-
-	^ SimdJSONReader superclass name == #NeoJSONReader
-		ifTrue: [ #neo ]
-		ifFalse: [ #standalone ]
-! !
-
-!SimdJSONReader class methodsFor: 'testing'!
-canFallBack
-	"NeoJSON can read again what simdjson refuses"
-
-	^ self mode == #neo
 ! !
 
 !SimdJSONReader class methodsFor: 'plugin'!
@@ -986,8 +954,8 @@ nativeSelfTestRead: json
 !SimdJSONReader class methodsFor: 'statistics'!
 statistics
 	"The counters, in a new Dictionary: reads (primitive calls), fastValues (values answered by
-	simdjson), fallbacks (values read by NeoJSON), overBudget, grows, numberTexts,
-	nativeDictionaries (values built as Dictionaries in C), tooLarge"
+	simdjson), overBudget, grows, numberTexts, nativeDictionaries (values built as
+	Dictionaries in C), tooLarge"
 
 	| statistics |
 	Statistics ifNil: [ self resetStatistics ].
@@ -1003,7 +971,7 @@ resetStatistics
 
 !SimdJSONReader class methodsFor: 'statistics'!
 statisticsKeys
-	^ #(reads fastValues fallbacks overBudget grows numberTexts nativeDictionaries tooLarge)
+	^ #(reads fastValues overBudget grows numberTexts nativeDictionaries tooLarge)
 ! !
 
 !SimdJSONReader class methodsFor: 'statistics'!
@@ -1101,10 +1069,8 @@ primRelease: freeParser
 initialize
 	super initialize.
 	propertyNamesAsSymbols ifNil: [ propertyNamesAsSymbols := false ].
-	delegating := false.
 	depth := 0.
 	multi := false.
-	strict := false.
 	exactNumbers := true.
 	nativeDictionaries := true.
 	hasPending := false
@@ -1112,17 +1078,14 @@ initialize
 
 !SimdJSONReader methodsFor: 'initialize-release'!
 on: aReadStream
-	self class mode == #neo
-		ifTrue: [ super on: aReadStream ]
-		ifFalse: [ readStream := aReadStream ].
-	originalStream := aReadStream.
+	readStream := originalStream := aReadStream.
 	self classifyStream
 ! !
 
 !SimdJSONReader methodsFor: 'initialize-release'!
 close
-	"Close the stream given to on:, as NeoJSON does, even when I read from a stream of my
-	own (standalone mode, or after a fallback over bytes)"
+	"Close the stream given to on:, as NeoJSON does, also when I read it into a stream of
+	my own"
 
 	originalStream ifNotNil: [ originalStream close ].
 	(readStream notNil and: [ readStream ~~ originalStream ]) ifTrue: [ readStream close ].
@@ -1142,18 +1105,6 @@ listClass: aClass
 !SimdJSONReader methodsFor: 'initialize-release'!
 propertyNamesAsSymbols: aBoolean
 	propertyNamesAsSymbols := aBoolean
-! !
-
-!SimdJSONReader methodsFor: 'initialize-release'!
-beStrict
-	self strict: true
-! !
-
-!SimdJSONReader methodsFor: 'initialize-release'!
-strict: aBoolean
-	"true: what simdjson refuses raises SimdJSONParseError, NeoJSON never reads"
-
-	strict := aBoolean
 ! !
 
 !SimdJSONReader methodsFor: 'initialize-release'!
@@ -1185,15 +1136,12 @@ next
 	"One JSON value.  The white space after it is consumed; anything else after it is left"
 
 	| r value native |
-	delegating ifTrue: [ ^ super next ].
 	depth > 0 ifTrue: [ ^ self materialize: self takeValue ].
 	self syncIn.
 	native := self useNativeDictionary.
-	(r := self read: native not) ifNil: [ ^ self delegateDuring: [ super next ] ].
-	(r at: 1) = 2 ifTrue: [
-		self canFallBack ifFalse: [ ^ self signalError: (r at: 6) at: index ].
-		^ self delegateDuring: [ super next ] ].
-	value := self finish: r ifBadNumber: [ ^ self delegateDuring: [ super next ] ].
+	r := self read: native not.
+	(r at: 1) = 2 ifTrue: [ ^ self signalError: (r at: 6) at: index ].
+	value := self finish: r.
 	native
 		ifTrue: [ self class count: #nativeDictionaries ]
 		ifFalse: [ value := self materialize: value ].
@@ -1207,39 +1155,10 @@ next
 !SimdJSONReader methodsFor: 'accessing'!
 nextAs: schema
 	| mapping |
-	delegating ifTrue: [ ^ super nextAs: schema ].
 	schema ifNil: [ ^ self next ].
 	mapping := self mappingFor: schema.
-	depth > 0 ifTrue: [ ^ self readWith: mapping ].
-	^ self topLevel: [ self readWith: mapping ] neo: [ super nextAs: schema ]
-! !
-
-!SimdJSONReader methodsFor: 'accessing'!
-readWith: mapping
-	"mapping readFrom: me.  NeoJSON's object mapping reads the value of a key it does not map
-	with next, which would build it to drop it: a copy of its readFrom: skips it instead"
-
-	^ mapping class name == #NeoJSONObjectMapping
-		ifTrue: [ self readNeoObjectMapping: mapping ]
-		ifFalse: [ mapping readFrom: self ]
-! !
-
-!SimdJSONReader methodsFor: 'accessing'!
-readNeoObjectMapping: mapping
-	"NeoJSONObjectMapping>>readFrom: (neo mode), except that the value of an unknown key is
-	skipped, not built; the mapping answers its subjectClass as its identifier"
-
-	| anObject |
-	anObject := mapping identifier new.
-	(mapping instVarNamed: #allowNil) == true ifTrue: [
-		self parseConstantDo: [ :value |
-			^ value ifNotNil: [ self error: 'Unexpected boolean constant' ] ] ].
-	self parseMapKeysDo: [ :key |
-		(mapping propertyNamed: key ifAbsent: [ nil ])
-			ifNil: [ self skipValue ]
-			ifNotNil: [ :property |
-				property readObject: anObject from: self ] ].
-	^ anObject
+	depth > 0 ifTrue: [ ^ mapping readFrom: self ].
+	^ self topLevel: [ mapping readFrom: self ]
 ! !
 
 !SimdJSONReader methodsFor: 'accessing'!
@@ -1258,7 +1177,6 @@ upToEnd
 
 !SimdJSONReader methodsFor: 'testing'!
 atEnd
-	delegating ifTrue: [ ^ super atEnd ].
 	depth = 0 ifTrue: [ self syncIn ].
 	^ index > stop
 ! !
@@ -1271,16 +1189,14 @@ failIfNotAtEnd
 
 !SimdJSONReader methodsFor: 'parsing'!
 parseValue
-	delegating ifTrue: [ ^ super parseValue ].
-	depth = 0 ifTrue: [ ^ self topLevel: [ self parseValue ] neo: [ super parseValue ] ].
+	depth = 0 ifTrue: [ ^ self topLevel: [ self parseValue ] ].
 	^ self materialize: self takeValue
 ! !
 
 !SimdJSONReader methodsFor: 'parsing'!
 parseMap
 	| node |
-	delegating ifTrue: [ ^ super parseMap ].
-	depth = 0 ifTrue: [ ^ self topLevel: [ self parseMap ] neo: [ super parseMap ] ].
+	depth = 0 ifTrue: [ ^ self topLevel: [ self parseMap ] ].
 	node := self takeValue.
 	node class == SimdJSONFlatMap ifFalse: [ ^ self error: '{ expected' ].
 	^ self materialize: node
@@ -1289,8 +1205,7 @@ parseMap
 !SimdJSONReader methodsFor: 'parsing'!
 parseList
 	| node |
-	delegating ifTrue: [ ^ super parseList ].
-	depth = 0 ifTrue: [ ^ self topLevel: [ self parseList ] neo: [ super parseList ] ].
+	depth = 0 ifTrue: [ ^ self topLevel: [ self parseList ] ].
 	node := self takeValue.
 	node class == Array ifFalse: [ ^ self error: '[ expected' ].
 	^ self materialize: node
@@ -1299,8 +1214,7 @@ parseList
 !SimdJSONReader methodsFor: 'parsing'!
 parseString
 	| node |
-	delegating ifTrue: [ ^ super parseString ].
-	depth = 0 ifTrue: [ ^ self topLevel: [ self parseString ] neo: [ super parseString ] ].
+	depth = 0 ifTrue: [ ^ self topLevel: [ self parseString ] ].
 	node := self takeValue.
 	node isString ifFalse: [ ^ self error: '" expected' ].
 	^ node
@@ -1309,8 +1223,7 @@ parseString
 !SimdJSONReader methodsFor: 'parsing'!
 parseNumber
 	| node |
-	delegating ifTrue: [ ^ super parseNumber ].
-	depth = 0 ifTrue: [ ^ self topLevel: [ self parseNumber ] neo: [ super parseNumber ] ].
+	depth = 0 ifTrue: [ ^ self topLevel: [ self parseNumber ] ].
 	node := self takeValue.
 	node isNumber ifFalse: [ ^ self error: 'Integer digit expected' ].
 	^ node
@@ -1320,9 +1233,7 @@ parseNumber
 parseConstantDo: block
 	"Evaluate block with the value when it is true, false or null, else consume nothing"
 
-	delegating ifTrue: [ ^ super parseConstantDo: block ].
-	depth = 0 ifTrue: [
-		^ self topLevel: [ self parseConstantDo: block ] neo: [ super parseConstantDo: block ] ].
+	depth = 0 ifTrue: [ ^ self topLevel: [ self parseConstantDo: block ] ].
 	(hasPending == true and: [ pending isNil or: [ pending == true or: [ pending == false ] ] ])
 		ifTrue: [ block value: self takeValue ]
 ! !
@@ -1333,9 +1244,7 @@ parseMapKeysDo: block
 	block does not read is skipped"
 
 	| node |
-	delegating ifTrue: [ ^ super parseMapKeysDo: block ].
-	depth = 0 ifTrue: [
-		^ self topLevel: [ self parseMapKeysDo: block ] neo: [ super parseMapKeysDo: block ] ].
+	depth = 0 ifTrue: [ ^ self topLevel: [ self parseMapKeysDo: block ] ].
 	node := self takeValue.
 	node class == SimdJSONFlatMap ifFalse: [ ^ self error: '{ expected' ].
 	1 to: node size by: 2 do: [ :i |
@@ -1356,8 +1265,7 @@ parseMapDo: block
 	"NeoJSON's per entry protocol: block reads the key with parsePropertyName, then the value"
 
 	| node |
-	delegating ifTrue: [ ^ super parseMapDo: block ].
-	depth = 0 ifTrue: [ ^ self topLevel: [ self parseMapDo: block ] neo: [ super parseMapDo: block ] ].
+	depth = 0 ifTrue: [ ^ self topLevel: [ self parseMapDo: block ] ].
 	node := self takeValue.
 	node class == SimdJSONFlatMap ifFalse: [ ^ self error: '{ expected' ].
 	1 to: node size by: 2 do: [ :i |
@@ -1370,7 +1278,6 @@ parseMapDo: block
 !SimdJSONReader methodsFor: 'parsing'!
 parsePropertyName
 	| entry |
-	delegating ifTrue: [ ^ super parsePropertyName ].
 	hasPending == #entry ifFalse: [ ^ self error: 'property name expected' ].
 	entry := pending.
 	pending := entry value.
@@ -1383,8 +1290,7 @@ parseListDo: block
 	"Evaluate block for each element, armed for the reads of the block"
 
 	| node |
-	delegating ifTrue: [ ^ super parseListDo: block ].
-	depth = 0 ifTrue: [ ^ self topLevel: [ self parseListDo: block ] neo: [ super parseListDo: block ] ].
+	depth = 0 ifTrue: [ ^ self topLevel: [ self parseListDo: block ] ].
 	node := self takeValue.
 	node class == Array ifFalse: [ ^ self error: '[ expected' ].
 	1 to: node size do: [ :i |
@@ -1402,42 +1308,34 @@ parseListElementsDo: block
 
 !SimdJSONReader methodsFor: 'parsing'!
 skipValue
-	"Drop the next value without building it (the standalone mapping, for unknown keys)"
+	"Drop the next value without building it (the object mapping, for unknown keys)"
 
-	(delegating or: [ depth = 0 ]) ifTrue: [ ^ self next ].
+	depth = 0 ifTrue: [ ^ self next ].
 	self takeValue
 ! !
 
 !SimdJSONReader methodsFor: 'private'!
 consumeWhitespace
-	delegating ifTrue: [ ^ super consumeWhitespace ]
+	"NeoJSON's; the plugin consumes the white space around a value itself"
 ! !
 
 !SimdJSONReader methodsFor: 'private'!
 expectChar: character
-	delegating ifTrue: [ ^ super expectChar: character ]
+	"NeoJSON's; simdjson checks the structure of the whole value"
 ! !
 
 !SimdJSONReader methodsFor: 'private'!
 error: text
-	self class mode == #neo ifTrue: [ ^ super error: text ].
 	SimdJSONParseError new signal: text
-! !
-
-!SimdJSONReader methodsFor: 'private'!
-canFallBack
-	^ strict not and: [ self class canFallBack ]
 ! !
 
 !SimdJSONReader methodsFor: 'private'!
 classifyStream
 	"#string: a ReadStream on a String, read by the plugin in characters; #bytes: on a
-	ByteArray, in bytes of UTF-8; #opaque: anything else, read by NeoJSON (neo mode) or
-	read to its end now (standalone mode), into a stream of my own: originalStream keeps
-	the one given, which close closes"
+	ByteArray, in bytes of UTF-8; anything else is read to its end now, into a ReadStream
+	of my own: originalStream keeps the one given, which close closes"
 
 	| contents |
-	delegating := false.
 	depth := 0.
 	multi := false.
 	hasPending := false.
@@ -1446,11 +1344,6 @@ classifyStream
 			contents := readStream originalContents.
 			contents isString ifTrue: [ ^ self useSource: contents kind: #string ].
 			contents class == ByteArray ifTrue: [ ^ self useSource: contents kind: #bytes ] ].
-	self class mode == #neo
-		ifTrue: [
-			streamKind := #opaque.
-			delegating := true.
-			^ self ].
 	contents := (readStream respondsTo: #upToEnd)
 		ifTrue: [ readStream upToEnd ]
 		ifFalse: [
@@ -1483,11 +1376,9 @@ syncOut: nextIndex
 
 !SimdJSONReader methodsFor: 'private'!
 tooLarge: units
-	"The plugin refused a value of units over the cap (maxInputUnits): nil, NeoJSON reads
-	it in neo mode, else an error"
+	"The plugin refused a value of units over the cap (maxInputUnits)"
 
 	self class count: #tooLarge.
-	self canFallBack ifTrue: [ ^ nil ].
 	^ SimdJSONResourceError new
 		code: #tooLarge;
 		signal: 'a value of ', units printString, ' units exceeds SimdJSONReader maxInputUnits; raise it', (self class platform = 'emscripten'
@@ -1539,8 +1430,7 @@ prim: flags budget: budget
 !SimdJSONReader methodsFor: 'private'!
 read: wantTree
 	"One call of the primitive at index, as a tree or built in C (wantTree false: the caller
-	checked useNativeDictionary), with status OK or ERROR, or nil when NeoJSON must read the
-	value.  Where budgetChecked, the budget is checked before anything is built: a refusal
+	checked useNativeDictionary), with status OK or ERROR.  Where budgetChecked, the budget is checked before anything is built: a refusal
 	says how many bytes the value needs, and the memory is grown by that first"
 
 	| flags budget r |
@@ -1550,13 +1440,13 @@ read: wantTree
 			ifTrue: [ Smalltalk vm parameterAt: 54 ]
 			ifFalse: [ -1 ] ].
 	r := self prim: flags budget: budget.
-	r class == SimdJSONFailure ifTrue: [ (r := self recover: r flags: flags) ifNil: [ ^ nil ] ].
+	r class == SimdJSONFailure ifTrue: [ r := self recover: r flags: flags ].
 	(r at: 1) = 3 ifTrue: [ ^ self tooLarge: (r at: 6) ].
 	(r at: 1) = 1 ifTrue: [
 		self class count: #overBudget.
 		self grow: ((r at: 6) - (Smalltalk vm parameterAt: 54) + 1048576 max: 1048576).
 		r := self prim: flags budget: (Smalltalk vm parameterAt: 54).
-		r class == SimdJSONFailure ifTrue: [ (r := self recover: r flags: flags) ifNil: [ ^ nil ] ].
+		r class == SimdJSONFailure ifTrue: [ r := self recover: r flags: flags ].
 		(r at: 1) = 1 ifTrue: [ ^ OutOfMemory signal ] ].
 	^ r
 ! !
@@ -1582,7 +1472,6 @@ recover: failure flags: flags
 
 !SimdJSONReader methodsFor: 'private'!
 pluginMissing
-	self canFallBack ifTrue: [ ^ nil ].
 	^ SimdJSONResourceError new
 		code: #'not found';
 		signal: 'SimdJSONPlugin not available'
@@ -1590,7 +1479,6 @@ pluginMissing
 
 !SimdJSONReader methodsFor: 'private'!
 cMemoryFailure
-	self canFallBack ifTrue: [ ^ nil ].
 	^ SimdJSONResourceError new
 		code: #'insufficient C memory';
 		signal: 'SimdJSONPlugin: out of C memory'
@@ -1616,23 +1504,10 @@ finish: r
 ! !
 
 !SimdJSONReader methodsFor: 'private'!
-finish: r ifBadNumber: aBlock
-	"finish: r, but when NeoJSON refuses a number text (1e-1074) in neo mode, the value of
-	aBlock, which has NeoJSON read the value again, for its error and its position"
-
-	((r at: 4) isNil or: [ self canFallBack not ]) ifTrue: [ ^ self finish: r ].
-	^ [ self finish: r ]
-		on: (Smalltalk globals at: #NeoJSONParseError)
-		do: [ :error | aBlock value ]
-! !
-
-!SimdJSONReader methodsFor: 'private'!
 numberFromText: aString
-	"NeoJSON's own code in neo mode, so its values and errors"
+	"With NeoJSON's rules, and its errors as SimdJSONParseErrors"
 
-	self class mode == #neo ifFalse: [ ^ SimdJSONNumberParser parse: aString ].
-	numberReader ifNil: [ numberReader := (Smalltalk globals at: #NeoJSONReader) new ].
-	^ (numberReader on: aString readStream; yourself) parseNumber
+	^ SimdJSONNumberParser parse: aString
 ! !
 
 !SimdJSONReader methodsFor: 'private'!
@@ -1680,7 +1555,7 @@ takeValue
 ! !
 
 !SimdJSONReader methodsFor: 'private'!
-topLevel: cursorBlock neo: neoBlock
+topLevel: cursorBlock
 	"Read the value at the position as a tree, then evaluate cursorBlock with it pending.
 	When nothing took it, the stream goes back before it, as NeoJSON reads nothing.  An
 	error of cursorBlock puts the reader and the stream back before the value before any
@@ -1690,11 +1565,9 @@ topLevel: cursorBlock neo: neoBlock
 	| r root restored |
 	self syncIn.
 	topStart := index.
-	(r := self read: true) ifNil: [ ^ self delegateDuring: neoBlock ].
-	(r at: 1) = 2 ifTrue: [
-		self canFallBack ifFalse: [ ^ self signalError: (r at: 6) at: index ].
-		^ self delegateDuring: neoBlock ].
-	root := pending := self finish: r ifBadNumber: [ ^ self delegateDuring: neoBlock ].
+	r := self read: true.
+	(r at: 1) = 2 ifTrue: [ ^ self signalError: (r at: 6) at: index ].
+	root := pending := self finish: r.
 	hasPending := true.
 	self class count: #fastValues.
 	index := r at: 3.
@@ -1726,35 +1599,6 @@ topLevel: cursorBlock neo: neoBlock
 				hasPending := false.
 				pending := nil.
 				self syncOut: index ] ]
-! !
-
-!SimdJSONReader methodsFor: 'private'!
-delegateDuring: aBlock
-	"simdjson refused the value at index, or cannot be used: NeoJSON's own code reads it,
-	from my stream, with my settings and mappings, while every structural selector of mine
-	sends to super; then the fast path goes on from where NeoJSON stopped"
-
-	streamKind == #bytes ifTrue: [ self decodeRest ].
-	readStream position: index - 1.
-	delegating := true.
-	self class count: #fallbacks.
-	^ [ aBlock value ] ensure: [
-		delegating := false.
-		index := readStream position + 1 ]
-! !
-
-!SimdJSONReader methodsFor: 'private'!
-decodeRest
-	"NeoJSON reads characters: decode the bytes left once, and go on over them as a String
-	on a stream of my own (an error path)"
-
-	| rest |
-	rest := (source copyFrom: index to: stop) utf8Decoded.
-	readStream := ReadStream on: rest.
-	source := rest.
-	streamKind := #string.
-	index := 1.
-	stop := rest size
 ! !
 
 !SimdJSONReader methodsFor: 'private'!

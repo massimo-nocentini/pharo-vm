@@ -9,8 +9,6 @@
 # The value of a series is the median of its run medians.
 # Gates (exit status 1 when one fails):
 #   - every CHECK is equal, with 0 policy differences;
-#   - no NeoJSON fallback on a valid input: CHECK lines but the lenient one,
-#     STATS lines but those of sj-lenient;
 #   - no ERROR line;
 #   - sj-string is at least 8x faster than neo-string on every corpus file and VM.
 # Targets are reported, not checked.
@@ -105,8 +103,6 @@ def main(paths):
     print('## Gates\n')
     bad = [c for c in checks if not c['equal']]
     policy = [c for c in checks if c.get('policy', '0') != '0']
-    fallback_checks = [c for c in checks if c['kind'] != 'lenient' and c.get('fallbacks', '0') != '0']
-    fallback_stats = [s for s in stats if s['series'] != 'sj-lenient' and s.get('fallbacks', '0') != '0']
     slow = []
     for label in labels:
         for file in corpus:
@@ -127,8 +123,6 @@ def main(paths):
              lambda p: first(p, lambda c: f"{c['label']} {c['file']} {c['kind']} at {c.get('firstDiff')}")),
         gate('0 policy differences', policy,
              lambda p: first(p, lambda c: f"{c['label']} {c['file']} {c['kind']} policy={c['policy']}")),
-        gate('no fallback on valid inputs', fallback_checks + fallback_stats,
-             lambda p: first(p, lambda c: f"{c['label']} {c['file']} {c.get('kind', c.get('series'))} fallbacks={c['fallbacks']}")),
         gate('no ERROR line', errors, lambda p: first(p, lambda e: e[1])),
         gate(f'sj-string >= {GATE_SPEEDUP:.0f}x neo-string', slow + [f'{l}: no sj-string' for l in missing],
              lambda p: first(p, str)),
@@ -190,7 +184,7 @@ def main(paths):
                 [times(ratio(val(label, file, 'neo-map'), val(label, file, 'sj-map'))),
                  times(ratio(val(label, file, 'neo-map'), val(label, file, 'sj-map-symbols')))]
                 for file in mapped])
-        others = [(f, s) for f in files for s in NDJSON + ('neo-small', 'sj-small', 'sj-lenient')
+        others = [(f, s) for f in files for s in NDJSON + ('neo-small', 'sj-small')
                   if val(label, f, s) is not None]
         if others:
             table(['file', 'series', 'median ms', 'MB/s'], [

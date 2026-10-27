@@ -1,11 +1,9 @@
 "SimdJSON-Tests.st - the SUnit tests of SimdJSON.st, in the package SimdJSON-Tests
 
-They run in both modes of SimdJSON.st: standalone (stock Pharo 15) and neo
-(NeoJSON loaded before SimdJSON.st), and need no NeoJSON of their own: a
-NeoJSON class is only reached through Smalltalk globals, in neo mode.  What
-differs between the modes is said where it is tested: NeoJSON's errors and
-its lenient inputs come from the fallback in neo mode, while standalone mode
-is strict RFC 8259 and raises SimdJSONParseError.
+They need no NeoJSON, and pass whether NeoJSON is in the image or not:
+SimdJSONReader has none of its classes in its hierarchy, and is strict
+RFC 8259 (NeoJSON's leniencies raise SimdJSONParseError).
+SimdJSON-NeoTests.st compares the reader with NeoJSON itself.
 
 	SimdJSONReaderTests   the reader API: values, numbers, strings, classes,
 	                      sources, stream positions, NDJSON, errors
@@ -44,12 +42,17 @@ g := Smalltalk globals.
 ((g at: #SimdJSONTestCase) << #SimdJSONMemoryTests tag: 'Tests'; package: 'SimdJSON-Tests') install.
 ((g at: #SimdJSONTestCase) << #SimdJSONMappingTests tag: 'Tests'; package: 'SimdJSON-Tests') install.
 ((g at: #SimdJSONTestCase) << #SimdJSONSlowTests tag: 'Tests'; package: 'SimdJSON-Tests') install.
+"The methods of an older SimdJSON-Tests.st that are gone"
+{ #SimdJSONTestCase -> #( #isNeo #parseErrorClass #mappingNotFoundClass ).
+  #SimdJSONReaderTests -> #( #testMode #testObjectFromString ) } do: [ :each |
+	each value do: [ :selector |
+		((g at: each key) includesSelector: selector) ifTrue: [ (g at: each key) removeSelector: selector ] ] ].
 !
 
 !SimdJSONTestStream class methodsFor: 'instance creation'!
 on: aString
 	"A character stream that is not a ReadStream, with the protocol of NeoJSONMockStream:
-	 NeoJSON reads it in neo mode, standalone mode reads it to its end"
+	 the reader reads it to its end"
 
 	^ self new setStream: aString readStream! !
 
@@ -126,26 +129,6 @@ tearDown
 	super tearDown! !
 
 !SimdJSONTestCase methodsFor: 'accessing'!
-isNeo
-
-	^ SimdJSONReader mode == #neo! !
-
-!SimdJSONTestCase methodsFor: 'accessing'!
-parseErrorClass
-	"The errors of a reader that is not strict: NeoJSON's, from the fallback, in neo mode"
-
-	^ self isNeo
-		ifTrue: [ Smalltalk globals at: #NeoJSONParseError ]
-		ifFalse: [ SimdJSONParseError ]! !
-
-!SimdJSONTestCase methodsFor: 'accessing'!
-mappingNotFoundClass
-
-	^ self isNeo
-		ifTrue: [ Smalltalk globals at: #NeoJSONMappingNotFound ]
-		ifFalse: [ SimdJSONMappingNotFound ]! !
-
-!SimdJSONTestCase methodsFor: 'accessing'!
 statistic: aSymbol
 
 	^ SimdJSONReader statistics at: aSymbol! !
@@ -182,9 +165,9 @@ reader: aString
 
 !SimdJSONTestCase methodsFor: 'helpers'!
 strictErrorOf: aString
-	"The SimdJSONParseError that a strict reader raises on aString, or nil"
+	"The SimdJSONParseError that the reader raises on aString, or nil"
 
-	^ [ (self reader: aString) beStrict; next. nil ]
+	^ [ (self reader: aString) next. nil ]
 		on: SimdJSONParseError
 		do: [ :error | error return: error ]! !
 
@@ -238,12 +221,24 @@ probeJSON
 		stream nextPutAll: '}}' ]! !
 
 !SimdJSONReaderTests methodsFor: 'tests - plugin'!
-testMode
+testStandalone
+	"No NeoJSON class in the hierarchy of the reader and of its errors, and none named by a
+	 method of the package SimdJSON, whether NeoJSON is in the image or not"
 
-	self assert: (#( #neo #standalone ) includes: SimdJSONReader mode).
-	self
-		assert: SimdJSONReader mode == #neo
-		equals: (Smalltalk globals includesKey: #NeoJSONReader)! !
+	| names |
+	self assert: SimdJSONReader superclass equals: SimdJSONMapper.
+	self assert: SimdJSONMapper superclass equals: Object.
+	self assert: SimdJSONParseError superclass equals: Error.
+	self assert: SimdJSONMappingNotFound superclass equals: Error.
+	names := Set new.
+	SimdJSONReader package definedClasses do: [ :class |
+		class methods , class class methods do: [ :method |
+			method literals do: [ :literal |
+				(literal isVariableBinding and: [ literal key beginsWith: 'Neo' ])
+					ifTrue: [ names add: literal key ].
+				(literal isSymbol and: [ literal beginsWith: 'NeoJSON' ])
+					ifTrue: [ names add: literal ] ] ] ].
+	self assert: names isEmpty description: [ 'NeoJSON named: ' , names asArray printString ]! !
 
 !SimdJSONReaderTests methodsFor: 'tests - plugin'!
 testPluginInfo
@@ -269,15 +264,13 @@ testPluginInfo
 
 !SimdJSONReaderTests methodsFor: 'tests - plugin'!
 testPluginMissing
-	"Without the module, neo mode reads everything with NeoJSON"
+	"Without the module, reading signals SimdJSONResourceError"
 
 	SimdJSONReader testHook: #pluginMissing value: true.
-	self isNeo
-		ifTrue: [
-			self
-				assert: (self read: '[1,{"a":"b"},1e2]')
-				equals: { 1. Dictionary new at: 'a' put: 'b'; yourself. 100 } ]
-		ifFalse: [ self should: [ self read: '[1]' ] raise: SimdJSONResourceError ]! !
+	self
+		should: [ self read: '[1]' ]
+		raise: SimdJSONResourceError
+		withExceptionDo: [ :error | self assert: error messageText equals: 'SimdJSONPlugin not available' ]! !
 
 !SimdJSONReaderTests methodsFor: 'tests - values'!
 testShapes
@@ -397,7 +390,7 @@ testExponents
 		self assert: value class equals: each value class ].
 	self
 		should: [ self read: '1e-1074' ]
-		raise: self parseErrorClass
+		raise: SimdJSONParseError
 		withExceptionDo: [ :error |
 			self assert: error messageText equals: 'number exponent too small' ]! !
 
@@ -581,18 +574,6 @@ testPropertyNamesAsSymbols
 	self assert: (value keys allSatisfy: [ :each | each isSymbol ]).
 	self assert: (value at: #b) equals: 3! !
 
-!SimdJSONReaderTests methodsFor: 'tests - classes'!
-testObjectFromString
-
-	| value |
-	self isNeo ifFalse: [
-		^ self should: [ SimdJSONReader objectFromString: '{}' ] raise: SimdJSONResourceError ].
-	value := SimdJSONReader objectFromString: '{"a":[1,{"b":2}]}'.
-	self assert: value class equals: (Smalltalk globals at: #NeoJSONObject).
-	self assert: (value at: #a) class equals: (Smalltalk globals at: #NeoJSONArray).
-	self assert: (value keys allSatisfy: [ :each | each isSymbol ]).
-	self assert: ((value at: #a) second at: #b) equals: 2! !
-
 !SimdJSONReaderTests methodsFor: 'tests - sources'!
 testSources
 
@@ -614,8 +595,8 @@ testSources
 
 !SimdJSONReaderTests methodsFor: 'tests - sources'!
 testOtherStreams
-	"Streams that are not a ReadStream on a String or a ByteArray: NeoJSON reads them in
-	 neo mode, standalone mode reads them to their end first"
+	"Streams that are not a ReadStream on a String or a ByteArray are read to their end
+	 first"
 
 	| stream reader |
 	stream := ReadWriteStream on: String new.
@@ -758,7 +739,7 @@ testFailIfNotAtEnd
 	self assert: reader next equals: #( 1 ).
 	self
 		should: [ reader failIfNotAtEnd ]
-		raise: self parseErrorClass
+		raise: SimdJSONParseError
 		withExceptionDo: [ :error | self assert: error messageText equals: 'extraneous input detected' ].
 	reader := self reader: '[1]  '.
 	reader next.
@@ -775,8 +756,8 @@ testNextAsNilAndClose
 
 !SimdJSONReaderTests methodsFor: 'tests - streams'!
 testCloseClosesTheStream
-	"close closes the stream given to on:, also when standalone mode read it into a stream
-	 of its own"
+	"close closes the stream given to on:, also when the reader read it into a stream of
+	 its own"
 
 	| stream reader |
 	stream := SimdJSONTestStream on: '[1,2] 3'.
@@ -791,31 +772,20 @@ testErrors
 
 	#( '[1,' '[1,2' '{"a":1' '{"a" 1}' '[1 2]' '{1:2}' '[1,]' '[,1]' '{"a":1,}' 'nul' 'tru'
 	   '"open' '{a:1}' '.5' '+1' '-' '' '   ' '[}' '"\x"' '"\uD83D"' ) do: [ :each |
-		self should: [ self read: each ] raise: self parseErrorClass ]! !
+		self should: [ self read: each ] raise: SimdJSONParseError ]! !
 
 !SimdJSONReaderTests methodsFor: 'tests - errors'!
 testLenientInputs
-	"NeoJSON accepts these, simdjson does not: neo mode reads them again with NeoJSON,
-	 standalone mode is strict RFC 8259"
+	"NeoJSON accepts these, simdjson does not: the reader is strict RFC 8259"
 
-	{ '01' -> 1. '-01' -> -1. '00' -> 0. '1.' -> 1.0. '[1.]' -> { 1.0 }.
-	  ('"a' , self lf , 'b"') -> ('a' , self lf , 'b').
-	  ('[' , self ff , '1]') -> #( 1 ).
-	  '"\uDE00"' -> (self string: #( 16rDE00 )).
-	  '123abc' -> 123. '0x10' -> 0.
-	  '1e400' -> (10 raisedTo: 400). '1.0e309' -> Float infinity } do: [ :each |
-		self isNeo
-			ifTrue: [
-				self
-					assert: (self count: #fallbacks during: [
-						self assert: (self read: each key) equals: each value ])
-					equals: 1 ]
-			ifFalse: [ self should: [ self read: each key ] raise: SimdJSONParseError ] ]! !
+	#( '01' '-01' '00' '1.' '[1.]' '"\uDE00"' '123abc' '0x10' '1e400' '1.0e309' ) ,
+	{ '"a' , self lf , 'b"'. '[' , self ff , '1]' } do: [ :each |
+		self should: [ self read: each ] raise: SimdJSONParseError ]! !
 
 !SimdJSONReaderTests methodsFor: 'tests - errors'!
 testStrict
-	"A strict reader never falls back: simdjson's error is a SimdJSONParseError, in both
-	 modes (a NeoJSONParseError too, in neo mode)"
+	"simdjson's error is a SimdJSONParseError, with its code, the position of the value and
+	 its message"
 
 	| error |
 	error := self strictErrorOf: '01'.
@@ -824,11 +794,8 @@ testStrict
 	self assert: error position equals: 1.
 	self assert: error messageText equals: 'simdjson: ' , (SimdJSONReader errorMessageFor: 9).
 	self assert: (error messageText beginsWith: 'simdjson: NUMBER_ERROR').
-	self isNeo ifTrue: [
-		self assert: (error isKindOf: (Smalltalk globals at: #NeoJSONParseError)).
-		self assert: ((self reader: '01') beStrict; strict: false; next) equals: 1 ].
-	self assert: ((self reader: '[1]') beStrict; next) equals: #( 1 ).
-	self assert: ((self reader: '1 2') beStrict; next) equals: 1! !
+	self assert: (self read: '[1]') equals: #( 1 ).
+	self assert: (self reader: '1 2') next equals: 1! !
 
 !SimdJSONReaderTests methodsFor: 'tests - errors'!
 testErrorCodes
@@ -838,7 +805,7 @@ testErrorCodes
 	self assert: (self strictErrorOf: '') code equals: 13.
 	self assert: (self strictErrorOf: (self string: #( 16rFEFF )) , '[1]') code equals: 1001.
 	self
-		assert: ([ (SimdJSONReader on: (#[ 16rEF 16rBB 16rBF ] , '[1]' asByteArray) readStream) beStrict; next. nil ]
+		assert: ([ (SimdJSONReader on: (#[ 16rEF 16rBB 16rBF ] , '[1]' asByteArray) readStream) next. nil ]
 			on: SimdJSONParseError
 			do: [ :error | error return: error code ])
 		equals: 1001.
@@ -861,24 +828,21 @@ testErrorMessages
 
 !SimdJSONReaderTests methodsFor: 'tests - errors'!
 testMaxInputUnits
-	"Above the cap, neo mode reads with NeoJSON, standalone mode refuses"
+	"Above the cap, the reader refuses the value"
 
 	SimdJSONReader maxInputUnits: 8.
 	self assert: (self read: '[1]') equals: #( 1 ).
-	self isNeo
-		ifTrue: [
-			self
-				assert: (self count: #tooLarge during: [
-					self assert: (self read: '[1,2,3,4,5]') equals: #( 1 2 3 4 5 ) ])
-				equals: 1 ]
-		ifFalse: [ self should: [ self read: '[1,2,3,4,5]' ] raise: SimdJSONResourceError ].
+	self
+		assert: (self count: #tooLarge during: [
+			self should: [ self read: '[1,2,3,4,5]' ] raise: SimdJSONResourceError ])
+		equals: 1.
 	SimdJSONReader maxInputUnits: nil.
 	self assert: (self read: '[1,2,3,4,5]') equals: #( 1 2 3 4 5 )! !
 
 !SimdJSONReaderTests methodsFor: 'tests - errors'!
 testMaxInputUnitsPerValue
 	"The cap applies to each value: a sequence of small values longer than the cap is read
-	 by the plugin, in both modes"
+	 by the plugin"
 
 	| json reader |
 	json := String streamContents: [ :stream |
@@ -886,30 +850,23 @@ testMaxInputUnitsPerValue
 	SimdJSONReader maxInputUnits: 8.
 	self
 		assert: (self count: #tooLarge during: [
-			self
-				assert: (self count: #fallbacks during: [
-					self assert: (self reader: json) upToEnd equals: (1 to: 100) asArray ])
-				equals: 0 ])
+			self assert: (self reader: json) upToEnd equals: (1 to: 100) asArray ])
 		equals: 0.
 	reader := self reader: '[1,2] [1,2,3,4,5] [3]'.
 	self assert: reader next equals: #( 1 2 ).
-	self isNeo
-		ifTrue: [
-			self assert: reader next equals: #( 1 2 3 4 5 ).
-			self assert: reader next equals: #( 3 ) ]
-		ifFalse: [ self should: [ reader next ] raise: SimdJSONResourceError ]! !
+	self should: [ reader next ] raise: SimdJSONResourceError! !
 
 !SimdJSONReaderTests methodsFor: 'tests - statistics'!
 testStatistics
 
 	SimdJSONReader resetStatistics.
-	#( #reads #fastValues #fallbacks #overBudget #grows #numberTexts #nativeDictionaries #tooLarge ) do: [ :each |
+	self assert: SimdJSONReader statistics keys asSet equals: SimdJSONReader statisticsKeys asSet.
+	#( #reads #fastValues #overBudget #grows #numberTexts #nativeDictionaries #tooLarge ) do: [ :each |
 		self assert: (self statistic: each) equals: 0 ].
 	self read: '[1e2,{"a":1}]'.
 	self assert: (self statistic: #reads) >= 1.
 	self assert: (self statistic: #fastValues) >= 1.
-	self assert: (self statistic: #numberTexts) equals: 1.
-	self assert: (self statistic: #fallbacks) equals: 0! !
+	self assert: (self statistic: #numberTexts) equals: 1! !
 
 !SimdJSONReaderTests methodsFor: 'tests - primitive'!
 testPrimitiveResult
@@ -1352,11 +1309,11 @@ testAllowNil
 	self assert: (reader nextListAs: Point) equals: { 1 @ 2. nil }.
 	self
 		should: [ reader nextAs: Point ]
-		raise: self parseErrorClass
+		raise: SimdJSONParseError
 		withExceptionDo: [ :error | self assert: error messageText equals: 'Unexpected boolean constant' ].
 	self
 		should: [ (self reader: 'null') mapInstVarsFor: Point; nextAs: Point ]
-		raise: self parseErrorClass
+		raise: SimdJSONParseError
 		withExceptionDo: [ :error | self assert: error messageText equals: '{ expected' ]! !
 
 !SimdJSONMappingTests methodsFor: 'tests'!
@@ -1479,11 +1436,11 @@ testMappingNotFound
 
 	self
 		should: [ (self reader: self pointJSON) nextAs: Point ]
-		raise: self mappingNotFoundClass
+		raise: SimdJSONMappingNotFound
 		withExceptionDo: [ :error |
 			self assert: error messageText equals: 'No mapping found for Point in SimdJSONReader' ].
-	self should: [ (self reader: self pointJSON) nextAs: #Unknown ] raise: self mappingNotFoundClass.
-	self should: [ SimdJSONReader fromString: '[1,' as: #Unknown ] raise: self mappingNotFoundClass.
+	self should: [ (self reader: self pointJSON) nextAs: #Unknown ] raise: SimdJSONMappingNotFound.
+	self should: [ SimdJSONReader fromString: '[1,' as: #Unknown ] raise: SimdJSONMappingNotFound.
 	self
 		should: [ (self reader: '{}') for: Point do: [ :mapping | mapping mapInstVar: #zz ] ]
 		raise: Error! !
@@ -1493,9 +1450,7 @@ testMappingLenientInput
 
 	| reader |
 	reader := (self reader: '{"x":01,"y":2}') mapInstVarsFor: Point; yourself.
-	self isNeo
-		ifTrue: [ self assert: (reader nextAs: Point) equals: 1 @ 2 ]
-		ifFalse: [ self should: [ reader nextAs: Point ] raise: SimdJSONParseError ]! !
+	self should: [ reader nextAs: Point ] raise: SimdJSONParseError! !
 
 !SimdJSONMappingTests methodsFor: 'tests'!
 testSeveralValues

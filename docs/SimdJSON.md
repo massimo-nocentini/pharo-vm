@@ -1,8 +1,8 @@
 # SimdJSON: a JSON reader on simdjson
 
-The SimdJSONPlugin parses JSON with [simdjson](https://github.com/simdjson/simdjson) 5.0.5, and `plugins/SimdJSONPlugin/st/SimdJSON.st` gives Pharo 15 a reader with the API of NeoJSON's `NeoJSONReader` on top of it: `SimdJSONReader`.
+The SimdJSONPlugin parses JSON with [simdjson](https://github.com/simdjson/simdjson) 5.0.5, and `plugins/SimdJSONPlugin/st/SimdJSON.st` gives Pharo 15 a reader with the API of NeoJSON's `NeoJSONReader` on top of it: `SimdJSONReader`, which needs no NeoJSON.
 The plugin builds the whole value of a JSON document in one primitive call: Dictionaries and Arrays built in C when the reader is configured as NeoJSON's defaults, or else a tree that the reader turns into the configured classes, or walks for NeoJSON's mappings.
-Values, number classes, string classes, errors and stream positions are NeoJSON's, with the exceptions listed below.
+Values, number classes, string classes and stream positions are NeoJSON's, with the exceptions listed below; the errors are classes of its own.
 The plugin builds natively (Cog and Stack VMs) and in the WebAssembly VMs, where it is a builtin plugin.
 
 Files, in `plugins/SimdJSONPlugin`:
@@ -49,19 +49,16 @@ In the WebAssembly VMs the plugin links libc++ and libc++abi into `pharo.wasm` a
 
 ## Loading the Smalltalk side
 
-`SimdJSON.st` is one file in the chunk format of Pharo 15, which works in two modes, chosen when it is filed in:
-
-- **neo mode**, when NeoJSON is in the image: `SimdJSONReader` is a subclass of `NeoJSONReader`.
-  NeoJSON's mappings run unchanged, and whatever simdjson refuses (simdjson is strict RFC 8259, NeoJSON is lenient) is read again by NeoJSON's own code, so even the errors are NeoJSON's;
-- **standalone mode**, in a stock Pharo 15 image: `SimdJSONReader` is a subclass of `SimdJSONMapper`, a port of NeoJSON's mapper and mapping classes (the reading side), and it is strict RFC 8259.
-
-File NeoJSON in first if you want neo mode:
+`SimdJSON.st` is one file in the chunk format of Pharo 15, with no dependency but the plugin.
+`SimdJSONReader` is a subclass of `SimdJSONMapper`, a port of NeoJSON's mapper and mapping classes (the reading side), and it is strict RFC 8259.
+NeoJSON need not be in the image; when it is, whether it was loaded before or after, nothing changes: no NeoJSON class is in the hierarchy of `SimdJSONReader` or of its errors, and no method of the package `SimdJSON` names one (`SimdJSONReaderTests>>testStandalone` checks both).
 
     pharo --headless Pharo.image --no-default-preferences st --save --quit plugins/SimdJSONPlugin/st/SimdJSON.st
 
-The file prints `SimdJSON: neo mode (NeoJSONReader subclass)` or `SimdJSON: standalone mode`, and `SimdJSONReader mode` answers `#neo` or `#standalone`.
-Filing it in again is harmless, and switches to neo mode when NeoJSON was loaded in the meantime; file it in again after loading NeoJSON.
-The image works without the plugin too: in neo mode NeoJSON then reads everything, in standalone mode reading signals `SimdJSONResourceError` ('SimdJSONPlugin not available').
+The file prints `SimdJSON: SimdJSONReader loaded, a subclass of SimdJSONMapper`.
+Filing it in again is harmless.
+Over an image where an older `SimdJSON.st` made `SimdJSONReader` a subclass of `NeoJSONReader` (its former neo mode), the class is made again; its class-side settings (`maxInputUnits:`, `nativeDictionaries:`) go back to their defaults.
+Without the plugin, reading signals `SimdJSONResourceError` ('SimdJSONPlugin not available').
 
 ## API
 
@@ -79,19 +76,16 @@ Class side:
 |---|---|
 | `on:`, `fromString:`, `fromString:as:` | as NeoJSON |
 | `onBytes:`, `fromBytes:`, `fromBytes:as:` | UTF-8 bytes (a ByteArray) instead of a String |
-| `objectFromString:` | as `NeoJSONObject fromString:` (neo mode only) |
-| `mode` | `#neo` or `#standalone` |
 | `pluginAvailable`, `pluginInfo`, `implementationName`, `simdjsonVersion`, `platform` | the plugin: whether it is there, its version, simdjson's kernel, `'native'` or `'emscripten'` |
 | `maxInputUnits`, `maxInputUnits:` | the largest value the plugin parses, in characters or bytes: 16 Mi in WebAssembly, none natively; nil removes it |
 | `nativeDictionaries:` | false turns the Dictionaries built in C off until it is set back to true; the setting is kept by an image save |
-| `statistics`, `resetStatistics` | counters: `reads fastValues fallbacks overBudget grows numberTexts nativeDictionaries tooLarge` |
+| `statistics`, `resetStatistics` | counters: `reads fastValues overBudget grows numberTexts nativeDictionaries tooLarge` |
 | `releaseParser` | frees the parser's memory (it grows to the largest document read) |
 
 Instance side, besides NeoJSON's (`next`, `nextAs:`, `nextListAs:`, `upToEnd`, `atEnd`, `failIfNotAtEnd`, `mapClass:`, `listClass:`, `propertyNamesAsSymbols:`, `for:do:`, `for:customDo:`, `mapInstVarsFor:`...):
 
 | selector | |
 |---|---|
-| `beStrict`, `strict:` | no NeoJSON fallback: what simdjson refuses signals `SimdJSONParseError`, with simdjson's error `code`, the `position` and simdjson's message |
 | `exactNumbers:` | false reads every number with a fraction or an exponent as a Float (`1e2` is `100.0`) |
 | `nativeDictionaries:` | false reads into NeoJSON's exact Dictionary layout (see below) |
 
@@ -100,10 +94,10 @@ The stream given to `on:` decides how the input is read:
 - a `ReadStream` on a String (ByteString or WideString): the plugin reads the String itself, from the stream's position up to its limit, and the stream is left after the value and the white space that follows it, as NeoJSON leaves it.
   Nothing is read ahead, and reads of the stream between two `next`s are seen;
 - a `ReadStream` on a ByteArray: UTF-8, positions in bytes (NeoJSON cannot read bytes);
-- any other stream (a socket, a `ZnCharacterReadStream`): neo mode leaves it to NeoJSON, one value at a time; standalone mode reads it to its end in `on:` (which waits for the end of a socket stream), so what is read from that stream afterwards is not seen by the reader.
-  In both modes `close` closes the stream given to `on:`, as NeoJSON does.
+- any other stream (a socket, a `ZnCharacterReadStream`): the reader reads it to its end in `on:` (which waits for the end of a socket stream), so what is read from that stream afterwards is not seen by the reader.
+  `close` closes the stream given to `on:`, as NeoJSON does.
 
-Errors: `SimdJSONParseError` (a `NeoJSONParseError` in neo mode), `SimdJSONResourceError` (C memory, the input cap, no plugin), `SimdJSONMappingNotFound` (standalone mode; neo mode raises NeoJSON's), and `OutOfMemory`.
+Errors: `SimdJSONParseError` (with simdjson's error `code`, the `position` of the value and simdjson's message, or NeoJSON's message for an error of its rules), `SimdJSONResourceError` (C memory, the input cap, no plugin), `SimdJSONMappingNotFound`, and `OutOfMemory`; the first three are subclasses of `Error`, where NeoJSON raises `NeoJSONParseError` and `NeoJSONMappingNotFound`.
 When a read at the top level fails (`nextAs:`, `nextListAs:`, `parseMap`...), the reader and the stream are back before the value when the handler runs, so the handler can read it again: `[ reader nextAs: Point ] on: Error do: [ :e | reader next ]`.
 
 ## Semantics against NeoJSON
@@ -121,10 +115,9 @@ When a read at the top level fails (`nextAs:`, `nextListAs:`, `parseMap`...), th
   With another `mapClass`, `listClass` or `propertyNamesAsSymbols: true`, the reader builds the configured classes; Symbol keys are interned once per distinct key.
 - **Duplicate keys**: the last one wins, as in NeoJSON.
 - **What simdjson refuses**: leading zeros (`01`), `1.`, a number out of the Float range (`1e400`, `1.0e309`), raw control characters, a form feed inside a value, a lone trail surrogate, a byte order mark, trailing garbage inside a value (`123abc`).
-  In neo mode NeoJSON reads these again from the start of the value, with its own result or error; in standalone mode, and with `beStrict`, they signal `SimdJSONParseError`.
-  A lenient document costs a simdjson parse plus NeoJSON's whole read (the `sj-lenient` series of the benchmark); `statistics` counts the `fallbacks`.
-  The same holds for a number that simdjson reads but NeoJSON refuses (`1e-1074`, whose exact value underflows): in neo mode NeoJSON reads the value again, so that its error and the position of the stream are NeoJSON's; standalone mode signals `SimdJSONParseError` with NeoJSON's message.
-- **ByteArray streams**: after their first NeoJSON fallback the reader decodes the rest of the bytes once and goes on with a String stream of its own; the position of the caller's ByteArray stream is then no longer updated.
+  NeoJSON reads them; `SimdJSONReader` signals `SimdJSONParseError`, and the stream stays before the value.
+  NeoJSON's own test `NeoJSONReaderTests>>testIntegers` reads leading zeros, so the compatibility run skips it (see Tests).
+  A number that simdjson reads but NeoJSON's rules refuse (`1e-1074`, whose exact value underflows) signals `SimdJSONParseError` with NeoJSON's message.
 - **Trailing input** is not checked by `next`, as in NeoJSON: `failIfNotAtEnd` does.
 - **NDJSON** and other sequences of values: `next` parses one value at a time, without rescanning the rest, and `upToEnd` answers an Array of them all.
 
@@ -140,7 +133,7 @@ When a read at the top level fails (`nextAs:`, `nextListAs:`, `parseMap`...), th
 - Objects nest at most 1024 deep.
 - **WebAssembly**:
   - a value is limited to 16 Mi characters (or bytes) by default, since the 32-bit memory of the web VM holds the input, its UTF-8 copy, simdjson's buffers and the objects at the same time; the plugin compares the value itself with the limit, before any parse, so a stream of small values (NDJSON) of any length is read by the plugin.
-    Beyond it, neo mode reads that value with NeoJSON and standalone mode signals `SimdJSONResourceError` (`statistics` counts it as `tooLarge`).
+    Beyond it, reading the value signals `SimdJSONResourceError` (`statistics` counts it as `tooLarge`).
     `SimdJSONReader maxInputUnits: nil` removes the limit; large documents then need a VM started with a larger old space window, `PHARO_WASM_OLD_SPACE_BASE=0x40000000` (see docs/WebAssembly.md);
   - the parser is freed after a document above 16 MiB, since WebAssembly memory never shrinks;
   - a primitive call runs to its end: the web VM, which runs in slices, does not return to its page during one, nor during the GC that the new objects bring about.
@@ -190,13 +183,13 @@ The primitive fails only with `PrimErrBadNumArgs`, `PrimErrBadArgument` or `Prim
 ## Tests
 
     sh plugins/SimdJSONPlugin/tests/run-c-tests.sh --simdjson <simdjson tree> --corpus <simdjson-data>    # C: clang++, g++ with ASan and UBSan, em++
-    sh plugins/SimdJSONPlugin/tests/run-st-tests.sh build/build/vm <Pharo 15 image or zip> standalone     # SUnit: SimdJSON-Tests
-    sh plugins/SimdJSONPlugin/tests/run-st-tests.sh build/build/vm <Pharo 15 image or zip> neo            # also SimdJSON-NeoTests, NeoJSON's own tests
+    sh plugins/SimdJSONPlugin/tests/run-st-tests.sh build/build/vm <Pharo 15 image or zip>                # SUnit: SimdJSON-Tests
+    sh plugins/SimdJSONPlugin/tests/run-st-tests.sh build/build/vm <Pharo 15 image or zip> compat         # also SimdJSON-NeoTests, against NeoJSON
 
-`run-st-tests.sh <vm-dir> <image.zip or .image> <standalone or neo>` works on a copy of the image: it checks that every `.st` file is ASCII with one method a `methodsFor:` section, files them in, checks the banner of the mode, runs each package with a JUnit file and summarises it.
-Its environment: `NEOJSON_DIR` (neo mode: a clone of NeoJSON), `SJ_CORPUS` (the `jsonexamples` directory of simdjson-data, for the corpus and jsonchecker tests), `SJ_SLOW` (runs `SimdJSONSlowTests`: 2 million boxed Floats, and an `OutOfMemory` at a capped old space), `SJ_NUM_TOKENS` (random number tokens, 100000 by default), `SJ_WORK_DIR` (where the image copy goes, else a new directory in `TMPDIR`) and `SJ_TIMEOUT` (seconds a step may take, 3600 by default).
-Neo mode loads NeoJSON from `NEOJSON_DIR` (`st/load-neojson.st`), compares the reader with NeoJSONReader on the semantics table, the lenient inputs and the corpus (`SJ_CORPUS`), and runs NeoJSON's own test classes against `SimdJSONReader`.
-In the WebAssembly build, lane 68 of `make wasm-check` runs the standalone suite with the node and the web VMs (see docs/WebAssembly.md).
+`run-st-tests.sh <vm-dir> <image.zip or .image> [compat]` works on a copy of the image: it checks that every `.st` file is ASCII with one method a `methodsFor:` section, files them in, checks the banner of `SimdJSON.st`, runs each package with a JUnit file and summarises it.
+Its environment: `NEOJSON_DIR` (compat: a clone of NeoJSON), `SJ_CORPUS` (the `jsonexamples` directory of simdjson-data, for the corpus and jsonchecker tests), `SJ_SLOW` (runs `SimdJSONSlowTests`: 2 million boxed Floats, and an `OutOfMemory` at a capped old space), `SJ_NUM_TOKENS` (random number tokens, 100000 by default), `SJ_WORK_DIR` (where the image copy goes, else a new directory in `TMPDIR`) and `SJ_TIMEOUT` (seconds a step may take, 3600 by default).
+`compat` loads NeoJSON from `NEOJSON_DIR` (`st/load-neojson.st`) before `SimdJSON.st`, only to compare with it: `SimdJSONCompatTests` reads the semantics table, random number tokens and the corpus (`SJ_CORPUS`) with both readers and requires the same values, classes and stream positions, an error where NeoJSON has one, and a `SimdJSONParseError` only where NeoJSON is lenient, never on an RFC 8259 input of its list; then NeoJSON's own test classes run against `SimdJSONReader` (as `SJ<name>`, expecting SimdJSON's errors), but `testIntegers`, which only NeoJSON's leniency passes.
+In the WebAssembly build, lane 68 of `make wasm-check` runs the suite with the node and the web VMs (see docs/WebAssembly.md).
 
 ## Benchmarks
 
@@ -208,11 +201,11 @@ In the WebAssembly build, lane 68 of `make wasm-check` runs the standalone suite
     python3 -I plugins/SimdJSONPlugin/bench/summarize.py $OUT/bench/*.tsv
 
 - `fetch-corpus.sh` downloads simdjson-data at commit 3519499 (its archive is checked against SHA256 `a2623f4c…a884`; `SJ_CORPUS_ZIP=<file>` takes it from a file).
-- `run-bench.sh` prepares the image once, natively (`prepare-image.st` files `SimdJSON.st`, which must come up in neo mode, `SJBenchMapping.st` and `SJBench.st` in), then runs `run-bench.st` on a fresh copy of it with each VM in turn, pinned to one CPU (`taskset -c 2`), and the whole matrix twice; each run writes a TSV file, which `summarize.py` turns into the tables below.
+- `run-bench.sh` prepares the image once, natively (`prepare-image.st` files `SimdJSON.st`, whose `SimdJSONReader` must be a subclass of `SimdJSONMapper`, `SJBenchMapping.st` and `SJBench.st` in; NeoJSON is in the image only to be compared with), then runs `run-bench.st` on a fresh copy of it with each VM in turn, pinned to one CPU (`taskset -c 2`), and the whole matrix twice; each run writes a TSV file, which `summarize.py` turns into the tables below.
 - The timed inputs are 13 files of the corpus (13.8 MB: twitter, citm_catalog, canada, gsoc-2018, mesh, numbers, random, twitterescaped, github_events, update-center, apache_builds, instruments, marine_ik), an NDJSON file of 20,000 small objects (1.37 MB), and documents of 200 bytes and 2 KB.
 - Every value is first compared with NeoJSON's, on all 30 JSON files of the corpus: deep equality, with the classes of numbers, strings and collections, from the String, from the bytes, in tree mode, then with Symbol keys, as NeoJSONObjects, through the mappings, on the NDJSON.
 - A series is a full GC, warm-up runs, then samples of k runs each, k doubled until a sample lasts 50 ms (the clock of the WebAssembly VMs has a resolution of 1 ms), 10 samples natively and 5 in WebAssembly, within 20 s; the median of the samples counts, and MB/s is always over the UTF-8 bytes of the input.
-  Around each series, the counters of the reader and of the plugin must show no NeoJSON fallback, no repeated parse and no failed build.
+  Around each series, the counters of the reader and of the plugin must show no repeated parse and no failed build.
 
 | series | what it times |
 |---|---|
@@ -223,14 +216,13 @@ In the WebAssembly build, lane 68 of `make wasm-check` runs the standalone suite
 | `sj-float` | `exactNumbers: false`: what exact numbers cost |
 | `sj-prim` | the primitive alone, Dictionaries built in C, no exact numbers |
 | `neo-symbols`, `sj-symbols` | `propertyNamesAsSymbols: true` |
-| `neo-objects`, `sj-objects` | `NeoJSONObject fromString:`, `SimdJSONReader objectFromString:` |
+| `neo-objects`, `sj-objects` | `NeoJSONObject fromString:`, and `SimdJSONReader` with NeoJSONObject, NeoJSONArray and Symbol keys |
 | `neo-map`, `sj-map`, `neo-map-symbols`, `sj-map-symbols` | `nextAs: #Top` with the mappings of `SJBenchMapping.st` (twitter, citm_catalog, canada), with and without Symbol keys |
 | `neo-ndjson-next`, `sj-ndjson-next`, `neo-ndjson-upToEnd`, `sj-ndjson-upToEnd` | the NDJSON, with `next` until `atEnd`, and with `upToEnd` |
 | `neo-small`, `sj-small` | the 200-byte and 2 KB documents: the cost of a call |
-| `sj-lenient` | twitter with a leading zero in a number of its top object: simdjson's parse, then NeoJSON's whole read |
 | `utf8Encoded` | `s utf8Encoded`, for reference |
 
-The gates, which `summarize.py` checks (its exit status): every comparison equal with no number of another class, no fallback on a valid input, no ERROR line, and `sj-string` at least 8 times faster than `neo-string` on every file and VM.
+The gates, which `summarize.py` checks (its exit status): every comparison equal with no number of another class, no ERROR line, and `sj-string` at least 8 times faster than `neo-string` on every file and VM.
 The targets, reported only: on Cog, `sj-string` within 3 ms on twitter, 5 ms on citm_catalog and 7.5 ms on canada; Stack within 15% of Cog there; the node VM at least 40 times faster than NeoJSON on twitter (60 as a stretch); `sj-map` 5 times faster than `neo-map` on Cog twitter, and 10 times with Symbol keys; `sj-float` within 10% of `sj-string` on marine_ik.
 The times of Cog come from a prototype that called the primitive on the UTF-8 bytes, without exact numbers and without a budget; `sj-string` meets them because the String is transcoded to UTF-8 8 or 16 characters at a time when they are ASCII, the number tokens are looked for only once the walk meets a number with a fraction or an exponent, and natively no budget is given (see Memory and limits).
 The layout of the code alone moves a series by up to 15% between two builds of the same sources, so `run-bench.sh` runs the matrix twice, and only the ratios within a run are worth comparing.
@@ -238,6 +230,8 @@ The layout of the code alone moves a series by up to 15% between two builds of t
 ### Results
 
 Measured on 2026-10-21 with `run-bench.sh --repeat 2` and `summarize.py`; every value is the median of the two run medians.
+`SimdJSON.st` then still had a neo mode, in which `SimdJSONReader` was a subclass of `NeoJSONReader` that NeoJSON's code read again whatever simdjson refused; the benchmark ran in that mode, with an `sj-lenient` series and a gate of no such fallback on a valid input, which are gone since.
+A valid input took the same path through the plugin then as it does now, so the times of the other series stand.
 
 - Machine: 2 x Intel Xeon Gold 6238R @ 2.20GHz (Cascade Lake, 28 cores and 56 threads a socket, AVX-512), 503 GB, bare metal, Linux 6.8.0-139-generic.
   No cpufreq driver is loaded (the firmware controls the clock), so the governor is n/a; `/proc/cpuinfo` shows 2200 MHz.
@@ -549,15 +543,15 @@ In `primitiveInfo`'s statistics `gateHits` counts the gate's openings, and `enum
 ## Licences
 
 - simdjson is under the Apache License 2.0 or the MIT licence, at the user's choice: both texts are installed as `LICENSE.simdjson` and `LICENSE.simdjson-MIT`, next to the plugin on Linux and Windows (`build/vm`, the `lib` directory of the Linux zip) and in `Pharo.app/Contents/Resources` on macOS, and go into the `THIRD-PARTY-NOTICES.txt` of the WebAssembly VMs, with those of libc++ and libc++abi (Apache License 2.0 with LLVM exceptions), which the plugin links there.
-- The mapper, the mapping classes and the number parser of the standalone mode of `SimdJSON.st` are ports of NeoJSON, under its MIT licence (Copyright (C) 2012 Sven Van Caekenberghe), which the file carries.
+- The mapper, the mapping classes and the number parser of `SimdJSON.st` are ports of NeoJSON, under its MIT licence (Copyright (C) 2012 Sven Van Caekenberghe), which the file carries.
 - The benchmark corpus is not part of this repository: `fetch-corpus.sh` downloads it, and its files keep the terms of their sources.
 
 This is not legal advice.
 
 ## Limitations
 
-- Reading only: there is no writer, NeoJSONWriter writes.
+- Reading only: there is no writer; NeoJSONWriter or STON writes JSON.
 - Pharo 15 only: `SimdJSON.st` is written in the class syntax and chunk format of Pharo 15.
 - Only Dictionaries and Arrays are built in C; OrderedDictionary, NeoJSONObject, SmallDictionary and OrderedCollection go through the tree.
-- A value is parsed whole: a stream other than a ReadStream on a String or a ByteArray goes to NeoJSON (neo mode) or is read to its end first (standalone mode), and the web VM does not return to its page during a primitive call.
+- A value is parsed whole: a stream other than a ReadStream on a String or a ByteArray is read to its end first, and the web VM does not return to its page during a primitive call.
 - macOS, Windows and Linux aarch64 are untested until CI runs the step that loads the plugin.

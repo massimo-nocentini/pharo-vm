@@ -1,7 +1,7 @@
 #!/bin/sh
 # run-st-tests.sh - the Smalltalk tests of the SimdJSONPlugin on a VM
 #
-#   sh run-st-tests.sh <vm-dir> <image.zip | X.image> <standalone | neo>
+#   sh run-st-tests.sh <vm-dir> <image.zip | X.image> [compat]
 #
 # <vm-dir> holds the VM, pharo, and its plugins (build/vm of a native build,
 # or node/ of make wasm); <image> is a Pharo 15 image, zipped as
@@ -11,42 +11,43 @@
 #
 #   lint   every .st file it files in is ASCII, and has one method a
 #          methodsFor: section (Pharo 15 reads only the first one);
-#   load   neo: NeoJSON first, with load-neojson.st (NEOJSON_DIR names the
-#          clone); then SimdJSON.st, whose banner must name the mode, and
-#          SimdJSON-Tests.st; neo: SimdJSON-NeoTests.st, which generates the
-#          SJ* classes from NeoJSON's tests;
+#   load   compat: NeoJSON first, with load-neojson.st (NEOJSON_DIR names
+#          the clone), only to compare the reader with it; then SimdJSON.st,
+#          whose banner must show SimdJSONReader under SimdJSONMapper, and
+#          SimdJSON-Tests.st; compat: SimdJSON-NeoTests.st, which generates
+#          the SJ* classes from NeoJSON's tests;
 #   test   the package SimdJSON-Tests (SimdJSONSlowTests are skipped unless
-#          SJ_SLOW is set); neo: SimdJSON-NeoTests, then the report of the
+#          SJ_SLOW is set); compat: SimdJSON-NeoTests, then the report of the
 #          SJ* classes (SimdJSONNeoTestGenerator report): what passed, and
-#          how many values NeoJSON read again.
+#          which tests NeoJSON passes only by its leniency.
 #
 # A JUnit file of each package is left in the directory.  The status is 0
 # when every step passed.
 #
-# Environment: NEOJSON_DIR (neo), SJ_CORPUS (the jsonexamples directory of
+# Environment: NEOJSON_DIR (compat), SJ_CORPUS (the jsonexamples directory of
 # simdjson-data, for the corpus and jsonchecker tests of SimdJSON-NeoTests),
 # SJ_SLOW, SJ_NUM_TOKENS (100000 random number tokens by default),
 # SJ_WORK_DIR, SJ_TIMEOUT (seconds a step may take, 3600 by default).
 
-if test $# -ne 3; then
-    echo "usage: $0 <vm-dir> <image.zip | X.image> <standalone | neo>" >&2
+if test $# -lt 2 || test $# -gt 3; then
+    echo "usage: $0 <vm-dir> <image.zip | X.image> [compat]" >&2
     exit 2
 fi
 VM_DIR=$(cd "$1" && pwd) || exit 2
 IMAGE=$2
-MODE=$3
+COMPAT=${3:-}
 ST=$(cd "$(dirname "$0")/../st" && pwd)
 
-case $MODE in
-standalone) FILES="SimdJSON.st SimdJSON-Tests.st" ;;
-neo)        FILES="load-neojson.st SimdJSON.st SimdJSON-Tests.st SimdJSON-NeoTests.st" ;;
-*)          echo "the mode is standalone or neo, not '$MODE'" >&2; exit 2 ;;
+case $COMPAT in
+'')     FILES="SimdJSON.st SimdJSON-Tests.st" ;;
+compat) FILES="load-neojson.st SimdJSON.st SimdJSON-Tests.st SimdJSON-NeoTests.st" ;;
+*)      echo "the third argument is compat or nothing, not '$COMPAT'" >&2; exit 2 ;;
 esac
 if ! test -x "$VM_DIR/pharo"; then
     echo "FAIL: no $VM_DIR/pharo" >&2
     exit 1
 fi
-if test "$MODE" = neo && ! test -d "$NEOJSON_DIR/repository"; then
+if test -n "$COMPAT" && ! test -d "$NEOJSON_DIR/repository"; then
     echo "FAIL: NEOJSON_DIR must name a clone of NeoJSON (with its repository directory)" >&2
     exit 1
 fi
@@ -131,8 +132,8 @@ for file in $FILES; do
     fi
     echo "load: $file"
 done
-if ! grep "SimdJSON: $MODE mode" "$WORK/SimdJSON.st.out" >/dev/null; then
-    fail "load: SimdJSON.st did not file in in $MODE mode"
+if ! grep "SimdJSON: SimdJSONReader loaded, a subclass of SimdJSONMapper" "$WORK/SimdJSON.st.out" >/dev/null; then
+    fail "load: SimdJSON.st did not make SimdJSONReader a subclass of SimdJSONMapper"
     exit 1
 fi
 
@@ -171,7 +172,7 @@ run_package() {
 }
 
 run_package SimdJSON-Tests
-if test "$MODE" = neo; then
+if test -n "$COMPAT"; then
     run_package SimdJSON-NeoTests
     pharo eval 'SimdJSONNeoTestGenerator report' >"$WORK/report.out" 2>&1
     sed 's/^/    /' "$WORK/report.out"
@@ -185,6 +186,6 @@ if test "$MODE" = neo; then
 fi
 
 if test $failed = 0; then
-    echo "PASS $MODE: $VM_DIR/pharo ($WORK)"
+    echo "PASS${COMPAT:+ $COMPAT}: $VM_DIR/pharo ($WORK)"
 fi
 exit $failed

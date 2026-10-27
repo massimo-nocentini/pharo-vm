@@ -3,8 +3,8 @@
 NEOJSON_DIR names the clone of https://github.com/svenvc/NeoJSON (tested with
 commit 11e274d): Metacello loads the groups core and tests of BaselineOfNeoJSON
 from its tonel directory, NEOJSON_DIR/repository, with no network.  Run it with
---save, before SimdJSON.st, for the neo mode of SimdJSON.st and for
-SimdJSON-NeoTests.st:
+--save, for SimdJSON-NeoTests.st and the benchmark, which compare SimdJSONReader
+with NeoJSON (SimdJSON.st itself needs no NeoJSON):
 
 	NEOJSON_DIR=/path/to/NeoJSON pharo --headless X.image --no-default-preferences st --save --quit load-neojson.st
 

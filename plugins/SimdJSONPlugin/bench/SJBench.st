@@ -1,7 +1,7 @@
 "SJBench.st - SimdJSONReader against NeoJSONReader, on the same inputs (Pharo 15, chunk format)
 
- prepare-image.st files this in, after SimdJSON.st (neo mode) and SJBenchMapping.st, into a copy of
- an image with NeoJSON, natively; the saved image then runs on every VM with run-bench.st:
+ prepare-image.st files this in, after SimdJSON.st and SJBenchMapping.st, into a copy of an
+ image with NeoJSON, natively; the saved image then runs on every VM with run-bench.st:
      pharo --headless sjbench.image --no-default-preferences st --quit run-bench.st
  run-bench.sh does both.  Environment:
      SJ_CORPUS      directory of the corpus: the jsonexamples of simdjson-data (fetch-corpus.sh)
@@ -24,17 +24,16 @@
  Checks.  Before any timing, NeoJSONReader's value is compared with SimdJSONReader's, from the
  String, from the bytes and in tree mode, with deep equality that includes the classes of
  numbers, strings and collections; then, for the timed files, with Symbol keys, as NeoJSONObjects,
- through the mappings of SJBenchMapping, on the NDJSON and with a lenient input.  A number of
- another class but the same value is a policy difference, which the exact numbers of the reader
- should leave at 0.  CHECK lines also give the NeoJSON fallbacks the reader took.  A series whose
- check found a difference is skipped.
+ through the mappings of SJBenchMapping and on the NDJSON.  A number of another class but the
+ same value is a policy difference, which the exact numbers of the reader should leave at 0.  A
+ series whose check found a difference is skipped.
 
  Series.  A full GC, SJ_WARMUP runs, the calibration of k (doubled until a sample lasts
  SJ_MIN_SAMPLE ms: the microsecond clock has ms resolution in WebAssembly), then up to SJ_N samples
  of k runs.  Printed: median and min ms of one run, MB/s at the median, the ms of the GCs of the
  samples (vm parameters 8 and 10) and k.  Around the samples of an sj series, the counters of the
  reader and of the plugin give the CSPLIT line (the plugin's parse and build ms per run) and the
- STATS line, and must show no fallback (but in sj-lenient), no cache hit and no failed build.
+ STATS line, and must show no cache hit and no failed build.
 
  Lines are tab-separated: INFO, CHECK, RESULT, CSPLIT, STATS, SPEEDUP, ERROR, SKIP; summarize.py
  reads them.  ASCII only, one method per methodsFor: section (Pharo 15 file-in rules)."
@@ -66,7 +65,7 @@ allSeries
 		'neo-symbols' 'sj-symbols' 'neo-objects' 'sj-objects'
 		'neo-map' 'sj-map' 'neo-map-symbols' 'sj-map-symbols'
 		'neo-ndjson-next' 'sj-ndjson-next' 'neo-ndjson-upToEnd' 'sj-ndjson-upToEnd'
-		'neo-small' 'sj-small' 'sj-lenient' 'utf8Encoded' )! !
+		'neo-small' 'sj-small' 'utf8Encoded' )! !
 
 !SJBench class methodsFor: 'defaults'!
 checkOfSeries
@@ -75,7 +74,7 @@ checkOfSeries
 	^ Dictionary newFromPairs: #( 'sj-string' 'string' 'sj-float' 'string' 'sj-prim' 'string'
 		'sj-bytes' 'bytes' 'sj-tree' 'tree' 'sj-symbols' 'symbols' 'sj-objects' 'objects'
 		'sj-map' 'map' 'sj-map-symbols' 'map-symbols' 'sj-ndjson-next' 'ndjson-next'
-		'sj-ndjson-upToEnd' 'ndjson-upToEnd' 'sj-small' 'string' 'sj-lenient' 'lenient' )! !
+		'sj-ndjson-upToEnd' 'ndjson-upToEnd' 'sj-small' 'string' )! !
 
 !SJBench class methodsFor: 'defaults'!
 speedups
@@ -84,8 +83,7 @@ speedups
 	^ #( #( 'neo-string' 'sj-string' ) #( 'neo-symbols' 'sj-symbols' ) #( 'neo-objects' 'sj-objects' )
 		#( 'neo-map' 'sj-map' ) #( 'neo-map-symbols' 'sj-map-symbols' ) #( 'neo-map' 'sj-map-symbols' )
 		#( 'neo-ndjson-next' 'sj-ndjson-next' ) #( 'neo-ndjson-upToEnd' 'sj-ndjson-upToEnd' )
-		#( 'neo-small' 'sj-small' ) #( 'sj-tree' 'sj-string' ) #( 'sj-string' 'sj-prim' )
-		#( 'sj-lenient' 'neo-string' ) )! !
+		#( 'neo-small' 'sj-small' ) #( 'sj-tree' 'sj-string' ) #( 'sj-string' 'sj-prim' ) )! !
 
 !SJBench class methodsFor: 'defaults'!
 pluginCounters
@@ -140,15 +138,6 @@ records: aCount
 			do: [ :i | stream nextPutAll: (self record: i) ]
 			separatedBy: [ stream nextPut: $, ].
 		stream nextPut: $] ]! !
-
-!SJBench class methodsFor: 'inputs'!
-lenient: aString
-	"aString, a JSON object, with a first member whose number has a leading zero: NeoJSON reads
-	 it, simdjson rejects the document, and the reader falls back to NeoJSON for all of it"
-
-	| brace |
-	brace := aString indexOf: ${.
-	^ (aString copyFrom: 1 to: brace) , '"lenient":01,' , (aString copyFrom: brace + 1 to: aString size)! !
 
 !SJBench methodsFor: 'setup'!
 env: aName default: aString
@@ -218,9 +207,10 @@ pluginString
 	^ (info at: 2) , ' simdjson ' , (info at: 3) , ' ' , (info at: 4) , ' ' , (info at: 5)! !
 
 !SJBench methodsFor: 'printing'!
-modeString
+readerString
+	"The superclass of SimdJSONReader: SimdJSONMapper, never a NeoJSON class"
 
-	^ [ SimdJSONReader mode asString ] on: Error do: [ :e | 'none' ]! !
+	^ [ SimdJSONReader superclass name asString ] on: Error do: [ :e | 'none' ]! !
 
 !SJBench methodsFor: 'comparing'!
 diffAt: aPath
@@ -275,12 +265,10 @@ check: aName as: aKind against: neo do: aBlock
 	"Compare the value of aBlock with neo; print a CHECK line.  A difference, or an error, skips
 	 the series that depend on aKind"
 
-	| fallbacks sj |
-	fallbacks := self counter: 'fallbacks'.
+	| sj |
 	sj := [ aBlock value ] on: Error do: [ :e |
 		(failed at: aName ifAbsentPut: [ Set new ]) add: aKind.
 		^ self fail: { aName. 'check ' , aKind. e class name , ': ' , e messageText asString } ].
-	fallbacks := (self counter: 'fallbacks') - fallbacks.
 	diffs := policyDiffs := 0.
 	firstDiff := firstPolicy := nil.
 	self compare: neo with: sj at: nil.
@@ -288,7 +276,6 @@ check: aName as: aKind against: neo do: aBlock
 	self line: { 'CHECK'. label. aName. aKind.
 		diffs = 0 ifTrue: [ 'equal' ] ifFalse: [ 'DIFFERENT' ].
 		'diffs=' , diffs printString. 'policy=' , policyDiffs printString.
-		'fallbacks=' , fallbacks printString.
 		'firstDiff=' , (firstDiff ifNil: [ '-' ]). 'firstPolicy=' , (firstPolicy ifNil: [ '-' ]) }! !
 
 !SJBench methodsFor: 'comparing'!
@@ -333,14 +320,13 @@ checkSimple: aName input: anArray
 checkExtras: aName string: aString
 	"The checks of the other series of a timed corpus file"
 
-	| lenient |
 	(checking = 'none' or: [ self sjWanted not ]) ifTrue: [ ^ self ].
 	self check: aName as: 'symbols'
 		neo: [ (NeoJSONReader on: aString readStream) propertyNamesAsSymbols: true; next ]
 		do: [ (SimdJSONReader on: aString readStream) propertyNamesAsSymbols: true; next ].
 	self check: aName as: 'objects'
 		neo: [ NeoJSONObject fromString: aString ]
-		do: [ SimdJSONReader objectFromString: aString ].
+		do: [ self objectsFrom: aString ].
 	(SJBenchMapping files includes: aName) ifTrue: [
 		self check: aName as: 'map'
 			neo: [ (SJBenchMapping configure: (NeoJSONReader on: aString readStream) for: aName) nextAs: #Top ]
@@ -352,11 +338,6 @@ checkExtras: aName string: aString
 			do: [ (SJBenchMapping
 				configure: ((SimdJSONReader on: aString readStream) propertyNamesAsSymbols: true; yourself)
 				for: aName) nextAs: #Top ] ].
-	aName = 'twitter.json' ifTrue: [
-		lenient := self class lenient: aString.
-		self check: aName as: 'lenient'
-			neo: [ NeoJSONReader fromString: lenient ]
-			do: [ SimdJSONReader fromString: lenient ] ].
 	Smalltalk garbageCollect! !
 
 !SJBench methodsFor: 'measuring'!
@@ -461,8 +442,8 @@ series: aSeries file: aName size: aSize do: aBlock
 
 !SJBench methodsFor: 'measuring'!
 stats: aSeries file: aName runs: aCount from: before to: after
-	"Print the CSPLIT and STATS lines of the counters of a series; fail on a NeoJSON fallback
-	 (but in sj-lenient), a cache hit or a failed build"
+	"Print the CSPLIT and STATS lines of the counters of a series; fail on a cache hit or a
+	 failed build"
 
 	| delta |
 	delta := [ :name | (after at: name ifAbsent: [ 0 ]) - (before at: name ifAbsent: [ 0 ]) ].
@@ -470,12 +451,10 @@ stats: aSeries file: aName runs: aCount from: before to: after
 		'parse_ms=' , (self ms: (delta value: 'plugin.parseNanos') / aCount / 1.0e6).
 		'build_ms=' , (self ms: (delta value: 'plugin.buildNanos') / aCount / 1.0e6) }.
 	self line: { 'STATS'. label. aName. aSeries. 'runs=' , aCount printString } ,
-		(#( 'plugin.calls' 'plugin.parses' 'plugin.builds' 'fallbacks' 'plugin.cacheHits'
+		(#( 'plugin.calls' 'plugin.parses' 'plugin.builds' 'plugin.cacheHits'
 			'plugin.buildFailures' 'plugin.overBudget' 'plugin.measures' 'plugin.gateHits'
 			'plugin.enumerations' 'plugin.numberTexts' 'grows' 'tooLarge' 'nativeDictionaries' )
 				collect: [ :name | (name copyReplaceAll: 'plugin.' with: '') , '=' , (delta value: name) printString ]).
-	((delta value: 'fallbacks') = 0 or: [ aSeries = 'sj-lenient' ])
-		ifFalse: [ self fail: { aName. aSeries. 'fallbacks=' , (delta value: 'fallbacks') printString } ].
 	(delta value: 'plugin.cacheHits') = 0
 		ifFalse: [ self fail: { aName. aSeries. 'cacheHits=' , (delta value: 'plugin.cacheHits') printString } ].
 	(delta value: 'plugin.buildFailures') = 0
@@ -516,9 +495,20 @@ nextLoop: aReader
 	^ Array streamContents: [ :stream | [ aReader atEnd ] whileFalse: [ stream nextPut: aReader next ] ]! !
 
 !SJBench methodsFor: 'running'!
+objectsFrom: aString
+	"What NeoJSONObject fromString: answers, read by SimdJSONReader: NeoJSONObjects with Symbol
+	 keys, and NeoJSONArrays"
+
+	^ (SimdJSONReader on: aString readStream)
+		mapClass: NeoJSONObject;
+		listClass: NeoJSONArray;
+		propertyNamesAsSymbols: true;
+		next! !
+
+!SJBench methodsFor: 'running'!
 runCorpusFile: aName bytes: bytes string: string
 
-	| size lenient |
+	| size |
 	size := bytes size.
 	self checkExtras: aName string: string.
 	self series: 'neo-string' file: aName size: size do: [ NeoJSONReader fromString: string ].
@@ -537,12 +527,8 @@ runCorpusFile: aName bytes: bytes string: string
 	self series: 'sj-symbols' file: aName size: size do: [
 		(SimdJSONReader on: string readStream) propertyNamesAsSymbols: true; next ].
 	self series: 'neo-objects' file: aName size: size do: [ NeoJSONObject fromString: string ].
-	self series: 'sj-objects' file: aName size: size do: [ SimdJSONReader objectFromString: string ].
+	self series: 'sj-objects' file: aName size: size do: [ self objectsFrom: string ].
 	(SJBenchMapping files includes: aName) ifTrue: [ self runMapping: aName string: string size: size ].
-	aName = 'twitter.json' ifTrue: [
-		lenient := self class lenient: string.
-		self series: 'sj-lenient' file: aName size: lenient utf8Encoded size do: [
-			SimdJSONReader fromString: lenient ] ].
 	self series: 'utf8Encoded' file: aName size: size do: [ string utf8Encoded ]! !
 
 !SJBench methodsFor: 'running'!
@@ -613,7 +599,7 @@ runAll
 	"Print the INFO line, check the corpus, time the files; answer the number of ERROR lines"
 
 	self line: { 'INFO'. label. 'run=' , run. Smalltalk vm interpreterClass. Smalltalk vm architectureName.
-		SystemVersion current version. 'mode=' , self modeString. 'plugin=' , self pluginString.
+		SystemVersion current version. 'reader=' , self readerString. 'plugin=' , self pluginString.
 		'warmup=' , warmup printString. 'N=' , iterations printString.
 		'budget_ms=' , budgetMs printString. 'min_sample_ms=' , minSampleMs printString.
 		'clock_us=' , self clockResolution printString.
