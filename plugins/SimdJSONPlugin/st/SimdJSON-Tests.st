@@ -134,6 +134,7 @@ tearDown
 	SimdJSONReader
 		maxInputUnits: savedMaxInputUnits;
 		nativeDictionaries: true.
+	SimdJSONWriter maxOutputBytes: nil.
 	#( #budget #pluginMissing #nativeSelfTestFails ) do: [ :each |
 		SimdJSONReader testHook: each value: nil ].
 	super tearDown! !
@@ -1979,6 +1980,39 @@ testStreamingProtocol
 	stream := WriteStream on: ByteArray new.
 	(SimdJSONWriter on: stream) nextPut: { 1 / 2. self string: #( 233 8364 ) }.
 	self assert: stream contents equals: ('[0.5,"' , (self string: #( 233 8364 )) , '"]') utf8Encoded! !
+
+!SimdJSONWriterTests methodsFor: 'tests - output'!
+testZincStreams
+	"A ZnCharacterWriteStream of UTF-8 gets the bytes on its binary stream; another
+	encoding gets the characters, which it encodes"
+
+	| bytes stream value inner |
+	value := { self string: #( 233 8364 16r1D11E ). 1 / 2. #( 1 ) }.
+	bytes := WriteStream on: ByteArray new.
+	stream := ZnCharacterWriteStream on: bytes.
+	(SimdJSONWriter on: stream) nextPut: value; prettyPrint: true; nextPut: (Set with: 'x').
+	self
+		assert: bytes contents
+		equals: ((self write: value) , (SimdJSONWriter toStringPretty: (Set with: 'x'))) utf8Encoded.
+	bytes := WriteStream on: ByteArray new.
+	stream := ZnCharacterWriteStream on: bytes encoding: 'latin1'.
+	(SimdJSONWriter on: stream) nextPut: { self string: #( 233 ) }.
+	self assert: bytes contents equals: #[ 91 34 233 34 93 ].
+	inner := SimdJSONTestStream on: ''.
+	(SimdJSONWriter on: (ZnCharacterWriteStream on: inner)) close.
+	self assert: inner isClosed! !
+
+!SimdJSONWriterTests methodsFor: 'tests - output'!
+testMaxOutputBytes
+
+	SimdJSONWriter maxOutputBytes: 16.
+	self assert: (self write: #( 1 2 3 )) equals: '[1,2,3]'.
+	self
+		should: [ self write: (String new: 20 withAll: $a) ]
+		raise: SimdJSONResourceError
+		withExceptionDo: [ :error | self assert: error code equals: #tooLarge ].
+	SimdJSONWriter maxOutputBytes: nil.
+	self assert: (self write: (String new: 20 withAll: $a)) size equals: 22! !
 
 !SimdJSONWriterTests methodsFor: 'tests - errors'!
 testErrorsInTheImage

@@ -24,7 +24,8 @@
  Checks.  Before any timing, NeoJSONReader's value is compared with SimdJSONReader's, from the
  String, from the bytes and in tree mode, with deep equality that includes the classes of
  numbers, strings and collections; then, for the timed files, with Symbol keys, as NeoJSONObjects,
- through the mappings of SJBenchMapping and on the NDJSON.  A number of another class but the
+ through the mappings of SJBenchMapping and on the NDJSON; and NeoJSONWriter's text of the value
+ with SimdJSONWriter's, plain and pretty.  A number of another class but the
  same value is a policy difference, which the exact numbers of the reader should leave at 0.  A
  series whose check found a difference is skipped.
 
@@ -65,7 +66,8 @@ allSeries
 		'neo-symbols' 'sj-symbols' 'neo-objects' 'sj-objects'
 		'neo-map' 'sj-map' 'neo-map-symbols' 'sj-map-symbols'
 		'neo-ndjson-next' 'sj-ndjson-next' 'neo-ndjson-upToEnd' 'sj-ndjson-upToEnd'
-		'neo-small' 'sj-small' 'utf8Encoded' )! !
+		'neo-small' 'sj-small' 'utf8Encoded'
+		'neo-write' 'sj-write' 'sj-write-bytes' 'neo-write-pretty' 'sj-write-pretty' 'neo-write-utf8' 'sj-write-utf8' )! !
 
 !SJBench class methodsFor: 'defaults'!
 checkOfSeries
@@ -74,7 +76,8 @@ checkOfSeries
 	^ Dictionary newFromPairs: #( 'sj-string' 'string' 'sj-float' 'string' 'sj-prim' 'string'
 		'sj-bytes' 'bytes' 'sj-tree' 'tree' 'sj-symbols' 'symbols' 'sj-objects' 'objects'
 		'sj-map' 'map' 'sj-map-symbols' 'map-symbols' 'sj-ndjson-next' 'ndjson-next'
-		'sj-ndjson-upToEnd' 'ndjson-upToEnd' 'sj-small' 'string' )! !
+		'sj-ndjson-upToEnd' 'ndjson-upToEnd' 'sj-small' 'string'
+		'sj-write' 'write' 'sj-write-bytes' 'write' 'sj-write-pretty' 'write-pretty' 'sj-write-utf8' 'write' )! !
 
 !SJBench class methodsFor: 'defaults'!
 speedups
@@ -83,7 +86,8 @@ speedups
 	^ #( #( 'neo-string' 'sj-string' ) #( 'neo-symbols' 'sj-symbols' ) #( 'neo-objects' 'sj-objects' )
 		#( 'neo-map' 'sj-map' ) #( 'neo-map-symbols' 'sj-map-symbols' ) #( 'neo-map' 'sj-map-symbols' )
 		#( 'neo-ndjson-next' 'sj-ndjson-next' ) #( 'neo-ndjson-upToEnd' 'sj-ndjson-upToEnd' )
-		#( 'neo-small' 'sj-small' ) #( 'sj-tree' 'sj-string' ) #( 'sj-string' 'sj-prim' ) )! !
+		#( 'neo-small' 'sj-small' ) #( 'sj-tree' 'sj-string' ) #( 'sj-string' 'sj-prim' )
+		#( 'neo-write' 'sj-write' ) #( 'neo-write-pretty' 'sj-write-pretty' ) #( 'neo-write-utf8' 'sj-write-utf8' ) )! !
 
 !SJBench class methodsFor: 'defaults'!
 pluginCounters
@@ -529,7 +533,40 @@ runCorpusFile: aName bytes: bytes string: string
 	self series: 'neo-objects' file: aName size: size do: [ NeoJSONObject fromString: string ].
 	self series: 'sj-objects' file: aName size: size do: [ self objectsFrom: string ].
 	(SJBenchMapping files includes: aName) ifTrue: [ self runMapping: aName string: string size: size ].
-	self series: 'utf8Encoded' file: aName size: size do: [ string utf8Encoded ]! !
+	self series: 'utf8Encoded' file: aName size: size do: [ string utf8Encoded ].
+	self runWrite: aName string: string size: size! !
+
+!SJBench methodsFor: 'running'!
+runWrite: aName string: string size: size
+	"The value NeoJSONReader reads of the file (Fractions included), written by both
+	writers: to a String, plain and pretty, to UTF-8 bytes, and through a
+	ZnCharacterWriteStream of UTF-8, as to a file or a socket; MB/s over the input"
+
+	| value |
+	(series anySatisfy: [ :each | each includesSubstring: '-write' ]) ifFalse: [ ^ self ].
+	value := NeoJSONReader fromString: string.
+	(checking = 'none' or: [ self sjWanted not ]) ifFalse: [
+		self check: aName as: 'write' neo: [ NeoJSONWriter toString: value ] do: [ SimdJSONWriter toString: value ].
+		self check: aName as: 'write-pretty'
+			neo: [ NeoJSONWriter toStringPretty: value ] do: [ SimdJSONWriter toStringPretty: value ] ].
+	self series: 'neo-write' file: aName size: size do: [ NeoJSONWriter toString: value ].
+	self series: 'sj-write' file: aName size: size do: [ SimdJSONWriter toString: value ].
+	self series: 'sj-write-bytes' file: aName size: size do: [ SimdJSONWriter toBytes: value ].
+	self series: 'neo-write-pretty' file: aName size: size do: [ NeoJSONWriter toStringPretty: value ].
+	self series: 'sj-write-pretty' file: aName size: size do: [ SimdJSONWriter toStringPretty: value ].
+	self series: 'neo-write-utf8' file: aName size: size do: [ self utf8: value with: NeoJSONWriter ].
+	self series: 'sj-write-utf8' file: aName size: size do: [ self utf8: value with: SimdJSONWriter ].
+	value := nil.
+	Smalltalk garbageCollect! !
+
+!SJBench methodsFor: 'running'!
+utf8: value with: aWriterClass
+	"The bytes that aWriterClass writes of value through a ZnCharacterWriteStream of UTF-8"
+
+	| bytes |
+	bytes := WriteStream on: (ByteArray new: 65536).
+	(aWriterClass on: (ZnCharacterWriteStream on: bytes)) nextPut: value.
+	^ bytes contents! !
 
 !SJBench methodsFor: 'running'!
 runMapping: aName string: string size: size

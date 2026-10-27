@@ -114,13 +114,14 @@ When a read at the top level fails (`nextAs:`, `nextListAs:`, `parseMap`...), th
 
 | selector | |
 |---|---|
-| `on:`, `toString:`, `toStringPretty:`, `nextPut:`, `nextPut:as:`, `nextPutAll:` (NDJSON), `close` | as NeoJSONWriter; on a binary stream the writer writes the bytes of UTF-8, characters on any other |
+| `on:`, `toString:`, `toStringPretty:`, `nextPut:`, `nextPut:as:`, `nextPutAll:` (NDJSON), `close` | as NeoJSONWriter; on a binary stream the writer writes the bytes of UTF-8, characters on any other, and on a `ZnCharacterWriteStream` of UTF-8 (a file, a socket) the bytes the plugin wrote, on the binary stream it wraps, so that they are not encoded again (`close` closes the stream given to `on:`) |
 | `for:do:`, `for:customDo:`, `mapInstVarsFor:`, `mapAllInstVarsFor:`, the class-side `neoJsonMapping:` | the mappings, as NeoJSON's: an object mapping writes its properties (a nil one only with `writeNil: true`), a custom mapping its `writer:` or `encoder:` block, `listOfElementSchema:`, `listOfType:`, `mapWithValueSchema:` |
 | `writeMapStreamingDo:`, `writeListStreamingDo:`, `writeKey:value:` and `writeElement:` of their `SimdJSONStreamingWriter`, `writeObject:`, `writeMap:`, `writeList:`, `writeString:`, `writeInteger:`, `writeFloat:`, `writeBoolean:`, `writeNull`, `encodeKey:value:`, `newlineIndent`... | NeoJSONWriter's protocol for the code that writes an object (writer blocks, `neoJsonOn:`) |
 | `floatPrinter:` | an object that answers `printFloat:on:` and writes every Float (NeoJSONFloatPrinter, for one); nil, the default, writes them as `Float>>printOn:`, in the plugin |
 | `prettyPrint:`, `asciiOnly:`, `newLine:`, `writeNil:` | as NeoJSONWriter: a newline and a tab per level, `"key" : value`, `[ ]` and `{ }` for the empty ones; `\uXXXX` above 126 (a surrogate pair above U+FFFF); the line end (`OSPlatform current lineEnding`); `writeNil:` is for the object mappings |
 | `toBytes:`, `bytesFor:`, `stringFor:` | the JSON of a value as UTF-8 bytes or as a String, without a stream |
 | `nonFiniteAsNull:` | true writes NaN and the infinities as `null`; by default they signal `SimdJSONWriteError` |
+| `SimdJSONWriter maxOutputBytes:` | the most bytes one call of the plugin writes, nil (the default) for no cap; above it, writing signals `SimdJSONResourceError` (`#tooLarge`) |
 
 The output is NeoJSONWriter's, character for character, which `SimdJSONCompatTests` checks on the corpus and on edge values, plain, pretty and `asciiOnly`:
 
@@ -272,7 +273,7 @@ In the WebAssembly build, lane 68 of `make wasm-check` runs the suite with the n
 - `fetch-corpus.sh` downloads simdjson-data at commit 3519499 (its archive is checked against SHA256 `a2623f4c…a884`; `SJ_CORPUS_ZIP=<file>` takes it from a file).
 - `run-bench.sh` prepares the image once, natively (`prepare-image.st` files `SimdJSON.st`, whose `SimdJSONReader` must be a subclass of `SimdJSONMapper`, `SJBenchMapping.st` and `SJBench.st` in; NeoJSON is in the image only to be compared with), then runs `run-bench.st` on a fresh copy of it with each VM in turn, pinned to one CPU (`taskset -c 2`), and the whole matrix twice; each run writes a TSV file, which `summarize.py` turns into the tables below.
 - The timed inputs are 13 files of the corpus (13.8 MB: twitter, citm_catalog, canada, gsoc-2018, mesh, numbers, random, twitterescaped, github_events, update-center, apache_builds, instruments, marine_ik), an NDJSON file of 20,000 small objects (1.37 MB), and documents of 200 bytes and 2 KB.
-- Every value is first compared with NeoJSON's, on all 30 JSON files of the corpus: deep equality, with the classes of numbers, strings and collections, from the String, from the bytes, in tree mode, then with Symbol keys, as NeoJSONObjects, through the mappings, on the NDJSON.
+- Every value is first compared with NeoJSON's, on all 30 JSON files of the corpus: deep equality, with the classes of numbers, strings and collections, from the String, from the bytes, in tree mode, then with Symbol keys, as NeoJSONObjects, through the mappings, on the NDJSON; and NeoJSONWriter's text of each timed file with SimdJSONWriter's, plain and pretty (CHECK `write` and `write-pretty`).
 - A series is a full GC, warm-up runs, then samples of k runs each, k doubled until a sample lasts 50 ms (the clock of the WebAssembly VMs has a resolution of 1 ms), 10 samples natively and 5 in WebAssembly, within 20 s; the median of the samples counts, and MB/s is always over the UTF-8 bytes of the input.
   Around each series, the counters of the reader and of the plugin must show no repeated parse and no failed build.
 
@@ -289,6 +290,9 @@ In the WebAssembly build, lane 68 of `make wasm-check` runs the suite with the n
 | `neo-map`, `sj-map`, `neo-map-symbols`, `sj-map-symbols` | `nextAs: #Top` with the mappings of `SJBenchMapping.st` (twitter, citm_catalog, canada), with and without Symbol keys |
 | `neo-ndjson-next`, `sj-ndjson-next`, `neo-ndjson-upToEnd`, `sj-ndjson-upToEnd` | the NDJSON, with `next` until `atEnd`, and with `upToEnd` |
 | `neo-small`, `sj-small` | the 200-byte and 2 KB documents: the cost of a call |
+| `neo-write`, `sj-write`, `sj-write-bytes` | the value NeoJSONReader reads of the file (Fractions included) written by `NeoJSONWriter toString:`, `SimdJSONWriter toString:` and `toBytes:` |
+| `neo-write-pretty`, `sj-write-pretty` | `toStringPretty:` |
+| `neo-write-utf8`, `sj-write-utf8` | `nextPut:` on a `ZnCharacterWriteStream` of UTF-8 on a ByteArray stream, as on a file |
 | `utf8Encoded` | `s utf8Encoded`, for reference |
 
 The gates, which `summarize.py` checks (its exit status): every comparison equal with no number of another class, no ERROR line, and `sj-string` at least 8 times faster than `neo-string` on every file and VM.
@@ -582,6 +586,28 @@ Each value is one small parse, so the cost of a call dominates: the gain is 5.9x
 - With the same `pharo-web.wasm`, headless Chromium reads 8-12% faster than node 24 with SimdJSONReader and at the same speed with NeoJSON; the node VM (`node/pharo`) is the slowest of the three, 15-20% behind Chromium with SimdJSONReader.
 - In WebAssembly simdjson runs its scalar `fallback` kernel: with the node VM its parse takes 3-9x the native time (canada 9.18 against 3.11 ms, twitter 1.76 against 0.27 ms) and the build 1.5-2x.
 - In WebAssembly, the containers built in Smalltalk (`sj-tree`, `sj-symbols`, `sj-objects`) take 4-10x the time of `sj-string`, against 1.5-4x on Cog and 2.5-6x on Stack: the native Dictionaries of the default path matter most there.
+
+### Writing
+
+The write series were added after the results above, and measured on another machine: an Apple M4 Max (macOS 27.0.1, not pinned to a CPU, which macOS does not offer), on 2026-10-27, with SJBench's protocol and `SJ_SERIES` set to the write series, twice (the medians of the two runs; their spread is 1.9% for the median series).
+VM: the Darwin arm64 Cog VM of release v12.0.6-beta-885ae8867 with the SimdJSONPlugin of this tree built for it; image: Pharo 15 b41 with NeoJSON 11e274d, prepared by `prepare-image.st`.
+The 124 checks of the text are equal, plain and pretty.
+Median ms of one write, and the speedups over NeoJSONWriter:
+
+| file | neo-write | sj-write | sj-write-bytes | neo-write-pretty | sj-write-pretty | neo-write-utf8 | sj-write-utf8 | speedup | pretty | utf8 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| twitter.json | 10.21 | 1.31 | 0.766 | 16.69 | 1.60 | 11.33 | 1.02 | 7.8x | 10.4x | 11.1x |
+| citm_catalog.json | 22.29 | 1.85 | 1.40 | 39.95 | 3.23 | 19.91 | 1.76 | 12.0x | 12.4x | 11.3x |
+| canada.json | 79.42 | 9.70 | 9.12 | 97.41 | 13.77 | 89.29 | 16.75 | 8.2x | 7.1x | 5.3x |
+| gsoc-2018.json | 95.35 | 10.29 | 4.11 | 98.14 | 10.71 | 84.14 | 20.63 | 9.3x | 9.2x | 4.1x |
+| mesh.json | 35.99 | 2.41 | 2.26 | 41.64 | 2.80 | 42.80 | 4.47 | 14.9x | 14.9x | 9.6x |
+| marine_ik.json | 135.6 | 17.12 | 16.64 | 198.6 | 47.91 | 152.2 | 26.46 | 7.9x | 4.1x | 5.7x |
+| twitterescaped.json | 11.25 | 1.34 | 0.779 | 17.03 | 1.64 | 11.69 | 1.04 | 8.4x | 10.4x | 11.2x |
+| update-center.json | 18.54 | 1.52 | 0.946 | 29.16 | 1.81 | 15.86 | 2.18 | 12.2x | 16.1x | 7.3x |
+
+- marine_ik is the file of Fractions (its numbers have exponents, which NeoJSONReader reads exactly): each is a hole that the image writes, as a Float in a primitive call of its own, hence the smaller gain, the smallest in pretty printing.
+- gsoc-2018 has wide characters: `sj-write` answers a WideString, decoded from the UTF-8 of the plugin, `sj-write-bytes` the UTF-8 itself.
+- The `-utf8` series collect the bytes in a growing ByteArray stream, whose copies and the garbage of the repeated runs weigh on `sj-write-utf8`: with a full GC first and on a file in memory (`FileSystem memory`), writing gsoc-2018 takes 4.9 ms with SimdJSONWriter and 94.6 ms with NeoJSONWriter.
 
 ### Number tokens
 

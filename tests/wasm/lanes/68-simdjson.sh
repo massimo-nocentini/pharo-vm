@@ -12,6 +12,8 @@
 #            'emscripten', the implementation of simdjson, 'fallback'
 #            (simdjson has no kernel for WebAssembly), and the version of
 #            simdjson, '5.0.5';
+#   write    SimdJSONWriter writes a value that the plugin writes in part
+#            and the image in part (a Set, a Fraction);
 #   suite    tests/wasm/st/simdjson-lane.st runs the package SimdJSON-Tests
 #            but SimdJSONSlowTests: no failure and no error;
 #   cap      a document of 17 MiB, one string, is refused with a
@@ -19,7 +21,7 @@
 #            (SimdJSONReader maxInputUnits, 16 Mi units), and read with no
 #            cap, with old space at 1 GiB
 #            (PHARO_WASM_OLD_SPACE_BASE=0x40000000, as docs/SimdJSON.md
-#            advises for large documents);
+#            advises for large documents), then written back whole;
 #   web      the suite again in pharo-web (the MEMORY64=2 module of the
 #            pages), through packaging/emscripten/web/vm-driver.js and the
 #            REPL of the Console page, as lane 60 runs them.
@@ -73,7 +75,7 @@ cap() (
     $P eval "| s capped | s := String new: 17 * 1024 * 1024 + 2 withAll: \$a. s at: 1 put: \$\"; at: s size put: \$\".
 	capped := [ SimdJSONReader fromString: s. #read ] on: SimdJSONResourceError do: [ :e | #refused ].
 	SimdJSONReader maxInputUnits: nil.
-	{ capped. (SimdJSONReader fromString: s) size }"
+	{ capped. (SimdJSONReader fromString: s) size. (SimdJSONWriter toBytes: (SimdJSONReader fromString: s)) size }"
 )
 
 # web: simdjson-lane.st evaluated in the REPL of the Console page, whose
@@ -174,13 +176,17 @@ fresh info "$loaded"
 expect info "#(#SimdJSONMapper true 'emscripten' 'fallback' '5.0.5')" $P eval \
     "{ SimdJSONReader superclass name. SimdJSONReader pluginAvailable. SimdJSONReader platform. SimdJSONReader implementationName. SimdJSONReader simdjsonVersion }"
 
+fresh write "$loaded"
+expect write "'[1,\"a\",0.5,{\"k\":[0.25]}]'" $P eval \
+    "SimdJSONWriter toString: { 1. 'a'. 0.5. Dictionary new at: 'k' put: (Set with: 1 / 4); yourself }"
+
 fresh suite "$loaded"
 if run suite suite; then
     suite_passed suite
 fi
 
 fresh cap "$loaded"
-expect cap "#(#refused $((17 * 1024 * 1024)))" cap
+expect cap "#(#refused $((17 * 1024 * 1024)) $((17 * 1024 * 1024 + 2)))" cap
 
 fresh web "$loaded"
 if run web web; then

@@ -22,6 +22,7 @@ SERIES = ('neo-string', 'sj-string', 'sj-bytes', 'sj-tree', 'sj-float', 'sj-prim
           'neo-symbols', 'sj-symbols', 'neo-objects', 'sj-objects', 'utf8Encoded')
 MAPPING = ('neo-map', 'sj-map', 'neo-map-symbols', 'sj-map-symbols')
 NDJSON = ('neo-ndjson-next', 'sj-ndjson-next', 'neo-ndjson-upToEnd', 'sj-ndjson-upToEnd')
+WRITE = ('neo-write', 'sj-write', 'sj-write-bytes', 'neo-write-pretty', 'sj-write-pretty', 'neo-write-utf8', 'sj-write-utf8')
 
 
 def fields(rest):
@@ -110,7 +111,8 @@ def main(paths):
             if r is not None and r < GATE_SPEEDUP:
                 slow.append(f'{label} {file} {r:.1f}x')
     missing = [label for label in labels
-               if not any(median(results, label, f, 'sj-string') for f in corpus)]
+               if any(median(results, label, f, 'neo-string') for f in corpus)
+               and not any(median(results, label, f, 'sj-string') for f in corpus)]
 
     def gate(name, problems, detail):
         if problems:
@@ -184,6 +186,14 @@ def main(paths):
                 [times(ratio(val(label, file, 'neo-map'), val(label, file, 'sj-map'))),
                  times(ratio(val(label, file, 'neo-map'), val(label, file, 'sj-map-symbols')))]
                 for file in mapped])
+        written = [f for f in corpus if val(label, f, 'neo-write') is not None]
+        if written:
+            table(['file'] + list(WRITE) + ['speedup', 'pretty', 'utf8'], [
+                [file] + [ms(val(label, file, s)) for s in WRITE] +
+                [times(ratio(val(label, file, 'neo-write'), val(label, file, 'sj-write'))),
+                 times(ratio(val(label, file, 'neo-write-pretty'), val(label, file, 'sj-write-pretty'))),
+                 times(ratio(val(label, file, 'neo-write-utf8'), val(label, file, 'sj-write-utf8')))]
+                for file in written])
         others = [(f, s) for f in files for s in NDJSON + ('neo-small', 'sj-small')
                   if val(label, f, s) is not None]
         if others:

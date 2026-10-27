@@ -84,7 +84,8 @@ g := Smalltalk globals.
 	tag: 'Core'; package: 'SimdJSON') install.
 ((g at: #SimdJSONMapper) << #SimdJSONWriter
 	slots: #( #writeStream #prettyPrint #asciiOnly #newLine #writeNil #nonFiniteAsNull #level
-		#floatPrinter #binary #classes #layout #plainClasses #ownWriters );
+		#floatPrinter #sink #binary #classes #layout #plainClasses #ownWriters );
+	sharedVariables: { #MaxOutputBytes };
 	tag: 'Writing'; package: 'SimdJSON') install.
 (Object << #SimdJSONStreamingWriter slots: { #jsonWriter. #first }; tag: 'Writing'; package: 'SimdJSON') install.
 "The methods of an older SimdJSON.st that are gone"
@@ -1652,7 +1653,9 @@ culprit: anObject
 
 !SimdJSONWriter class methodsFor: 'instance creation'!
 on: aWriteStream
-	"A stream of characters gets characters, a binary stream the bytes of UTF-8"
+	"A stream of characters gets characters, a binary stream the bytes of UTF-8, and a
+	ZnCharacterWriteStream of UTF-8 (a file, a socket) the bytes the plugin writes, on the
+	binary stream it wraps"
 
 	^ self new
 		on: aWriteStream;
@@ -1685,6 +1688,19 @@ maxDepth
 	"The deepest nesting written: deeper, the value is likely a cycle"
 
 	^ 1024
+! !
+
+!SimdJSONWriter class methodsFor: 'configuration'!
+maxOutputBytes
+	"The most bytes of UTF-8 that one call of the plugin writes, or nil (the default) for no
+	cap; above it, writing signals SimdJSONResourceError"
+
+	^ MaxOutputBytes
+! !
+
+!SimdJSONWriter class methodsFor: 'configuration'!
+maxOutputBytes: anIntegerOrNil
+	MaxOutputBytes := anIntegerOrNil
 ! !
 
 !SimdJSONWriter class methodsFor: 'configuration'!
@@ -1765,15 +1781,20 @@ initialize
 
 !SimdJSONWriter methodsFor: 'initialize-release'!
 on: aWriteStream
-	writeStream := aWriteStream.
-	binary := (aWriteStream respondsTo: #isBinary) and: [ aWriteStream isBinary ]
+	"Write on aWriteStream, which close closes; the JSON goes to its binary stream when it
+	encodes UTF-8 with Zinc, so that it is not encoded twice"
+
+	writeStream := sink := aWriteStream.
+	((aWriteStream isKindOf: ZnCharacterWriteStream) and: [ aWriteStream encoder class == ZnUTF8Encoder ])
+		ifTrue: [ sink := aWriteStream wrappedStream ].
+	binary := (sink respondsTo: #isBinary) and: [ sink isBinary ]
 ! !
 
 !SimdJSONWriter methodsFor: 'initialize-release'!
 close
 	writeStream ifNotNil: [
 		writeStream close.
-		writeStream := nil ]
+		writeStream := sink := nil ]
 ! !
 
 !SimdJSONWriter methodsFor: 'initialize-release'!
@@ -2019,7 +2040,7 @@ indentedDo: aBlock
 emit: aString
 	"ASCII text of the writer itself"
 
-	writeStream nextPutAll: (binary ifTrue: [ aString asByteArray ] ifFalse: [ aString ])
+	sink nextPutAll: (binary ifTrue: [ aString asByteArray ] ifFalse: [ aString ])
 ! !
 
 !SimdJSONWriter methodsFor: 'private'!
@@ -2076,16 +2097,16 @@ emitOutput: r
 
 	| output holes from |
 	output := r at: 2.
-	(holes := r at: 3) ifNil: [ ^ writeStream nextPutAll: output ].
+	(holes := r at: 3) ifNil: [ ^ sink nextPutAll: output ].
 	from := 0.
 	1 to: holes size by: 3 do: [ :i | | saved |
-		writeStream nextPutAll: (output copyFrom: from + 1 to: (holes at: i)).
+		sink next: (holes at: i) - from putAll: output startingAt: from + 1.
 		saved := level.
 		level := holes at: i + 2.
 		self writeOther: (holes at: i + 1).
 		level := saved.
 		from := holes at: i ].
-	writeStream nextPutAll: (output copyFrom: from + 1 to: output size)
+	sink next: output size - from putAll: output startingAt: from + 1
 ! !
 
 !SimdJSONWriter methodsFor: 'private'!
@@ -2093,18 +2114,19 @@ output: anObject bytes: aBoolean
 	"The JSON of anObject at once: the output of the plugin when it wrote all of it, else
 	that output with its holes written in, on a stream of its own"
 
-	| r stream savedStream savedBinary |
+	| r stream savedSink savedBinary |
 	(self isPlain: anObject) ifTrue: [
 		r := self prim: anObject bytes: aBoolean.
 		(r at: 3) ifNil: [ ^ r at: 2 ] ].
-	stream := (aBoolean ifTrue: [ ByteArray ] ifFalse: [ String ]) new writeStream.
-	savedStream := writeStream.
+	stream := ((aBoolean ifTrue: [ ByteArray ] ifFalse: [ String ])
+		new: (r ifNil: [ 256 ] ifNotNil: [ (r at: 2) size + ((r at: 3) size * 8) ])) writeStream.
+	savedSink := sink.
 	savedBinary := binary.
-	writeStream := stream.
+	sink := stream.
 	binary := aBoolean.
 	[ r ifNil: [ self writeOther: anObject ] ifNotNil: [ self emitOutput: r ] ]
 		ensure: [
-			writeStream := savedStream.
+			sink := savedSink.
 			binary := savedBinary ].
 	^ stream contents
 ! !
@@ -2125,7 +2147,7 @@ callPrim: anObject flags: flags
 	(SimdJSONReader testHook: #pluginMissing) == true ifTrue: [ ^ SimdJSONFailure on: nil ].
 	^ self class
 		primWrite: anObject flags: flags newLine: newLine asString asByteString level: level
-		maxDepth: self class maxDepth maxBytes: -1
+		maxDepth: self class maxDepth maxBytes: (self class maxOutputBytes ifNil: [ -1 ])
 		classes: (classes ifNil: [ classes := self class writeClasses ])
 		layout: (layout ifNil: [ layout := self class writeLayout ])
 ! !
@@ -2146,7 +2168,7 @@ prim: anObject bytes: aBoolean
 	r class == SimdJSONFailure ifTrue: [ ^ self failed: r ].
 	(r at: 1) = 2 ifTrue: [ ^ self signalError: (r at: 4) culprit: (r at: 5) ].
 	(r at: 1) = 3 ifTrue: [
-		^ SimdJSONResourceError new code: #tooLarge; signal: 'the JSON exceeds the cap of SimdJSONWriter' ].
+		^ SimdJSONResourceError new code: #tooLarge; signal: 'the JSON exceeds SimdJSONWriter maxOutputBytes; raise it' ].
 	^ r
 ! !
 
