@@ -5,7 +5,8 @@
  * and liDigitDiv() digit for digit with FROZEN copies of the 32-bit loops the plugin ran
  * before the kernels existed, and with independent oracles: a base-256 schoolbook
  * multiply, the reconstruction a = q*b + r with known q and r, and (mode `dump`)
- * Python's big integers (oracle.py).
+ * Python's big integers (oracle.py).  Squares (the same digits as both operands, through
+ * one pointer or a copy) take their own kernels, and have their own cases.
  *
  * Build variants (run-c-tests.sh): LI_LIMB_BITS=64 (the default on x86_64 and aarch64)
  * or 32, FAKE_BIGENDIAN (SQ_SWAP_4_BYTES_IF_BIGENDIAN swaps: digits are stored
@@ -311,12 +312,135 @@ static void testMulNoMemory(void)
 	long before = mallocCalls;
 	mallocFails = 1;
 	mulCase(700, 900, 1600, 0, 1, 0, 0);
-	mulCase(300, 300, 599, 2, 2, 1, 0);
+	mulCase(1200, 1200, 2399, 2, 2, 1, 0);   /* a square: its limbs alone outgrow the stack */
 	mulCase(40, 5000, 5040, 0, 0, 0, 0);
 	mallocFails = 0;
 	CHECK(mallocCalls - before == 3, "the large multiplies did not ask for scratch memory (%ld)", mallocCalls - before);
 	nFallbackMul += 3;
 	printf("mul with failing malloc: 3 cases\n");
+}
+
+/* ---------------------------------------------------------------- squares */
+
+static long nSqr;
+
+/* One square: the n digits of x by themselves, through one pointer (x * x, how the plugin
+   passes x squared) or through a copy of x (equal digits at two places), into resLen
+   digits.  top: the top digit as filled (0) or 0xFFFFFFFF, 0x80000000, 1; lead: that many
+   zero digits above it (an unnormalized operand).  Frozen loop into zeros vs kernel into
+   garbage, operands untouched; optionally the base-256 oracle. */
+static void sqrCase(long n, long resLen, int mode, int top, long lead, int copy, int oracle)
+{
+	static const u32 tops[] = { 0, 0xFFFFFFFFu, 0x80000000u, 1 };
+	u32 *x = dalloc(n), *y = copy ? dalloc(n) : x, *x0 = dalloc(n);
+	fill(x, n, mode);
+	if (top && n > lead) PUT(x, n - 1 - lead, tops[top]);
+	for (long i = n - lead < 0 ? 0 : n - lead; i < n; i++) PUT(x, i, 0);
+	if (copy) memcpy(y, x, n * 4);
+	memcpy(x0, x, n * 4);
+	u32 *r1 = dalloc(resLen), *r2 = dalloc(resLen);
+	memset(r1, 0, resLen * 4);
+	garbage(r2, resLen);
+	frozen_mul(x0, n, x0, n, r1, resLen);
+	liDigitMultiply(x, n, y, n, r2, resLen);
+	CHECK(!memcmp(r1, r2, resLen * 4), "sqr %ld res %ld mode %d top %d lead %ld copy %d thr %ld/%ld", n, resLen, mode, top, lead, copy,
+		(long) liSqrBasecaseLimbs, (long) liSqrKaratsubaLimbs);
+	CHECK(!memcmp(x, x0, n * 4) && !memcmp(y, x0, n * 4), "sqr %ld changed its operand", n);
+	if (oracle) {
+		u32 *r3 = dalloc(2 * n);
+		ref_mul(x0, n, x0, n, r3);
+		CHECK(!memcmp(r1, r3, resLen * 4), "frozen square != base-256 oracle %ld res %ld", n, resLen);
+		free(r3);
+	}
+	free(x); if (copy) free(y); free(x0); free(r1); free(r2);
+	nMul++;
+	nSqr++;
+}
+
+/* x * y with y equal to x but for one digit (lowest, highest or a middle one): a product,
+   not a square */
+static void nearSquareCase(long n, int mode)
+{
+	u32 *x = dalloc(n), *y = dalloc(n), *r1 = dalloc(2 * n), *r2 = dalloc(2 * n);
+	long k = rnd() % 3 == 0 ? 0 : rnd() % 2 ? n - 1 : rndBelow(n);
+	fill(x, n, mode);
+	memcpy(y, x, n * 4);
+	PUT(y, k, GET(y, k) ^ (1u << (rnd() % 32)));
+	memset(r1, 0, 2 * n * 4);
+	garbage(r2, 2 * n);
+	frozen_mul(x, n, y, n, r1, 2 * n);
+	liDigitMultiply(x, n, y, n, r2, 2 * n);
+	CHECK(!memcmp(r1, r2, 2 * n * 4), "near-square %ld digit %ld mode %d", n, k, mode);
+	free(x); free(y); free(r1); free(r2);
+	nMul++;
+}
+
+/* random squares up to 200 digits, Karatsuba squaring forced at thresholds 2..9 limbs,
+   squaring from 1..4 limbs on */
+static void testSqrSmall(long count)
+{
+	long b0 = liSqrBasecaseLimbs, k0 = liSqrKaratsubaLimbs;
+	for (long c = 0; c < count; c++) {
+		static const long kthr[] = { 2, 3, 4, 5, 6, 9 }, bthr[] = { 1, 2, 3, 4 };
+		long n = c % 4 ? rndBelow(200) + 1 : rndBelow(16) + 1;
+		int mode = (int) rnd(), top = (int) (rnd() % 4), copy = (int) (rnd() % 2);
+		long lead = rnd() % 4 ? 0 : rndBelow(3);
+		long resLen = 2 * n - (long) (rnd() & 1);
+		liSqrKaratsubaLimbs = kthr[rnd() % 6];
+		liSqrBasecaseLimbs = c % 3 ? bthr[rnd() % 4] : b0;
+		sqrCase(n, resLen, mode, top, lead, copy, c < 3000);
+		if (c % 8 == 0) nearSquareCase(n, mode);
+	}
+	liSqrBasecaseLimbs = b0;
+	liSqrKaratsubaLimbs = k0;
+	printf("sqr small + forced Karatsuba squaring: %ld cases\n", count);
+}
+
+/* sizes straddling the production thresholds (squaring, Karatsuba squaring, one and two
+   levels of it, the product's Karatsuba), every partial-limb offset, both resLen */
+static void testSqrThreshold(long reps)
+{
+	long D = LI_DIGITS_PER_LIMB, n = 0;
+	long centres[] = { LI_SQR_BASECASE_LIMBS, LI_SQR_KARATSUBA_LIMBS, 2 * LI_SQR_KARATSUBA_LIMBS, 4 * LI_SQR_KARATSUBA_LIMBS,
+		LI_KARATSUBA_LIMBS };
+	for (unsigned c = 0; c < sizeof centres / sizeof *centres; c++)
+		for (long l = centres[c] - 3; l <= centres[c] + 3; l++) {
+			if (l < 1) continue;
+			for (long r = 0; r < reps; r++)
+				for (int ds = 0; ds < D; ds++)
+					for (int top = 0; top < 4; top++) {
+						long d = l * D - ds;
+						int mode = (int) rnd(), copy = (int) (rnd() % 2);
+						sqrCase(d, 2 * d - (top & 1), mode, top, 0, copy, r == 0 && c < 2);
+						sqrCase(d, 2 * d, mode, top, 1 + (long) (rnd() % 2), !copy, 0);
+						n += 2;
+					}
+			nearSquareCase(l * D, (int) rnd());
+		}
+	printf("sqr threshold straddle (squaring from %d, Karatsuba from %d limbs): %ld cases\n",
+		LI_SQR_BASECASE_LIMBS, LI_SQR_KARATSUBA_LIMBS, n);
+}
+
+static void testSqrLarge(void)
+{
+	static const long sizes[] = { 255, 256, 257, 500, 511, 1000, 1023, 1024, 1025, 2047, 2048, 3001, 4096, 6001, 10000 };
+	for (unsigned i = 0; i < sizeof sizes / sizeof *sizes; i++)
+		for (int mode = 0; mode < 5; mode++)
+			sqrCase(sizes[i], 2 * sizes[i] - (mode & 1), mode, mode % 4, mode == 3, mode & 1, sizes[i] <= 1024 && mode < 2);
+	printf("sqr large: %ld sizes x 5 patterns\n", (long) (sizeof sizes / sizeof *sizes));
+}
+
+/* the scratch malloc fails: the 32-bit loop runs instead, for both kinds of square */
+static void testSqrNoMemory(void)
+{
+	long before = mallocCalls;
+	mallocFails = 1;
+	sqrCase(1500, 3000, 0, 1, 0, 0, 0);
+	sqrCase(1501, 3001, 4, 2, 1, 1, 0);
+	mallocFails = 0;
+	CHECK(mallocCalls - before == 2, "the large squares did not ask for scratch memory (%ld)", mallocCalls - before);
+	nFallbackMul += 2;
+	printf("sqr with failing malloc: 2 cases\n");
 }
 
 /* ---------------------------------------------------------------- divide */
@@ -514,6 +638,22 @@ static void dump(long n)
 		divCase(a, an, b, bn, q, rr);
 		printf("D"); hex(a, an); hex(b, bn); hex(q, an - bn + 1); hex(rr, bn); printf("\n");
 		free(a); free(b); free(q); free(rr);
+
+		/* a square, around the squaring thresholds of both limb sizes, through one pointer
+		   or a copy */
+		static const long sq[] = { 1, 2, 3, 5, 6, 7, 8, 9, 16, 47, 48, 49, 87, 88, 89, 95, 96, 97, 175, 176, 177, 300, 1000, 2500 };
+		long xn = sq[rnd() % 24];
+		xn += rndBelow(3);
+		int copy = (int) (rnd() & 1);
+		resLen = pluginResLen(xn, xn);
+		u32 *x = dalloc(xn), *y = copy ? dalloc(xn) : x;
+		r = dalloc(resLen);
+		fill(x, xn, (int) rnd());
+		if (copy) memcpy(y, x, xn * 4);
+		garbage(r, resLen);
+		liDigitMultiply(x, xn, y, xn, r, resLen);
+		printf("M"); hex(x, xn); hex(y, xn); printf(" %ld", resLen); hex(r, resLen); printf("\n");
+		free(x); if (copy) free(y); free(r);
 	}
 }
 
@@ -524,8 +664,9 @@ int main(int argc, char **argv)
 		return fails != 0;
 	}
 	long scale = argc > 1 ? atol(argv[1]) : 1;
-	printf("LI_LIMB_BITS=%d LI_KARATSUBA_LIMBS=%d LI_MUL_LOOP_DIGIT_PRODUCT=%d LI_DIV_LOOP_QUOTIENT_DIGITS=%d LI_STACK_LIMBS=%d%s\n",
-		LI_LIMB_BITS, LI_KARATSUBA_LIMBS, LI_MUL_LOOP_DIGIT_PRODUCT, LI_DIV_LOOP_QUOTIENT_DIGITS, (int) LI_STACK_LIMBS,
+	printf("LI_LIMB_BITS=%d LI_KARATSUBA_LIMBS=%d LI_MUL_LOOP_DIGIT_PRODUCT=%d LI_SQR_BASECASE_LIMBS=%d LI_SQR_KARATSUBA_LIMBS=%d LI_DIV_LOOP_QUOTIENT_DIGITS=%d LI_STACK_LIMBS=%d%s\n",
+		LI_LIMB_BITS, LI_KARATSUBA_LIMBS, LI_MUL_LOOP_DIGIT_PRODUCT, LI_SQR_BASECASE_LIMBS, LI_SQR_KARATSUBA_LIMBS,
+		LI_DIV_LOOP_QUOTIENT_DIGITS, (int) LI_STACK_LIMBS,
 #ifdef FAKE_BIGENDIAN
 		" FAKE_BIGENDIAN"
 #else
@@ -541,6 +682,8 @@ int main(int argc, char **argv)
 		printf("-- pass %d: dispatch to the 32-bit loops %s\n", pass, pass ? "OFF" : "on");
 		testMulSmall(100000 * scale);
 		testMulThreshold(2);
+		testSqrSmall(20000 * scale);
+		testSqrThreshold(1);
 		testDivRandom(100000 * scale, 12, 12);
 		testDivRandom(5000 * scale, 80, 80);
 		testDivReconstruct(100000 * scale, 12, 12);
@@ -551,10 +694,12 @@ int main(int argc, char **argv)
 	liDivLoopQuotientDigits = LI_DIV_LOOP_QUOTIENT_DIGITS;
 	testMulLarge();
 	testMulNoMemory();
+	testSqrLarge();
+	testSqrNoMemory();
 	testDivLarge();
 	testDivNoMemory();
 	testDivOffContract();
-	printf("totals: %ld multiplies, %ld divisions (%ld + %ld through a failing malloc)\n", nMul, nDiv, nFallbackMul, nFallbackDiv);
+	printf("totals: %ld multiplies (%ld squares), %ld divisions (%ld + %ld through a failing malloc)\n", nMul, nSqr, nDiv, nFallbackMul, nFallbackDiv);
 	printf("%s: %d failures\n", fails ? "FAILED" : "OK", fails);
 	return fails != 0;
 }

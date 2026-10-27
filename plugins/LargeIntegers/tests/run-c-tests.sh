@@ -172,7 +172,7 @@ for p in $pids; do
     wait ${p%%:*}
     st=$?
     if test $st = 0; then
-        echo "== $k: ok, $(grep -m1 '^LI_LIMB_BITS' "$build/$k.log" | sed 's/ LI_KARATSUBA[^ ]*//; s/ LI_MUL[^ ]*//; s/ LI_DIV[^ ]*//; s/ LI_STACK[^ ]*//'), $(grep '^totals:' "$build/$k.log" | sed 's/^totals: //')"
+        echo "== $k: ok, $(grep -m1 '^LI_LIMB_BITS' "$build/$k.log" | sed 's/ LI_KARATSUBA[^ ]*//; s/ LI_MUL[^ ]*//; s/ LI_SQR[^ ]*//g; s/ LI_DIV[^ ]*//; s/ LI_STACK[^ ]*//'), $(grep '^totals:' "$build/$k.log" | sed 's/^totals: //')"
     else
         grep -E 'FAIL|ERROR|runtime error' "$build/$k.log" | head -n 20
         tail -n 3 "$build/$k.log"
@@ -195,6 +195,8 @@ done
 
 # --- the plugin through the mock VM
 harness() { $limit "$build/plugin_harness" "$@"; }
+# donecalls FILE: the call counts of its '# done ...' lines, 'done 84773 calls + 320 same-object calls'
+donecalls() { echo "done $(sed -n 's/^# done //p' "$1" | sed -e ':a' -e 'N;s/\n/ + /;ta')"; }
 expected=$TESTS/expected/mock-calls.sha256
 if test -n "$record"; then
     if harness calls "$build/reference.so" > "$build/reference.calls"; then
@@ -203,7 +205,7 @@ if test -n "$record"; then
             echo "# run-c-tests.sh --record --reference-c from the LargeIntegers.c before the kernels."
             python3 -I "$TESTS/digest.py" < "$build/reference.calls"
         } > "$expected"
-        echo "== calls: recorded $(grep -vc '^#' "$expected") digests of $(tail -n 1 "$build/reference.calls" | sed 's/^# //') into $expected"
+        echo "== calls: recorded $(grep -vc '^#' "$expected") digests of $(donecalls "$build/reference.calls") into $expected"
     else
         fail "calls (the reference crashed or failed, nothing recorded)"
     fi
@@ -212,7 +214,7 @@ else
     st=$?
     if test $st = 0 &&
        python3 -I "$TESTS/digest.py" --compare "$expected" < "$build/plugin.calls" > "$build/calls.cmp"; then
-        echo "== calls: ok, $(tail -n 1 "$build/plugin.calls" | sed 's/^# //'), $(cat "$build/calls.cmp")"
+        echo "== calls: ok, $(donecalls "$build/plugin.calls"), $(cat "$build/calls.cmp")"
     else
         head -n 20 "$build/plugin.calls.err"
         timedout $st

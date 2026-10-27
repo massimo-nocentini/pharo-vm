@@ -28,7 +28,7 @@ rowMs: label ns: ns
 	Stdio stdout nextPutAll: label, ' ms: ', (ns asFloat / 1000000 printShowingDecimalPlaces: 3); lf; flush
 !
 benchKernels
-	| a b c ab si |
+	| a b c ab ac si |
 	self row: 'empty' ns: (self nsPerCall: [nil]).
 	si := 16r0FFFFFFFFFFFFFFF - 12345.
 	#(64 96 128 192 256 384 512 768 1024 1536 2048 3072 4096 8192 16384 32768 65536 262144) do: [:bits |
@@ -37,6 +37,10 @@ benchKernels
 		c := self large: LargePositiveInteger bytes: bits // 8 - 1 mode: #rnd.
 		ab := (a liMul: b neg: false) liAdd: c.
 		self row: 'mul ', bits printString, 'x', bits printString, 'b' ns: (self nsPerCall: [a liMul: b neg: false]).
+		self row: 'sqr ', bits printString, 'b (x * x)' ns: (self nsPerCall: [a liMul: a neg: false]).
+		ac := LargePositiveInteger new: a basicSize.
+		1 to: a basicSize do: [:i | ac basicAt: i put: (a basicAt: i)].
+		self row: 'sqr ', bits printString, 'b (x * copy of x)' ns: (self nsPerCall: [a liMul: ac neg: false]).
 		self row: 'div ', (2 * bits) printString, '/', bits printString, 'b' ns: (self nsPerCall: [ab liDiv: b neg: false]).
 		self row: 'div ', bits printString, '/', bits printString, 'b' ns: (self nsPerCall: [a liDiv: c neg: false]).
 		self row: 'mul ', bits printString, 'b x SI' ns: (self nsPerCall: [a liMul: si neg: false]).

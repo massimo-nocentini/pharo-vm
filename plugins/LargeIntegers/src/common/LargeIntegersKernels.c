@@ -12,6 +12,10 @@
  * - multiplication: schoolbook, and Karatsuba once the shorter operand has
  *   LI_KARATSUBA_LIMBS limbs (an unbalanced product is cut into pieces of the shorter
  *   operand's length); a short operand of one 64-bit limb streams over the digits;
+ * - squaring, when both operands are the same digits (one pointer, as for x * x, or
+ *   equal contents) of at least LI_SQR_BASECASE_LIMBS limbs: schoolbook squaring, each
+ *   cross product once, and Karatsuba squaring (three half-size squares) from
+ *   LI_SQR_KARATSUBA_LIMBS limbs on; 0.6 to 0.9 of the time of the product;
  * - division: Knuth's algorithm D, each quotient limb estimated with the Moller-Granlund
  *   2-by-1 division by a precomputed reciprocal of the top divisor limb, then corrected
  *   with the next divisor limb as Knuth does; a single-limb divisor takes a plain loop.
@@ -75,6 +79,30 @@ typedef unsigned long long liDLimb;
 #if !defined(LI_MUL_LOOP_DIGIT_PRODUCT)
 # define LI_MUL_LOOP_DIGIT_PRODUCT 25
 #endif
+/* A square (the two operands the same digits) of at least LI_SQR_BASECASE_LIMBS limbs
+   takes the squaring kernels: schoolbook squaring, and Karatsuba squaring from
+   LI_SQR_KARATSUBA_LIMBS limbs on.  Smaller squares are multiplied as any product.
+   Schoolbook squaring does half the limb products of schoolbook multiplication, so
+   Karatsuba overtakes it at a larger size.  With 32-bit limbs, the threshold of the
+   wasm build (node 25, emcc -O2): below 11 digits the 32-bit loop is as fast, and
+   cheaper than comparing two copies of the digits. */
+#if !defined(LI_SQR_BASECASE_LIMBS)
+# if LI_LIMB_BITS == 64
+#  define LI_SQR_BASECASE_LIMBS 3
+# else
+#  define LI_SQR_BASECASE_LIMBS 11
+# endif
+#endif
+#if !defined(LI_SQR_KARATSUBA_LIMBS)
+# if LI_LIMB_BITS == 64
+#  define LI_SQR_KARATSUBA_LIMBS 44
+# else
+#  define LI_SQR_KARATSUBA_LIMBS 48
+# endif
+#endif
+#if LI_SQR_KARATSUBA_LIMBS < 2 || LI_SQR_BASECASE_LIMBS < 1
+# error "LI_SQR_KARATSUBA_LIMBS must be at least 2, LI_SQR_BASECASE_LIMBS at least 1"
+#endif
 /* The 32-bit division loop for quotients of at most this many digits by divisors of fewer
    than LI_DIV_LOOP_DIVISOR_DIGITS digits: it needs no reciprocal and no copies. */
 #if !defined(LI_DIV_LOOP_QUOTIENT_DIGITS)
@@ -91,10 +119,14 @@ typedef unsigned long long liDLimb;
 #if defined(LI_TUNABLE)
 sqInt liKaratsubaLimbs = LI_KARATSUBA_LIMBS;
 sqInt liMulLoopDigitProduct = LI_MUL_LOOP_DIGIT_PRODUCT;
+sqInt liSqrBasecaseLimbs = LI_SQR_BASECASE_LIMBS;
+sqInt liSqrKaratsubaLimbs = LI_SQR_KARATSUBA_LIMBS;
 sqInt liDivLoopQuotientDigits = LI_DIV_LOOP_QUOTIENT_DIGITS;
 #else
 # define liKaratsubaLimbs LI_KARATSUBA_LIMBS
 # define liMulLoopDigitProduct LI_MUL_LOOP_DIGIT_PRODUCT
+# define liSqrBasecaseLimbs LI_SQR_BASECASE_LIMBS
+# define liSqrKaratsubaLimbs LI_SQR_KARATSUBA_LIMBS
 # define liDivLoopQuotientDigits LI_DIV_LOOP_QUOTIENT_DIGITS
 #endif
 
@@ -560,6 +592,108 @@ liMul(liLimb *r, const liLimb *a, sqInt an, const liLimb *b, sqInt bn, liLimb *s
 	}
 }
 
+/* The scratch limbs liSqr(r, a, n, scratch) uses; n >= 1. */
+static sqInt
+liSqrScratch(sqInt n)
+{
+	sqInt h, need, other;
+
+	if (n < liSqrKaratsubaLimbs) {
+		return 0;
+	}
+	h = (n + 1) / 2;
+	need = liSqrScratch(h);
+	if ((other = liSqrScratch(n - h)) > need) {
+		need = other;
+	}
+	if (2 * h + 1 > need) {
+		need = 2 * h + 1;
+	}
+	return 3 * h + need;
+}
+
+/* r[0 .. 2n) := a^2 by schoolbook, each cross product once: the sum of a_i a_j B^(i+j)
+   over i < j, doubled by a one-bit shift, plus the squares a_i^2 B^2i on the diagonal;
+   n (n + 1) / 2 limb products instead of n^2.  Menezes, van Oorschot & Vanstone,
+   "Handbook of Applied Cryptography" (1996), algorithm 14.16, doubles each cross product
+   as it goes; summing them first and doubling once, as GMP's mpn_sqr_basecase does, needs
+   no three-limb accumulator.  n >= 1 */
+static void
+liSqrBasecase(liLimb *r, const liLimb *a, sqInt n)
+{
+	liLimb s = 0, c = 0, x0, x1;
+	liDLimb p, t;
+	sqInt i;
+
+	/* r[1 .. 2n - 1) := the cross products, row i adding a_i a[i + 1 .. n) from limb 2i + 1 */
+	r[0] = 0;
+	r[2 * n - 1] = 0;
+	if (n > 1) {
+		r[n] = liMul1(r + 1, a + 1, n - 1, a[0]);
+		for (i = 1; i < n - 1; i += 1) {
+			r[n + i] = liAddMul1(r + 2 * i + 1, a + i + 1, n - i - 1, a[i]);
+		}
+	}
+	/* r := 2 r + the diagonal, two limbs at a time: s is the bit shifted out of the limb
+	   below, c the carry of the sum; both end at zero, as a^2 fits 2n limbs */
+	for (i = 0; i < n; i += 1) {
+		p = (liDLimb) a[i] * a[i];
+		x0 = r[2 * i];
+		x1 = r[2 * i + 1];
+		t = (liDLimb) ((x0 << 1) | s) + (liLimb) p + c;
+		r[2 * i] = (liLimb) t;
+		t = (liDLimb) ((x1 << 1) | (x0 >> (LI_LB - 1))) + (liLimb) (p >> LI_LB) + (liLimb) (t >> LI_LB);
+		r[2 * i + 1] = (liLimb) t;
+		c = (liLimb) (t >> LI_LB);
+		s = x1 >> (LI_LB - 1);
+	}
+}
+
+static void liSqr(liLimb *r, const liLimb *a, sqInt n, liLimb *scratch);
+
+/* Karatsuba squaring, n >= 2: with h = (n + 1) / 2 and a = a1 B^h + a0,
+   a^2 = a1^2 B^2h + (a0^2 + a1^2 - (a0 - a1)^2) B^h + a0^2, three squares of at most h
+   limbs; the middle coefficient 2 a0 a1 is never negative */
+static void
+liSqrKaratsuba(liLimb *r, const liLimb *a, sqInt n, liLimb *scratch)
+{
+	sqInt h = (n + 1) / 2, a1n = n - h, z2n = 2 * a1n, tn;
+	liLimb *d = scratch, *zm = scratch + h, *t = scratch + 3 * h;
+	liLimb c;
+
+	liAbsDiff(d, a, h, a + h, a1n);
+	liSqr(zm, d, h, scratch + 3 * h);
+	liSqr(r, a, h, scratch + 3 * h);
+	liSqr(r + 2 * h, a + h, a1n, scratch + 3 * h);
+
+	/* t[0 .. 2h] := z0 + z2 - (a0 - a1)^2 */
+	c = liAddN(t, r, r + 2 * h, z2n);
+	t[2 * h] = liAdd1(t + z2n, r + z2n, 2 * h - z2n, c);
+	t[2 * h] -= liSubN(t, t, zm, 2 * h);
+
+	/* r[h ..) += t, as in liMulKaratsuba */
+	tn = 2 * n - h < 2 * h + 1 ? 2 * n - h : 2 * h + 1;
+	c = liAddN(r + h, r + h, t, tn);
+	liAdd1(r + h + tn, r + h + tn, 2 * n - h - tn, c);
+}
+
+/* r[0 .. 2n) := a^2; n >= 1; r overlaps neither a nor the liSqrScratch(n) limbs at
+   scratch.  Below liSqrBasecaseLimbs (inside Karatsuba only when the tests force its
+   threshold down) the general schoolbook. */
+static void
+liSqr(liLimb *r, const liLimb *a, sqInt n, liLimb *scratch)
+{
+	if (n < liSqrBasecaseLimbs) {
+		liMulBasecase(r, a, n, a, n);
+	}
+	else if (n < liSqrKaratsubaLimbs) {
+		liSqrBasecase(r, a, n);
+	}
+	else {
+		liSqrKaratsuba(r, a, n, scratch);
+	}
+}
+
 #if LI_LIMB_BITS == 64
 /* pRes[0 .. resLen) := the low resLen digits of the product of the aDigits digits at pA
    with the limb m: the short operand of most multiplications, with no scratch memory */
@@ -599,9 +733,11 @@ liMulDigitsBy1(unsigned int *pRes, sqInt resLen, const unsigned int *pA, sqInt a
 }
 #endif
 
-/* liDigitMultiply over limbs in scratch memory; aDigits >= bDigits > 0 */
+/* liDigitMultiply over limbs in scratch memory; aDigits >= bDigits > 0.  square: the
+   digits at pB are those at pA, loaded once and squared. */
 static void
-liMulDigits(unsigned int *pA, sqInt aDigits, unsigned int *pB, sqInt bDigits, unsigned int *pRes, sqInt resLen)
+liMulDigits(unsigned int *pA, sqInt aDigits, unsigned int *pB, sqInt bDigits, unsigned int *pRes, sqInt resLen,
+		int square)
 {
 	liLimb stackLimbs[LI_STACK_LIMBS];
 	liLimb *limbs, *a, *b, *r;
@@ -609,18 +745,24 @@ liMulDigits(unsigned int *pA, sqInt aDigits, unsigned int *pB, sqInt bDigits, un
 
 	an = liLimbsFor(aDigits);
 	bn = liLimbsFor(bDigits);
-	need = an + bn + (an + bn) + liMulScratch(an, bn);
+	need = square ? an + (an + an) + liSqrScratch(an) : an + bn + (an + bn) + liMulScratch(an, bn);
 	limbs = need <= LI_STACK_LIMBS ? stackLimbs : (liLimb *) LI_MALLOC(need * sizeof(liLimb));
 	if (limbs == 0) {
 		liDigitMultiply32(pB, bDigits, pA, aDigits, pRes, resLen);
 		return;
 	}
 	a = limbs;
-	b = a + an;
-	r = b + bn;
 	liLoad(a, pA, aDigits, 0);
-	liLoad(b, pB, bDigits, 0);
-	liMul(r, a, an, b, bn, r + an + bn);
+	if (square) {
+		r = a + an;
+		liSqr(r, a, an, r + an + an);
+	}
+	else {
+		b = a + an;
+		r = b + bn;
+		liLoad(b, pB, bDigits, 0);
+		liMul(r, a, an, b, bn, r + an + bn);
+	}
 	liStore(pRes, resLen, r, an + bn, 0);
 	if (limbs != stackLimbs) {
 		LI_FREE(limbs);
@@ -633,6 +775,7 @@ liDigitMultiply(unsigned int *pWordShort, sqInt shortLen, unsigned int *pWordLon
 {
 	unsigned int *pA, *pB;
 	sqInt aDigits, bDigits;
+	int square;
 
 	if (shortLen <= longLen) {
 		pA = pWordLong; aDigits = longLen; pB = pWordShort; bDigits = shortLen;
@@ -650,14 +793,22 @@ liDigitMultiply(unsigned int *pWordShort, sqInt shortLen, unsigned int *pWordLon
 		liDigitMultiply32(pWordShort, shortLen, pWordLong, longLen, pWordRes, resLen);
 		return;
 	}
-#else
-	/* below Karatsuba, the 32-bit loop needs no scratch and is as fast */
-	if (bDigits < liKaratsubaLimbs) {
+#endif
+	/* x * x passes the same digits twice; equal digits at two places square too.  Unequal
+	   operands nearly always differ in their lowest digit, which is compared first, so
+	   that they pay no call; otherwise memcmp reads at most the 2 x aDigits digits, a few
+	   ns at worst where the square saves at least 10% of a product of 3 limbs. */
+	square = aDigits == bDigits && liLimbsFor(aDigits) >= liSqrBasecaseLimbs
+		&& (pA == pB
+			|| (pA[0] == pB[0] && memcmp(pA + 1, pB + 1, (size_t) (aDigits - 1) * sizeof(unsigned int)) == 0));
+#if LI_LIMB_BITS == 32
+	/* below Karatsuba, the 32-bit loop needs no scratch and is as fast as schoolbook */
+	if (!square && bDigits < liKaratsubaLimbs) {
 		liDigitMultiply32(pWordShort, shortLen, pWordLong, longLen, pWordRes, resLen);
 		return;
 	}
 #endif
-	liMulDigits(pA, aDigits, pB, bDigits, pWordRes, resLen);
+	liMulDigits(pA, aDigits, pB, bDigits, pWordRes, resLen, square);
 }
 
 

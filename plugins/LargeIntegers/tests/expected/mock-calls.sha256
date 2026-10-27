@@ -22,3 +22,6 @@ b15d2a066022a64ed9396ef6dcfc43006503c9945ac6e5b324b4fd085664869f 21 wrong-type a
 2338478667abbed48ff4eeed2eb18a5be959ae6681fc84e6e6d5767b1dcb1bc7 42 wrong-type arguments | primAnyBitFromTo
 dc68a1d253280e3c750f53a7c6b21ac8b618ff58c927f94721840afa7a974bb9 41 wrong-type arguments | primMontgomeryTimesModulo
 0029653d49505f0803db65ed468527a51e5d5205bd0c7ec4e4bd1a40d1a60083 1 done 84773 calls | (section)
+b9c73a8dd9c2d1091f46043af6290c694bc543435f7e553cdc426152f2efd217 1 same object: x * x | (section)
+dd53d4eca972e633c08138902b8977fd5f62357ec79c096a498d172378c1685c 320 same object: x * x | primDigitMultiplyNegative
+bdf1656bf677bb5d79b010109bef69715791d9025abbecb375b762061daf6a60 1 done 320 same-object calls | (section)

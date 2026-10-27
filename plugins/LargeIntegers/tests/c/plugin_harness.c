@@ -378,6 +378,9 @@ static void describe(sqInt r, sqInt rcv, char *buf, size_t len)
 	}
 }
 
+/* When set, the first argument is the receiver's object itself, not a copy (x * x). */
+static int sameObject;
+
 /* Call `prim` of plugin p with receiver and args materialised from specs.
    argc < 0 means the true arity.  Returns a textual outcome. */
 static void callPrim(Plugin *p, const char *prim, const Spec *rcv, const Spec **args, int nargs, int argc, Outcome *out)
@@ -392,7 +395,7 @@ static void callPrim(Plugin *p, const char *prim, const Spec *rcv, const Spec **
 	base = sp;
 	rcvOop = materialise(rcv);
 	stk[++sp] = rcvOop;
-	for (i = 0; i < nargs; i++) stk[++sp] = materialise(args[i]);
+	for (i = 0; i < nargs; i++) stk[++sp] = i == 0 && sameObject ? rcvOop : materialise(args[i]);
 	argCount = argc < 0 ? nargs : argc;
 	primFailCode = 0;
 	remapDepth = remapMax = 0;
@@ -597,8 +600,53 @@ static int runDiff(void)
 		for (unsigned r = 0; r < sizeof rcvs / sizeof rcvs[0]; r++) free(rcvs[r]);
 		free(one); free(eight); free(m); free(inv); free(a); free(b);
 	}
-	if (diffMode) printf("diff: %ld calls, %d mismatches\n", calls, bad);
-	else printf("# done %ld calls\n", calls);
+	if (!diffMode) printf("# done %ld calls\n", calls);
+
+	/* x * x as the image sends it, e.g. from #squared: the receiver again as the argument,
+	   one object, so that the plugin multiplies the same digits by themselves (the squaring
+	   kernels; the pairs above pass equal digits in two objects).  Last, so that the calls
+	   above and their digests stay as they were recorded. */
+	long sameCalls = 0;
+	note("same object: x * x");
+	{
+		/* byte sizes around the squaring thresholds: 3, 44 and 88 64-bit limbs (24, 352, 704
+		   bytes), 8, 48 and 96 32-bit limbs (32, 192, 384 bytes), a digit and a byte off */
+		static const int centres[] = { 24, 32, 192, 352, 384, 704 }, deltas[] = { -5, -4, -1, 0, 1, 4, 5 };
+		static const int large[] = { 1500, 4001, 8000, 40000 };
+		static const uint32_t tops[] = { 0xFFFFFFFFu, 0x80000000u, 1 };
+		Spec *specs[96];
+		int ns = 0;
+		for (unsigned c = 0; c < sizeof centres / sizeof centres[0]; c++)
+			for (unsigned d = 0; d < sizeof deltas / sizeof deltas[0]; d++) {
+				/* one draw per statement: the arguments of a call are evaluated in no fixed order */
+				int kind = rnd() & 1 ? K_LNI : K_LPI;
+				int mode = (int)(rnd() % 2);
+				specs[ns++] = spec(kind, centres[c] + deltas[d], mode, 1);
+			}
+		for (unsigned i = 0; i < sizeof large / sizeof large[0]; i++)
+			specs[ns++] = spec(K_LPI, large[i], 0, 1);
+		/* top digit all ones, 0x80000000 or 1; all ones throughout */
+		for (unsigned c = 0; c < sizeof centres / sizeof centres[0]; c++)
+			for (unsigned k = 0; k < 4; k++) {
+				Spec *s = spec(K_LPI, centres[c], 0, 1);
+				if (k == 3) memset(s->bytes, 0xFF, s->n);
+				else for (int b = 0; b < 4; b++) s->bytes[s->n - 4 + b] = (unsigned char)(tops[k] >> (8 * b));
+				specs[ns++] = s;
+			}
+		sameObject = 1;
+		for (int i = 0; i < npool + ns; i++) {
+			/* the pool too: SmallIntegers, empty and unnormalized LargeIntegers, wrong types */
+			const Spec *x = i < npool ? pool[i] : specs[i - npool];
+			const Spec *a2t[2] = { x, t }, *a2f[2] = { x, f };
+			bad += diffOne("same", "primDigitMultiplyNegative", x, a2t, 2);
+			bad += diffOne("same", "primDigitMultiplyNegative", x, a2f, 2);
+			sameCalls += 2;
+		}
+		sameObject = 0;
+		for (int i = 0; i < ns; i++) free(specs[i]);
+	}
+	if (diffMode) printf("diff: %ld calls, %d mismatches\n", calls + sameCalls, bad);
+	else printf("# done %ld same-object calls\n", sameCalls);
 	return bad ? 1 : 0;
 }
 
