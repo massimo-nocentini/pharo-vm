@@ -28,6 +28,12 @@
 # the root of branch gh-pages, which GitHub Pages serves, once every file of
 # its manifest is checked (and small enough for git).
 #
+# Every job compiles C with clang and C++ with clang++: CC and CXX on Linux
+# and macOS (AppleClang there), -DCMAKE_C_COMPILER and -DCMAKE_CXX_COMPILER
+# in MSYS2, and in the WebAssembly job emcc and em++ (clang) for the VMs and
+# clang for the native tree that generates their sources.  After configuring,
+# scripts/check-clang.sh fails the job if CMake found another compiler.
+#
 # Linux and macOS bundle the prebuilt libraries of files.pharo.org
 # (PHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES), Windows the DLLs of the
 # MSYS2 packages (cmake/importMinGWDependencies.cmake).
@@ -90,6 +96,9 @@ jobs:
             -DICEBERG_DEFAULT_REMOTE=httpsUrl \
             -DBUILD_WITH_GRAPHVIZ=OFF
 
+      - name: Check that CMake uses clang and clang++
+        run: sh scripts/check-clang.sh build
+
       - name: Build
         run: cmake --build build --parallel "$(nproc)"
 
@@ -136,6 +145,9 @@ jobs:
         include:
           - { arch: x86_64, runner: macos-15-intel }
           - { arch: arm64,  runner: macos-15 }
+    env:
+      CC: clang
+      CXX: clang++
     steps:
       - uses: actions/checkout@v7
         with:
@@ -169,6 +181,9 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
             -DCMAKE_OSX_SYSROOT=macosx \
             "${extra[@]}"
+
+      - name: Check that CMake uses clang and clang++
+        run: sh scripts/check-clang.sh build
 
       - name: Build
         run: cmake --build build --parallel "$(sysctl -n hw.ncpu)"
@@ -237,6 +252,9 @@ jobs:
             -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE \
             -DICEBERG_DEFAULT_REMOTE=httpsUrl \
             -DBUILD_WITH_GRAPHVIZ=OFF
+
+      - name: Check that CMake uses clang and clang++
+        run: sh scripts/check-clang.sh build
 
       - name: Generate
         run: cmake --build build --target generate-sources
@@ -330,6 +348,9 @@ jobs:
             -DICEBERG_DEFAULT_REMOTE=httpsUrl \
             -DBUILD_WITH_GRAPHVIZ=OFF
 
+      - name: Check that CMake uses clang and clang++
+        run: sh scripts/check-clang.sh build
+
       - name: Build
         run: cmake --build build
 
@@ -414,6 +435,10 @@ jobs:
       # Pharo 15 build 41, the image of the site before: only its .sources is staged, for the images saved on it
       PHARO15B41_URL: https://files.pharo.org/image/150/Pharo15.0-SNAPSHOT.build.41.sha.4e572fed79.arch.64bit.zip
       PHARO15B41_SHA256: 8ce97d8d8a1b466a4a591d52a8f9f5822e2cff03669eacf91713b8f29db46727
+      # The native tree of build-wasm/host, which generates the sources;
+      # the toolchain file of emcmake makes the wasm tree use emcc and em++
+      CC: clang
+      CXX: clang++
     steps:
       - uses: actions/checkout@v7
         with:
@@ -424,6 +449,11 @@ jobs:
         run: |
           git fetch --no-tags --force https://github.com/pharo-project/pharo-vm.git '+refs/tags/v*:refs/tags/v*'
           git describe --tags --match 'v[0-9]*'
+
+      - name: Install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang
 
       - name: Install Emscripten
         run: |
@@ -458,6 +488,9 @@ jobs:
           make wasm WASM_IMAGE_ZIP="$PHARO15_ZIP" WASM_IMAGE_ID=p15 \
             WASM_EXTRA_IMAGES="p13=$PHARO13_ZIP p14=$PHARO14_ZIP" \
             WASM_EXTRA_SOURCES="$PHARO_LEGACY_SOURCES" WASM_LIBGIT2=ON
+
+      - name: Check that CMake uses clang and clang++
+        run: sh scripts/check-clang.sh build-wasm/host build-wasm/cmake
 
       - name: Run the node test lanes
         run: |
