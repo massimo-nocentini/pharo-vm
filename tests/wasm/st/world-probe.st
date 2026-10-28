@@ -7,6 +7,7 @@
 
 	seq            how many times it was written
 	major          the major version of Pharo
+	home           the HOME of the VM, from its environment, or null
 	renderer, driver   the classes of the world renderer and of its driver
 	world          the extent of the World, [width, height]
 	display        the extent of the renderer's Form, or null
@@ -143,6 +144,7 @@ Smalltalk globals
 		state := Dictionary new.
 		state at: 'seq' put: seq.
 		state at: 'major' put: SystemVersion current major.
+		state at: 'home' put: (OSEnvironment current at: 'HOME' ifAbsent: [ nil ]).
 		[
 		| renderer menubar playground area |
 		renderer := World worldState worldRenderer.

@@ -24,6 +24,20 @@
 //     requests to the site's default (ready.gitProxy): Iceberg clones
 //     through it, and the page says once that the requests go through the
 //     site's public proxy (the one-time note, pharo-wasm.gitProxyNoted);
+//   - the first commit of a user that git does not know yet (the HOME of
+//     the VM has no .gitconfig at first) goes through Iceberg's dialog of
+//     the missing properties, as the world page shows it: here the dialog
+//     (IceTipGitUsernameAndEmailDialogPresenter) is made as Iceberg makes
+//     it, not opened, filled in with 'Save properties as global?' checked,
+//     and accepted, which resumes the commit; then a full garbage
+//     collection, whose finalization frees the LGitConfig that the dialog
+//     made, with git_config_free and no error in the terminal, and the next
+//     commit must work (on Pharo 13 and later only the set up of the
+//     image, OSWebDriver class>>#setUpLibGit, makes that finalization
+//     harmless), without a failed callout;
+//   - that user, written into HOME/.gitconfig, is kept with the image:
+//     after Save and a reload HOME is /pharo/home, its .gitconfig is there,
+//     and a commit no longer asks for the user;
 //   - the clone is kept with the image (the files of the image, saved with
 //     it in the browser): after Save and a reload, its directory and its
 //     .git are there, Iceberg fetches it again, and the page does not say
@@ -57,7 +71,7 @@
 // console error or a failed request, which name the git server) are what
 // the check of None expects: they are taken out of the errors of pw.mjs,
 // whose last check is then that there were no others.  With that last
-// check, 12 checks for each browser.
+// check, 14 checks for each browser.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -203,6 +217,84 @@ await run(async t => {
     assert((await spied()).notices.includes(NOTE_ONCE), 'and in a notice: ' + JSON.stringify((await spied()).notices));
     const noted = await page.evaluate(() => localStorage.getItem('pharo-wasm.gitProxyNoted'));
     assert(noted === proxyOrigin, 'noted: ' + noted);
+  });
+
+  // A commit of the repository GitSpecIdRepo, which answers its short id
+  // and how many times a commit asked for the user so far (GitSpecDialogs):
+  // when it asks, the dialog answers, made as
+  // IceTipInteractiveErrorVisitor>>#visitMissingCredentialsError: makes it,
+  // and its Ok (IceTipGitUsernameAndEmailDialogPresenter>>#accept) resumes
+  // the commit
+  const commitAs = message =>
+    `| r d | r := Smalltalk at: #GitSpecIdRepo. [ 'commit ' , ([ (r commitWithMessage: '${message}') shortId ] ` +
+    `on: IceGitUsernameOrEmailNotFound do: [ :missing | ` +
+    `Smalltalk at: #GitSpecDialogs put: (Smalltalk at: #GitSpecDialogs) + 1. ` +
+    `d := IceTipGitUsernameAndEmailDialogPresenter newApplication: SpApplication new model: r. d asModalWindow. ` +
+    `d nameInput text: 'Git Spec User'. d emailInput text: 'spec@example.org'. d globalCheckbox state: true. ` +
+    `d onAccept: [ missing resume ]. d accept ]) , ' dialogs ' , (Smalltalk at: #GitSpecDialogs) printString ] ` +
+    `on: Error do: [ :e | 'error ' , e class name , ': ' , e messageText ]`;
+  const COMMITTED = /'commit [0-9a-f]{7} dialogs \d+'|'error [^']*'/;
+  const ID_LOG = "((Smalltalk at: #GitSpecIdRepo) branch commits collect: [ :c | c comment , ' (' , c author , ')' ]) asArray";
+  const trapped = () => workerLog.filter(l => /FFI callout (failed|trapped)/.test(l));
+  // The C functions that the method of LGitConfig's free function names in
+  // its callout ('missing' without that method): git_config_free once the
+  // image is set up
+  const FREE_CALLS = "((LGitConfig class lookupSelector: LGitConfig freeFunctionSelector) " +
+    "ifNil: [ 'missing' ] ifNotNil: [ :m | ' ' join: ((m ast allChildren select: [ :n | n isLiteralNode and: [ n value isArray ] ]) " +
+    "flatCollect: [ :n | (n value select: [ :e | e isSymbol and: [ e beginsWith: 'git_' ] ]) collect: [ :e | e asString ] ]) ])";
+
+  await check('a first commit asks for the user, the dialog sets it globally, and after a full GC the next commit works', async () => {
+    const from = (await term()).length;
+    const start = await evalTo("| r c | Smalltalk at: #GitSpecDialogs put: 0. " +
+                               "r := IceRepositoryCreator new location: FileLocator imageDirectory / 'git-spec' / 'identity'; " +
+                               "subdirectory: 'src'; createNewRepositoryNamed: 'identity'. r register. " +
+                               "Smalltalk at: #GitSpecIdRepo put: r. " +
+                               "c := (Object << #GitSpecIdentityDemo) package: 'GitSpecIdentityDemo'; install. " +
+                               "c compile: 'one ^ 1'. r workingCopy addPackageNamed: 'GitSpecIdentityDemo'. " +
+                               "'ready, .gitconfig ' , (FileLocator home / '.gitconfig') exists printString",
+                               /'ready[^']*'|Error|error/);
+    assert(/'ready, \.gitconfig false'/.test(start), 'a repository, a package, and no user yet: ' + start.trim().slice(-300));
+    const first = await evalTo(commitAs('first'), COMMITTED);
+    assert(/'commit [0-9a-f]{7} dialogs 1'/.test(first), 'the first commit, through the dialog: ' + first.trim().slice(-300));
+    const gc = await evalTo("Smalltalk garbageCollect. (Delay forMilliseconds: 300) wait. Smalltalk garbageCollect. " +
+                            "(Delay forMilliseconds: 300) wait. 'configurations ' , LGitConfig allInstances size printString , " +
+                            "', freed by ' , " + FREE_CALLS,
+                            /'configurations [^']*'/);
+    assert(/'configurations 0, freed by git_config_free'/.test(gc),
+           'the LGitConfig objects of the dialog are freed by git_config_free: ' + (gc.match(/'configurations [^']*'/g) || [gc.trim().slice(-200)]).pop());
+    await evalTo("(Smalltalk at: #GitSpecIdentityDemo) compile: 'two ^ 2'. #compiled", /#compiled/);
+    const second = await evalTo(commitAs('second'), COMMITTED);
+    assert(/'commit [0-9a-f]{7} dialogs 1'/.test(second), 'the commit after the GC, without the dialog: ' + second.trim().slice(-300));
+    const log = await evalTo(ID_LOG, /#\([^)]*\)/);
+    assert(log.includes("#('second (Git Spec User)' 'first (Git Spec User)')"), 'the log: ' + log.trim().slice(-300));
+    assert(trapped().length === 0, 'no failed callout: ' + trapped().join(' | '));
+    // (an error of the finalization process, a free function that is not
+    // there say, only shows in the terminal)
+    const errors = (await term()).slice(from).match(/\bError: [A-Za-z][^\n]*/g);
+    assert(!errors, 'no error in the terminal: ' + (errors || []).join(' | ').slice(0, 400));
+  });
+
+  await check('that user is kept with the saved image: after a reload HOME/.gitconfig is there, and a commit asks no more', async () => {
+    await page.click('#save');
+    await page.waitForFunction(() => !document.getElementById('notice').hidden &&
+                               /^The image is saved in this browser/.test(document.getElementById('notice-text').textContent),
+                               null, { timeout: 120000 });
+    await waitStatus('waiting', 60000);
+    await page.reload();
+    await waitStatus('waiting', 60000);
+    assert(/[?&]slot=/.test(page.url()), 'the saved image runs: ' + page.url());
+    const home = await evalTo("'home ' , (OSEnvironment current at: 'HOME' ifAbsent: [ 'none' ]) , ' ' , " +
+                              "((FileLocator home / '.gitconfig') exists ifTrue: [ (FileLocator home / '.gitconfig') contents " +
+                              "lines detect: [ :l | l includesSubstring: 'name =' ] ifNone: [ 'no name' ] ] ifFalse: [ 'no .gitconfig' ]) trimBoth",
+                              /'home [^']*'/);
+    assert(/'home \/pharo\/home name = Git Spec User'/.test(home), 'HOME and its .gitconfig: ' + home.trim().slice(-300));
+    await evalTo("Smalltalk at: #GitSpecDialogs put: 0. (Smalltalk at: #GitSpecIdentityDemo) compile: 'three ^ 3'. #compiled", /#compiled/);
+    const third = await evalTo(commitAs('third'), COMMITTED);
+    assert(/'commit [0-9a-f]{7} dialogs 0'/.test(third), 'a commit that does not ask for the user: ' + third.trim().slice(-300));
+    const log = await evalTo(ID_LOG, /#\([^)]*\)/);
+    assert(log.includes("#('third (Git Spec User)' 'second (Git Spec User)' 'first (Git Spec User)')"),
+           'the log: ' + log.trim().slice(-300));
+    assert(trapped().length === 0, 'no failed callout: ' + trapped().join(' | '));
   });
 
   await check('the clone is saved with the image: after a reload its .git is there, Iceberg fetches it, and no note again', async () => {

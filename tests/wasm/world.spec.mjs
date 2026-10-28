@@ -51,7 +51,9 @@
 // URL (?slot=) and the link to the Console say; Images lists the slots,
 // Save as makes another, which an Open of Images leaves for the first,
 // Rename renames, Delete deletes, the focus staying in the dialog; a file written into /pharo is kept with
-// the image (the tree) across a Save and a reload.  Settings (git-proxy.js)
+// the image (the tree) across a Save and a reload, and so is a .gitconfig in
+// the home, /pharo/home, which is the HOME of the world (the probe says it)
+// before and after.  Settings (git-proxy.js)
 // on the world page: the site's default (pw.mjs serves a dead local one),
 // None, which a reload keeps, and a proxy of the user's, given to the VM;
 // the "git" messages of the worker give the note of the public proxy once,
@@ -814,12 +816,17 @@ await run(async t => {
     assert(await page.getAttribute('#console', 'href') === 'index.html?slot=' + now, 'the Console link');
   });
 
-  await check('a file written into /pharo is kept with the image: Save, reload, it is there', async () => {
+  await check('a file written into /pharo is kept with the image: Save, reload, it is there; so is the home of the world, /pharo/home', async () => {
     const file = '/pharo/pharo-local/world-spec/kept.txt', dir = '/pharo/pharo-local/world-spec/empty';
+    // (the global configuration of git, in the HOME of the VM: vm-worker.js)
+    const gitconfig = '/pharo/home/.gitconfig', user = '[user]\n\tname = World Spec\n';
     const mtime = Date.UTC(2024, 1, 2, 3, 4, 5);
-    await page.evaluate(([file, dir, mtime]) => Promise.all([
+    const before = await probe('the home', q => 'home' in q);
+    assert(before.home === '/pharo/home', 'the HOME of the world: ' + JSON.stringify(before.home));
+    await page.evaluate(([file, dir, mtime, gitconfig, user]) => Promise.all([
       window.PharoWorld.fs('writeFile', file, { data: 'kept by world.spec\n', mode: 0o100600, mtime }),
-      window.PharoWorld.fs('mkdir', dir, { mode: 0o40750 })]), [file, dir, mtime]);
+      window.PharoWorld.fs('writeFile', gitconfig, { data: user }),
+      window.PharoWorld.fs('mkdir', dir, { mode: 0o40750 })]), [file, dir, mtime, gitconfig, user]);
     await page.evaluate(() => { document.getElementById('notice-text').textContent = ''; });
     await page.click('#save');
     await noticeSays(/^The image is saved in this browser as '[^']*' \(/, 120000);
@@ -836,6 +843,10 @@ await run(async t => {
     assert((st.mode & 0o777) === 0o600 && st.mtime === mtime, 'its mode and time: ' + JSON.stringify(st));
     const d = await page.evaluate(f => window.PharoWorld.fs('stat', f), dir);
     assert((d.mode & 0o170000) === 0o040000, 'the empty directory: ' + JSON.stringify(d));
+    const home = await page.evaluate(f => window.PharoWorld.readFile(f).then(d => new TextDecoder().decode(d)), gitconfig);
+    assert(home === user, 'the .gitconfig of the home: ' + JSON.stringify(home));
+    const after = await probe('the home after the reload', q => 'home' in q);
+    assert(after.home === '/pharo/home', 'the HOME of the world after the reload: ' + JSON.stringify(after.home));
     await waitState('running');
   });
 

@@ -178,6 +178,21 @@
 // path with '', '.' or '..' in it is skipped); saved {treeFiles, treeSize}
 // says what the slot keeps.
 //
+// The home.  The VM's HOME is HOME, /pharo/home, in the tree: the worker
+// makes it at every boot (after the tree of the slot, which may have it),
+// in every mode.  So what the image and libgit2 keep in HOME is kept with
+// the image, as any file of the tree: above all the global .gitconfig,
+// where Iceberg's dialog of the missing properties (the user of a commit)
+// writes when its "Save properties as global?" is checked: once the image
+// is saved, no commit asks again, after a reload too.  It is the home of
+// the slot, not of the browser: each slot keeps its own, as it keeps its
+// clones, an image saved as another slot takes a copy, and a fresh image,
+// an upload and a slot saved before there was a home start with an empty
+// one.  The notebook reads the one of the slot it boots.  (Emscripten's own
+// HOME, /home/web_user, is in no tree.)  A slot saved before there was a
+// home may keep a file or a link named home there, of the user's: the VM
+// then keeps Emscripten's HOME, and the worker warns.
+//
 // Preparation.  The world page sends init.prepare: an image that cannot
 // open the world (not prepared: it lacks OSWindow-Web, or has an older
 // version of it) is then prepared for it, as the Console's "Prepare for the
@@ -282,6 +297,8 @@ const PACKAGE_MARKER = 'OSWindowWebPackage';
 // Where the REPL says which version of it its image has, 0 without it
 // (PHARO_WEB_WORLD_FILE)
 const WORLD_FILE = DIR + '/.pharo-web-world';
+// The HOME of the VM, in the tree of the slot (see The home)
+const HOME = DIR + '/home';
 // What prepares an image for the world, in one evaluation of the REPL
 const PREPARE = "CodeImporter evaluateFileNamed: '" + DIR + "/st/web-bootstrap.st'. " + SAVE;
 // The most that the tree of a slot keeps: the bytes of its files, and its
@@ -1033,6 +1050,9 @@ async function load(m) {
   // the files of the slot first, then the placeholders: a file of the
   // manifest of the same name wins
   const files = saved && saved.tree ? treeFiles(saved.tree) : [];
+  const home = files.some(f => f.path === HOME && !f.dir) ? null : HOME;
+  if (home) files.push({ path: home, dir: true });
+  else console.warn('vm-worker: the saved image has a file named ' + HOME + ': the VM keeps the HOME of Emscripten');
   for (const name of manifest.libraries || []) {
     if (!/^[^/]+$/.test(name)) throw new Error('manifest.json names the library file ' + JSON.stringify(name));
     files.push({ path: DIR + '/' + name, data: new Uint8Array(0) });
@@ -1053,7 +1073,7 @@ async function load(m) {
   if (store) {
     try { stored = (await store.list()).length > 0; } catch (e) { /* none that can be used */ }
   }
-  return Object.assign(said, { files, source, savedAt, webPackage, prepared: canOpen(webPackage), stored,
+  return Object.assign(said, { files, home, source, savedAt, webPackage, prepared: canOpen(webPackage), stored,
                                sources: served });
 }
 
@@ -1094,6 +1114,7 @@ async function boot(m) {
   config.onGitHttp = gitHttp;
   const image = DIR + '/' + manifest.image;
   const env = mode === 'console' ? { PHARO_WEB_WORLD_FILE: WORLD_FILE } : {};
+  if (loaded.home) env.HOME = loaded.home;
   if (mode === 'sdl') {
     // before the VM's factory runs, which takes the document of the shim
     importScripts('sdl-shim.js' + q);

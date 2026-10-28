@@ -15,7 +15,7 @@
  web-bootstrap.st.  The --save of st saves the image once more after this script, so
  the image starts in the browser with nothing of the preparation left to run."
 
-| environment stDir outDir undeclared package |
+| environment stDir outDir undeclared package snapshot |
 environment := OSEnvironment current.
 stDir := (environment
 	at: 'PHARO_WEB_ST_DIR'
@@ -32,7 +32,8 @@ environment
 
 "Install the snapshot rather than load the version: a version is named with a UUID,
  which Pharo 15 makes only with the UUIDPlugin of a VM 10.3.9 or later"
-(TonelReader on: stDir fileName: 'OSWindow-Web') snapshot install.
+snapshot := (TonelReader on: stDir fileName: 'OSWindow-Web') snapshot.
+snapshot install.
 package := 'OSWindow-Web' asPackage.
 
 "Loading only warns about an undeclared variable, and the world would break in the
@@ -63,7 +64,10 @@ OSWindowDriver classPool
  the initialization of the classes that define one on their class side.  The file outs of
  the images would not do: Package>>#fileOut of Pharo 12 writes a class after methods that
  refer to it, and Pharo 15 has a Fileouter instead, which initializes every class that
- defines #initialize on its instance side"
+ defines #initialize on its instance side.  Only the methods of the sources of the
+ package: not the extensions of it that #setUpImage compiled into this image because
+ it needs them (OSWebDriver class>>#setUpLibGit), which web-bootstrap.st compiles in
+ an image that needs them too"
 (outDir / 'OSWindow-Web.st') ensureDelete; writeStreamDo: [ :stream |
 	| bang chunk classes methods |
 	"A chunk ends with an exclamation mark, and one in it is doubled.  One before a chunk
@@ -94,7 +98,12 @@ OSWindowDriver classPool
 			chunk
 				value: class name , ' commentStamp: '''' prior: 0';
 				value: class comment ] ].
-	methods := package methods asArray sort: [ :a :b |
+	methods := (package methods select: [ :method |
+		snapshot definitions anySatisfy: [ :definition |
+			definition isMethodDefinition and: [
+				definition selector = method selector and: [
+					definition className = method methodClass instanceSide name and: [
+						definition classIsMeta = method methodClass isMeta ] ] ] ] ]) asArray sort: [ :a :b |
 		a methodClass instanceSide name < b methodClass instanceSide name or: [
 			a methodClass instanceSide == b methodClass instanceSide and: [
 				a methodClass == b methodClass

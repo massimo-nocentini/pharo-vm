@@ -17,7 +17,8 @@
  web-bootstrap.st' files it in first.  So an image saved with an older version of the
  package gets the new one.  Then it sets the image up for the web VM
  (OSWebDriver class>>#setUpImage): FreeType fonts when the VM has FreeType, else
- bitmap fonts.  It does not save the image."
+ bitmap fonts, Iceberg's https:// remotes, and the free function of LGitConfig
+ (#setUpLibGit).  It does not save the image."
 
 | package imageVersion fileVersion driver renderer |
 package := FileLocator imageDirectory / 'st' / 'OSWindow-Web.st'.

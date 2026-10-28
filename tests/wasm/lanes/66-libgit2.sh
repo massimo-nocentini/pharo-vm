@@ -9,7 +9,7 @@
 # commits and a diff, the log, a branch, the status, and a clone of it
 # through a file:// URL.
 # The user of the commits is the one of a .gitconfig that the lane writes
-# in a HOME of its own.
+# in a HOME of its own (but for the identity checks, whose HOME is empty).
 #
 #   flow      every line of the golden file of the image's version,
 #             tests/wasm/golden/iceflow-p<major>.txt, must be a line of what
@@ -21,6 +21,34 @@
 #             many methods as the golden file lists, no other;
 #   web       the same flow on the prepared image of the world (image/web),
 #             against the same golden file;
+#   identity <image>
+#             the first commit of a user that git does not know yet, as the
+#             browser has it (its HOME has no .gitconfig at first):
+#             tests/wasm/st/git-identity.st, with a HOME of its own that is
+#             empty, goes through Iceberg's dialog of the missing
+#             properties (IceTipGitUsernameAndEmailDialogPresenter>>#accept,
+#             not opened, 'Save properties as global?' checked), then a full
+#             garbage collection, whose finalization frees the LGitConfig
+#             that the dialog made, then two commits more; on each world
+#             image of the site (image/web, and image/web-<id> of an extra
+#             image), every line of tests/wasm/golden/git-identity.txt must
+#             be a line of what it prints: LGitConfig frees with
+#             config_free: (OSWebDriver class>>#setUpLibGit set the image
+#             up so, or its Pharo has it), whose callout is
+#             git_config_free, and a second setUpLibGit compiles nothing;
+#             the dialog was asked once, the user went into
+#             HOME/.gitconfig, and the three commits are there, by that
+#             user;
+#   control <image>
+#             the same on each stock image of the site (image/stock, and
+#             image/stock-<id>), which nothing set up: when its LGitConfig
+#             frees with object_free: (Pharo 13 and later), the steps up to
+#             the dialog must work and a commit must then fail (the
+#             finalization may come during the first one already, at a
+#             garbage collection of its own), which shows that the identity
+#             check sees the bug that the set up removes; when it frees
+#             with config_free: (Pharo 12), the stock image must pass as a
+#             world image does;
 #   adapted   the flow is run with PHARO_WASM_FFI_TRACE=1, which has the
 #             width adapter of the FFI (src/emscripten/ffiAdapt.c) name each
 #             function whose declaration it adapted, once, on stderr: every
@@ -129,6 +157,10 @@ home() {
     mkdir -p home &&
 	printf '[user]\n\tname = Wasm Test\n\temail = wasm@example.org\n' >home/.gitconfig
 }
+# (an empty one, for the identity checks)
+empty_home() {
+    rm -rf home && mkdir home
+}
 vm() {
     if HOME=$(pwd)/home XDG_CONFIG_HOME=$(pwd)/home/.config \
 	limit "$timeout" "$1" --headless Pharo.image --no-default-preferences st --quit "$script" 2>vm.err
@@ -154,6 +186,10 @@ unresolved() (
 hidden() (
     PHARO_WASM_FFI_HIDE=git2 WASM_ICEFLOW_STEPS='libgit2 version,create repo,after'
     export PHARO_WASM_FFI_HIDE WASM_ICEFLOW_STEPS
+    vm "$WASM_DIR/node/pharo"
+)
+identity() (
+    script=$SRCDIR/tests/wasm/st/git-identity.st
     vm "$WASM_DIR/node/pharo"
 )
 # (the clones over HTTP, from the git server whose URL is $git_url, never
@@ -297,6 +333,58 @@ if ls "$web"/*.image >/dev/null 2>&1; then
 else
     skip_check web "no image in $web (WASM_WORLD=OFF, or no WASM_HOST_PHARO)"
 fi
+
+# The identity checks, on the world images, then the controls on the stock
+# ones; <image> is the name of the directory of the image (web, web-p13,
+# stock, ...)
+identity_golden=$golden_dir/git-identity.txt
+worlds=0
+for dir in "$WASM_DIR/image/web" "$WASM_DIR"/image/web-*; do
+    ls "$dir"/*.image >/dev/null 2>&1 || continue
+    image=${dir##*/}
+    worlds=$((worlds + 1))
+    fresh "identity-$image" "$dir"
+    empty_home
+    run "identity $image" identity && quiet "identity $image" && {
+	if differ smoke.out "$identity_golden"; then
+	    ok "identity $image" "Pharo $(value major), frees with $(value 'free calls'), $(value dialogs) dialog, commits $(value 'commit 1') $(value 'commit 2') $(value 'commit 3') by $(value gitconfig) after the finalization"
+	else
+	    fail "identity $image" "differs from ${identity_golden#$SRCDIR/}: $(tr '\n' ';' <differ.txt | cut -c 1-1500)"
+	fi
+    }
+done
+if test "$worlds" -eq 0; then
+    skip_check identity "no image in $WASM_DIR/image/web (WASM_WORLD=OFF, or no WASM_HOST_PHARO)"
+fi
+for dir in "$WASM_DIR/image/stock" "$WASM_DIR"/image/stock-*; do
+    ls "$dir"/*.image >/dev/null 2>&1 || continue
+    image=${dir##*/}
+    fresh "control-$image" "$dir"
+    empty_home
+    run "control $image" identity && exited "control $image" && {
+	free=$(value 'free function')
+	errors=$(value errors)
+	if test "x$(value 'add package')" != 'x#(#WasmIdentityDemo)' || test "x$(value 'dialogs 1')" != x1; then
+	    fail "control $image" "the steps before the first commit did not run: add package '$(value 'add package' | cut -c 1-200)', dialogs '$(value 'dialogs 1' | cut -c 1-100)'"
+	elif test "x$free" = 'xobject_free:'; then
+	    case $errors in
+		*"'commit 1'"*|*"'signature'"*|*"'commit 2'"*|*"'commit 3'"*)
+		    ok "control $image" "Pharo $(value major), LGitConfig frees with #object_free:, so $errors failed, with $(grep -c '' guard.err) failed callouts" ;;
+		*) fail "control $image" "LGitConfig frees with object_free:, but no commit failed (errors: '$(echo "$errors" | cut -c 1-200)'): the identity check would not see the bug" ;;
+	    esac
+	elif test "x$free" = 'xconfig_free:'; then
+	    if test -s guard.err; then
+		fail "control $image" "LGitConfig frees with config_free:, but $(grep -c '' guard.err) callouts failed: $(head -n 1 guard.err)"
+	    elif ! differ smoke.out "$identity_golden"; then
+		fail "control $image" "LGitConfig frees with config_free:, but the flow differs from ${identity_golden#$SRCDIR/}: $(tr '\n' ';' <differ.txt | cut -c 1-1000)"
+	    else
+		ok "control $image" "Pharo $(value major), LGitConfig frees with #config_free: already, and the flow passes"
+	    fi
+	else
+	    fail "control $image" "LGitConfig frees with '$(echo "$free" | cut -c 1-200)'"
+	fi
+    }
+done
 
 fresh adapt-off
 home

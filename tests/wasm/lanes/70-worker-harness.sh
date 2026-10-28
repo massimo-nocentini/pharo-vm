@@ -17,14 +17,15 @@
 # W-NB1..4: its requests, Stop, the credit of its events, and a slot it never
 # stores).  On a build of the world it also checks the preparation of the
 # stock image of image/stock (init.prepare, case 19) and the versions of
-# OSWindow-Web (manifest.webPackage, cases 20-23, and 25-26, from version 2
-# to 3, the AthensCairoSurface extension, and from 3 to 4, Iceberg's https://
-# remotes), and, when manifest.libraries has some, the placeholders of the
-# libraries of the FFI (24); a case whose build lacks what it needs says
-# '# skip' and why.  On sites of its own with a catalog of two images (C1-
-# C11) it checks init.fresh, init.slot and the slots: main if free, a slot
-# per fresh image, saveAs, two workers on two slots, resetStorage of a
-# slot, a meta of before the slots, the tree of /pharo kept with the image,
+# OSWindow-Web (manifest.webPackage, cases 20-23, and 25-27, from version 2
+# to 3, the AthensCairoSurface extension, from 3 to 4, Iceberg's https://
+# remotes, and from 5 to 6, the free function of LGitConfig), and, when
+# manifest.libraries has some, the placeholders of the libraries of the FFI
+# (24); a case whose build lacks what it needs says '# skip' and why.  On
+# sites of its own with a catalog of two images (C1-C11) it checks
+# init.fresh, init.slot and the slots: main if free, a slot per fresh image,
+# saveAs, two workers on two slots, resetStorage of a slot, a meta of
+# before the slots, the tree of /pharo kept with the image,
 # the site's default git proxy, the .sources a slot gets by name, and a
 # save that never overwrites another image that took the id of its slot.  An
 # engine-level failure on its stderr fails the lane too.  The harness is

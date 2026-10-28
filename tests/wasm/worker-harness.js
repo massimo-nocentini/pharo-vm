@@ -37,7 +37,11 @@
 // prepared to version 4 on its world boot, and then has Iceberg's https://
 // remotes (remoteTypeSelector #httpsUrl), which the smart-HTTP transport of
 // libgit2 clones (case 26, on every build: the setting is the image's, with
-// or without libgit2).
+// or without libgit2); and an image of version 5 whose LGitConfig frees
+// with git_object_free (OSWindow-Web before #setUpLibGit, or a stock Pharo
+// 13 and later) is prepared to version 6 on its world boot, and then frees
+// it with config_free:, git_config_free, an extension of OSWindow-Web, which
+// a second set up leaves as it is (case 27).
 // The notebook mode (W-NB1..4, init.mode 'notebook'): the kernel of
 // st/web-notebook.st, its events (output {fd: 3, bytes}), a request posted
 // before ready, Stop, the credit of the events, and a worker that boots the
@@ -1433,6 +1437,67 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
              'ready ' + JSON.stringify(R.ready));
       R.send('{ OSWebDriver packageVersion. Iceberg remoteTypeSelector }\n');
       await R.expectOut(val(`#(${webPackage} #httpsUrl)`));
+      await R.prompt();
+    } finally { await R.close(); current = S; }
+  });
+
+  // ---- version 5 of OSWindow-Web to 6: the free function of LGitConfig
+  // (run whenever the staged package sets it up, so that a package that
+  // does without its version being raised above 5 fails here)
+  const stagedPackage = path.join(webDir, 'st', 'OSWindow-Web.st');
+  const libgit = versions && fs.existsSync(stagedPackage) && /setUpLibGit/.test(fs.readFileSync(stagedPackage, 'latin1'));
+  if (!libgit) console.log('# skip 27: ' + (!versions ? 'no versions (see 20-23)' : 'the staged OSWindow-Web.st has no setUpLibGit'));
+  // what LGitConfig frees with: its free function, the C functions that the
+  // method of it names in its callout, and the package of that method
+  const FREES = "| m | m := LGitConfig class lookupSelector: LGitConfig freeFunctionSelector. { OSWebDriver packageVersion. " +
+    "LGitConfig freeFunctionSelector. ' ' join: ((m ast allChildren select: [ :n | n isLiteralNode and: [ n value isArray ] ]) " +
+    "flatCollect: [ :n | (n value select: [ :e | e isSymbol and: [ e beginsWith: 'git_' ] ]) collect: [ :e | e asString ] ]). " +
+    "m package name asString }\n";
+  if (libgit) await check('27 an image of version 5, whose LGitConfig frees with git_object_free, is prepared to 6 on the world boot; then it frees with git_config_free', async () => {
+    memory.map.clear();
+    // the site's image, made what a site of version 5 saved: LGitConfig
+    // without the free function of its own that the set up gives it (or
+    // that Pharo 12 has), so that it inherits #object_free:, and version 5
+    const C = session();
+    try {
+      current = C;
+      await C.started();
+      C.send("LGitConfig class removeSelector: #config_free:; removeSelector: #freeFunctionSelector. " +
+             "OSWebDriver class compile: 'packageVersion ^ 5'; compile: 'packageMarker ^ #OSWindowWebPackage5'. " +
+             "{ OSWebDriver packageVersion. LGitConfig freeFunctionSelector }\n");
+      await C.expectOut(val('#(5 #object_free:)'));
+      await C.prompt();
+      C.post({ type: 'save' });
+      await waitFor('saved', () => C.saved.length, 60000);
+      await C.prompt(60000);
+      const m = C.saved[0];
+      assert(!m.error && m.webPackage === 5 && m.prepared === false, 'saved ' + JSON.stringify(m));
+    } finally { await C.close(); current = S; }
+    // the world boot prepares it
+    const t = now();
+    const P = session(world, { display: true });
+    try {
+      current = P;
+      await waitFor('prepared', () => P.prepared || P.crash || P.exit !== null, 300000);
+      P.alive();
+      console.log(`#   prepared from version 5 in ${((now() - t) / 1000).toFixed(1)} s`);
+      assert(P.ready.source === 'saved' && P.ready.preparing === true && P.ready.webPackage === 5, 'ready ' + JSON.stringify(P.ready));
+      assert(!P.prepared.error && P.prepared.saved === true && P.prepared.webPackage === webPackage,
+             'prepared ' + JSON.stringify(P.prepared));
+    } finally { await P.close(); current = S; }
+    // the image has the package of the site, and LGitConfig frees with
+    // git_config_free, which a second set up leaves as it is
+    const R = session();
+    try {
+      current = R;
+      await R.started();
+      assert(R.ready.source === 'saved' && R.ready.webPackage === webPackage && R.ready.prepared === true,
+             'ready ' + JSON.stringify(R.ready));
+      R.send(FREES);
+      await R.expectOut(val(`#(${webPackage} #config_free: 'git_config_free' 'OSWindow-Web')`));
+      await R.prompt();
+      R.send('| m | m := LGitConfig class >> #config_free:. OSWebDriver setUpImage. (LGitConfig class >> #config_free:) == m\n');
+      await R.expectOut(val('true'));
       await R.prompt();
     } finally { await R.close(); current = S; }
   });

@@ -70,14 +70,14 @@ OSWebDriver class >> isSupported [
 OSWebDriver class >> packageMarker [
 	"A symbol of its own for each #packageVersion, which the image keeps as a literal of this method: the worker of the page finds the version of an image in its bytes without booting it. It is the name of the package and the version"
 
-	^ #OSWindowWebPackage5
+	^ #OSWindowWebPackage6
 ]
 
 { #category : 'versions' }
 OSWebDriver class >> packageVersion [
-	"The version of this package: web-bootstrap.st files the package in again over an older one, and the page sets an image of an older version up again (see #setUpImage). Version 1 had neither this method nor #setUpImage, and bitmap fonts; 2 keeps the FreeType fonts of the stock image when the VM has FreeType; 3 draws Athens with cairo without the SurfacePlugin, which the web VMs lack (the AthensCairoSurface extension of this package); 4 gives Iceberg https:// remotes (#setUpGit); 5 draws the world in device pixels on high-density displays (OSWebFormRenderer>>#outputExtent). Change #packageMarker with it. packaging/emscripten/tools/stage.mjs reads both from this file, for the manifest of the page"
+	"The version of this package: web-bootstrap.st files the package in again over an older one, and the page sets an image of an older version up again (see #setUpImage). Version 1 had neither this method nor #setUpImage, and bitmap fonts; 2 keeps the FreeType fonts of the stock image when the VM has FreeType; 3 draws Athens with cairo without the SurfacePlugin, which the web VMs lack (the AthensCairoSurface extension of this package); 4 gives Iceberg https:// remotes (#setUpGit); 5 draws the world in device pixels on high-density displays (OSWebFormRenderer>>#outputExtent); 6 gives LGitConfig the free function of Pharo 12 (#setUpLibGit). Change #packageMarker with it. packaging/emscripten/tools/stage.mjs reads both from this file, for the manifest of the page"
 
-	^ 5
+	^ 6
 ]
 
 { #category : 'primitives' }
@@ -139,12 +139,40 @@ OSWebDriver class >> setUpGit [
 ]
 
 { #category : 'image setup' }
+OSWebDriver class >> setUpLibGit [
+	"The LGitConfig of Pharo 13 and later has no free function of its own: it inherits #object_free: of LGitExternalObject, so the finalization of a configuration calls git_object_free on a git_config. That breaks the configuration, which its repository keeps: git_object_free takes one from the pointer to its backends, where an object has its counter, and never releases it. The next call of libgit2 that reads it goes out of the memory of a web VM (a native VM may crash). Iceberg makes such a configuration when it asks for the user of a commit: the dialog of the missing properties (IceTipGitUsernameAndEmailDialogPresenter>>#accept, through LGitRepository>>#config), which the browser always shows once, since its HOME has no .gitconfig at first. So give LGitConfig the free function of Pharo 12, git_config_free.
+
+	The two methods are those of Pharo 12, but extensions of this package, not of LibGit-Core as in Pharo 12: so Monticello sees LibGit-Core as it loaded it, unmodified, a load of LibGit-Core does not remove them (it would remove methods of LibGit-Core that its version lacks), and a LibGit-Core that defines them takes them over. prepare-web-image.st does not file them out with the package, which would then give them to any image it is filed into: web-bootstrap.st calls me there, as the build does.
+
+	This runs where the rest of the set up runs, and only there: at build time (prepare-web-image.st), for every image of the site, which the node VM runs too (node-try.sh), and in the page (web-bootstrap.st) for an image the user opens on the world page, or one saved with an older version of this package, which the world page prepares again. The Console and the notebook boot an image as it is, filing in their own code only, and no window of Iceberg runs there; sdl.html boots an image as it is too, and runs its world, so a stock Pharo 13 or later opened there, never prepared for the world page, keeps its #object_free:. Compile only when LGitConfig still frees with #object_free:, so that an image that has its own free function (Pharo 12, or a later Pharo that fixes it), or no LGit, is left alone, and a second set up changes nothing"
+
+	| config |
+	config := Smalltalk at: #LGitConfig ifAbsent: [ ^ self ].
+	config freeFunctionSelector = #object_free: ifFalse: [ ^ self ].
+	config class
+		compile: 'config_free: handle
+	"From Pharo 12, compiled by OSWebDriver class>>#setUpLibGit"
+
+	^ self
+		ffiCallSafely: #(void git_config_free #(void *handle))
+		options: #()'
+		classified: '*OSWindow-Web'.
+	config class
+		compile: 'freeFunctionSelector
+	"From Pharo 12, compiled by OSWebDriver class>>#setUpLibGit"
+
+	^ #config_free:'
+		classified: '*OSWindow-Web'
+]
+
+{ #category : 'image setup' }
 OSWebDriver class >> setUpImage [
 	"Set the image up for the web VMs: prepare-web-image.st calls me at build time, and web-bootstrap.st in the page. Both call nothing else of the kind, so that a new version of this package changes only me"
 
 	self
 		setUpFonts;
-		setUpGit
+		setUpGit;
+		setUpLibGit
 ]
 
 { #category : 'system startup' }
