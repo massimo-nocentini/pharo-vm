@@ -238,7 +238,7 @@ extern sqExport *pluginExports[];
 
 /* The name of fileName that the registry knows: its base name, without a
  * leading "lib", nor anything from its first '.' on (.so.6, .dylib, .dll),
- * nor a version after a '-' (libSDL2-2.0.so.0 is SDL2, libc.so.6 is c,
+ * nor a version after a '-' (libfoo-2.0.so.0 is foo, libc.so.6 is c,
  * libgit2.so.1.4.4 is git2).
  */
 static void

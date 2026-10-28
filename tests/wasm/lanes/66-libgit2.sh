@@ -31,14 +31,43 @@
 #             garbage collection, whose finalization frees the LGitConfig
 #             that the dialog made, then two commits more; on each world
 #             image of the site (image/web, and image/web-<id> of an extra
-#             image), every line of tests/wasm/golden/git-identity.txt must
-#             be a line of what it prints: LGitConfig frees with
-#             config_free: (OSWebDriver class>>#setUpLibGit set the image
-#             up so, or its Pharo has it), whose callout is
-#             git_config_free, and a second setUpLibGit compiles nothing;
-#             the dialog was asked once, the user went into
-#             HOME/.gitconfig, and the three commits are there, by that
-#             user;
+#             image), with packaging/emscripten/st/web-libgit.st in st/
+#             next to it, as the page has it, every line of
+#             tests/wasm/golden/git-identity.txt must be a line of what it
+#             prints: LGitConfig frees with config_free:
+#             (OSWebDriver class>>#setUpLibGit, which evaluates
+#             web-libgit.st, set the image up so at build time, or its
+#             Pharo has it), whose callout is git_config_free, and a second
+#             setUpLibGit compiles nothing; the dialog was asked once, the
+#             user went into HOME/.gitconfig, and the three commits are
+#             there, by that user;
+#   console <image>
+#             the same flow on each stock image of the site (image/stock,
+#             and image/stock-<id>), never set up, booted as the Console
+#             boots it: st --no-source st/web-repl.st, with web-repl.st and
+#             web-libgit.st in st/ next to it, as the page stages them, and
+#             a line of input that evaluates git-identity.st (the prompts
+#             of the REPL are taken out of what it prints); the boot must
+#             have given LGitConfig its free function, so every line of
+#             git-identity.txt must be a line of what it prints, as for a
+#             world image;
+#   notebook <image>
+#             the same, booted as the notebook kernel: st --no-source
+#             st/web-notebook.st, NOTEBOOK_EVENTS a file, and a request
+#             that runs a cell which evaluates git-identity.st; the events
+#             must be hello, start and a done of status ok, and every line
+#             of git-identity.txt a line of what it prints;
+#   prepared <image>
+#             each stock image booted as the page boots one that it prepares
+#             for the world (vm-worker.js: as the Console boots it, then
+#             PREPARE), with web-repl.st, web-libgit.st, web-bootstrap.st and
+#             the site's OSWindow-Web.st in st/: a line of the REPL files
+#             web-bootstrap.st in (but does not save); the boot has put the
+#             config_free: of web-libgit.st in LibGit-Core, before the
+#             package was there, and the set up (#setUpLibGit) must have made
+#             it an extension of OSWindow-Web, with LibGit-Core unmodified
+#             and without it in its snapshot (an image whose LibGit-Core has
+#             a config_free: of its own, Pharo 12, keeps it as it is);
 #   control <image>
 #             the same on each stock image of the site (image/stock, and
 #             image/stock-<id>), which nothing set up: when its LGitConfig
@@ -161,9 +190,19 @@ home() {
 empty_home() {
     rm -rf home && mkdir home
 }
+# (the st files of the page FILE..., in st/ next to the image, as the page
+# stages them in /pharo/st)
+stage_st() {
+    mkdir -p st && for f in "$@"; do cp "$SRCDIR/packaging/emscripten/st/$f" st/ || return 1; done
+}
 vm() {
+    vm_with "$1" st --quit "$script"
+}
+# vm_with VM ARG...: VM on Pharo.image with the arguments ARG...
+vm_with() {
+    vm_bin=$1; shift
     if HOME=$(pwd)/home XDG_CONFIG_HOME=$(pwd)/home/.config \
-	limit "$timeout" "$1" --headless Pharo.image --no-default-preferences st --quit "$script" 2>vm.err
+	limit "$timeout" "$vm_bin" --headless Pharo.image --no-default-preferences "$@" 2>vm.err
     then vm_status=0; else vm_status=$?; fi
     grep -E "$guard" vm.err >guard.err
     grep -E "$trace" vm.err >trace.err
@@ -191,6 +230,51 @@ hidden() (
 identity() (
     script=$SRCDIR/tests/wasm/st/git-identity.st
     vm "$WASM_DIR/node/pharo"
+)
+# booted KIND: git-identity.st in an image booted as the page boots it in
+# KIND, repl (the Console) or notebook (the kernel), from st/web-KIND.st
+# next to the image, with st/web-libgit.st: a line of the REPL, or the
+# request of a cell, evaluates it.  The prompts of the REPL are taken out of
+# what it prints; the events of the kernel go to events.txt
+booted() (
+    stage_st web-libgit.st "web-$1.st" || exit 1
+    evaluate="Smalltalk compiler evaluate: '$SRCDIR/tests/wasm/st/git-identity.st' asFileReference contents"
+    case $1 in
+	repl) printf '%s\n' "$evaluate" >input.txt ;;
+	notebook) printf '{"op":"run","rid":1,"name":"In[1]","code":"%s"}\n' "$evaluate" >input.txt ;;
+    esac
+    NOTEBOOK_EVENTS=$(pwd)/events.txt
+    export NOTEBOOK_EVENTS
+    vm_with "$WASM_DIR/node/pharo" st --no-source "st/web-$1.st" <input.txt >booted.out
+    booted_status=$?
+    sed 's/^\(st> \)*//' booted.out
+    exit $booted_status
+)
+# prepared: the image booted as the page boots one that it prepares for the
+# world (vm-worker.js: as the Console boots it, then the evaluation PREPARE),
+# with st/ as the page stages it, web-repl.st, web-libgit.st,
+# web-bootstrap.st and the site's OSWindow-Web.st: a line of the REPL files
+# web-bootstrap.st in, as PREPARE does but for its save, and the next one
+# prints 'prepared: <major> <version of OSWindow-Web> <free function> <its
+# package>/<its protocol> ext <an extension> modified <LibGit-Core modified
+# for Monticello> snapshot <in the snapshot of LibGit-Core> marker
+# <compiled by web-libgit.st>'
+prepared_boot() (
+    stage_st web-libgit.st web-repl.st web-bootstrap.st || exit 1
+    cp "$WASM_DIR/web/st/OSWindow-Web.st" st/ || exit 1
+    {
+	echo "CodeImporter evaluateFileNamed: (FileLocator imageDirectory / 'st' / 'web-bootstrap.st') fullName. nil"
+	echo "| m lgc in | m := LGitConfig class lookupSelector: LGitConfig freeFunctionSelector. lgc := MCWorkingCopy forPackageNamed: 'LibGit-Core'." \
+	    "in := lgc package snapshot definitions anySatisfy: [ :d | d isMethodDefinition and: [ d className = #LGitConfig and: [ d classIsMeta and: [ d selector = m selector ] ] ] ]." \
+	    "Stdio stdout nextPutAll: 'prepared: ' , SystemVersion current major printString , ' ' , OSWebDriver packageVersion printString , ' ' ," \
+	    "LGitConfig freeFunctionSelector , ' ' , m package name , '/' , m protocolName , ' ext ' , m isExtension printString ," \
+	    "' modified ' , lgc modified printString , ' snapshot ' , in printString ," \
+	    "' marker ' , ((m sourceCode ifNil: [ '' ]) includesSubstring: 'compiled by web-libgit.st') printString; lf; flush. nil"
+    } >input.txt
+    vm_with "$WASM_DIR/node/pharo" st --no-source st/web-repl.st <input.txt >booted.out
+    booted_status=$?
+    sed 's/^\(st> \)*//' booted.out
+    exit $booted_status
 )
 # (the clones over HTTP, from the git server whose URL is $git_url, never
 # through a proxy of the environment of the user who runs the lane, which
@@ -345,6 +429,7 @@ for dir in "$WASM_DIR/image/web" "$WASM_DIR"/image/web-*; do
     worlds=$((worlds + 1))
     fresh "identity-$image" "$dir"
     empty_home
+    stage_st web-libgit.st
     run "identity $image" identity && quiet "identity $image" && {
 	if differ smoke.out "$identity_golden"; then
 	    ok "identity $image" "Pharo $(value major), frees with $(value 'free calls'), $(value dialogs) dialog, commits $(value 'commit 1') $(value 'commit 2') $(value 'commit 3') by $(value gitconfig) after the finalization"
@@ -383,6 +468,51 @@ for dir in "$WASM_DIR/image/stock" "$WASM_DIR"/image/stock-*; do
 	else
 	    fail "control $image" "LGitConfig frees with '$(echo "$free" | cut -c 1-200)'"
 	fi
+    }
+done
+
+# The console and notebook checks, on the stock images, which only the boot
+# sets up
+for dir in "$WASM_DIR/image/stock" "$WASM_DIR"/image/stock-*; do
+    ls "$dir"/*.image >/dev/null 2>&1 || continue
+    image=${dir##*/}
+    for kind in console notebook; do
+	fresh "$kind-$image" "$dir"
+	empty_home
+	case $kind in console) mode=repl ;; *) mode=notebook ;; esac
+	run "$kind $image" booted $mode && quiet "$kind $image" && {
+	    events=
+	    if test $kind = notebook; then
+		events=$(sed -n 's/^{"ev":"\([a-z]*\)".*/\1/p' events.txt 2>/dev/null | tr '\n' ' ')
+		grep -q '^{"ev":"done","rid":1,.*"status":"ok"' events.txt 2>/dev/null || events="$events(no done of status ok)"
+	    fi
+	    if test $kind = notebook && test "x$events" != 'xhello start done '; then
+		fail "$kind $image" "the events of the kernel are '$events', not hello, start and a done of status ok"
+	    elif differ smoke.out "$identity_golden"; then
+		ok "$kind $image" "Pharo $(value major), booted as the $kind boots it: frees with $(value 'free calls'), $(value dialogs) dialog, commits $(value 'commit 1') $(value 'commit 2') $(value 'commit 3') by $(value gitconfig) after the finalization"
+	    else
+		fail "$kind $image" "differs from ${identity_golden#$SRCDIR/}: $(tr '\n' ';' <differ.txt | cut -c 1-1500)"
+	    fi
+	}
+    done
+done
+
+# The prepared checks, on the stock images: booted as the page boots one
+# that it prepares for the world
+for dir in "$WASM_DIR/image/stock" "$WASM_DIR"/image/stock-*; do
+    ls "$dir"/*.image >/dev/null 2>&1 || continue
+    image=${dir##*/}
+    fresh "prepared-$image" "$dir"
+    empty_home
+    run "prepared $image" prepared_boot && quiet "prepared $image" && {
+	got=$(sed -n 's/^prepared: //p' smoke.out | head -n 1)
+	case $got in
+	    *' config_free: OSWindow-Web/*OSWindow-Web ext true modified false snapshot false marker true')
+		ok "prepared $image" "$got: web-libgit.st compiled it at the boot, in LibGit-Core, and again as an extension once OSWindow-Web was in" ;;
+	    *' config_free: LibGit-Core/'*' ext false modified false snapshot true marker false')
+		ok "prepared $image" "$got: the image's own free function, left as it is" ;;
+	    *) fail "prepared $image" "LGitConfig frees with '$(echo "$got" | cut -c 1-300)', not the config_free: of web-libgit.st as an extension of OSWindow-Web (nor one of LibGit-Core itself)" ;;
+	esac
     }
 done
 

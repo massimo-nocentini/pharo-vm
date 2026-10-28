@@ -11,14 +11,14 @@
 #     wasm-web-stage   - ${WASM_STAGE_DIR}/web, the static site, written by
 #                        packaging/emscripten/tools/stage.mjs: the files of
 #                        packaging/emscripten/web with @BUILD@ replaced by the
-#                        build id (but for the SDL page, sdl.html, sdl.js
-#                        and sdl-shim.js, which only a build with SDL2
-#                        stages), pharo-web.js and pharo-web.wasm,
+#                        build id, pharo-web.js and pharo-web.wasm,
 #                        THIRD-PARTY-NOTICES.txt, the images (gzipped) in
 #                        image/, the st files in st/ (web-repl.st, the
-#                        Console's REPL, and web-notebook.st, the notebook
+#                        Console's REPL, web-notebook.st, the notebook
 #                        kernel, which starts only in a VM that has
-#                        NOTEBOOK_EVENTS, so that every mode can have it)
+#                        NOTEBOOK_EVENTS, so that every mode can have it,
+#                        and web-libgit.st, which both evaluate at every
+#                        boot, as web-bootstrap.st does)
 #                        and manifest.json.  It always runs, and rewrites
 #                        only what changed.
 #
@@ -31,11 +31,8 @@
 # has libgit2 (PHARO_WASM_HAS_LIBGIT2: make wasm-check-browser runs git.spec
 # only then) and its smart-HTTP transport (PHARO_WASM_HAS_LIBGIT2_HTTP: the
 # pages then show the Settings of its CORS proxy, and the manifest has the
-# site's default proxy, below), whether it has SDL2
-# (PHARO_WASM_HAS_SDL2, WASM_SDL2 with the FFI: web/ then has the SDL page,
-# the world through the image's own OSSDL2Driver, and make
-# wasm-check-browser runs sdl.spec; the manifest of a build without it has
-# no sdl2 key), and the placeholders of the libraries of the FFI (below).
+# site's default proxy, below), and the placeholders of the libraries of
+# the FFI (below).
 #
 # web/ gets the image of the world when webimage.cmake defines its target
 # wasm-web-image, and the stock image otherwise; and so for each extra image
@@ -302,11 +299,6 @@ if(PHARO_WASM_HAS_LIBGIT2 AND PHARO_WASM_HAS_LIBGIT2_HTTP)
 else()
     set(PHARO_WASM_STAGE_LIBGIT2_HTTP 0)
 endif()
-if(PHARO_WASM_HAS_SDL2)
-    set(PHARO_WASM_STAGE_SDL2 1)
-else()
-    set(PHARO_WASM_STAGE_SDL2 0)
-endif()
 set(PHARO_WASM_STAGE_ARGUMENTS
     --out "${PHARO_WASM_WEB_DIR}"
     --web "${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/web"
@@ -317,13 +309,13 @@ set(PHARO_WASM_STAGE_ARGUMENTS
     --fonts ${PHARO_WASM_STAGE_FONTS}
     --libgit2 ${PHARO_WASM_STAGE_LIBGIT2}
     --libgit2-http ${PHARO_WASM_STAGE_LIBGIT2_HTTP}
-    --sdl2 ${PHARO_WASM_STAGE_SDL2}
     --web-package "${PHARO_WASM_ST_SOURCE_DIR}/OSWindow-Web/OSWebDriver.class.st"
     --notices "${PHARO_WASM_NOTICES_FILE}"
     ${PHARO_WASM_STAGE_LIBRARIES}
     --stock-image "${WASM_STOCK_IMAGE_DIR}"
     --st "${PHARO_WASM_ST_SOURCE_DIR}/web-repl.st"
-    --st "${PHARO_WASM_ST_SOURCE_DIR}/web-notebook.st")
+    --st "${PHARO_WASM_ST_SOURCE_DIR}/web-notebook.st"
+    --st "${PHARO_WASM_ST_SOURCE_DIR}/web-libgit.st")
 if(TARGET wasm-web-image)
     list(APPEND PHARO_WASM_STAGE_ARGUMENTS
         --world-image "${WASM_WEB_IMAGE_DIR}"

@@ -61,7 +61,7 @@
 //   https:// remotes go to, followed by the host and the path of the
 //   repository (src/emscripten/gitSupport.c); the site's default
 //   (manifest.gitProxyDefault), none, or one of the user's.  This browser
-//   keeps the choice (pharo-wasm.gitProxy, which world.js and sdl.js read
+//   keeps the choice (pharo-wasm.gitProxy, which world.js reads
 //   too); it goes to the worker in init.gitProxy (null for the default),
 //   and to a running VM at once ("gitProxy"), also when another tab changes
 //   it; the worker makes it Module.gitHttpProxy.  It is set only in the

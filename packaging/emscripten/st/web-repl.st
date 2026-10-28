@@ -4,8 +4,9 @@
 
  (PharoVMDriver.vmArgs('console') of packaging/emscripten/web/vm-driver.js), so this
  script is filed in at every boot, also of an image that was saved from the page, and
- its source is not logged to the .changes each time.  It defines the class WebRepl and
- starts it.
+ its source is not logged to the .changes each time.  It first evaluates web-libgit.st of
+ /pharo/st, which gives LGitConfig the free function of Pharo 12 in an image that lacks it,
+ then defines the class WebRepl and starts it.
 
  WebRepl reads stdin, which the page feeds with what the user types.  It evaluates
  every line, up to its LF, prints the value on stdout, or the error it raised on
@@ -33,6 +34,24 @@
  It files in with Pharo 12 and Pharo 15.  Every method has a methodsFor: section of its
  own: Pharo 15 reads only one method in a section, takes the chunk after it for the
  metadata of that method, and the next one for code to evaluate."
+
+"Give LGitConfig the free function of Pharo 12 when the image frees its configurations with
+ git_object_free, as Pharo 13 and later do, which breaks the next commit of Iceberg: web-libgit.st,
+ which the page stages next to this script, says why, and does it, at every boot, in any image;
+ in an image that needs nothing it compiles nothing, and logs nothing to the .changes (it is
+ evaluated, not filed in).  Without the file (a REPL run elsewhere), nothing.  An error of it is
+ reported on stderr, and the REPL starts anyway"
+| libgit |
+libgit := FileLocator imageDirectory / 'st' / 'web-libgit.st'.
+libgit exists ifTrue: [
+	[ Smalltalk compiler evaluate: libgit contents ]
+		on: Error
+		do: [ :error |
+			Stdio stderr
+				nextPutAll: 'web-libgit.st: ';
+				nextPutAll: error description;
+				lf;
+				flush ] ]!
 
 "Define WebRepl, unless an image saved from the page has it already: Pharo 15 logs a class
  definition to the .changes, an unchanged one too, which --no-source does not prevent"

@@ -11,7 +11,7 @@ Two VMs are linked from the same objects:
 - a VM for a Web Worker, which a static web site runs: the Console, a Smalltalk REPL with Stop, Save, Download, Open, which starts an image of your own, and Images, which starts another image of the site or one saved in the browser, and its Notebook tab, cells of Smalltalk, which a second VM of their own runs, and of Markdown, which the page renders.
 
 The site also has the world page: the Morphic world of the image in a canvas, drawn through the WebDisplayPlugin.
-Both VMs link the libraries that the image calls through its FFI, built from pinned archives: FreeType 2.14.3 for the fonts of the world, and cairo 1.18.4 for Athens and Roassal, by default; libgit2 1.4.4 for Iceberg (`WASM_LIBGIT2=ON`) and SDL2 2.32.10 for the image's own SDL2 driver, with the page `sdl.html` (`WASM_SDL2=ON`), on request.
+Both VMs link the libraries that the image calls through its FFI, built from pinned archives: FreeType 2.14.3 for the fonts of the world, and cairo 1.18.4 for Athens and Roassal, by default; and libgit2 1.4.4 for Iceberg (`WASM_LIBGIT2=ON`), on request.
 
 Requirements:
 
@@ -33,7 +33,7 @@ Engines, as Emscripten's feature matrix gives them for the default settings:
 - The pages inflate what they download with DecompressionStream (Chrome 80, Firefox 113, Safari 16.4), and say so in a browser without it, so a `wasm-legacy` build needs Chrome 95, Firefox 113 or Safari 16.4, or later.
 - The pages were tested in Chromium 153 and Firefox 155.
   Safari is untested.
-- The world page, and `sdl.html`, also need OffscreenCanvas: Chrome 69, Firefox 105, Safari 17.
+- The world page also needs OffscreenCanvas: Chrome 69, Firefox 105, Safari 17.
 
 ## Building
 
@@ -50,7 +50,7 @@ It is configured again when a setting or that initial cache changes, and CMake c
 The build downloads the pinned Pharo 12 image (`Pharo12.0-SNAPSHOT.build.1599.sha.7d5f14cb47.arch.64bit.zip`, checked against its SHA256) and the pinned archives of the libraries (see The libraries), and stages `build-wasm/node` and `build-wasm/web`.
 
 The first `make wasm` took about 2.5 minutes from a clean clone with the downloads, and about 1.5 minutes offline, on the machine the port was made on: most of that time goes to the VMMaker image, which loads its packages and generates the sources in a single process.
-A new build directory with the sources generated already (`WASM_GENERATED`) and the archives of the libraries at hand (`WASM_DEPS_DIR`), with libgit2 and SDL2, took 57 s there, on 112 processors.
+A new build directory with the sources generated already (`WASM_GENERATED`) and the archives of the libraries at hand (`WASM_DEPS_DIR`), with libgit2, took 54 s there, on 112 processors, with the three images of the site of GitHub Actions to prepare, and 56 s with the pinned Pharo 12.
 When nothing has changed, it takes under a second.
 
 To build offline, give the inputs that the first build would download: a VMMaker image, the Pharo VM that runs it, the image zip (from https://files.pharo.org/image/120/), and a directory holding the archives of the libraries.
@@ -82,15 +82,14 @@ It needs no special headers (no COOP or COEP, since nothing uses SharedArrayBuff
 
 - `build-wasm/node/pharo`: the command-line VM, a shell script that runs `pharo.js` (and `pharo.wasm`) next to it with node.
   `NODE` selects the node binary, and `NODE_OPTIONS_WASM` gives it options.
-  Next to it are `THIRD-PARTY-NOTICES.txt` and the empty placeholders of the libraries of the FFI (`libcairo.so.2`, and `libgit2.so.1.4.4` and `libSDL2-2.0.so.0` with those libraries; see The FFI).
+  Next to it are `THIRD-PARTY-NOTICES.txt` and the empty placeholders of the libraries of the FFI (`libcairo.so.2`, and `libgit2.so.1.4.4` with libgit2; see The FFI).
 - `build-wasm/web/`: the static site.
-  It holds the Console page (`index.html`), the web VM (`pharo-web.js`, the factory `createPharoVM`, and `pharo-web.wasm`), the scripts of the pages and of the workers (see The web pages), the default image, its `.changes` and its `.sources`, gzipped, in `image/`, those of each extra image in `image/<id>/`, the `WASM_EXTRA_SOURCES` in `image/sources/`, the Smalltalk scripts of the pages in `st/`, `THIRD-PARTY-NOTICES.txt`, which the pages link to, and `manifest.json`, which lists the files the worker loads and says what the build has (`ffi`, `fonts`, `git`, `gitHttp`, `gitProxyDefault`, `sdl2`, `world`, `libraries`, `webPackage`), with the catalog of its images (`images`, `imageId`, `extraSources`; see The web pages).
+  It holds the Console page (`index.html`), the web VM (`pharo-web.js`, the factory `createPharoVM`, and `pharo-web.wasm`), the scripts of the pages and of the workers (see The web pages), the default image, its `.changes` and its `.sources`, gzipped, in `image/`, those of each extra image in `image/<id>/`, the `WASM_EXTRA_SOURCES` in `image/sources/`, the Smalltalk scripts of the pages in `st/`, `THIRD-PARTY-NOTICES.txt`, which the pages link to, and `manifest.json`, which lists the files the worker loads and says what the build has (`ffi`, `fonts`, `git`, `gitHttp`, `gitProxyDefault`, `world`, `libraries`, `webPackage`), with the catalog of its images (`images`, `imageId`, `extraSources`; see The web pages).
   The pages load every file with the build id in its URL (`?v=<id>`), so a new build is never mixed with a cached one.
   The browser downloads about 25 MB for the image it starts, and nothing of the others: an image of about 55 MB (15.4 MB gzipped), the 43 MB `.sources` (7.6 MB gzipped), and `pharo-web.wasm`, 2.1 MB in the default build (743 KB gzipped).
 - `build-wasm/web/world.html`: the world page.
   With the world (`WASM_WORLD=ON`, the default, and a native Pharo VM, `WASM_HOST_PHARO`), `web/` holds the world image, which is the stock image with the OSWindow-Web package, prepared at build time; both pages boot it.
   Without it, `web/` holds the stock image, and the world page says that the build has no world image.
-- `build-wasm/web/sdl.html`, with `WASM_SDL2=ON` only: the world through the image's own SDL2 driver (see The world through SDL2).
 - `build-wasm/image/stock/`: the unpacked stock image (as `Pharo.image` and `Pharo.changes`, with its `.sources`); `build-wasm/image/stock.stamp` records the SHA256 of the zip it came from, and its path.
 - `build-wasm/image/web/`: `Pharo-web.image` and `.changes`, the world image, and `OSWindow-Web.st`, the package filed out for `web-bootstrap.st`.
 - `build-wasm/image/stock-<id>/` and `build-wasm/image/web-<id>/`: the same for each extra image.
@@ -100,7 +99,6 @@ It needs no special headers (no COOP or COEP, since nothing uses SharedArrayBuff
 - `build-wasm/config.make`, `build-wasm/config-host.make` and `build-wasm/.make-wasm`: the recorded settings, and the mark of a directory that `make wasm` builds in.
 
 The workflow `.github/workflows/build.yml` makes such a site and node VM on every push, with the images of Pharo 15 (build 50, the default), 14 (build 785) and 13.1 (build 749), which it downloads from files.pharo.org and checks against their SHA256, the `.sources` of Pharo 15 build 41 (the image of the site before), and `WASM_LIBGIT2=ON` (the command above), so they have the FFI, FreeType, cairo, libgit2 and the Notebook.
-SDL2 is left out for now (no `sdl.html`): `WASM_SDL2=ON` in its two make steps brings it back.
 It zips them as `PharoVM-<version>-WebAssembly-bin.zip`, with `serve.mjs` and the `README.md` and `node-try.sh` of `packaging/emscripten/dist` (the README says how to use them; `node-try.sh` runs the default image), and, for a push to `pharo-12`, publishes the zip with the release of the push.
 For a push to `pharo-12` it also deploys `web/` to the root of branch `gh-pages`, which GitHub Pages serves, once it has checked that every file of the manifest is there, of its size, and small enough for git.
 
@@ -276,11 +274,11 @@ The image is the one its URL names (`?slot=<id>` of a saved image, `?fresh=<id>`
 On a first visit (nothing saved in this browser) to a site of several images, no VM starts: the Images dialog opens as the launcher, "Choose a Pharo image", with a button for each image of the site, its build and the size of its download, and the default one has the focus, so that Enter starts it; Escape does not close it.
 A site of one image starts it at once, as before.
 The canvas follows the size of the page, and the world has its size in CSS pixels.
-On a high-density display the world draws in device pixels: the page reports the canvas in device pixels too, from which Pharo's world renderer takes `devicePixelRatio` for its `canvasScaleFactor`, as with SDL on a Retina display, and draws a Form that much larger, which the page shows one pixel per device pixel; it follows the ratio when the window moves to another screen, or with the zoom of the page.
+On a high-density display the world draws in device pixels: the page reports the canvas in device pixels too, from which Pharo's world renderer takes `devicePixelRatio` for its `canvasScaleFactor`, as the desktop VMs do on a Retina display, and draws a Form that much larger, which the page shows one pixel per device pixel; it follows the ratio when the window moves to another screen, or with the zoom of the page.
 The world's text is drawn with FreeType, in the stock fonts of the image (Source Sans Pro and Source Code Pro): text beyond Latin-1, emphasis such as the strike-out of deprecated classes, and exact font sizes are drawn as natively.
 With cairo, Athens draws too: Roassal, the Canvas view of the Inspector, Epicea's Code Changes (whose graph Hiedra draws) and the color picker of the Settings.
 
-- The mouse buttons, the wheel and the keyboard reach the world as the events of an SDL2 window would.
+- The mouse buttons, the wheel and the keyboard reach the world as the events of a desktop window would (numbered as SDL2, the driver of the desktop VMs, numbers them).
   Text typed with Shift, Option (macOS) or AltGr is text.
   On macOS Cmd is sent as Ctrl, Pharo's shortcut key.
   On Windows, Ctrl+Alt types the AltGr character of the key, when the key has one; elsewhere, Ctrl+Alt is a shortcut.
@@ -309,29 +307,11 @@ With cairo, Athens draws too: Roassal, the Canvas view of the Inspector, Epicea'
 
 The first frame came 1.4 s (Chromium) to 2.0 s (Firefox) after the page was first opened on localhost, nothing cached, and a key took 40 to 57 ms (median) to reach the canvas.
 
-## The world through SDL2
-
-A build with `WASM_SDL2=ON` also has `sdl.html`, which no page links to: there the image draws its world as the desktop VMs do, through its own OSSDL2Driver and SDL2, rather than through OSWebDriver and the WebDisplayPlugin.
-(The site of GitHub Actions is built without SDL2 for now.)
-Any image runs there, a stock image of Pharo 12 to 15 too, unprepared, and so does code that uses the SDL2 bindings of OSWindow.
-It boots the site's default image, or the image of the site that `?fresh=<id>` of its URL names, or one opened from disk.
-The worker boots the image with `--interactive` and no display, and SDL's Emscripten video driver draws into the canvas of the page, transferred to the worker as an OffscreenCanvas.
-That driver expects the DOM of the main thread, which a worker lacks: `sdl-shim.js` gives it the few objects it touches (`screen`, the canvas's box, style and events, a `document` that is an EventTarget, `navigator.userActivation`), and the page forwards its pointer, wheel and keyboard events to the worker, where SDL's handlers queue them for the image.
-No threads, COOP or COEP are needed.
-SurfacePlugin is built into these VMs, since an SDL world blits its Form through it; the stock image's Athens then draws through it too.
-Nothing is kept in this browser, and no saved image is booted: Download gives what the image saved, and Restart boots the same image again.
-Its git proxy is the one of Settings of the other pages.
-The clipboard, resizing, HiDPI and input methods are SDL's, not bridged to the page.
-
-It costs 156 KiB of gzipped wasm and 10 KiB of JavaScript, and, idle, about 3.5 (Chromium) to 4 to 6 (Firefox, which varies from run to run) times the VM time of the world page, and 186 slices a second against 61, since the image polls `SDL_PollEvent` every 5 ms and every present uploads the whole window.
-The first present came 1.3 s (Chromium) to 1.4 s (Firefox) after the worker started.
-The world page stays the default.
-
 ## Other targets
 
 `make wasm-check-browser` runs the Playwright specs of the pages (see Tests).
 Without Playwright (`PLAYWRIGHT_MODULE`, or a `playwright` package that node finds from `tests/wasm/lib`) it fails, and says so.
-It skips, and says why, `tests/wasm/world.spec.mjs` on a build without the world image, `ffi.spec.mjs` without the FFI, `git.spec.mjs` without libgit2, and `sdl.spec.mjs` without SDL2: `web/manifest.json` says what the build has.
+It skips, and says why, `tests/wasm/world.spec.mjs` on a build without the world image, `ffi.spec.mjs` without the FFI, and `git.spec.mjs` without libgit2: `web/manifest.json` says what the build has.
 `make wasm-clean` removes the WebAssembly build (`build-wasm/cmake`, `node`, `web` and `tests-run`), and keeps the generated sources, the images and the downloads, the image zip and the archives of the libraries.
 `make wasm-distclean` also removes `build-wasm/host`, `build-wasm/image` and the recorded settings, and, with `WASM_CLEAN_DOWNLOADS=1`, `build-wasm/downloads`.
 
@@ -344,7 +324,7 @@ The WebAssembly tree can also be configured with CMake alone, from sources gener
     cmake --build build-wasm-cmake
 
 It stages `node/` and `web/` in its build directory, or in `WASM_STAGE_DIR`, and downloads the archives of the libraries into `downloads/` there.
-Its cache variables are the settings `WASM_SJLJ`, `WASM_WEB_MEMORY64`, `WASM_STACK_SIZE`, `WASM_INITIAL_MEMORY`, `WASM_MAXIMUM_MEMORY`, `WASM_OLD_SPACE_BASE`, `WASM_SLICE_MS`, `WASM_WORLD`, `WASM_FFI`, `WASM_FREETYPE`, `WASM_CAIRO`, `WASM_CAIRO_PDF`, `WASM_LIBGIT2`, `WASM_LIBGIT2_HTTP`, `WASM_SDL2`, `WASM_IMAGE_ZIP`, `WASM_IMAGE_ID`, `WASM_EXTRA_IMAGES` and `WASM_EXTRA_SOURCES` (CMake lists there, separated by `;`, of absolute paths), `WASM_GIT_PROXY`, `WASM_DEPS_DIR` and `WASM_HOST_PHARO` below, `CMAKE_BUILD_TYPE` (`Debug` for `WASM_DEBUG=1`), `WASM_STAGE_DIR`, and `NODE_JS_EXECUTABLE`, the node that stages `web/`.
+Its cache variables are the settings `WASM_SJLJ`, `WASM_WEB_MEMORY64`, `WASM_STACK_SIZE`, `WASM_INITIAL_MEMORY`, `WASM_MAXIMUM_MEMORY`, `WASM_OLD_SPACE_BASE`, `WASM_SLICE_MS`, `WASM_WORLD`, `WASM_FFI`, `WASM_FREETYPE`, `WASM_CAIRO`, `WASM_CAIRO_PDF`, `WASM_LIBGIT2`, `WASM_LIBGIT2_HTTP`, `WASM_IMAGE_ZIP`, `WASM_IMAGE_ID`, `WASM_EXTRA_IMAGES` and `WASM_EXTRA_SOURCES` (CMake lists there, separated by `;`, of absolute paths), `WASM_GIT_PROXY`, `WASM_DEPS_DIR` and `WASM_HOST_PHARO` below, `CMAKE_BUILD_TYPE` (`Debug` for `WASM_DEBUG=1`), `WASM_STAGE_DIR`, and `NODE_JS_EXECUTABLE`, the node that stages `web/`.
 `WASM_HOST_PHARO` has no default there, so the world image is prepared only when it is given.
 Two more are options for developers of the FFI, which `make wasm` does not give: `WASM_FFI_LIBC_ALL=ON` lists every function of the C library in the registry, not only those the images call (about 100 KB more of gzipped wasm), and `WASM_FFI_TEST_LIBRARY=ON` links the library of the FFI tests into the web VM too, as it always is into the node VM.
 
@@ -385,7 +365,8 @@ To keep two builds, give each its own `WASM_BUILDDIR`:
 - `WASM_CAIRO_PDF`: `ON` adds the PDF, PostScript and script surfaces of cairo, for AthensCairoPDFSurface (default `OFF`): 68 KB more of gzipped wasm, and cairo's configuration with zlib.
 - `WASM_LIBGIT2`: `ON` builds libgit2, for Iceberg (default `OFF`): 258.6 KiB more of gzipped wasm.
 - `WASM_LIBGIT2_HTTP`: with libgit2, `ON` (the default) gives it the smart-HTTP transport of `src/emscripten/gitSupport.c`; `OFF` leaves libgit2 with local repositories only.
-- `WASM_SDL2`: `ON` builds SDL2, SurfacePlugin and the page `sdl.html` (default `OFF`): 156 KiB more of gzipped wasm.
+- There is no `WASM_SDL2` any more: the VMs have no SDL2, nor the site the page `sdl.html` that drew the world through the image's own OSSDL2Driver (the world page draws it through OSWebDriver).
+  `make wasm WASM_SDL2=ON` (or with `WASM_SDL2` in the environment) is refused, and so is a configuration with CMake alone that gives it, or whose cache has it true; `WASM_SDL2=OFF` changes nothing, and `make wasm` drops it from the cache of a build directory configured with it, rebuilding without SDL2.
 - `WASM_DEPS_DIR`: a directory holding the pinned archives of the libraries, by their file names, instead of downloading them (see The libraries).
 - `WASM_HOST_PHARO`: a native Pharo VM.
   By default, it is the VM that runs VMMaker: `WASM_VMMAKER_VM`, or the one that the host tree downloads, `build-wasm/host/build/vmmaker/vm/pharo`.
@@ -483,8 +464,7 @@ The VM core and every plugin are static libraries, and the plugins are built in:
 UUIDPlugin is built in as well: it uses the `uuid_generate` of Emscripten's JavaScript library (`crypto.getRandomValues`), and Pharo 15 makes its UUIDs only with it.
 So is SimdJSONPlugin, the JSON reader of `plugins/SimdJSONPlugin` (see `docs/SimdJSON.md`), with `FEATURE_PLUGIN_SIMDJSON` on, as it is by default: its C++ makes em++ link both VMs, with Emscripten's libc++ and libc++abi, and simdjson, which has no kernel for WebAssembly, runs its portable one (`fallback`).
 `make wasm` has no setting for it: `cmake -DFEATURE_PLUGIN_SIMDJSON=OFF build-wasm/cmake` leaves it out of that build directory.
-So is SurfacePlugin with SDL2 (`WASM_SDL2`): `plugins/SurfacePlugin/src/common/sqManualSurface.c` then takes the surface functions of BitBlt with their own types.
-`cmake/plugins.cmake` leaves out UnixOSProcessPlugin (fork), and SurfacePlugin without SDL2, on Emscripten, and the initial cache SqueakSSL.
+`cmake/plugins.cmake` leaves out UnixOSProcessPlugin (fork) and SurfacePlugin on Emscripten (the image's SDL2 driver blits through it, and the VMs have no SDL2; Athens goes without it, see cairo), and the initial cache SqueakSSL.
 The 20 primitives of `src/ffi` are in the builtin table of the VM's support code (`vmsupport_exports`, generated by `cmake/emscripten/genSupportTable.cmake`).
 
 WebAssembly checks the type of every indirect call.
@@ -504,7 +484,7 @@ Every object of libffi is compiled once for 64-bit pointers and serves both link
 The FFI adds 18.1 KiB of gzipped wasm, and 10000 callouts of `strlen` took 302 ms in node.
 
 There is no `dlopen`, so the libraries are linked in, and listed in a static registry, generated at build time (`cmake/emscripten/ffiRegistry.cmake`, `include/pharovm/emscripten/ffiRegistry.h`).
-`src/externalPrimitives.c`, under `__EMSCRIPTEN__`, reduces the name the image gives to a library of the registry: its base name, without a leading `lib`, without what follows its first `.`, and without a version after a `-` (`libc.so.6` is `c`, `libSDL2-2.0.so.0` is `SDL2`, `libgit2.so.1.4.4` is `git2`, `/x/libfoo.so.1` is `foo`).
+`src/externalPrimitives.c`, under `__EMSCRIPTEN__`, reduces the name the image gives to a library of the registry: its base name, without a leading `lib`, without what follows its first `.`, and without a version after a `-` (`libc.so.6` is `c`, `libgit2.so.1.4.4` is `git2`, `/x/libfoo-2.0.so.1` is `foo`).
 Each library is a sorted table of functions, taken by name from a list, `cmake/emscripten/ffi/symbols/<library>.txt`, every name of which must be declared by the library's public headers, or the build stops; its `# unavailable` sections list the names the images bind that the library of the VM does not define.
 The libraries of the registry (`cmake/emscripten/ffiLibraries.cmake`):
 
@@ -514,14 +494,13 @@ The libraries of the registry (`cmake/emscripten/ffiLibraries.cmake`):
 | `freetype` | `libfreetype.so.6` (FT2FFILibrary) | 17 | `WASM_FREETYPE` |
 | `cairo` | `libcairo.so.2` (CairoLibrary) | 120 | `WASM_CAIRO` |
 | `git2` | `libgit2.so.1.4.4` (LGitLibrary) | 239 | `WASM_LIBGIT2` |
-| `SDL2` | `libSDL2-2.0.so.0` (the SDL2 class of OSWindow-SDL2) | 119, and `SDL_PushEvent` | `WASM_SDL2` |
 | `TestLibrary` | `libTestLibrary.so` | 122 | the node VM (and the web VM with `WASM_FFI_TEST_LIBRARY`) |
 
 The lists are what Pharo 12 (build 1599) and Pharo 15 (build 41) bind, test packages included, and, for the C library, some more for the callouts of the tests and of the image's users.
 `packaging/emscripten/tools/ffi-symbols.st` lists them: run on an image, natively or in the node VM, it prints a line for each function a method binds, with the library of the registry it is bound in and the method (on Pharo 12: 752 rows, 663 functions of 15 libraries).
 Lane 59 checks with it that the registry has every function of a library it registers.
 
-The library finders of the image look for the file of a library before they load it, in the VM's directory: the sites and the node VM have empty placeholders of those files (`libcairo.so.2`, `libgit2.so.1.4.4`, `libSDL2-2.0.so.0`), which the worker writes into `/pharo` from `manifest.libraries`, and which the VM never reads.
+The library finders of the image look for the file of a library before they load it, in the VM's directory: the sites and the node VM have empty placeholders of those files (`libcairo.so.2`, `libgit2.so.1.4.4`), which the worker writes into `/pharo` from `manifest.libraries`, and which the VM never reads.
 
 libffi's `ffi_call` is JavaScript: it calls the function from JavaScript, which converts the arguments and the result by the types of the function's own WebAssembly signature.
 So a declaration that does not match the C function, harmless natively, throws a TypeError, or traps, and would end the VM.
@@ -558,13 +537,12 @@ Every library is built by a file of `cmake/emscripten/deps` from its pinned rele
 | pixman 0.44.2 | `pixman-0.44.2.tar.gz` | cairo | `-O2` |
 | cairo 1.18.4 | `cairo-1.18.4.tar.xz` | `WASM_CAIRO` | `-O2` |
 | libgit2 1.4.4 | `libgit2-1.4.4.tar.gz` | `WASM_LIBGIT2` | `-Os` |
-| SDL2 2.32.10 | `SDL2-2.32.10.tar.gz` | `WASM_SDL2` | `-Os` |
 | simdjson 5.0.5 | `simdjson-5.0.5.tar.gz` | `FEATURE_PLUGIN_SIMDJSON` | `-O3` |
 
 `cmake/emscripten/deps/fetch.cmake` looks for each archive in `WASM_DEPS_DIR`, then in `build-wasm/downloads`, where an earlier configure downloaded it, and otherwise downloads it there from its release URL.
 The archive must have its pinned SHA256: one in `build-wasm/downloads` that has not is removed and downloaded again, and one in `WASM_DEPS_DIR`, or a download, that has not stops the configuration, with a message that names the file, both hashes and `WASM_DEPS_DIR`.
 It is unpacked again only when the one unpacked had another hash.
-No configure step of a library runs: what their autotools, meson or CMake would make is committed next to the file that builds them (FreeType's module list and options; the config headers and source lists of pixman, cairo and libgit2, which `cmake/emscripten/deps/cairo/README` and `libgit2/sources.cmake` say how to make again; SDL's `SDL_config_emscripten.h`), and each file checks the version of the archive it was made for.
+No configure step of a library runs: what their autotools, meson or CMake would make is committed next to the file that builds them (FreeType's module list and options; the config headers and source lists of pixman, cairo and libgit2, which `cmake/emscripten/deps/cairo/README` and `libgit2/sources.cmake` say how to make again), and each file checks the version of the archive it was made for.
 The libraries are compiled with flags of their own, not with the VM's warnings, definitions and Debug optimisation: `-m64`, the setjmp/longjmp flags of the VM, their optimisation and `-w`.
 The VM links one zlib, which libpng, cairo's PDF surface and libgit2 share.
 simdjson, the parser of the SimdJSONPlugin, is the exception: `cmake/simdjson.cmake` fetches it the same way, for the native VMs too, and compiles its amalgamation `singleheader/simdjson.cpp` in C++17 with `-O3 -fno-exceptions`.
@@ -573,10 +551,10 @@ simdjson, the parser of the SimdJSONPlugin, is the exception: `cmake/simdjson.cm
   The fonts are those the images embed: lane 64 draws text with FreeType and compares it with the golden files of Pharo 12 and Pharo 15, which are those of the native VM (with FreeType 2.12.1: the same 688 pixels, the same hash).
   It adds 123.6 KiB of gzipped wasm, and about 0.3 s to the first frame of the world.
 - cairo, with pixman, libpng and zlib, on the VM's FreeType (the build checks that cairo sees 2.14.3): its image surface only, no fontconfig, and no renderers of COLR v1 and OT-SVG glyphs, which that FreeType cannot feed.
-  AthensCairoSurface, in OSWindow-Web, copies cairo's pixels into a Form instead of going through SurfacePlugin, which the default VM leaves out.
+  AthensCairoSurface, in OSWindow-Web, copies cairo's pixels into a Form instead of going through SurfacePlugin, which the VMs leave out.
   Lane 65 compares shapes, gradients, FreeType text, a Roassal canvas and a Mondrian view with the golden hashes of the native VM.
   It adds 318 KiB of gzipped wasm.
-- libgit2 and SDL2: see below.
+- libgit2: see below.
 
 Some libraries were deliberately left out:
 
@@ -602,10 +580,10 @@ The Settings of the Console and of the world page choose among three:
 - My proxy: a URL of your own, an http:// or https:// one without a user name, password or `#fragment` (a self-hosted proxy, say); the dialog says why it refuses another.
 
 This browser keeps the choice in localStorage, under `pharo-wasm.gitProxy`: absent for the site's default, `none` for none, or the URL (anything else counts as none, as it did in the builds before the default).
-Every page of the site, the Notebook and `sdl.html` use it, and a change reaches their running VMs at once, also from another tab; without localStorage it holds for the page.
+Every page of the site and the Notebook use it, and a change reaches their running VMs at once, also from another tab; without localStorage it holds for the page.
 It is never taken from a URL: the proxy sees the code and any credentials that pass through it, and a link must not choose where a user's git traffic goes; a `?gitProxy=` of the page's URL is ignored.
 The first git request of a VM that goes through the site's default says so once per proxy, in a notice with a Settings button: "Git requests (Iceberg clones, Metacello github://) go through the public CORS proxy <origin>, which sees what you clone." (`pharo-wasm.gitProxyNoted` remembers the proxy told).
-The Notebook's kernel says it, and why a request failed, in the Notebook's notice, and `sdl.html`, which has no Settings, in its notice with a link to the Console.
+The Notebook's kernel says it, and why a request failed, in the Notebook's notice.
 In the node VM the proxy is `PHARO_WASM_GIT_PROXY`, and there is none by default.
 
 The transport follows redirects (the browser does, or curl in the node VM), and takes the URL that the advertisement of the refs came from for the next requests of the remote, as libgit2's own HTTP transport does: GitLab and Codeberg redirect a remote named without its `.git` to it, and refuse the pack's POST to the old name with 422.
@@ -635,18 +613,13 @@ In the browser `HOME` is `/pharo/home`, which is kept with the image like the cl
 Each saved image has its own home, so a new image asks once again; the node VM reads the `HOME` of its environment, as a native VM does.
 That dialog makes an LGitConfig, which frees itself when the garbage collector takes it.
 In Pharo 13 and later LGitConfig has no free function of its own and inherits LGitExternalObject's `git_object_free`, which, called on a `git_config`, damages the configuration that the repository keeps: the next commit failed with "FFI callout trapped ... memory access out of bounds" (Firefox, the node VM) or crashed the tab (Chromium), and a native VM may crash too.
-`OSWebDriver class>>setUpLibGit` (OSWindow-Web 6) gives LGitConfig the `config_free:` and `freeFunctionSelector` of Pharo 12, which call `git_config_free`, when it still frees with `object_free:`: at build time for the images of the site (which `node-try.sh` runs too), and on the world page for an image opened there or saved with an older OSWindow-Web, which it prepares again.
-They are extensions of OSWindow-Web, so that Monticello sees LibGit-Core unmodified and a load of LibGit-Core keeps them, and the `OSWindow-Web.st` of the site does not carry them: `web-bootstrap.st` compiles them where the image needs them.
-It leaves Pharo 12, a Pharo that frees configurations right, and an image without LGit alone.
-The Console, the Notebook and `sdl.html` do not change the images they boot: a stock Pharo 13 or later opened there, and not prepared for the world page, keeps `object_free:` (in `sdl.html`, whose world has Iceberg's windows, its dialog can then break the next commit).
+`packaging/emscripten/st/web-libgit.st`, which the site stages in `st/`, gives LGitConfig the `config_free:` and `freeFunctionSelector` of Pharo 12, which call `git_config_free`, when it still frees with `object_free:`; it leaves Pharo 12, a Pharo that frees configurations right, an image patched already and an image without LGit alone, and then compiles and logs nothing.
+It is the one copy of that patch, and every image that the site runs gets it: the Console and the Notebook's kernel evaluate it at every boot (`web-repl.st` and `web-notebook.st`), whatever the image, a stock one opened from disk or a saved one of any build too, and `OSWebDriver class>>setUpLibGit` (OSWindow-Web 6) evaluates it where an image is set up for the world: at build time for the images of the site (which `node-try.sh` runs too), and on the world page for an image opened there or saved with an older OSWindow-Web, which it prepares again; the world boots its images as they are, prepared.
+In an image with OSWindow-Web the two methods are extensions of that package, so that Monticello sees LibGit-Core unmodified and a load of LibGit-Core keeps them, and the `OSWindow-Web.st` of the site does not carry them.
+The page prepares an image for the world by booting it as the Console does, which puts the two methods in LibGit-Core before `web-bootstrap.st` files the package in; `setUpLibGit` then finds them there (their comment names `web-libgit.st`) and compiles them again as extensions, once.
+In an image without it, a stock one in the Console say, they go into the protocols of LibGit-Core that Pharo 12 has them in, rather than make a package OSWindow-Web of two methods, compiled without the announcements of the system, so that neither Monticello nor Iceberg sees LibGit-Core modified, nor Epicea a change (a load of another LibGit-Core removes them, and the next boot of the Console or of the Notebook compiles them again; the world does not evaluate `web-libgit.st` at its boots, but its images have the methods as extensions, which such a load keeps).
+Their source goes to the `.changes` when they are compiled, about 400 bytes, once for each boot of an image that is not saved since (uFFI keeps only the pointer to the source of a callout that it generates at the first call); an image saved patched logs nothing more.
 libgit2 adds 258.6 KiB of gzipped wasm; the default build is unchanged.
-
-### SDL2
-
-`make wasm WASM_SDL2=ON` links SDL2 2.32.10, Emscripten's version of its port, built at `-Os` from the signed release archive with a committed `SDL_config_emscripten.h`: the Emscripten video driver, the dummy video driver for node (`SDL_VIDEODRIVER=dummy`), dummy audio, joystick and haptic drivers, no OpenGL ES 2 or EGL, and no iconv.
-The image needs no more than its video, events, timer and clipboard: a worker has neither an AudioContext nor gamepads.
-The worker gives the VM `SDL_EMSCRIPTEN_KEYBOARD_ELEMENT=#canvas`, so that SDL takes the keys from the canvas.
-See The world through SDL2 for the page.
 
 ### What else differs
 
@@ -664,18 +637,17 @@ See The world through SDL2 for the page.
 The files of `web/`, from `packaging/emscripten/web`:
 
 - `index.html`, the Console page, and `page.js`, which drives its VM; `notebook.js`, its Notebook tab, with `notebook-lib.js` (the Markdown renderer, the sanitizer of markup, the `.json` format), `notebook-st.js` (what is Smalltalk: the brackets, the highlighter, the `.st` format, the example) and `nb-kernel.js` (the client of the kernel).
-- `world.html` and `world.js`, the world page, with `keymap.js` (the keys of the page as SDL keycodes, scancodes and modifiers) and `display-worker.js` (the display of the WebDisplayPlugin, in the worker).
-- `sdl.html` and `sdl.js`, the world through SDL2, with `sdl-shim.js` (the DOM of SDL, in the worker), with `WASM_SDL2=ON` only.
+- `world.html` and `world.js`, the world page, with `keymap.js` (the keys of the page as the keycodes, scancodes and modifiers of SDL2, which OSWindow numbers them as) and `display-worker.js` (the display of the WebDisplayPlugin, in the worker).
 - `vm-worker.js`, the worker of every VM, with `vm-driver.js` (the slices, the stdio devices and `/dev/nbevents`), `vm-storage.js` (the saved images in IndexedDB, which the pages read too) and `catalog.js` (the images of the site, from the manifest, for the worker and the pages); `open-image.js`, which reads the images of the user's own; `images.js`, the Images dialog, and `git-proxy.js`, the git proxy of Settings and its dialog, which the Console and the world page share; `pharo-logo.png`.
-- `pharo-web.js` and `pharo-web.wasm`, the VM; `manifest.json`; `THIRD-PARTY-NOTICES.txt`; `image/`, the images, their `.changes` and `.sources`, gzipped; `st/`, `web-repl.st`, `web-notebook.st`, `web-bootstrap.st` and `OSWindow-Web.st`.
+- `pharo-web.js` and `pharo-web.wasm`, the VM; `manifest.json`; `THIRD-PARTY-NOTICES.txt`; `image/`, the images, their `.changes` and `.sources`, gzipped; `st/`, `web-repl.st`, `web-notebook.st`, `web-libgit.st`, `web-bootstrap.st` and `OSWindow-Web.st`.
 
 `manifest.json` (`packaging/emscripten/tools/stage.mjs` says every key) lists the files of the default image in `files`, and the catalog of the site's images in `images`, also when there is one: for each its `id`, `label` ("Pharo 13.1"), `pharo` ("13.1", from the name of its `.sources`), `pharoBuild` (from the name of its zip), `world` and `webPackage`, and its `files`; the default one has `default: true`, and `imageId` is its id.
 `extraSources` lists the `WASM_EXTRA_SOURCES`, and `gitProxyDefault` is the site's default git proxy (`""` for none).
 `catalog.js` is its only reader in the pages and the worker, and makes a catalog of one image of the manifest of an older build.
 
 The page compiles `pharo-web.wasm` once, and gives it to every worker it starts (`packaging/emscripten/web/vm-worker.js`).
-The worker fetches the files of the image it boots, as `manifest.json` lists them, inflates them as they come (DecompressionStream), writes them into `/pharo` in memory, after the files that a saved image keeps and the placeholders of the libraries, and boots the image in one of four modes (`PharoVMDriver.vmArgs`): `console`, the REPL, `--headless /pharo/Pharo.image --no-default-preferences st --no-source /pharo/st/web-repl.st`; `notebook`, the same with `web-notebook.st`; and `world` and `sdl`, `--headless /pharo/Pharo.image --no-default-preferences --interactive`, with a display or without one.
-`--no-source` keeps the script, which is filed in at every boot, out of the `.changes`.
+The worker fetches the files of the image it boots, as `manifest.json` lists them, inflates them as they come (DecompressionStream), writes them into `/pharo` in memory, after the files that a saved image keeps and the placeholders of the libraries, and boots the image in one of three modes (`PharoVMDriver.vmArgs`): `console`, the REPL, `--headless /pharo/Pharo.image --no-default-preferences st --no-source /pharo/st/web-repl.st`; `notebook`, the same with `web-notebook.st`; and `world`, `--headless /pharo/Pharo.image --no-default-preferences --interactive`, with a display.
+`--no-source` keeps the script, which is filed in at every boot, out of the `.changes`; it first evaluates `/pharo/st/web-libgit.st` (see libgit2).
 What the VM writes to stdout and stderr is posted at the end of every slice, and the worker pauses the VM while more than 1 MiB of it is not acknowledged, until less than 512 KiB is: the page acknowledges what it rendered, or, while it is hidden and gets no animation frames, what it received.
 Stdin is Emscripten's terminal device with its read and poll replaced: a read never blocks, and the REPL waits with `waitForData`, so the VM sleeps until the page sends a line.
 Stop calls `vm_interrupt()`, which signals the semaphore that the REPL, or the kernel, registered with the WebHostPlugin.
@@ -691,8 +663,8 @@ A worker in `notebook` mode boots the image of the Console, a saved one too, but
 
 The messages between a page and its worker:
 
-- page to worker: `init` (the compiled module, the manifest's URL, the build, the mode, the slice, whether to keep images, the image to boot: an upload, a saved slot or an image of the site, and the name of the slot it will make, a preparation, a display, the git proxy, a canvas), `input`, `eof`, `interrupt`, `save`, `saveAs` (the name of a new slot for the next save), `ack`, `fs`, `download`, `resetStorage` (one slot, the one bound, or all), `flush`, `display`, `gitProxy` (`null` for the site's default, `''` for none, or a URL), `sdl` and `stats`;
-- worker to page: `progress`, `ready` (what was booted: the slot, the catalog entry, the Pharo version, and what was missing of what was asked; the proxy in effect and the site's; and what the VM has), `output` (text of fds 1 and 2, bytes of fd 3), `state`, `tick`, `interrupted`, `edited`, `storing`, `saved` (the slot, whether it was made, the files kept or why not), `prepared`, `superseded`, `reset`, `exit`, `crash`, `fs-result`, `file`, `error`, `display`, `sdl`, `stats` and `git` (the first request of the VM, and a failed one, with its host, proxy and status, from `Module.onGitHttp` of the transport).
+- page to worker: `init` (the compiled module, the manifest's URL, the build, the mode, the slice, whether to keep images, the image to boot: an upload, a saved slot or an image of the site, and the name of the slot it will make, a preparation, a display, the git proxy), `input`, `eof`, `interrupt`, `save`, `saveAs` (the name of a new slot for the next save), `ack`, `fs`, `download`, `resetStorage` (one slot, the one bound, or all), `flush`, `display`, and `gitProxy` (`null` for the site's default, `''` for none, or a URL);
+- worker to page: `progress`, `ready` (what was booted: the slot, the catalog entry, the Pharo version, and what was missing of what was asked; the proxy in effect and the site's; and what the VM has), `output` (text of fds 1 and 2, bytes of fd 3), `state`, `tick`, `interrupted`, `edited`, `storing`, `saved` (the slot, whether it was made, the files kept or why not), `prepared`, `superseded`, `reset`, `exit`, `crash`, `fs-result`, `file`, `error`, `display` and `git` (the first request of the VM, and a failed one, with its host, proxy and status, from `Module.onGitHttp` of the transport).
 
 The notebook kernel reads its requests on the VM's stdin, one JSON line each (`run {rid, name, code}`, `ping`, `stop-background`), and writes its events on `/dev/nbevents` (`hello`, `start`, `display`, `clear`, `stream`, `error`, `done`, `pong`, `stopped`, `bad-request`), which the worker posts as fd 3; the requests are checked strictly, and the page checks every event before it allocates anything for it.
 
@@ -705,7 +677,7 @@ On the world page, `init.prepare` boots an image that has no OSWindow-Web, or an
 ### The world
 
 The Pharo world draws itself into a Form, and the VM only blits it.
-SDL2 under Emscripten would need the DOM of the main thread, or pthreads, and the image's SDL2 driver blits through SurfacePlugin, so the world page does without it (`sdl.html` gives it a shim of the DOM instead).
+SDL2's Emscripten driver expects the DOM of the main thread, and the image's SDL2 driver blits through SurfacePlugin; the world page needs neither, and the VMs have neither (`WASM_SDL2` is gone, see Settings).
 The world image has the OSWindow-Web package (`packaging/emscripten/st/OSWindow-Web`): OSWebDriver, a backend window and a Form renderer, which a startUp: hook picks whenever the page gives a display, and the extension of AthensCairoSurface that copies cairo's pixels into a Form.
 It keeps the FreeType fonts of the image, unless the build has no FreeType, and then gets bitmap fonts: `OSWebDriver>>setUpImage` takes the fonts the build gives from `webimage-fonts.txt`, and the manifest says which (`fonts`).
 The package is at version 6 (`OSWebDriver class>>packageVersion`, the manifest's `webPackage`): version 2 kept the FreeType fonts, 3 added the AthensCairoSurface extension, 4 makes Iceberg's remotes https:// ones, 5 draws the world in device pixels on high-density displays, and 6 gives LGitConfig the free function of Pharo 12 (see libgit2); an image saved with an older version is prepared again when the world page opens it.
@@ -717,10 +689,10 @@ The dirty rectangles (up to 64, then their bounding box) go to the page, and the
 The page's events come back as records of 8 integers, in a ring of 256 records, and each one signals the image's input semaphore.
 The title, the cursor (1-bit Forms, as RGBA), the clipboard and the focus go to the page as well.
 In the worker, `display-worker.js` paints the dirty rectangles, straight from the VM's memory, into the OffscreenCanvas that the page transferred to it.
-`world.js` sends it the size of the canvas, in CSS pixels and in device pixels, and the input, which `keymap.js` maps to SDL keycodes, scancodes and modifiers.
+`world.js` sends it the size of the canvas, in CSS pixels and in device pixels, and the input, which `keymap.js` maps to the keycodes, scancodes and modifiers that OSWindow takes (SDL2's).
 
-A stock image cannot open the world page as it is: its world starts through OSSDL2Driver.
-The world page prepares the stock images that it opens, and the Console offers to ("Prepare for the world"): both run `packaging/emscripten/st/web-bootstrap.st`, which files in the package and sets up the fonts, and then save.
+A stock image cannot open the world page as it is: its world starts through OSSDL2Driver, the driver of the desktop VMs.
+The world page prepares the stock images that it opens, and the Console offers to ("Prepare for the world"): both run `packaging/emscripten/st/web-bootstrap.st`, which files in the package and sets up the fonts, Iceberg's remotes and LGitConfig, and then save.
 
 ### Pharo versions
 
@@ -732,7 +704,7 @@ The VM is the same; what differs is the Smalltalk of the pages (`packaging/emscr
 - Pharo 15's command line (Clap) takes a single file after `st`, with `--save` and `--quit` as its own options, and a file only after `st`: the world image is prepared with `st --save --quit prepare-web-image.st`, which finds its directories in `PHARO_WEB_ST_DIR` and `PHARO_WEB_IMAGE_DIR`.
 - Pharo 15's chunk reader takes one method per `methodsFor:` section, so `web-repl.st`, `web-notebook.st` and the `OSWindow-Web.st` that `prepare-web-image.st` writes (the same from both versions) give each method its section, and define every class before its methods; `web-notebook.st` is ASCII, since Pharo 15 mangles the other characters of a file-in.
 - Pharo 15 handles errors through `ErrorHandler default`, opens its world in `UIManager class>>startUp:` (so OSWebDriver registers for an earlier startup), and does not boot with an empty `.changes`: the pages give an image opened without one a `.changes` that holds only its version header, `"VERSION:1.0"!`.
-- The libraries of the registry are those both images bind: they bind the same functions of cairo, FreeType and SDL2, and each binds one function of libgit2 that the other does not.
+- The libraries of the registry are those both images bind: they bind the same functions of cairo and FreeType, and each binds one function of libgit2 that the other does not.
 - Pharo 13 writes a `pharo-local` directory next to the image when it is prepared at build time, which the build removes before the image is staged.
 
 ## Tests
@@ -742,19 +714,19 @@ A lane that cannot run here is skipped, with the reason, and the run ends with t
 `make wasm-check` gives the lanes `NODE`, `WASM_DIR` (the build directory), `GEN` (the generated sources), `HOST_PHARO` (`WASM_HOST_PHARO`), `SRCDIR` and `TEST_DIR` (`build-wasm/tests-run`).
 Run by hand, `run-lanes.sh` defaults them for `build-wasm`, except `HOST_PHARO`, which stays empty unless it is given: the checks that need a native Pharo VM are then skipped.
 The lanes are meant for Release builds.
-On the machine the port was made on, the 23 lanes before 68-simdjson passed in 14 minutes on a build with libgit2 and SDL2, with `NOTEBOOK_IMAGES` of a Pharo 15 image, 9 minutes of which were lane 61; without libgit2 and SDL2, lanes 66 and 67 are skipped.
-The times below are those of that run:
+On the machine the port was made on, the 23 lanes passed in 13 minutes on the site of three images with libgit2 (lane 61 took 5 of them), and the 22 that a site of the pinned Pharo 12 with libgit2 runs (68-simdjson skips it) in 11 minutes; without libgit2, lane 66 is skipped.
+The times below are those of an earlier run, on a Pharo 12 build with libgit2 and `NOTEBOOK_IMAGES` of a Pharo 15 image (9 minutes of lane 61), but for lane 66, of the site of three images:
 
 | Lane | What it checks | Checks | Time |
 |---|---|---|---|
-| 05-build-rules | the rules of `GNUmakefile` and `cmake/emscripten/webimage.cmake`, in small trees where stand-ins of cmake, emcmake, the Pharo VMs and the specs log what they are asked to do: what is configured, generated or prepared again when a setting (the libraries', `WASM_DEPS_DIR` and those of the images and the git proxy too), the initial cache, a `.st` file or a class of OSWindow-Web changes, comes or goes, the refusals of bad images, ids, `.sources` and proxies, an extra image prepared once in a work directory of its own, the fonts of the world image, the patch of libffi, the guard of `WASM_BUILDDIR`, and which specs `make wasm-check-browser` runs; then `stage.mjs` on a catalog of images (the default at its URLs of before, an extra one under `image/<id>/`, the labels, builds and order of `manifest.images`, an extra `.sources`, the checks of the ids, of the `.sources` and of OSWindow-Web, and a build id that follows the build of an image); it needs GNU make and cmake, and builds no VM | every rule | 13 s |
+| 05-build-rules | the rules of `GNUmakefile` and `cmake/emscripten/webimage.cmake`, in small trees where stand-ins of cmake, emcmake, the Pharo VMs and the specs log what they are asked to do: what is configured, generated or prepared again when a setting (the libraries', `WASM_DEPS_DIR` and those of the images and the git proxy too), the initial cache, a `.st` file or a class of OSWindow-Web or `web-libgit.st` changes, comes or goes, the refusals of bad images, ids, `.sources` and proxies, an extra image prepared once in a work directory of its own, the fonts of the world image, the patch of libffi, the guard of `WASM_BUILDDIR`, the refusal of `WASM_SDL2`, and which specs `make wasm-check-browser` runs; then `stage.mjs` on a catalog of images (the default at its URLs of before, an extra one under `image/<id>/`, the labels, builds and order of `manifest.images`, an extra `.sources`, the checks of the ids, of the `.sources` and of OSWindow-Web, and a build id that follows the build of an image); it needs GNU make and cmake, and builds no VM | every rule | 13 s |
 | 10-types | `tests/wasm/check-types.sh` compiles the generated interpreter with `sqVirtualMachine.c`, `client.c` and `sqExternalSemaphores.c` as one translation unit: every interpreterProxy slot and prototype must have the interpreter's type; both link commands of the CMake tree (Unix Makefiles or Ninja) carry `-Wl,--fatal-warnings`, and neither module has a signature mismatch stub | 0 errors | 1 s |
 | 20-smoke | `tests/wasm/wasm-smoke.sh`, S1 to S22 with the node VM: the exact output of `eval` and `st`, the platform and the FFI backend, files, the environment (`setenv` through the FFI), Delays, preemption, deep recursion, a growing heap, a snapshot reloaded in WebAssembly and natively, exit statuses, time zones, the builtin plugins, the slices and where old space is placed | 28 | 24 s |
 | 22-old-space | `tests/wasm/st/oldspace-window.st`, `oldspace-regrow.st` and `permspace.st` with the node VM: old space ends in an `OutOfMemory` at the end of its window, and the young objects stored at its top survive a scavenge; a freed segment at the top is used and grown again; the perm-space primitives fail | 3 | 12 s |
 | 25-session-id | `tests/wasm/session-id.mjs`: a snapshot booted again within the same second gets a session ID of its own and refuses the old session's file handles; the C streams are flushed on exit | 8 | 2 s |
 | 30-engines | S2, S8 and S9 again, in Liftoff code only (`--liftoff-only`) with a 900 KB stack, and in a worker thread with a 1 MB stack, the stack of a browser worker; S2t checks that V8 compiled nothing with TurboFan, and fails when the V8 flags of the lane do not reach node | 8 | 17 s |
 | 40-bench | `tests/wasm/bench.sh`: the measures below, next to reference numbers; it fails when 300k-deep recursion takes 1 s, when `eval '3+4'` takes 1.5 s, or when 2 s of computing run in fewer than 10 slices | 8 | 13 s |
-| 50-prim-audit | `tests/wasm/prim-audit.mjs` reads `pharo.wasm`: the named-primitive lookup answers the trampoline tables, every primitive is called through a `() -> ()` function, every function pointer is at least 1024, nothing goes through `-sEMULATE_FUNCTION_POINTER_CASTS`, the builtin modules are the expected ones (18 with SDL2 and the SimdJSONPlugin), and the 20 support primitives of `src/ffi` are there | every row (411) | < 1 s |
+| 50-prim-audit | `tests/wasm/prim-audit.mjs` reads `pharo.wasm`: the named-primitive lookup answers the trampoline tables, every primitive is called through a `() -> ()` function, every function pointer is at least 1024, nothing goes through `-sEMULATE_FUNCTION_POINTER_CASTS`, the builtin modules are the expected ones (17 with the SimdJSONPlugin), and the 20 support primitives of `src/ffi` are there | every row (396) | < 1 s |
 | 55-webdisplay-unit | `tests/wasm/webdisplay-unit.c` on the frame code of the WebDisplayPlugin, then its primitives on bad arguments in the node VM | 235 + 34 | 2 s |
 | 56-memory-unit | `tests/wasm/memory-unit.c` drives `src/emscripten/memoryEmscripten.c` as Spur does, against a stub of `pharovm/pharo.h`: fixed spaces, segments that grow again where freed ones were and come back zeroed, old space that never leaves its window, and a first segment larger than the window | 55 + 2 | 1 s |
 | 58-ffi | `tests/wasm/st/ffi.st` with the node VM: callouts to the C library and to the FFI test library, scalars, a variadic function, structures by value, callbacks, reentrant ones 50 deep, results declared wider than the function's, the declarations that the adapter adapts (traced with `PHARO_WASM_FFI_TRACE=1`), and exactly two guarded failures and one of the adapter, each with its one line on stderr; a bench of 10000 `strlen` callouts (`WASM_FFI_BENCH_MS`, default 10000); then a 2 s loop in a callback must end no slice (`PHARO_WASM_STATS`) | 3 (26 in `ffi.st`) | 9 s |
@@ -763,16 +735,15 @@ The times below are those of that run:
 | 61-notebook-harness | `tests/wasm/notebook-lib.test.mjs` on the libraries of the Notebook (the brackets, the highlighter and their fuzz, the `.st` and `.json` formats, the frames of `/dev/nbevents`, the PNGs, the sanitizer, in linear time) and, with `HOST_PHARO`, the highlighter against the image's own scanner; then `tests/wasm/notebook-harness.js`, the kernel through `vm-driver.js` (requests, values, errors, Stop, output credit, encodings, rich output, background processes, snapshots, the end of stdin; the FFI, cairo and FreeType of the build) and the page's client against the real `vm-worker.js` in worker threads (the queue, Stop and its watchdog, restarts, exits, floods, uploads, the saved image, the slot that the Console names), with the default engine and in Liftoff code only, on the stock image and on each image directory of `NOTEBOOK_IMAGES` | 28 + 65 + 65 per image | 548 s (2 images) |
 | 62-web-repl-regress | `tests/wasm/web-repl-regress.js`, through `vm-driver.js` as lane 60: a Stop of an evaluation that has not started yet, a Warning that nothing handles, where a syntax error is, and the file in which the REPL tells the page about its image | 4 | 3 s |
 | 64-freetype | `tests/wasm/st/ft-parity.st` on the stock and world images: FreeType 2.14.3 draws a line of the default font with the 688 pixels and the hash of the golden file of the image's version (`tests/wasm/golden/ft-p12.txt`, `ft-p15.txt`); with FreeType hidden (`PHARO_WASM_FFI_HIDE=freetype`) the image falls back to StrikeFont; a note of what FreeType costs a boot | 4 | 10 s |
-| 65-cairo | `tests/wasm/st/athens-parity.st` on the world image: shapes, FreeType text, a repeated gradient, a Roassal canvas, a Mondrian and a PNG drawn by cairo 1.18.4, against the golden hashes (`athens-p12.txt`, `athens-p15.txt`); the functions the adapter adapts (`adapted-65.txt`); with `PHARO_WASM_FFI_ADAPT=0` the gradient fails as a primitive; the stock image without SurfacePlugin fails cleanly, or, with SDL2, draws through it the shapes of the golden file; with cairo hidden, a SymbolNotFoundError | 5 | 20 s |
-| 66-libgit2 | `tests/wasm/st/iceflow.st` on the stock and world images: a repository, a package, two commits and a diff, the log, a branch, the status and a file:// clone through Iceberg, against the golden output of the native VM (`iceflow-p12.txt`, `iceflow-p15.txt`); `tests/wasm/st/git-identity.st` on each world image of the site, in an empty `HOME`: a first commit through Iceberg's dialog of the missing properties, global, then a full garbage collection and two more commits (`git-identity.txt`), LGitConfig frees with `config_free:`, whose callout is `git_config_free`, and a second set up compiles nothing; and on each stock image the control, a commit of which fails once the LGitConfig is finalized when it frees with `object_free:`; the adapted functions (`adapted-66.txt`) and the control without the adapter; a git:// clone of an unresolvable host fails cleanly; with git2 hidden, a SymbolNotFoundError; with the smart-HTTP transport and a `git http-backend`, `tests/wasm/st/git-http-clone.st` clones over HTTP (curl) from `tests/wasm/lib/git-http.mjs` a remote named without its `.git`, which the server redirects, taking the redirect for the pack, and a missing repository fails with the 404 text; skipped without libgit2 | 8, and 2 for each image of the site (14 for three) | 40 s |
-| 67-sdl2 | `tests/wasm/st/sdl-session.st` on the stock and world images, with SDL's dummy video driver: the world opens through OSSDL2Driver on SDL 2.32.10, a Playground and a Browser, the clipboard, the cursors, the title, a resize, fullscreen, text input, the colours of the world, and the events of a user queued with `SDL_PushEvent` (the world menu, `3 + 4` typed and printed); SurfacePlugin is built in; with SDL2 hidden, a SymbolNotFoundError; skipped without SDL2 | 4 | 12 s |
+| 65-cairo | `tests/wasm/st/athens-parity.st` on the world image: shapes, FreeType text, a repeated gradient, a Roassal canvas, a Mondrian and a PNG drawn by cairo 1.18.4, against the golden hashes (`athens-p12.txt`, `athens-p15.txt`); the functions the adapter adapts (`adapted-65.txt`); with `PHARO_WASM_FFI_ADAPT=0` the gradient fails as a primitive; the stock image, without SurfacePlugin, fails cleanly; with cairo hidden, a SymbolNotFoundError | 5 | 20 s |
+| 66-libgit2 | `tests/wasm/st/iceflow.st` on the stock and world images: a repository, a package, two commits and a diff, the log, a branch, the status and a file:// clone through Iceberg, against the golden output of the native VM (`iceflow-p12.txt`, `iceflow-p15.txt`); `tests/wasm/st/git-identity.st` on each world image of the site, in an empty `HOME`: a first commit through Iceberg's dialog of the missing properties, global, then a full garbage collection and two more commits (`git-identity.txt`), LGitConfig frees with `config_free:`, whose callout is `git_config_free`, and a second set up compiles nothing; the same flow on each stock image booted as the Console boots it (`web-repl.st`, a line of its REPL) and as the Notebook's kernel does (`web-notebook.st`, a cell), with `web-libgit.st` next to them, which their boot must have evaluated; each stock image booted as the page boots one that it prepares for the world (as the Console, then `web-bootstrap.st` with the site's `OSWindow-Web.st`), after which `config_free:` must be an extension of OSWindow-Web, not in LibGit-Core, which Monticello sees unmodified; and on each stock image the control, a commit of which fails once the LGitConfig is finalized when it frees with `object_free:`; the adapted functions (`adapted-66.txt`) and the control without the adapter; a git:// clone of an unresolvable host fails cleanly; with git2 hidden, a SymbolNotFoundError; with the smart-HTTP transport and a `git http-backend`, `tests/wasm/st/git-http-clone.st` clones over HTTP (curl) from `tests/wasm/lib/git-http.mjs` a remote named without its `.git`, which the server redirects, taking the redirect for the pack, and a missing repository fails with the 404 text; skipped without libgit2 | 8, and 5 for each image of the site (23 for three) | 68 s |
 | 68-simdjson | the SimdJSONPlugin (`docs/SimdJSON.md`) with the node VM: it is built in, `plugins/SimdJSONPlugin/st/SimdJSON.st` and `SimdJSON-Tests.st` file in (`SimdJSONReader` a subclass of `SimdJSONMapper`), the plugin answers the platform `emscripten`, the implementation `fallback` and simdjson 5.0.5; `SimdJSONWriter` writes a value that the plugin writes in part and the image in part (a Set, a Fraction); `tests/wasm/st/simdjson-lane.st` runs the package `SimdJSON-Tests` but `SimdJSONSlowTests` with no failure; a document of 17 MiB is refused under the default input cap, read without it and written back; then the same tests in pharo-web through `vm-driver.js` and the REPL, as lane 60; skipped without `FEATURE_PLUGIN_SIMDJSON` or on an image older than Pharo 15 | 7 | 15 s |
-| 70-worker-harness | `tests/wasm/storage.test.mjs` on `vm-storage.js` and `catalog.js` (the slots on the in-memory store: a new slot never `main`, which a page of before overwrites, a save, a load and a sync per slot, the guards per slot, rename, remove, `last`, a meta of before the slots, the tree and its paths; the catalog of a manifest with images and of one before them; `PharoGitProxy.parse`, a proxy written as the browser writes it, and `describe`); then `tests/wasm/worker-harness.js`: `vm-worker.js` as staged, in worker threads behind a shim of the worker globals: the protocol, Stop, output credit, the downloads, persistence, two workers on one saved image, an image opened with a `.sources` of its own, the preparation of an image for the world and the versions of OSWindow-Web (from 5 to 6, LGitConfig then frees with `git_config_free`), the placeholders of the libraries, and the notebook mode, which stores nothing; and, on sites of its own with a catalog of two images, `init.fresh` and `init.slot`, a slot per fresh image, Save as, two workers on two slots, `resetStorage` of a slot, a meta of before the slots, the files of `/pharo` kept with the image (and the image kept without them when the store has no room for them), the site's default git proxy, the `.sources` a slot gets by name, and a save that never overwrites another image | 20 + 43 | 130 s |
+| 70-worker-harness | `tests/wasm/storage.test.mjs` on `vm-storage.js` and `catalog.js` (the slots on the in-memory store: a new slot never `main`, which a page of before overwrites, a save, a load and a sync per slot, the guards per slot, rename, remove, `last`, a meta of before the slots, the tree and its paths; the catalog of a manifest with images and of one before them; `PharoGitProxy.parse`, a proxy written as the browser writes it, and `describe`); then `tests/wasm/worker-harness.js`: `vm-worker.js` as staged, in worker threads behind a shim of the worker globals: the protocol, Stop, output credit, the downloads, persistence, two workers on one saved image, an image opened with a `.sources` of its own, the preparation of an image for the world and the versions of OSWindow-Web (from 5 to 6, LGitConfig then frees with `git_config_free`, which the set up of the preparation gives it, and a `config_free:` that `web-libgit.st` compiled in LibGit-Core becomes an extension of OSWindow-Web), the placeholders of the libraries, and the notebook mode, which stores nothing; and, on sites of its own with a catalog of two images, `init.fresh` and `init.slot`, a slot per fresh image, Save as, two workers on two slots, `resetStorage` of a slot, a meta of before the slots, the files of `/pharo` kept with the image (and the image kept without them when the store has no room for them), the site's default git proxy, the `.sources` a slot gets by name, and a save that never overwrites another image | 20 + 44 | 130 s |
 | 72-open-image | `tests/wasm/open-image.test.mjs` on `open-image.js` in node: zips (deflated and stored entries, data descriptors, UTF-8 names, directories and the files that the Finder adds, zip64), how the files are paired, every refusal, the image headers, drops, and the build's stock image zipped as files.pharo.org does and opened; `OPEN_ZIPS`, paths separated by colons, adds zips of your own | 11 | 3 s |
 | 80-world-harness | `tests/wasm/keymap.test.mjs`, then `tests/wasm/world-harness.mjs`, which plays the world page in node with a memory framebuffer, on the default image and then on every other world image of the catalog (`WORLD_IMAGE_ID`), and `tests/wasm/st/osweb-native.st` on the native VM | 16 + 16 per world image + 27 | 20 s (one image) |
 | 82-osweb-windows | `tests/wasm/st/osweb-windows.st` on the native VM: a second OSWindow without an event handler leaves the world shown, and the window of the Emergency Debugger (in Pharo 15, which has none, a window of the same kind) takes the canvas and the input, then gives them back | 11 | 10 s |
 
-The bench measured, on that machine with node 25.2.1, on a build with libgit2 and SDL2:
+The bench measured, on that machine with node 25.2.1, on a build with libgit2 (and SDL2, which the VMs had then):
 
 | Measure | This build | Native StackVM |
 |---|---|---|
@@ -812,7 +783,7 @@ The specs that open images zip the build's stock image, `<web>/../image/stock`, 
 `make wasm-check-browser` runs, in order:
 
 - `tests/wasm/page.spec.mjs`, the Console: evaluation, the keys, history, Stop, Save, Download, the persistence, two tabs, Open with good and damaged zips (each a new saved image), drops, `?slot=`, Delete of one saved image, Images and Save as, Settings and the git proxy (the site's default, None, a proxy of one's own, the notes, and that a `?gitProxy=` is ignored), the tabs, and the Content-Security-Policy; `OPEN_ZIPS` (paths separated by colons, Pharo downloads say) makes it open those zips too.
-  45 checks per browser.
+  46 checks per browser.
 - `tests/wasm/notebook.spec.mjs`, the Notebook tab: the lazy start, Run all on the example, rich outputs, the keys, Stop and its watchdog, the coloring, its contrast and its budget, the caps of the outputs, the sanitizer, the command keys, Upload, the layouts at 390, 360 and 320 px, Restart, Import and Export, autosave across tabs and reloads, Export .html opened from `file://`, the image of the Console, and no worker from `file://` or without memory64.
   `NB_OPEN_ZIP` names a Pharo zip (of the other version, say) that the Console opens last: the kernel then boots it, and Run all on the example passes on it too; and the kernel boots the Console's `?slot=` after a switch.
   58 checks per browser.
@@ -820,13 +791,11 @@ The specs that open images zip the build's stock image, `<web>/../image/stock`, 
   It boots the world with `st /pharo/st/world-probe.st` too (`tests/wasm/st/world-probe.st`), which writes `/pharo/probe.json` (the menus, windows, Playground text, debuggers and fonts of the world), and reads it through `window.PharoWorld`, which the world page gives tests: `stats` (the workers started, the frames and when they came, the times from a key to the next frame), `state` (the status pill), `unsaved`, `choice`, `images`, `readFile(path)` and `fs(op, path, fields)`.
   It checks that FreeType draws the world, and, with cairo, that the Inspector's Roassal canvas, Code Changes and the color picker draw.
   On a site of several images it checks the launcher (Enter starts the default, Escape does not close it) and starts the other images fresh; then Save, `?slot=`, Save as, Images (open, rename, delete), the link to the Console, a file of `/pharo` kept across a Save and a reload, a `.gitconfig` of `/pharo/home` too, which is the `HOME` of the world (the probe says it), and Settings with the notes of git.
-  41 checks per browser on the site of three images.
+  45 checks per browser on the site of three images, 43 on a site of one.
 - `tests/wasm/ffi.spec.mjs`, on a build with the FFI: a qsort callback, setenv, an adapted callout and a mismatched one in the Console.
   6 checks per browser.
-- `tests/wasm/git.spec.mjs`, on a build with libgit2 and its transport, and a git with `git http-backend` (`tests/wasm/lib/git-http.mjs` serves the repositories, redirects a remote named without its `.git`, and runs a CORS proxy, all on 127.0.0.1, the proxy being the site's default of the spec): by default a clone goes through the site's proxy, and the one-time note says so once; a first commit asks for the user, which Iceberg's dialog of the missing properties (made but not opened) sets globally, and after a full garbage collection, which frees its LGitConfig with `git_config_free` and with no error in the terminal, the next commit works; that user is in `/pharo/home/.gitconfig` after a Save and a reload, and the next commit does not ask; the clone is kept with the saved image, and fetched again after a reload, without the note; with None a clone fails with "request failed (CORS or network)" after one request, and the notice points to Settings; a clone, a fetch and the clone of a redirected remote through the proxy of Settings, and a clone again after a reload; every request reached the git server through the proxy; and the Settings of the world page.
-  14 checks per browser, with the one that no page or worker logged an error.
-- `tests/wasm/sdl.spec.mjs`, on a build with SDL2: `sdl.html` paints the world through OSSDL2Driver, the world menu, typing into a Playground and printing, a stock image opened unprepared, the git proxy of Settings (a change reaches the VM, one with credentials is refused, the site's default is `null`, a Restart gives it in its init), `?fresh=` on a site of several images, the idle cost against the world page (printed, never a failure), and the world page still on OSWebDriver.
-  9 checks per browser, 10 on a site of several images.
+- `tests/wasm/git.spec.mjs`, on a build with libgit2 and its transport, and a git with `git http-backend` (`tests/wasm/lib/git-http.mjs` serves the repositories, redirects a remote named without its `.git`, and runs a CORS proxy, all on 127.0.0.1, the proxy being the site's default of the spec): by default a clone goes through the site's proxy, and the one-time note says so once; a first commit asks for the user, which Iceberg's dialog of the missing properties (made but not opened) sets globally, and after a full garbage collection, which frees its LGitConfig with `git_config_free` and with no error in the terminal, the next commit works; that user is in `/pharo/home/.gitconfig` after a Save and a reload, and the next commit does not ask; the clone is kept with the saved image, and fetched again after a reload, without the note; with None a clone fails with "request failed (CORS or network)" after one request, and the notice points to Settings; a clone, a fetch and the clone of a redirected remote through the proxy of Settings, and a clone again after a reload; every request reached the git server through the proxy; the Settings of the world page; and, back in the Console, the stock image of the build opened from disk, whose boot gave LGitConfig `git_config_free` in a protocol of LibGit-Core (no package OSWindow-Web, LibGit-Core not modified for Monticello), with which the dialog, a full garbage collection and the next commit work, and the same in a cell of the Notebook, whose kernel boots that image as it was kept.
+  16 checks per browser, with the one that no page or worker logged an error; without the evaluation of `web-libgit.st` at the boot, the last two fail on a stock Pharo 13 or later (Chromium crashed the tab, Firefox failed the commit after the garbage collection).
 
 `tests/wasm/pages-regress.spec.mjs` holds regression checks of the pages (the live regions, input methods, output while the page is hidden, the questions before the page goes, Delete after a failed boot, two sites of one origin, a closed database connection, a browser without DecompressionStream, a notebook cell of 5 MB of output while hidden, the world's progress bar, F6, a refused clipboard write, a world that does not open, and the image saved by a build of before the saved images, which Images lists as "Saved image" and the world boots), and runs the same way; `make wasm-check-browser` does not run it.
 `PLAYWRIGHT_MODULE` names the Playwright package, and `BROWSERS` the browsers (default `chromium`); Playwright's own variables, such as `PLAYWRIGHT_BROWSERS_PATH`, apply:
@@ -837,8 +806,7 @@ or for one spec, on any staged site:
 
     PLAYWRIGHT_MODULE=/path/to/node_modules/playwright BROWSERS=chromium,firefox node tests/wasm/page.spec.mjs build-wasm/web
 
-On the site of three images with libgit2 and without SDL2, in Chromium and Firefox together, the Console spec passed its 90 checks, the Notebook spec its 116, the world spec its 82 and `pages-regress.spec.mjs` its 37; on that site, the git spec passed its 28 in 34 s.
-Before the saved images, on a build with libgit2 and SDL2, the FFI spec passed its 12 checks in 7 s and the SDL spec its 18 in 69 s.
+On the site of three images with libgit2, in Chromium and Firefox together, the Console spec passed its 92 checks, the Notebook spec its 116, the world spec its 90, `pages-regress.spec.mjs` its 37, the git spec its 32 in 53 s and the FFI spec its 12 in 7 s; on a site of the pinned Pharo 12 with libgit2, the same, but the world spec's 86.
 `SHOTS=1` saves screenshots of the pages, light and dark, at 1280 and 360 px, in `build-wasm/tests-run/shots`.
 
 ## Limitations
@@ -848,7 +816,7 @@ Before the saved images, on a build with libgit2 and SDL2, the FFI spec passed i
 - A declaration that does not match its C function other than in the width of an integer fails as a primitive, where natively it may work; a callback declared with another type than C's traps, and fails its callout.
 - A callback keeps the VM from its host until it returns: no output, input or Stop meanwhile.
 - No name resolution (`getaddrinfo` is disabled), and sockets are of little use in browsers.
-- No `fork`, OSProcess, SSL, SSH, threads or TFWorker, and no external surfaces without SDL2 (SurfacePlugin is left out).
+- No `fork`, OSProcess, SSL, SSH, threads or TFWorker, no SDL2, and no external surfaces (SurfacePlugin is left out).
 - libgit2 reaches http:// and https:// remotes only, through a CORS proxy for a server of another origin (by default a public one, which sees what is cloned), without credentials: no private repository, and no push to a host that asks for them.
 - A saved image keeps the files of its directory, its clones too, as they were at its last save: what was cloned or committed since is lost on a reload.
   At most 256 MiB and 50000 files are kept; beyond, the save keeps the image and the files of the save before, and says so.
@@ -875,18 +843,16 @@ Before the saved images, on a build with libgit2 and SDL2, the FFI spec passed i
   - what a background process writes on `Stdio stdout` or `Stdio stderr` (not on the Transcript) goes to the cell that runs then, or to the kernel's messages;
   - a cell can write events of its own on the kernel's device, a done of its own count say, which ends that cell early; the page checks every event, and the cells after it get their own results;
   - a huge output of right-to-left text takes long to lay out in Chromium: 500000 characters written in one line took 9.7 s (Hebrew) and 24.3 s (Arabic) to show, against 0.14 s for Latin text, and 1.0 s and 0.9 s in Firefox.
-- `sdl.html` keeps nothing in the browser, and its clipboard, resizing, HiDPI and input methods are SDL's, not bridged to the page; it costs about 3.5 to 6 times the idle VM time of the world page.
 - Safari is untested.
-- The canvas of `sdl.html` has one pixel per CSS pixel, so it is blurred on HiDPI screens (the world page draws in device pixels).
-  Input methods commit their text when the composition ends, touch gestures are not supported, and touch screens are untested.
+- Input methods commit their text when the composition ends, touch gestures are not supported, and touch screens are untested.
 
 ## Licences
 
 `THIRD-PARTY-NOTICES.txt`, in `node/` and `web/` and linked from the pages, gives the licences of the software that the WebAssembly modules contain besides the VM, which is under the MIT License (`LICENSE`).
 `cmake/emscripten/stage.cmake` assembles it at configure time: `packaging/emscripten/THIRD-PARTY-NOTICES.head.txt`, then, for each library linked into the VM, its version, the URL of its archive and the SHA256 of that archive, with the full text of the licence files the library declares (`pharo_wasm_dep_fetch(... LICENSES ...)`), then the runtime of Emscripten: its JavaScript support code, the C library (musl) and the compiler runtime (compiler-rt), and, with the SimdJSONPlugin, the C++ library libc++ and libc++abi.
-It was 166694 bytes on a build with libgit2 and SDL2, and 102448 bytes on a default build, before the SimdJSONPlugin, which adds 46441 bytes (simdjson, libc++ and libc++abi: 148932 bytes on a default build).
+It is 210374 bytes on a build with libgit2, 46441 of which the SimdJSONPlugin adds (simdjson, libc++ and libc++abi); a default build had 102448 bytes before the SimdJSONPlugin, and 148932 with it.
 
-Most libraries are under permissive licences: libffi and pixman under MIT licences, FreeType under the FreeType License, zlib under the zlib licence, libpng under its own, SDL2 under the zlib licence, with a BSD licence for its YUV conversions, simdjson under the Apache License 2.0 or the MIT License, at your choice, libc++ and libc++abi under the Apache License 2.0 with LLVM Exceptions (their older code also under the University of Illinois/NCSA or the MIT licence), and the http-parser that libgit2 bundles under an MIT licence.
+Most libraries are under permissive licences: libffi and pixman under MIT licences, FreeType under the FreeType License, zlib under the zlib licence, libpng under its own, simdjson under the Apache License 2.0 or the MIT License, at your choice, libc++ and libc++abi under the Apache License 2.0 with LLVM Exceptions (their older code also under the University of Illinois/NCSA or the MIT licence), and the http-parser that libgit2 bundles under an MIT licence.
 Two components are under the LGPL or the MPL:
 
 - cairo, available under the GNU LGPL 2.1 or the MPL 1.1; the notices give its `COPYING`, `COPYING-LGPL-2.1` and `COPYING-MPL-1.1`.

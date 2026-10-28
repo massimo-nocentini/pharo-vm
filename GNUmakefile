@@ -99,8 +99,6 @@ WASM_CAIRO_PDF ?= OFF
 # libgit2, for Iceberg (opt-in), and its smart-HTTP transport over XHR
 WASM_LIBGIT2 ?= OFF
 WASM_LIBGIT2_HTTP ?= ON
-# SDL2, for the image's own OSSDL2Driver in the page sdl.html (opt-in)
-WASM_SDL2 ?= OFF
 # offline builds: the image zip (the pinned Pharo 12 when empty, or another
 # image), a directory holding the pinned archives of the libraries
 # (cmake/emscripten/deps/fetch.cmake), the generated sources (a directory
@@ -235,6 +233,19 @@ $(error emcmake ($(EMCMAKE)) not found: source emsdk_env.sh of the Emscripten SD
 endif
 endif
 
+# WASM_SDL2 is gone: the WebAssembly VM has no SDL2 any more, nor the site
+# its page sdl.html (the world page draws the world through OSWebDriver).  A
+# command line or an environment that still asks for it is refused, rather
+# than built without it; WASM_SDL2=OFF asks for nothing.  (cmake is given
+# -U WASM_SDL2, below, so that a tree that an older make wasm configured with
+# it configures again without it, as without any setting not given again:
+# cmake/emscripten/deps/options.cmake refuses a true one)
+ifneq ($(filter $(WASM_GOALS) $(W)/%,$(WASM_REQUESTED)),)
+ifneq ($(filter-out OFF off Off 0 NO no No FALSE false False,$(WASM_SDL2)),)
+$(error WASM_SDL2 ($(WASM_SDL2)) is gone: the WebAssembly VM has no SDL2 any more, nor the site its page sdl.html (the world page draws the world through OSWebDriver). Drop WASM_SDL2)
+endif
+endif
+
 # What an offline build is given must exist
 $(foreach v,WASM_IMAGE_ZIP WASM_DEPS_DIR WASM_GENERATED WASM_VMMAKER_IMAGE WASM_VMMAKER_VM WASM_HOST_PHARO,\
   $(if $(and $($v),$(filter command line environment,$(origin $v))),\
@@ -353,7 +364,7 @@ WASM_CMAKE_FLAGS = \
   -DWASM_CAIRO_PDF=$(WASM_CAIRO_PDF) \
   -DWASM_LIBGIT2=$(WASM_LIBGIT2) \
   -DWASM_LIBGIT2_HTTP=$(WASM_LIBGIT2_HTTP) \
-  -DWASM_SDL2=$(WASM_SDL2) \
+  -UWASM_SDL2 \
   "-DWASM_IMAGE_ZIP=$(IMAGE_ZIP)" \
   "-DWASM_IMAGE_ID=$(WASM_IMAGE_ID)" \
   "-DWASM_EXTRA_IMAGES=$(subst $(WASM_SPACE),;,$(EXTRA_IMAGES))" \
@@ -406,7 +417,6 @@ $(W)/config.make: FORCE | $(W)/.make-wasm
 	  echo "WASM_CAIRO_PDF = $(WASM_CAIRO_PDF)"; \
 	  echo "WASM_LIBGIT2 = $(WASM_LIBGIT2)"; \
 	  echo "WASM_LIBGIT2_HTTP = $(WASM_LIBGIT2_HTTP)"; \
-	  echo "WASM_SDL2 = $(WASM_SDL2)"; \
 	  echo "WASM_IMAGE_ZIP = $(IMAGE_ZIP)"; \
 	  echo "WASM_IMAGE_ID = $(WASM_IMAGE_ID)"; \
 	  echo "WASM_EXTRA_IMAGES = $(EXTRA_IMAGES)"; \
@@ -491,16 +501,15 @@ wasm-check: wasm
 # and its Notebook tab, run on every build.  world.spec.mjs needs the image of
 # the world, which a build without one (WASM_WORLD=OFF, or no host Pharo)
 # skips, as lane 80 does, ffi.spec.mjs the FFI, which a build without it
-# (WASM_FFI=OFF) skips, git.spec.mjs libgit2, which only a build with
-# WASM_LIBGIT2=ON has, and sdl.spec.mjs SDL2 and its page sdl.html, which only
-# a build with WASM_SDL2=ON has.
+# (WASM_FFI=OFF) skips, and git.spec.mjs libgit2, which only a build with
+# WASM_LIBGIT2=ON has.
 # web/manifest.json says what the build has.
 wasm-check-browser: wasm
 	@if test -z "$$PLAYWRIGHT_MODULE" && ! (cd $(SRCDIR)/tests/wasm/lib && \
 	    $(NODE) -e 'require.resolve("playwright")') >/dev/null 2>&1; then \
 	  echo "make wasm-check-browser: the browser specs need Playwright: set PLAYWRIGHT_MODULE (and BROWSERS), e.g." >&2; \
 	  echo "  PLAYWRIGHT_MODULE=/path/to/node_modules/playwright BROWSERS=chromium,firefox make wasm-check-browser" >&2; \
-	  echo "(the specs are tests/wasm/page.spec.mjs, notebook.spec.mjs, world.spec.mjs, ffi.spec.mjs, git.spec.mjs and sdl.spec.mjs)" >&2; \
+	  echo "(the specs are tests/wasm/page.spec.mjs, notebook.spec.mjs, world.spec.mjs, ffi.spec.mjs and git.spec.mjs)" >&2; \
 	  exit 1; \
 	fi
 	$(NODE) $(SRCDIR)/tests/wasm/page.spec.mjs $(W)/web
@@ -522,12 +531,6 @@ wasm-check-browser: wasm
 	  $(NODE) $(SRCDIR)/tests/wasm/git.spec.mjs $(W)/web; \
 	else \
 	  echo "skip git.spec.mjs: $(W)/web/manifest.json has no libgit2 (WASM_LIBGIT2=OFF, the default, or WASM_FFI=OFF)"; \
-	fi
-	@if grep -q '"sdl2": *true' $(W)/web/manifest.json; then \
-	  echo "$(NODE) $(SRCDIR)/tests/wasm/sdl.spec.mjs $(W)/web"; \
-	  $(NODE) $(SRCDIR)/tests/wasm/sdl.spec.mjs $(W)/web; \
-	else \
-	  echo "skip sdl.spec.mjs: $(W)/web/manifest.json has no SDL2 (WASM_SDL2=OFF, the default, or WASM_FFI=OFF)"; \
 	fi
 
 wasm-serve: wasm

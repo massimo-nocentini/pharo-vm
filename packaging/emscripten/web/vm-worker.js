@@ -2,21 +2,20 @@
 //
 // The page owns one worker per VM: page.js (the Console), notebook.js (the
 // notebook kernel of the Console page, through nb-kernel.js) and, in M2,
-// world.js (the world), and sdl.js (the world through SDL2, sdl.html).
+// world.js (the world).
 // Messages:
 //
 //   page -> worker   init {wasmModule, manifestUrl, build, mode, sliceMs,
 //                          persist, upload: {name, image, changes, sources},
-//                          slot, fresh, name, prepare, display, gitProxy,
-//                          canvas},
+//                          slot, fresh, name, prepare, display, gitProxy},
 //                    input {text}, eof, interrupt, save, saveAs {name},
 //                    ack {chars}, fs {id, op, path, ...}, download {id},
 //                    resetStorage {id, slot, all}, flush, display {...},
-//                    gitProxy {gitProxy}, sdl {event}, stats {id}
+//                    gitProxy {gitProxy}
 //   worker -> page   progress {phase, loaded, total},
 //                    ready {image, source, persisted, savedAt, world,
 //                           prepared, webPackage, preparing, sources,
-//                           storageError, fonts, git, gitHttp, sdl2, mode,
+//                           storageError, fonts, git, gitHttp, mode,
 //                           slot, imageId, pharo, slotMissing, freshMissing,
 //                           sourcesMissing, gitProxy, gitProxyDefault},
 //                    output {fd, text}, output {fd: 3, bytes},
@@ -29,9 +28,8 @@
 //                    superseded {slot}, reset {id, slot, error},
 //                    exit {code}, crash {message, stack, stacks},
 //                    fs-result {id, ...}, file {id, name, data, count},
-//                    error {id, message}, display {...}, sdl {kind, ...},
-//                    stats {id, stats}, git {event, method, host, proxy,
-//                                            status, error}
+//                    error {id, message}, display {...},
+//                    git {event, method, host, proxy, status, error}
 //
 // Messages that arrive before "ready" are queued and replayed after it;
 // "ready" always precedes the first "state".  When the VM cannot start, or
@@ -78,7 +76,7 @@
 // in, never reads them; then the site's files and the image.  The image is
 // always /pharo/Pharo.image.  The VM then boots with
 // PharoVMDriver.vmArgs(init.mode): the REPL of st/web-repl.st, or the world
-// ('world' and 'sdl'), or the notebook kernel of st/web-notebook.st
+// ('world'), or the notebook kernel of st/web-notebook.st
 // ('notebook', below).  progress says how far the loading got: "fetch"
 // (the bytes of the files, inflated), "restore" (the slot), then "boot".
 // ready.slot is the slot booted, {slot, name, pharo, imageId, origin,
@@ -236,24 +234,6 @@
 // ready.gitHttp whether it has that transport (manifest.gitHttp,
 // WASM_LIBGIT2_HTTP), which is what the proxy is for.
 //
-// SDL2.  init.mode 'sdl' (sdl.html, on a build with WASM_SDL2=ON, whose
-// manifest says sdl2: true; ready.sdl2 says so) boots the world as 'world'
-// does, but without a display: the image's OSWebDriver, if it has one, is
-// not suitable then, and the image opens its world through its own
-// OSSDL2Driver, on the SDL2 linked into the VM, whose Emscripten video
-// driver draws into init.canvas, the OffscreenCanvas that the page
-// transferred.  The worker loads sdl-shim.js first, whose PharoSDLShim gives
-// SDL the few objects of the DOM that it touches (see there), makes the
-// canvas Module.canvas, and gives the VM SDL_EMSCRIPTEN_KEYBOARD_ELEMENT
-// '#canvas', for SDL to take the keys from the canvas.  The page forwards
-// its DOM events as "sdl {event}" records, which the shim dispatches on the
-// canvas (or the document), where SDL's handlers queue them for the image;
-// it posts what SDL asks of the page as "sdl {kind, ...}" (title, cursor,
-// cursorImage, size).  Nothing is prepared: any image runs, a stock one too.
-// "stats" answers {slices, sliceMs, presents, presentMs, pixels,
-// firstPresentMs} (PharoSDLShim stats()), what the VM and SDL's presents
-// cost so far.  Without the sdl2 of the manifest, the boot fails.
-//
 // Notebook.  init.mode 'notebook' boots the notebook kernel: the VM files
 // in st/web-notebook.st (vmArgs('notebook')) with the device of its events
 // (PharoVMDriver's events), which the worker posts as fd 3 output.  The
@@ -309,7 +289,7 @@ const GIT_FAILED_MS = 2000;
 const { MAIN, SLOT_ID } = PharoStorage;
 
 let drv = null, settled = false, queue = [];
-let mode = null, manifest = null, display = null, sdl = null;
+let mode = null, manifest = null, display = null;
 let store = null, storageError = null;
 // the slot that this VM saves into (it booted from it or saved it), or null
 // (a fresh image or an upload, until its first save), and its name; only
@@ -1090,9 +1070,6 @@ async function boot(m) {
   manifest = await fetchManifest(m.manifestUrl || 'manifest.json' + q);
   if (m.build && m.build !== manifest.build)
     console.warn('vm-worker: the page is of build ' + m.build + ', the files of build ' + manifest.build);
-  if (mode === 'sdl' && !manifest.sdl2) throw new Error('this build has no SDL2 (make wasm WASM_SDL2=ON)');
-  if (mode === 'sdl' && !(typeof OffscreenCanvas === 'function' && m.canvas instanceof OffscreenCanvas))
-    throw new Error('init.canvas is not an OffscreenCanvas');
   initName = typeof m.name === 'string' ? m.name.trim().slice(0, 200) : '';
   const loaded = await load(m);
   const { files, source, savedAt, webPackage, prepared, stored, sources } = loaded;
@@ -1104,7 +1081,7 @@ async function boot(m) {
   }
   post({ type: 'progress', phase: 'boot', loaded: 0, total: 1 });
   const config = {};
-  if (m.display && !preparing && mode !== 'sdl') {
+  if (m.display && !preparing) {
     importScripts('display-worker.js' + q);
     display = PharoDisplay.create(m.display, post);
     config.webDisplay = display;
@@ -1115,13 +1092,6 @@ async function boot(m) {
   const image = DIR + '/' + manifest.image;
   const env = mode === 'console' ? { PHARO_WEB_WORLD_FILE: WORLD_FILE } : {};
   if (loaded.home) env.HOME = loaded.home;
-  if (mode === 'sdl') {
-    // before the VM's factory runs, which takes the document of the shim
-    importScripts('sdl-shim.js' + q);
-    sdl = PharoSDLShim.install(m.canvas, (msg, transfer) => post(Object.assign({ type: 'sdl' }, msg), transfer));
-    config.canvas = m.canvas;
-    env.SDL_EMSCRIPTEN_KEYBOARD_ELEMENT = '#canvas';
-  }
   if (m.sliceMs > 0) env.PHARO_WASM_SLICE_MS = String(m.sliceMs);
   const options = {
     args: PharoVMDriver.vmArgs(mode, image),
@@ -1156,7 +1126,6 @@ async function boot(m) {
   // the display paints from the VM's memory: let it know the VM before any
   // slice, whatever the page sends first
   if (display && display.handle) display.handle({ kind: 'attach' }, drv);
-  if (sdl) sdl.attach(drv);
   remember(image);
   if (owned) startSync();
   if (bound) {
@@ -1171,7 +1140,7 @@ async function boot(m) {
   }
   const ready = { type: 'ready', image, source, persisted: stored, savedAt, world: !!manifest.world, prepared,
                   webPackage, preparing: !!preparing, sources, storageError, fonts: manifest.fonts || null,
-                  git: !!manifest.git, gitHttp: !!(manifest.git && manifest.gitHttp), sdl2: !!manifest.sdl2,
+                  git: !!manifest.git, gitHttp: !!(manifest.git && manifest.gitHttp),
                   slot: loaded.slot, imageId, pharo, gitProxy, gitProxyDefault: defaultProxy() };
   for (const k of ['slotMissing', 'freshMissing', 'sourcesMissing']) if (loaded[k]) ready[k] = loaded[k];
   if (mode === 'notebook') ready.mode = mode;
@@ -1329,13 +1298,6 @@ function handle(m) {
   case 'gitProxy':
     if (drv) drv.module.gitHttpProxy = gitProxyOf(m.gitProxy);
     break;
-  case 'sdl':
-    // (between slices: SDL's handlers only queue the event)
-    if (sdl && live) { sdl.dispatch(m.event); drv.kick(); }
-    break;
-  case 'stats':
-    post({ type: 'stats', id: m.id, stats: sdl ? sdl.stats() : null });
-    break;
   }
 }
 
@@ -1352,7 +1314,7 @@ onmessage = ({ data: m }) => {
     return;
   }
   if (mode) return;                     // one VM per worker
-  mode = m.mode === 'world' || m.mode === 'sdl' || m.mode === 'notebook' ? m.mode : 'console';
+  mode = m.mode === 'world' || m.mode === 'notebook' ? m.mode : 'console';
   boot(m).catch(e => {
     flushOut();
     post({ type: 'crash', message: 'the VM could not be loaded: ' + errorText(e), stack: String((e && e.stack) || '') });

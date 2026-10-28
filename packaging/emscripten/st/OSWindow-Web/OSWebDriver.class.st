@@ -140,29 +140,20 @@ OSWebDriver class >> setUpGit [
 
 { #category : 'image setup' }
 OSWebDriver class >> setUpLibGit [
-	"The LGitConfig of Pharo 13 and later has no free function of its own: it inherits #object_free: of LGitExternalObject, so the finalization of a configuration calls git_object_free on a git_config. That breaks the configuration, which its repository keeps: git_object_free takes one from the pointer to its backends, where an object has its counter, and never releases it. The next call of libgit2 that reads it goes out of the memory of a web VM (a native VM may crash). Iceberg makes such a configuration when it asks for the user of a commit: the dialog of the missing properties (IceTipGitUsernameAndEmailDialogPresenter>>#accept, through LGitRepository>>#config), which the browser always shows once, since its HOME has no .gitconfig at first. So give LGitConfig the free function of Pharo 12, git_config_free.
+	"Give LGitConfig the free function of Pharo 12, git_config_free, where it still frees with #object_free:, as in Pharo 13 and later, whose finalization of a configuration then breaks the configuration of its repository (and the next commit of Iceberg after its dialog of the missing properties). web-libgit.st says why, and does it: it is the one copy of that patch, which the Console and the notebook kernel evaluate at every boot too (web-repl.st, web-notebook.st), in any image, with this package or without. In an image that has this package, it makes the two methods extensions of it, which prepare-web-image.st does not file out.
 
-	The two methods are those of Pharo 12, but extensions of this package, not of LibGit-Core as in Pharo 12: so Monticello sees LibGit-Core as it loaded it, unmodified, a load of LibGit-Core does not remove them (it would remove methods of LibGit-Core that its version lacks), and a LibGit-Core that defines them takes them over. prepare-web-image.st does not file them out with the package, which would then give them to any image it is filed into: web-bootstrap.st calls me there, as the build does.
+	The page boots an image that it prepares as the Console boots it, so the boot has evaluated the file already, before web-bootstrap.st filed this package in, and put the two methods in LibGit-Core, as in an image without this package: evaluated again here, once the package is in, the file finds them there and makes them extensions of it.
 
-	This runs where the rest of the set up runs, and only there: at build time (prepare-web-image.st), for every image of the site, which the node VM runs too (node-try.sh), and in the page (web-bootstrap.st) for an image the user opens on the world page, or one saved with an older version of this package, which the world page prepares again. The Console and the notebook boot an image as it is, filing in their own code only, and no window of Iceberg runs there; sdl.html boots an image as it is too, and runs its world, so a stock Pharo 13 or later opened there, never prepared for the world page, keeps its #object_free:. Compile only when LGitConfig still frees with #object_free:, so that an image that has its own free function (Pharo 12, or a later Pharo that fixes it), or no LGit, is left alone, and a second set up changes nothing"
+	Evaluate it here for the set up of an image for the world, whose page boots an image as it is: at build time (prepare-web-image.st), where it is in the st directory of the build, which PHARO_WEB_ST_DIR names (as PHARO_WEB_FONTS names the fonts, see #setUpFonts), and in the page (web-bootstrap.st), where it is in the st directory of the image, /pharo/st, as the page stages it. The package does so since its version 6, so the world page prepares an image of an older version again. A missing file is an error: the set up must not leave an image unpatched"
 
-	| config |
-	config := Smalltalk at: #LGitConfig ifAbsent: [ ^ self ].
-	config freeFunctionSelector = #object_free: ifFalse: [ ^ self ].
-	config class
-		compile: 'config_free: handle
-	"From Pharo 12, compiled by OSWebDriver class>>#setUpLibGit"
-
-	^ self
-		ffiCallSafely: #(void git_config_free #(void *handle))
-		options: #()'
-		classified: '*OSWindow-Web'.
-	config class
-		compile: 'freeFunctionSelector
-	"From Pharo 12, compiled by OSWebDriver class>>#setUpLibGit"
-
-	^ #config_free:'
-		classified: '*OSWindow-Web'
+	| directory file |
+	directory := OSEnvironment current at: 'PHARO_WEB_ST_DIR' ifAbsent: [ '' ].
+	file := directory
+		        ifEmpty: [ FileLocator imageDirectory / 'st' / 'web-libgit.st' ]
+		        ifNotEmpty: [ directory asFileReference / 'web-libgit.st' ].
+	file exists ifFalse: [
+		^ self error: 'OSWebDriver class>>#setUpLibGit: no ' , file fullName ].
+	Smalltalk compiler evaluate: file contents
 ]
 
 { #category : 'image setup' }

@@ -9,7 +9,8 @@
  file.  It loads the OSWindow-Web package (Tonel) from <st dir>, sets the image up for
  the web VM (OSWebDriver class>>#setUpImage), with its fonts: freetype keeps the
  FreeType fonts of the stock image, bitmap switches to the bitmap fonts, for a web VM
- built without FreeType.  It also lets the session pick OSWebDriver whenever the page
+ built without FreeType; and LGitConfig gets the free function of Pharo 12 from
+ web-libgit.st of <st dir>.  It also lets the session pick OSWebDriver whenever the page
  provides a display.  <out dir> receives
  Pharo-web.image, Pharo-web.changes and OSWindow-Web.st, the package filed out for
  web-bootstrap.st.  The --save of st saves the image once more after this script, so
@@ -66,8 +67,9 @@ OSWindowDriver classPool
  refer to it, and Pharo 15 has a Fileouter instead, which initializes every class that
  defines #initialize on its instance side.  Only the methods of the sources of the
  package: not the extensions of it that #setUpImage compiled into this image because
- it needs them (OSWebDriver class>>#setUpLibGit), which web-bootstrap.st compiles in
- an image that needs them too"
+ it needs them (OSWebDriver class>>#setUpLibGit, from web-libgit.st of <st dir>), which
+ web-bootstrap.st compiles in an image that needs them too, as the Console and the
+ notebook do at every boot"
 (outDir / 'OSWindow-Web.st') ensureDelete; writeStreamDo: [ :stream |
 	| bang chunk classes methods |
 	"A chunk ends with an exclamation mark, and one in it is doubled.  One before a chunk

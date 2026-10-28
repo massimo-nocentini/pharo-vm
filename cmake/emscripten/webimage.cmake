@@ -193,7 +193,8 @@ function(pharo_wasm_web_image target stockDir stockDepends webDir workDir)
                 "-DWORK_DIR=${workDir}"
                 -P "${PHARO_WASM_WEB_IMAGE_SCRIPT}"
         DEPENDS ${PHARO_WASM_WEB_PACKAGE_FILES} "${PHARO_WASM_ST_DIR}/OSWindow-Web"
-                "${PHARO_WASM_ST_DIR}/prepare-web-image.st" "${PHARO_WASM_WEB_FONTS_FILE}"
+                "${PHARO_WASM_ST_DIR}/prepare-web-image.st" "${PHARO_WASM_ST_DIR}/web-libgit.st"
+                "${PHARO_WASM_WEB_FONTS_FILE}"
                 "${PHARO_WASM_WEB_IMAGE_SCRIPT}" ${depends}
         COMMENT "Preparing the image of the Pharo world in ${webDir} (${PHARO_WASM_WEB_FONTS} fonts) with ${WASM_HOST_PHARO}"
         VERBATIM)

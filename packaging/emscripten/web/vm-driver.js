@@ -32,8 +32,7 @@
 //   thisProgram  argv[0] (default '/pharo/pharo': the VM's directory is /pharo)
 //   env          {name: value} added to the environment of the VM
 //   sliceMs      the time slice in ms (default PHARO_WASM_SLICE_MS of the build)
-//   config       more properties of the emscripten Module (M2: webDisplay;
-//                sdl.html: canvas)
+//   config       more properties of the emscripten Module (M2: webDisplay)
 //   events       true: the device /dev/nbevents of the notebook kernel (below)
 //   wasmModule   a precompiled WebAssembly.Module (optional)
 //   locateFile   emscripten's locateFile hook (optional)
@@ -105,13 +104,11 @@
   // The arguments of the VM for the modes of the pages: 'console', the REPL
   // of web-repl.st (filed in at every boot, so without logging its source
   // to the .changes again each time), 'notebook', the notebook kernel of
-  // web-notebook.st (filed in the same way; it needs events), 'world', the
-  // Morphic world, and 'sdl', the same world, which the image then opens
-  // through its OSSDL2Driver (sdl.html), the VM having no display for its
-  // OSWebDriver.
+  // web-notebook.st (filed in the same way; it needs events), and 'world',
+  // the Morphic world.
   function vmArgs(mode, image) {
     image = image || '/pharo/Pharo.image';
-    if (mode === 'world' || mode === 'sdl') return ['--headless', image, '--no-default-preferences', '--interactive'];
+    if (mode === 'world') return ['--headless', image, '--no-default-preferences', '--interactive'];
     const st = mode === 'notebook' ? 'web-notebook.st' : 'web-repl.st';
     return ['--headless', image, '--no-default-preferences', 'st', '--no-source', '/pharo/st/' + st];
   }

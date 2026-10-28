@@ -29,7 +29,10 @@
  ffiLibraryName looks for the file of SDL2, which the node VM does not find), the one
  library class of the map below that the receiver's ffiLibraryName and ffiLibrary
  methods name.  A library class gives its registry name from the map, which keeps the
- library finders out: they look for the files of the host.  Any other library gives its
+ library finders out: they look for the files of the host.  (SDL2, which the stock images
+ bind through OSWindow-SDL2, stays in the map although the web VMs have no SDL2 any more:
+ its functions are then listed under its name, which lane 59 counts outside the registry,
+ rather than under '?'.)  Any other library gives its
  Unix file name, reduced, so DynamicLoader (libdl.so) is c too, as an alias of c is:
  those of cmake/emscripten/ffiLibraries.cmake (LibC is one: UnixPlatform>>
  getErrorMessage: binds strerror from the module #LibC).  A library that cannot be told

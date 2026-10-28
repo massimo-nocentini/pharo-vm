@@ -4,7 +4,9 @@
 	--headless /pharo/Pharo.image --no-default-preferences st --no-source /pharo/st/web-notebook.st
 
  (PharoVMDriver.vmArgs('notebook') of packaging/emscripten/web/vm-driver.js), so this script is
- filed in at every boot, and its source is not logged to the .changes.  It defines NotebookKernel,
+ filed in at every boot, and its source is not logged to the .changes.  It first evaluates
+ web-libgit.st of /pharo/st, which gives LGitConfig the free function of Pharo 12 in an image that
+ lacks it, as the Console does (web-repl.st).  It defines NotebookKernel,
  Notebook (what a cell calls to show rich output), NotebookDisplay, NotebookCell and
  NotebookTranscript, and starts the kernel only when NOTEBOOK_EVENTS names the file of its events:
  the driver sets it to /dev/nbevents, a device whose writes go to the page.  Filed in from the
@@ -57,6 +59,24 @@
  It files in with Pharo 12 and Pharo 15.  Every method has a methodsFor: section of its own (see
  web-repl.st), and the file is ASCII: Pharo 15 mangles the other characters of a file-in.  The
  kernel is not a sandbox: a cell can call it, and write events; the page checks every event"
+
+"Give LGitConfig the free function of Pharo 12 when the image frees its configurations with
+ git_object_free, as Pharo 13 and later do, which breaks the next commit of Iceberg: web-libgit.st,
+ which the page stages next to this script, says why, and does it, at every boot, in any image;
+ in an image that needs nothing it compiles nothing, and logs nothing to the .changes (it is
+ evaluated, not filed in).  Without the file (a kernel run elsewhere), nothing.  An error of it is
+ reported on stderr, and the kernel starts anyway"
+| libgit |
+libgit := FileLocator imageDirectory / 'st' / 'web-libgit.st'.
+libgit exists ifTrue: [
+	[ Smalltalk compiler evaluate: libgit contents ]
+		on: Error
+		do: [ :error |
+			Stdio stderr
+				nextPutAll: 'web-libgit.st: ';
+				nextPutAll: error description;
+				lf;
+				flush ] ]!
 
 "Define the classes, unless the image has them as they are: Pharo 15 logs a class definition to the
  .changes, an unchanged one too, which --no-source does not prevent"

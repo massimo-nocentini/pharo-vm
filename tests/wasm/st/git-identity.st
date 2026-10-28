@@ -11,8 +11,8 @@ LGitConfig of the repository (IceLibgitRepository>>#getConfigurationGlobal:)
 and resumes the commit.  The finalization of that LGitConfig, at a later
 garbage collection, must not break the configuration that the repository keeps:
 on an image whose LGitConfig frees with #object_free: (Pharo 13 and later,
-before OSWebDriver class>>#setUpLibGit), the next call of libgit2 that reads it
-fails.
+before packaging/emscripten/st/web-libgit.st gives it the free function of Pharo
+12), the next call of libgit2 that reads it fails.
 
 Run it with a HOME of its own, empty: it goes through the dialog itself, made
 as the error visitor makes it but not opened, filled in with the user Wasm
@@ -22,18 +22,22 @@ first, it prints a line each, '<key>: <value>':
 
 	major           the major version of Pharo
 	gitconfig before what HOME/.gitconfig says of the user before: none
-	free function   LGitConfig freeFunctionSelector: config_free: once the
-	                image is set up for the web VMs (Pharo 12 has it too),
-	                object_free: on a stock Pharo 13 or later
+	free function   LGitConfig freeFunctionSelector: config_free: once
+	                web-libgit.st ran in the image (the set up for the
+	                world, or a boot of the Console or of the notebook
+	                kernel; Pharo 12 has it too), object_free: on a stock
+	                Pharo 13 or later
 	free calls      the C functions that the method of that free function
 	                names in its callout: git_config_free once the image is
 	                set up (a free function that is missing, or that calls
 	                nothing, fails here)
 	set up again    OSWebDriver class>>#setUpLibGit once more, when the
-	                image has it: unchanged when the method of the free
-	                function is the same afterwards, as it must be (the set
-	                up compiles only where LGitConfig frees with
-	                object_free:); unchanged too without OSWebDriver
+	                image has it, which evaluates st/web-libgit.st of the
+	                directory of the image; else that file, when it is there,
+	                as a boot of the Console does: unchanged when the method
+	                of the free function is the same afterwards, as it must
+	                be (web-libgit.st compiles only where LGitConfig frees
+	                with object_free:); unchanged too with neither
 	create repo     a new repository, identity/demo, its code in src: its name
 	make class      a class WasmIdentityDemo, in a package WasmIdentityDemo
 	add package     that package added to the repository: its packages
@@ -68,7 +72,12 @@ say).
 It changes the image (a class, a package, the repositories of Iceberg) but
 does not save it: run it with st --quit,
 
-	HOME=<empty dir> pharo --headless Pharo.image --no-default-preferences st --quit git-identity.st"
+	HOME=<empty dir> pharo --headless Pharo.image --no-default-preferences st --quit git-identity.st
+
+or evaluate it in the REPL of the Console or in a cell of the notebook kernel,
+which lane 66 does too:
+
+	Smalltalk compiler evaluate: '<path>/git-identity.st' asFileReference contents"
 
 | out describe line step failed root dir repo cls dialogs commit user home |
 out := Stdio stdout.
@@ -137,9 +146,12 @@ step value: 'free calls' value: [
 			(node value select: [ :each | each isSymbol and: [ each beginsWith: 'git_' ] ])
 				collect: [ :each | each asString ] ]) ].
 step value: 'set up again' value: [
-	| free |
+	| free libgit |
 	free := LGitConfig class lookupSelector: LGitConfig freeFunctionSelector.
-	(Smalltalk at: #OSWebDriver ifAbsent: [ nil ]) ifNotNil: [ :driver | driver setUpLibGit ].
+	libgit := Smalltalk imageDirectory / 'st' / 'web-libgit.st'.
+	(Smalltalk at: #OSWebDriver ifAbsent: [ nil ])
+		ifNotNil: [ :driver | driver setUpLibGit ]
+		ifNil: [ libgit exists ifTrue: [ Smalltalk compiler evaluate: libgit contents ] ].
 	(LGitConfig class lookupSelector: LGitConfig freeFunctionSelector) == free
 		ifTrue: [ 'unchanged' ]
 		ifFalse: [ 'compiled again' ] ].

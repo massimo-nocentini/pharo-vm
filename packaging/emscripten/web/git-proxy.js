@@ -1,7 +1,7 @@
 // git-proxy.js - the CORS proxy of git's HTTP requests, as the user chose it
 //
-// UMD: the global PharoGitProxy of the pages (<script>: index.html,
-// world.html and sdl.html), a CommonJS module in node.  The pages share it:
+// UMD: the global PharoGitProxy of the pages (<script>: index.html and
+// world.html), a CommonJS module in node.  The pages share it:
 // the choice, where it is kept, and the Settings dialog that changes it.
 //
 // libgit2's smart-HTTP transport of the VM (src/emscripten/gitSupport.c)

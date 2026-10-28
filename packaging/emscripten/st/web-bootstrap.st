@@ -18,7 +18,8 @@
  package gets the new one.  Then it sets the image up for the web VM
  (OSWebDriver class>>#setUpImage): FreeType fonts when the VM has FreeType, else
  bitmap fonts, Iceberg's https:// remotes, and the free function of LGitConfig
- (#setUpLibGit).  It does not save the image."
+ (#setUpLibGit, which evaluates st/web-libgit.st, staged next to this script).  It does not
+ save the image."
 
 | package imageVersion fileVersion driver renderer |
 package := FileLocator imageDirectory / 'st' / 'OSWindow-Web.st'.

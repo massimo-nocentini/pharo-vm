@@ -32,9 +32,9 @@
 //     and accepted, which resumes the commit; then a full garbage
 //     collection, whose finalization frees the LGitConfig that the dialog
 //     made, with git_config_free and no error in the terminal, and the next
-//     commit must work (on Pharo 13 and later only the set up of the
-//     image, OSWebDriver class>>#setUpLibGit, makes that finalization
-//     harmless), without a failed callout;
+//     commit must work (on Pharo 13 and later only the free function of
+//     Pharo 12, which packaging/emscripten/st/web-libgit.st compiles, makes
+//     that finalization harmless), without a failed callout;
 //   - that user, written into HOME/.gitconfig, is kept with the image:
 //     after Save and a reload HOME is /pharo/home, its .gitconfig is there,
 //     and a commit no longer asks for the user;
@@ -67,11 +67,24 @@
 // its Settings show the kept proxy, and None and the site's default go to
 // its VM (the "gitProxy" message) and into the browser.
 //
+// Last, back in the Console, the stock image of the build (<web>/../image/
+// stock), which nothing prepared, opened from disk: its boot, which
+// evaluates st/web-libgit.st (web-repl.st), gives LGitConfig the free
+// function git_config_free when it lacks it (Pharo 13 and later), in a
+// protocol of LibGit-Core, which neither makes a package OSWindow-Web nor
+// leaves LibGit-Core modified for Monticello; and the first commit through
+// the dialog, a full garbage collection and the next commit work.  Then the
+// notebook kernel boots that image as it was kept (web-notebook.st, which
+// evaluates web-libgit.st too), and the same flow in a cell works.  Without
+// that evaluation at the boot, both fail on a stock Pharo 13 or later (the
+// free function is object_free:, and the commit after the garbage
+// collection fails).
+//
 // The browser's own complaints about the request that CORS stopped (a
 // console error or a failed request, which name the git server) are what
 // the check of None expects: they are taken out of the errors of pw.mjs,
 // whose last check is then that there were no others.  With that last
-// check, 14 checks for each browser.
+// check, 16 checks for each browser.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -459,6 +472,87 @@ await run(async t => {
     await page.click('#settings-save');
     assert(await stored() === null && JSON.stringify((await spied()).sent.slice(-1)) === '[["gitProxy",null]]',
            'the default: ' + JSON.stringify((await spied()).sent));
+  });
+
+  // The flow of a commit through the dialog, a full garbage collection and
+  // another commit, in one evaluation, in a repository of its own in DIR
+  // (under /pharo/git-spec) of a package of its own, NAME: what it answers
+  // says LGitConfig's free function, where its method is, whether there is
+  // a package OSWindow-Web and whether Monticello sees LibGit-Core
+  // modified, then the commits, the dialogs, the configurations left after
+  // the collection and the log, or the error of the step that failed; and
+  // first the major version of Pharo, and whether the class OTHER is there
+  const flowIn = (dir, name, other) =>
+    `| r c d dialogs commit free where | dialogs := 0. ` +
+    `free := LGitConfig class lookupSelector: LGitConfig freeFunctionSelector. ` +
+    `where := 'stock ' , SystemVersion current major printString , ' ' , (Smalltalk hasClassNamed: #${other}) printString , ` +
+    `'; free ' , LGitConfig freeFunctionSelector , ' ' , ${FREE_CALLS} , ' in ' , free package name , ` +
+    `', OSWindow-Web ' , (PackageOrganizer default hasPackage: 'OSWindow-Web') printString , ` +
+    `', LibGit-Core modified ' , (MCWorkingCopy forPackageNamed: 'LibGit-Core') modified printString. ` +
+    `commit := [ :m | ([ r commitWithMessage: m ] on: IceGitUsernameOrEmailNotFound do: [ :missing | ` +
+    `dialogs := dialogs + 1. d := IceTipGitUsernameAndEmailDialogPresenter newApplication: SpApplication new model: r. ` +
+    `d asModalWindow. d nameInput text: 'Git Spec Stock'. d emailInput text: 'stock@example.org'. ` +
+    `d globalCheckbox state: true. d onAccept: [ missing resume ]. d accept ]) shortId ]. ` +
+    `[ r := IceRepositoryCreator new location: FileLocator imageDirectory / 'git-spec' / '${dir}'; ` +
+    `subdirectory: 'src'; createNewRepositoryNamed: '${dir}'. r register. ` +
+    `c := (Object << #${name}) package: '${name}'; install. c compile: 'one ^ 1'. ` +
+    `r workingCopy addPackageNamed: '${name}'. commit value: 'first'. ` +
+    `Smalltalk garbageCollect. (Delay forMilliseconds: 300) wait. Smalltalk garbageCollect. (Delay forMilliseconds: 300) wait. ` +
+    `c compile: 'two ^ 2'. commit value: 'second'. ` +
+    `where , '; dialogs ' , dialogs printString , ', configurations ' , LGitConfig allInstances size printString , ` +
+    `', log ' , (' / ' join: (r branch commits collect: [ :e | e comment , ' (' , e author , ')' ])) ] ` +
+    `on: Error do: [ :e | where , '; error ' , e class name , ': ' , e messageText ]`;
+  // what that flow must answer, after its 'stock <major> <other>; '
+  const FLOWED = /^'stock \d+ false; free config_free: git_config_free in LibGit-Core, OSWindow-Web false, LibGit-Core modified false; dialogs 1, configurations 0, log second \(Git Spec Stock\) \/ first \(Git Spec Stock\)/;
+  const stock = path.join(webDir, '..', 'image', 'stock');
+  const stockImage = fs.existsSync(stock) && fs.readdirSync(stock).find(f => f.endsWith('.image'));
+
+  if (stockImage) await check('a stock image opened in the Console gets the free function at its boot: the dialog, a full GC and the next commit work', async () => {
+    await page.goto(t.base + 'index.html');
+    await waitStatus('waiting', 60000);
+    const from = (await term()).length;
+    markAt = from;
+    await page.setInputFiles('#open-file', [path.join(stock, stockImage), path.join(stock, stockImage.replace(/\.image$/, '.changes'))]);
+    await page.waitForFunction(at => /Started the opened image[\s\S]*st> $/.test(document.getElementById('term').textContent.slice(at)),
+                               from, { timeout: 120000 });
+    await waitStatus('waiting', 60000);
+    // (OSWebDriver: the stock image has no OSWindow-Web)
+    const out = await evalTo(flowIn('stock-console', 'GitSpecStockConsole', 'OSWebDriver'), /\n'stock [^']*'\n/, 120000);
+    const said = (out.match(/\n('stock [^']*')\n/) || [, out.trim().slice(-400)])[1];
+    console.log(`#   ${t.name}, in the Console: ${said}`);
+    assert(FLOWED.test(said), 'the flow: ' + said);
+    assert(trapped().length === 0, 'no failed callout: ' + trapped().join(' | '));
+    const errors = (await term()).slice(from).match(/\bError: [A-Za-z][^\n]*/g);
+    assert(!errors, 'no error in the terminal: ' + (errors || []).join(' | ').slice(0, 400));
+    // (kept in a slot, which the notebook boots)
+    await page.waitForFunction(() => /The opened image is now kept in this browser|cannot open the Pharo world/.test(
+      document.getElementById('notice-text').textContent), null, { timeout: 60000 });
+  });
+
+  if (stockImage) await check('the notebook kernel boots that stock image, which its boot gives the free function too: the same flow in a cell works', async () => {
+    await page.click('#tab-notebook');
+    await page.waitForFunction(() => /^ready$/.test(document.getElementById('nb-status').dataset.state), null, { timeout: 120000 });
+    const before = await page.$$eval('#nb-cells > li', l => l.length);
+    await page.click('#nb-end-code');
+    const i = await page.$$eval('#nb-cells > li', l => l.length) - 1;
+    assert(i === before, 'a new cell');
+    const src = page.locator('#nb-cells > li').nth(i).locator('.nb-src');
+    // (GitSpecStockConsole: the Console defined it, but did not save)
+    await src.fill(flowIn('stock-notebook', 'GitSpecStockNotebook', 'GitSpecStockConsole'));
+    await src.press('Control+Enter');
+    await page.waitForFunction(i => /^(ok|error|interrupted|cancelled)$/.test(document.querySelectorAll('#nb-cells > li')[i].dataset.status),
+                               i, { timeout: 120000 });
+    const cell = await page.$eval(`#nb-cells > li:nth-child(${i + 1})`, e => ({
+      status: e.dataset.status, values: [...e.querySelectorAll('.nb-value')].map(v => v.textContent),
+      error: (e.querySelector('.nb-error-msg') || {}).textContent || '' }));
+    const said = cell.values.join(' ');
+    console.log(`#   ${t.name}, the notebook kernel: ${said.slice(0, 400)}`);
+    assert(cell.status === 'ok', 'the cell: ' + JSON.stringify(cell).slice(0, 400));
+    // (the image the kernel booted is the stock one as it was opened: not
+    // the Console's, which defined GitSpecStockConsole, whose false FLOWED
+    // wants)
+    assert(FLOWED.test(said), 'the flow: ' + said);
+    assert(trapped().length === 0, 'no failed callout: ' + trapped().join(' | '));
   });
   expected();
 });

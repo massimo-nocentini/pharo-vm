@@ -10,7 +10,7 @@
  *
  * src/externalPrimitives.c finds a library by the name the image gives,
  * reduced to its base name without "lib", directories and suffixes:
- * libc.so.6 is "c", /pharo/libSDL2-2.0.so.0 is "SDL2".  The node VM and the
+ * libc.so.6 is "c", /pharo/libgit2.so.1.4.4 is "git2".  The node VM and the
  * web VM have a registry each, since a library can be in the node VM only
  * (the FFI test library).
  */

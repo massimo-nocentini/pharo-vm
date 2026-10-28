@@ -1,21 +1,26 @@
 # git-identity.txt - what tests/wasm/st/git-identity.st prints on an image
-# set up for the web VMs (OSWebDriver class>>#setUpLibGit), of any Pharo, in
-# a HOME without a .gitconfig, with the libgit2 of the WebAssembly VMs
+# patched by packaging/emscripten/st/web-libgit.st (at its set up for the
+# world, OSWebDriver class>>#setUpLibGit, or at a boot of the Console or of
+# the notebook kernel), of any Pharo, in a HOME without a .gitconfig, with
+# the libgit2 of the WebAssembly VMs
 #
 # Lane 66 (tests/wasm/lanes/66-libgit2.sh) runs git-identity.st in the node
-# VM on each world image of the site (its identity checks), and on a stock
-# image that frees its LGitConfig with config_free: (Pharo 12: its control),
-# and each line below must be a line of what it prints; '#' lines and blank
-# lines are comments, and a value '<id>' stands for the short id of a commit,
-# 7 hexadecimal digits, which changes with the time.
+# VM on each world image of the site (its identity checks), on each stock
+# image booted as the Console and as the notebook kernel boot it (its
+# console and notebook checks), and on a stock image that frees its
+# LGitConfig with config_free: (Pharo 12: its control), and each line below
+# must be a line of what it prints; '#' lines and blank lines are comments,
+# and a value '<id>' stands for the short id of a commit, 7 hexadecimal
+# digits, which changes with the time.
 #
 # LGitConfig frees with config_free:, which calls git_config_free, and a
-# second set up of the image changes nothing.  The first commit asks for the
-# user once, and the dialog of the missing properties answers it, writing
-# HOME/.gitconfig; the LGitConfig objects that it made are all gone after the
-# full garbage collection (gc: 0), freed by the finalization; and the commits
-# after it read the configuration of the repository again, which that
-# finalization must have left as it was.
+# second set up of the image (or evaluation of web-libgit.st) changes
+# nothing.  The first commit asks for the user once, and the dialog of the
+# missing properties answers it, writing HOME/.gitconfig; the LGitConfig
+# objects that it made are all gone after the full garbage collection (gc:
+# 0), freed by the finalization; and the commits after it read the
+# configuration of the repository again, which that finalization must have
+# left as it was.
 gitconfig before: none
 free function: config_free:
 free calls: git_config_free

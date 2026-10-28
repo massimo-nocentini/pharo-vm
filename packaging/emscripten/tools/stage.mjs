@@ -4,7 +4,7 @@
 //        --web-package <OSWebDriver.class.st>
 //        [--web <dir>] [--memory64 1|2] [--git <sha>] [--ffi 0|1]
 //        [--fonts freetype|bitmap] [--libgit2 0|1] [--libgit2-http 0|1]
-//        [--sdl2 0|1] [--notices <file>] [--st <file>]... [--library-file <name>]...
+//        [--notices <file>] [--st <file>]... [--library-file <name>]...
 //        [--world-image <dir> [--world-st <file>]...]
 //        [--image-id <id>] [--extra-image <id>=<dir>]...
 //        [--extra-world-image <id>=<dir>]... [--extra-sources <file>]...
@@ -22,9 +22,7 @@
 //
 //   <web files>                the files of --web (packaging/emscripten/web),
 //                              with @BUILD@ replaced by the build id in the
-//                              text files (for ?v=@BUILD@ cache busting);
-//                              its SDL page (SDL_PAGE: sdl.html, sdl.js,
-//                              sdl-shim.js) only with --sdl2 1
+//                              text files (for ?v=@BUILD@ cache busting)
 //   pharo-web.js, .wasm        the web module (--module)
 //   THIRD-PARTY-NOTICES.txt    the licences of the libraries in the VM
 //                              (--notices, which stage.cmake assembles),
@@ -49,7 +47,7 @@
 //                              OSWindow-Web.st and the --world-st files
 //   manifest.json              {build, extraSources, ffi, files, fonts, git,
 //                              gitHttp, gitProxyDefault, image, imageId,
-//                              images, libraries, memory64, sdl2, st,
+//                              images, libraries, memory64, st,
 //                              webPackage, world}
 //
 // The build id is the git sha, a dash and the first 12 hex digits of a
@@ -105,12 +103,6 @@
 //          writes each one empty into /pharo, the directory of the VM,
 //          before the boot, for the image to find the library there as a
 //          file (FFIUnix64LibraryFinder); the VM has it built in
-//   sdl2   true when the VM has SDL2 (--sdl2 1, from PHARO_WASM_HAS_SDL2,
-//          that is WASM_SDL2 with the FFI), and web/ its page sdl.html, the
-//          world through the image's own OSSDL2Driver: make
-//          wasm-check-browser runs sdl.spec.mjs only then.  Only such a
-//          build has the key, so that the manifest of the others stays as it
-//          was
 //   st     ["st/<file>", ...]: each file is at that url, and goes to /pharo/st
 //   webPackage  the version of the package OSWindow-Web of this build, an
 //          integer: OSWebDriver class>>packageVersion, read from
@@ -149,8 +141,6 @@ const IMAGE = 'Pharo.image';
 const CHANGES = 'Pharo.changes';
 const WORLD_IMAGE = 'Pharo-web.image';
 const NOTICES = 'THIRD-PARTY-NOTICES.txt';
-// The files of --web that make the SDL page, staged only with --sdl2 1
-const SDL_PAGE = new Set(['sdl.html', 'sdl.js', 'sdl-shim.js']);
 
 const fail = (message) => {
   process.stderr.write(`stage.mjs: ${message}\n`);
@@ -188,11 +178,11 @@ const idAndDir = (name, value) => {
 
 const parseArguments = (argv) => {
   const options = { st: [], worldSt: [], libraries: [], memory64: '2', git: '', ffi: '0', fonts: 'bitmap',
-                    libgit2: '0', libgit2Http: '0', sdl2: '0', imageId: '', gitProxyDefault: '',
+                    libgit2: '0', libgit2Http: '0', imageId: '', gitProxyDefault: '',
                     extraImages: [], extraWorldImages: [], extraSources: [] };
   const single = { '--out': 'out', '--web': 'web', '--module': 'module', '--memory64': 'memory64',
                    '--git': 'git', '--ffi': 'ffi', '--fonts': 'fonts', '--notices': 'notices',
-                   '--libgit2': 'libgit2', '--libgit2-http': 'libgit2Http', '--sdl2': 'sdl2',
+                   '--libgit2': 'libgit2', '--libgit2-http': 'libgit2Http',
                    '--stock-image': 'stockImage', '--web-package': 'webPackage', '--world-image': 'worldImage',
                    '--image-id': 'imageId', '--git-proxy-default': 'gitProxyDefault' };
   const many = { '--st': 'st', '--world-st': 'worldSt', '--library-file': 'libraries',
@@ -220,7 +210,6 @@ const parseArguments = (argv) => {
   if (!/^(freetype|bitmap)$/.test(options.fonts)) fail(`--fonts must be freetype or bitmap, not ${options.fonts}`);
   if (!/^[01]$/.test(options.libgit2)) fail(`--libgit2 must be 0 or 1, not ${options.libgit2}`);
   if (!/^[01]$/.test(options.libgit2Http)) fail(`--libgit2-http must be 0 or 1, not ${options.libgit2Http}`);
-  if (!/^[01]$/.test(options.sdl2)) fail(`--sdl2 must be 0 or 1, not ${options.sdl2}`);
   if (!existsSync(options.webPackage)) fail(`--web-package ${options.webPackage} does not exist`);
   if (options.notices && !existsSync(options.notices)) fail(`--notices ${options.notices} does not exist`);
   // (a name in /pharo, which the worker writes)
@@ -408,16 +397,9 @@ const main = async () => {
   // listed of its image, or extraSourcesListed)
   const entries = [];
   const extraSourcesListed = [];
-  const sdl2 = options.sdl2 == '1';
-  if (options.web) {
-    const web = walk(options.web);
-    if (sdl2)
-      for (const name of SDL_PAGE)
-        if (!web.includes(name)) fail(`--sdl2 1, but ${options.web} has no ${name}`);
-    for (const rel of web)
-      if (sdl2 || !SDL_PAGE.has(rel))
-        entries.push([rel, join(options.web, rel), TEXT_EXTENSIONS.has(extname(rel)) ? 'text' : 'copy']);
-  }
+  if (options.web)
+    for (const rel of walk(options.web))
+      entries.push([rel, join(options.web, rel), TEXT_EXTENSIONS.has(extname(rel)) ? 'text' : 'copy']);
   const module = resolve(options.module);
   entries.push([basename(module), module, 'copy']);
   entries.push([basename(module).replace(/\.js$/, '.wasm'), module.replace(/\.js$/, '.wasm'), 'copy']);
@@ -465,7 +447,7 @@ const main = async () => {
                                         `${image.pharoBuild} ${image.world}`),
                          `extraSources ${[...extraSources.keys()].sort().join(' ')}`,
                          `libraries ${options.libraries.join(' ')}`,
-                         `memory64 ${options.memory64}`, ...(sdl2 ? ['sdl2 true'] : []),
+                         `memory64 ${options.memory64}`,
                          `webPackage ${webPackage}`, `world ${world}`,
                          ...[...inputs].map(([rel, { sha256 }]) => `${rel} ${sha256}`).sort()].join('\n'));
   const build = (options.git ? `${options.git}-` : '') + digest.slice(0, 12);
@@ -543,7 +525,6 @@ const main = async () => {
     images,
     libraries: options.libraries,
     memory64: Number(options.memory64),
-    ...(sdl2 ? { sdl2 } : {}),
     st: entries.filter(([rel]) => rel.startsWith('st/')).map(([rel]) => rel).sort(),
     webPackage,
     world,

@@ -15,8 +15,8 @@
 #                            [LINK <target or library>...] [CFLAGS <flag>...]
 #                            [FILES <file name>...] [ON_LOAD <function>])
 #         Adds the library <name>, the name the image gives reduced as
-#         src/externalPrimitives.c does (libc.so.6 is c, libSDL2-2.0.so.0 is
-#         SDL2), or one of ALIASES.  Its table, ${CMAKE_BINARY_DIR}/wasm/ffi/
+#         src/externalPrimitives.c does (libc.so.6 is c, libgit2.so.1.4.4 is
+#         git2), or one of ALIASES.  Its table, ${CMAKE_BINARY_DIR}/wasm/ffi/
 #         ffi_<name>.c, is generated at build time by genFFILibrary.cmake,
 #         which prints 'FFI library <name>: <n> symbols, ...':
 #

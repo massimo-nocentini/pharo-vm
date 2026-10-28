@@ -11,7 +11,7 @@
 #   parity    every line of the golden file of the image's version,
 #             tests/wasm/golden/athens-p<major>.txt, must be a line of what it
 #             prints: TFFIBackend, the extension of OSWindow-Web that copies
-#             the pixels of a surface into a Form (a default build has no
+#             the pixels of a surface into a Form (the web VMs have no
 #             SurfacePlugin), cairo 1.18.4, and the SHA256 of the bits of
 #             each scene.  The golden files are the reference; with
 #             HOST_PHARO, the same script on the same image, natively, is
@@ -31,14 +31,8 @@
 #             mismatch, and the trace must name nothing;
 #   stock     the negative control of the extension: on the stock image,
 #             which does not have it, Athens shapes must fail with 'Unable to
-#             register surface with SurfacePlugin', without a failed callout.
-#             A build with SDL2 (WASM_SDL2=ON in its CMake cache) has
-#             SurfacePlugin built in (cmake/plugins.cmake): there the stock
-#             image's Athens registers its surface with it, and Athens shapes
-#             must draw instead the pixels of the golden file: the stock
-#             asForm answers a Form whose bits are the id of the surface,
-#             which athens-parity.st copies with BitBlt, through
-#             SurfacePlugin, into a Form of its own before it hashes it;
+#             register surface with SurfacePlugin', without a failed callout
+#             (the web VMs have no SurfacePlugin: cmake/plugins.cmake);
 #   hidden    the negative control of the registry: with cairo hidden from
 #             the VM (PHARO_WASM_FFI_HIDE=cairo), Athens shapes must fail with
 #             a SymbolNotFoundError, without a crash or a failed callout.
@@ -247,27 +241,11 @@ if test -n "$web"; then
     }
 fi
 
-# (SurfacePlugin is built in with SDL2, which needs the FFI that this lane
-# requires, as in wasm-smoke.sh's S18)
-surface_plugin=
-if grep -Eiq '^WASM_SDL2:BOOL=(ON|TRUE|YES|Y|1)$' "$WASM_DIR/cmake/CMakeCache.txt" 2>/dev/null; then
-    surface_plugin=yes
-fi
 fresh stock
 run stock shapes && quiet stock && {
     shapes_line=$(value athens-shapes)
     if test "x$(value surface)" = xOSWindow-Web; then
 	fail stock "the stock image has the extension of OSWindow-Web"
-    elif test -n "$surface_plugin"; then
-	golden=$golden_dir/athens-p$(value major).txt
-	expected=$(sed -n 's/^athens-shapes: //p' "$golden" 2>/dev/null | head -n 1)
-	if test -z "$expected"; then
-	    fail stock "no line athens-shapes in $golden for the Pharo of the stock image (major: '$(value major)')"
-	elif test "x$shapes_line" = "x$expected"; then
-	    ok stock "SurfacePlugin built in (WASM_SDL2): the pixels of ${golden#$SRCDIR/}, $shapes_line"
-	else
-	    fail stock "with SurfacePlugin built in (WASM_SDL2), the stock image's Athens shapes are not those of ${golden#$SRCDIR/}: expected '$expected', got '$(echo "$shapes_line" | cut -c 1-200)'"
-	fi
     else
 	case $shapes_line in
 	    *'Unable to register surface with SurfacePlugin'*) ok stock "$shapes_line" ;;

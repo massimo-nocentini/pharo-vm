@@ -52,12 +52,15 @@ if (${FEATURE_NETWORK})
   endif()
 endif()
 
-# Emscripten has only builtin plugins: there sqManualSurface.c takes the
-# surface functions of SurfacePlugin through ioLoadFunctionFrom.  The
-# Emscripten VM has SurfacePlugin only with SDL2 (WASM_SDL2,
-# cmake/emscripten/deps/options.cmake), since OSWindow-SDL2 blits through
-# its manual surfaces
-if(NOT EMSCRIPTEN OR PHARO_WASM_HAS_SDL2)
+# The Emscripten VM has no SurfacePlugin: what blits through its manual
+# surfaces is OSWindow-SDL2, and the Emscripten VM has no SDL2 (its world
+# goes through OSWebDriver, and Athens draws through the AthensCairoSurface
+# extension of OSWindow-Web, which needs no SurfacePlugin); the Athens of a
+# stock image fails cleanly without it, as lane 65 checks.  (Its
+# sqManualSurface.c, which calls the surface functions of SurfacePlugin.c
+# directly, would not do as a builtin plugin of Emscripten, where those are
+# static and WebAssembly checks the type of an indirect call)
+if(NOT EMSCRIPTEN)
     add_vm_plugin(SurfacePlugin TRUE FALSE)
 endif()
 add_vm_plugin(FloatArrayPlugin TRUE FALSE)

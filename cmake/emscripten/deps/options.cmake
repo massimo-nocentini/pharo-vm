@@ -26,13 +26,17 @@
 #                              synchronous XHR (src/emscripten/gitSupport.c),
 #                              for http:// and https:// remotes behind a CORS
 #                              proxy
-#     PHARO_WASM_HAS_SDL2      SDL2, for OSWindow-SDL2 (OSSDL2Driver): the
-#                              web page sdl.html, where a stock image draws
-#                              its world through SDL in the worker, and
-#                              SurfacePlugin, built in (cmake/plugins.cmake)
 #
 # Every library is an FFI library, so none is built without the FFI.  One
 # STATUS line gives the result.
+#
+# There is no SDL2 any more: WASM_SDL2 built it, for the image's own
+# OSSDL2Driver in a page of its own, sdl.html, which the world page, on
+# OSWebDriver, made needless (the native VMs keep their SDL2,
+# FEATURE_LIB_SDL2, which the initial cache turns off here).  A true
+# WASM_SDL2, given again or left in the cache of a tree configured with it,
+# stops the configuration, rather than build without what it asks for; a
+# false one is taken out of the cache.
 
 # The FFI.  The initial cache (cmake/Emscripten.cache.cmake) declares
 # WASM_FFI and sets FEATURE_FFI from it, since CMakeLists.txt reads
@@ -76,13 +80,17 @@ option(WASM_CAIRO_PDF "Build the PDF, PostScript and script surfaces of cairo (w
 # TLS and sockets.
 option(WASM_LIBGIT2 "Build libgit2, for Iceberg (needs WASM_FFI)" OFF)
 option(WASM_LIBGIT2_HTTP "Give libgit2 its smart-HTTP transport over XHR (with libgit2)" ON)
-# SDL2 2.32.10, for the image's own OSSDL2Driver: off by default, since it
-# costs about 160 KB of gzipped wasm (570 KB raw) and 10 KB of gzipped
-# JavaScript, and the world page (world.html, on OSWebDriver) needs none of
-# it.  With it the site also has sdl.html, where a stock image, unprepared,
-# draws its world through SDL's Emscripten video driver in the worker;
-# SurfacePlugin, which OSWindow-SDL2 blits through, is then built in too.
-option(WASM_SDL2 "Build SDL2, for the image's OSSDL2Driver, and the sdl.html page (needs WASM_FFI)" OFF)
+# (WASM_SDL2 is gone: see above)
+if(DEFINED WASM_SDL2)
+    if(WASM_SDL2)
+        message(FATAL_ERROR "WASM_SDL2 is gone: the Emscripten VM has no SDL2 any more, nor the site its "
+            "page sdl.html (the world page draws the world through OSWebDriver).  Configure without it: "
+            "drop -DWASM_SDL2=${WASM_SDL2}, and for a tree configured with it, cmake -U WASM_SDL2 <build dir> "
+            "(make wasm drops it itself)")
+    endif()
+    unset(WASM_SDL2 CACHE)
+    unset(WASM_SDL2)
+endif()
 
 # WASM_CAIRO is AUTO or a boolean (ON, OFF, 1, 0, YES, NO...)
 string(TOUPPER "${WASM_CAIRO}" PHARO_WASM_CAIRO_SETTING)
@@ -145,13 +153,8 @@ if(WASM_FFI)
         set(PHARO_WASM_HAS_LIBGIT2_HTTP OFF)
         set(PHARO_WASM_LIBGIT2_STATUS "libgit2 OFF")
     endif()
-    if(WASM_SDL2)
-        set(PHARO_WASM_HAS_SDL2 ON)
-    else()
-        set(PHARO_WASM_HAS_SDL2 OFF)
-    endif()
     message(STATUS "wasm deps: ffi ON, freetype ${PHARO_WASM_HAS_FREETYPE}, ${PHARO_WASM_CAIRO_STATUS}, "
-        "${PHARO_WASM_LIBGIT2_STATUS}, sdl2 ${PHARO_WASM_HAS_SDL2}")
+        "${PHARO_WASM_LIBGIT2_STATUS}")
 else()
     set(PHARO_WASM_HAS_FFI OFF)
     set(PHARO_WASM_HAS_FREETYPE OFF)
@@ -159,6 +162,5 @@ else()
     set(PHARO_WASM_HAS_CAIRO_PDF OFF)
     set(PHARO_WASM_HAS_LIBGIT2 OFF)
     set(PHARO_WASM_HAS_LIBGIT2_HTTP OFF)
-    set(PHARO_WASM_HAS_SDL2 OFF)
-    message(STATUS "wasm deps: ffi OFF (WASM_FFI=OFF): no library is built, freetype OFF, cairo OFF, libgit2 OFF, sdl2 OFF")
+    message(STATUS "wasm deps: ffi OFF (WASM_FFI=OFF): no library is built, freetype OFF, cairo OFF, libgit2 OFF")
 endif()

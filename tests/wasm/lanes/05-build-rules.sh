@@ -15,7 +15,7 @@
 #     VMMaker image and generates the sources again, and nothing else does;
 #   - an edit of cmake/Emscripten.cache.cmake configures the wasm build again,
 #     and so does a change of WASM_FFI, WASM_FREETYPE, WASM_LIBGIT2,
-#     WASM_LIBGIT2_HTTP, WASM_SDL2, WASM_DEPS_DIR, WASM_IMAGE_ID,
+#     WASM_LIBGIT2_HTTP, WASM_DEPS_DIR, WASM_IMAGE_ID,
 #     WASM_EXTRA_IMAGES, WASM_EXTRA_SOURCES or WASM_GIT_PROXY, which
 #     config.make records (a WASM_DEPS_DIR that does not exist is refused, and
 #     so are an extra image that is not <id>=<zip>, of a bad id, of the id
@@ -24,13 +24,16 @@
 #     would refuse: not http:// or https://, with a user name or a
 #     #fragment, and, as stage.mjs --check-git-proxy says, with a port or a
 #     host that is none);
+#   - WASM_SDL2, which is gone, is refused when it asks for SDL2, and
+#     WASM_SDL2=OFF changes nothing; cmake is given -U WASM_SDL2, which drops
+#     it from the cache of a tree configured with it;
 #   - wasm-check-browser fails without Playwright, runs page.spec.mjs and
 #     then notebook.spec.mjs on every build, world.spec.mjs only for a build
 #     with the image of the world, ffi.spec.mjs only for one with the FFI,
-#     git.spec.mjs only for one with libgit2, and sdl.spec.mjs only for one
-#     with SDL2;
+#     and git.spec.mjs only for one with libgit2;
 #   - a class of OSWindow-Web that comes, goes or changes prepares the image
-#     of the world again (and one that goes breaks nothing), and nothing
+#     of the world again (and one that goes breaks nothing), and so does an
+#     edit of web-libgit.st, which the preparation evaluates, and nothing
 #     else does; the preparation runs the command line that both Pharo 12
 #     and Pharo 15 take, and leaves no image of an earlier build, nor the
 #     .sources of another stock image, next to the world image;
@@ -53,8 +56,9 @@
 #     from the default image; the build id follows the build of an image; it
 #     refuses an id given twice, a bad one, the default's, sources, two
 #     .sources of one name that differ, an extra world image
-#     prepared with another OSWindow-Web, and an --extra-sources file that is
-#     not the .sources of its name; and a staging without the extra image
+#     prepared with another OSWindow-Web, an --extra-sources file that is
+#     not the .sources of its name, and --sdl2, which is gone; and a staging
+#     without the extra image
 #     removes its files;
 #   - pharo_wasm_dep_fetch (cmake/emscripten/deps/fetch.cmake) takes an
 #     archive from WASM_DEPS_DIR, or downloads it once (from a file:// URL
@@ -209,7 +213,6 @@ echo 'console.log("notebook.spec.mjs " + process.argv[2])' >"$src/tests/wasm/not
 echo 'console.log("world.spec.mjs " + process.argv[2])' >"$src/tests/wasm/world.spec.mjs"
 echo 'console.log("ffi.spec.mjs " + process.argv[2])' >"$src/tests/wasm/ffi.spec.mjs"
 echo 'console.log("git.spec.mjs " + process.argv[2])' >"$src/tests/wasm/git.spec.mjs"
-echo 'console.log("sdl.spec.mjs " + process.argv[2])' >"$src/tests/wasm/sdl.spec.mjs"
 mkdir -p "$T/vmmaker"
 : >"$T/vmmaker/VMMaker.image"
 
@@ -331,19 +334,34 @@ wmake "$W/cmake/.configured"
 calls "emcmake" "configure cmake"
 grep -qx 'WASM_LIBGIT2 = OFF' "$W/config.make" || { cat "$W/config.make"; fail "$step: config.make does not record WASM_LIBGIT2 = OFF"; }
 grep -qx 'WASM_LIBGIT2_HTTP = ON' "$W/config.make" || { cat "$W/config.make"; fail "$step: config.make does not record WASM_LIBGIT2_HTTP = ON"; }
-step="SDL2 is turned on"
-wmake "$W/cmake/.configured" WASM_SDL2=ON
-calls "emcmake" "configure cmake"
-grep -qx 'WASM_SDL2 = ON' "$W/config.make" || { cat "$W/config.make"; fail "$step: config.make does not record WASM_SDL2 = ON"; }
-grep -q -- ' -DWASM_SDL2=ON ' "$log.configure" || { cat "$log.configure"; fail "$step: cmake was not given -DWASM_SDL2=ON"; }
-step="nothing changed with SDL2"
-wmake "$W/cmake/.configured" WASM_SDL2=ON
+step="cmake drops WASM_SDL2, which is gone, from the cache"
+grep -q -- ' -UWASM_SDL2 ' "$log.configure" || { cat "$log.configure"; fail "$step: cmake was not given -UWASM_SDL2"; }
+if grep -q -- '-DWASM_SDL2' "$log.configure" || grep -q 'WASM_SDL2' "$W/config.make"; then
+    cat "$log.configure" "$W/config.make"
+    fail "$step: cmake was given WASM_SDL2, or config.make records it"
+fi
+for sdl2 in ON on 1 yes; do
+    step="WASM_SDL2=$sdl2 is refused"
+    if HOME=$T/home "$make" -s --no-print-directory -f "$src/GNUmakefile" -C "$src" $knobs \
+        "WASM_SDL2=$sdl2" "$W/cmake/.configured" >"$T/make.out" 2>&1; then
+        cat "$T/make.out"
+        fail "$step: make accepted it"
+    fi
+    grep -q "WASM_SDL2 ($sdl2) is gone: the WebAssembly VM has no SDL2 any more" "$T/make.out" ||
+        { cat "$T/make.out"; fail "$step: no refusal"; }
+    calls
+done
+step="WASM_SDL2 from the environment is refused too"
+if WASM_SDL2=ON HOME=$T/home "$make" -s --no-print-directory -f "$src/GNUmakefile" -C "$src" $knobs \
+    "$W/cmake/.configured" >"$T/make.out" 2>&1; then
+    cat "$T/make.out"
+    fail "$step: make accepted it"
+fi
+grep -q "WASM_SDL2 (ON) is gone" "$T/make.out" || { cat "$T/make.out"; fail "$step: no refusal"; }
 calls
-step="SDL2 is off again, by default"
-wmake "$W/cmake/.configured"
-calls "emcmake" "configure cmake"
-grep -qx 'WASM_SDL2 = OFF' "$W/config.make" || { cat "$W/config.make"; fail "$step: config.make does not record WASM_SDL2 = OFF"; }
-grep -q -- ' -DWASM_SDL2=OFF ' "$log.configure" || { cat "$log.configure"; fail "$step: cmake was not given -DWASM_SDL2=OFF"; }
+step="WASM_SDL2=OFF changes nothing"
+wmake "$W/cmake/.configured" WASM_SDL2=OFF
+calls
 step="a WASM_DEPS_DIR that does not exist"
 if HOME=$T/home "$make" -s --no-print-directory -f "$src/GNUmakefile" -C "$src" $knobs \
     "WASM_DEPS_DIR=$T/no-archives" "$W/cmake/.configured" >"$T/make.out" 2>&1; then
@@ -472,7 +490,7 @@ recorded WASM_GIT_PROXY https://cors.isomorphic-git.org/
 # ---- wasm-check-browser (on a web/ of its own; wasm is taken as built)
 
 mkdir -p "$W/web"
-echo '{ "world": false, "ffi": false, "git": false, "sdl2": false }' >"$W/web/manifest.json"
+echo '{ "world": false, "ffi": false, "git": false }' >"$W/web/manifest.json"
 step="wasm-check-browser without Playwright"
 if (cd "$src/tests/wasm/lib" && HOME=$T/home "$NODE" -e 'require.resolve("playwright")') >/dev/null 2>&1; then
     echo "05-build-rules: node finds a playwright package here: the goal without one is not checked"
@@ -484,7 +502,7 @@ elif ! grep -q 'need Playwright' "$T/make.out" || grep -q 'spec.mjs /' "$T/make.
     cat "$T/make.out"
     fail "$step: no message, or a spec ran"
 fi
-step="wasm-check-browser, no image of the world, no FFI, no libgit2, no SDL2"
+step="wasm-check-browser, no image of the world, no FFI, no libgit2"
 PLAYWRIGHT_MODULE=$T/playwright wmake -o wasm wasm-check-browser
 grep -q "^page.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: page.spec.mjs did not run"; }
 grep -q "^notebook.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: notebook.spec.mjs did not run"; }
@@ -502,10 +520,6 @@ if grep -q "^git.spec.mjs" "$T/make.out" || ! grep -q "^skip git.spec.mjs" "$T/m
     cat "$T/make.out"
     fail "$step: git.spec.mjs ran, or no skip was reported"
 fi
-if grep -q "^sdl.spec.mjs" "$T/make.out" || ! grep -q "^skip sdl.spec.mjs" "$T/make.out"; then
-    cat "$T/make.out"
-    fail "$step: sdl.spec.mjs ran, or no skip was reported"
-fi
 step="wasm-check-browser, with the image of the world and the FFI, no libgit2"
 printf '{\n  "world": true,\n  "ffi": true,\n  "git": false\n}\n' >"$W/web/manifest.json"
 PLAYWRIGHT_MODULE=$T/playwright wmake -o wasm wasm-check-browser
@@ -515,31 +529,16 @@ if grep -q "^git.spec.mjs" "$T/make.out" || ! grep -q "^skip git.spec.mjs" "$T/m
     cat "$T/make.out"
     fail "$step: git.spec.mjs ran, or no skip was reported"
 fi
-step="wasm-check-browser, with the image of the world, the FFI and libgit2, no SDL2"
-printf '{\n  "world": true,\n  "ffi": true,\n  "git": true,\n  "sdl2": false\n}\n' >"$W/web/manifest.json"
+step="wasm-check-browser, with the image of the world, the FFI and libgit2"
+printf '{\n  "world": true,\n  "ffi": true,\n  "git": true\n}\n' >"$W/web/manifest.json"
 PLAYWRIGHT_MODULE=$T/playwright wmake -o wasm wasm-check-browser
-grep -q "^world.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: world.spec.mjs did not run"; }
-grep -q "^ffi.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: ffi.spec.mjs did not run"; }
-grep -q "^git.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: git.spec.mjs did not run"; }
-if grep -q "^sdl.spec.mjs" "$T/make.out" || ! grep -q "^skip sdl.spec.mjs" "$T/make.out"; then
-    cat "$T/make.out"
-    fail "$step: sdl.spec.mjs ran, or no skip was reported"
-fi
-step="wasm-check-browser, with the image of the world, the FFI and SDL2, no libgit2"
-printf '{\n  "world": true,\n  "ffi": true,\n  "git": false,\n  "sdl2": true\n}\n' >"$W/web/manifest.json"
-PLAYWRIGHT_MODULE=$T/playwright wmake -o wasm wasm-check-browser
-grep -q "^sdl.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: sdl.spec.mjs did not run"; }
-if grep -q "^git.spec.mjs" "$T/make.out" || ! grep -q "^skip git.spec.mjs" "$T/make.out"; then
-    cat "$T/make.out"
-    fail "$step: git.spec.mjs ran, or no skip was reported"
-fi
-step="wasm-check-browser, with the image of the world, the FFI, libgit2 and SDL2"
-printf '{\n  "world": true,\n  "ffi": true,\n  "git": true,\n  "sdl2": true\n}\n' >"$W/web/manifest.json"
-PLAYWRIGHT_MODULE=$T/playwright wmake -o wasm wasm-check-browser
-for spec in page notebook world ffi git sdl; do
+for spec in page notebook world ffi git; do
     grep -q "^$spec.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: $spec.spec.mjs did not run"; }
 done
 if grep -q "^skip " "$T/make.out"; then cat "$T/make.out"; fail "$step: a spec was skipped"; fi
+# (no rule of SDL any more: no sdl.spec.mjs, run or skipped; the paths of
+# the specs, which name TEST_DIR, are not looked at)
+if grep -Eq '(^|[ /])sdl\.spec\.mjs|^skip sdl' "$T/make.out"; then cat "$T/make.out"; fail "$step: something of SDL ran"; fi
 step="wasm-check-browser, playwright found by node"
 mkdir -p "$src/tests/node_modules/playwright"
 echo 'module.exports = {}' >"$src/tests/node_modules/playwright/index.js"
@@ -555,6 +554,7 @@ st=$wi/packaging/emscripten/st
 mkdir -p "$wi/cmake/emscripten" "$st/OSWindow-Web" "$wi/stock"
 cp "$SRCDIR/cmake/emscripten/webimage.cmake" "$wi/cmake/emscripten/"
 : >"$st/prepare-web-image.st"
+: >"$st/web-libgit.st"
 echo 'Class { #name : #OSWebA }' >"$st/OSWindow-Web/OSWebA.class.st"
 echo 'Class { #name : #OSWebB }' >"$st/OSWindow-Web/OSWebB.class.st"
 : >"$wi/stock/Pharo.image"
@@ -638,6 +638,14 @@ wbuild
 calls "prepare"
 if grep -q OSWebB "$package"; then fail "$step: OSWebB is still in $package"; fi
 step="webimage.cmake, nothing changed after a class went"
+wbuild
+calls
+step="webimage.cmake, web-libgit.st changes"
+sleep 1
+echo '"edited"' >>"$st/web-libgit.st"
+wbuild
+calls "prepare"
+step="webimage.cmake, nothing changed after web-libgit.st"
 wbuild
 calls
 step="webimage.cmake, configured again with the same fonts"
@@ -867,6 +875,8 @@ stage_refused "is not an http:// or https:// URL" --git-proxy-default ftp://prox
 stage_refused "has a user name or password" --git-proxy-default https://me:secret@proxy.example/
 stage_refused "has a #fragment" --git-proxy-default https://proxy.example/#x
 stage_refused "--image-id P15 is not" --image-id P15
+# (SDL2 is gone, and its page with it)
+stage_refused "bad argument --sdl2" --sdl2 1
 stage_refused "--extra-image sources: image/sources/ holds the --extra-sources files" \
     --extra-image "sources=$sg/stock-p99"
 

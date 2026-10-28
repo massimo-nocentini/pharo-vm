@@ -11,8 +11,8 @@ bits, a line each, '<key>: <value>':
 	                OSWindow-Web when the image has the extension of
 	                packaging/emscripten/st/OSWindow-Web, which copies the
 	                pixels of a surface into a Form (asForm) instead of
-	                registering it with the SurfacePlugin, which only the
-	                WebAssembly VMs with SDL2 have
+	                registering it with the SurfacePlugin, which the
+	                WebAssembly VMs do not have
 	web package     OSWebDriver packageVersion, or none
 	library         CairoLibrary uniqueInstance libraryName, the file that
 	                the image found (a placeholder, on WebAssembly)

@@ -30,8 +30,8 @@
 // error, not in a loop.  The placeholders of the libraries of the FFI
 // (manifest.libraries) are empty files of /pharo, where CairoLibrary finds
 // libcairo.so.2; and an image of version 2 (OSWindow-Web without its
-// AthensCairoSurface extension: Athens needs the SurfacePlugin, which only
-// a VM with SDL2 has, manifest.sdl2) is prepared to version 3 on its world
+// AthensCairoSurface extension: Athens needs the SurfacePlugin, which the
+// web VMs do not have) is prepared to version 3 on its world
 // boot, and then draws Roassal; an image of version 3 (Iceberg's stock
 // remotes, scp-like URLs over SSH, which a browser cannot reach) is
 // prepared to version 4 on its world boot, and then has Iceberg's https://
@@ -41,7 +41,13 @@
 // with git_object_free (OSWindow-Web before #setUpLibGit, or a stock Pharo
 // 13 and later) is prepared to version 6 on its world boot, and then frees
 // it with config_free:, git_config_free, an extension of OSWindow-Web, which
-// a second set up leaves as it is (case 27).
+// a second set up leaves as it is (case 27: the set up of the preparation,
+// OSWebDriver class>>#setUpLibGit, gives it, since the boots of the case
+// look for no web-libgit.st); and one whose config_free: and
+// freeFunctionSelector were compiled by web-libgit.st in LibGit-Core, as a
+// boot of the Console leaves a stock Pharo 13 or later, without
+// OSWindow-Web, before the page prepares it, has them made extensions of
+// OSWindow-Web by that set up (27b).
 // The notebook mode (W-NB1..4, init.mode 'notebook'): the kernel of
 // st/web-notebook.st, its events (output {fd: 3, bytes}), a request posted
 // before ready, Stop, the credit of the events, and a worker that boots the
@@ -1326,12 +1332,10 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       C.send(EXTENSION('/pharo/extension-2.txt'));
       await C.expectOut(val('0'));
       await C.prompt();
-      // (a VM with SDL2 has SurfacePlugin built in, cmake/plugins.cmake,
-      // where the stock Athens draws too)
+      // (the web VMs have no SurfacePlugin, cmake/plugins.cmake)
       C.send(SURFACE);
       await C.prompt();
-      assert((manifest.sdl2 ? /(^|> )#drawn\n/m
-                            : /(^|> )'Unable to register surface with SurfacePlugin'\n/m).test(C.since()),
+      assert(/(^|> )'Unable to register surface with SurfacePlugin'\n/m.test(C.since()),
              'Athens of version 2: ' + JSON.stringify(C.since() + C.errSince()).slice(0, 400));
       C.post({ type: 'save' });
       await waitFor('saved', () => C.saved.length, 60000);
@@ -1446,26 +1450,40 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
   // does without its version being raised above 5 fails here)
   const stagedPackage = path.join(webDir, 'st', 'OSWindow-Web.st');
   const libgit = versions && fs.existsSync(stagedPackage) && /setUpLibGit/.test(fs.readFileSync(stagedPackage, 'latin1'));
-  if (!libgit) console.log('# skip 27: ' + (!versions ? 'no versions (see 20-23)' : 'the staged OSWindow-Web.st has no setUpLibGit'));
+  if (!libgit) console.log('# skip 27, 27b: ' + (!versions ? 'no versions (see 20-23)' : 'the staged OSWindow-Web.st has no setUpLibGit'));
   // what LGitConfig frees with: its free function, the C functions that the
   // method of it names in its callout, and the package of that method
   const FREES = "| m | m := LGitConfig class lookupSelector: LGitConfig freeFunctionSelector. { OSWebDriver packageVersion. " +
     "LGitConfig freeFunctionSelector. ' ' join: ((m ast allChildren select: [ :n | n isLiteralNode and: [ n value isArray ] ]) " +
     "flatCollect: [ :n | (n value select: [ :e | e isSymbol and: [ e beginsWith: 'git_' ] ]) collect: [ :e | e asString ] ]). " +
     "m package name asString }\n";
-  if (libgit) await check('27 an image of version 5, whose LGitConfig frees with git_object_free, is prepared to 6 on the world boot; then it frees with git_config_free', async () => {
+  // The Console's boot evaluates st/web-libgit.st too (web-repl.st), and the
+  // preparation boots the image as the Console does: so that only the set up
+  // of the preparation (web-bootstrap.st, OSWebDriver class>>#setUpLibGit)
+  // can give LGitConfig its free function here, the sessions of 27 and 27b
+  // get a web-repl.st whose boot looks for another file, which is not there
+  const replFile = path.join(webDir, 'st', 'web-repl.st');
+  const repl = libgit ? fs.readFileSync(replFile, 'latin1') : '';
+  const bootLibgit = "/ 'st' / 'web-libgit.st'.";
+  const noBoot = { override: { '/st/web-repl.st': repl.replace(bootLibgit, "/ 'st' / 'web-libgit.st-not-at-boot'.") } };
+  // 27 and 27b: make the site's image what a site of version 5 saved, with
+  // LGitConfig made so by `edit` (a line of the REPL whose value `made`
+  // matches), boot it for the world, which prepares it, and check that
+  // LGitConfig then frees with git_config_free, through an extension of
+  // OSWindow-Web, which a second set up leaves as it is
+  const version5 = async (edit, made) => {
+    assert(repl.includes(bootLibgit), replFile + ' has no ' + bootLibgit + ', which the case takes out of its boot');
     memory.map.clear();
-    // the site's image, made what a site of version 5 saved: LGitConfig
-    // without the free function of its own that the set up gives it (or
-    // that Pharo 12 has), so that it inherits #object_free:, and version 5
-    const C = session();
+    const C = session({}, noBoot);
     try {
       current = C;
       await C.started();
-      C.send("LGitConfig class removeSelector: #config_free:; removeSelector: #freeFunctionSelector. " +
-             "OSWebDriver class compile: 'packageVersion ^ 5'; compile: 'packageMarker ^ #OSWindowWebPackage5'. " +
-             "{ OSWebDriver packageVersion. LGitConfig freeFunctionSelector }\n");
-      await C.expectOut(val('#(5 #object_free:)'));
+      C.send(edit);
+      await C.expectOut(made);
+      await C.prompt();
+      C.send("OSWebDriver class compile: 'packageVersion ^ 5'; compile: 'packageMarker ^ #OSWindowWebPackage5'. " +
+             "OSWebDriver packageVersion\n");
+      await C.expectOut(val('5'));
       await C.prompt();
       C.post({ type: 'save' });
       await waitFor('saved', () => C.saved.length, 60000);
@@ -1475,7 +1493,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     } finally { await C.close(); current = S; }
     // the world boot prepares it
     const t = now();
-    const P = session(world, { display: true });
+    const P = session(world, Object.assign({ display: true }, noBoot));
     try {
       current = P;
       await waitFor('prepared', () => P.prepared || P.crash || P.exit !== null, 300000);
@@ -1486,8 +1504,11 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
              'prepared ' + JSON.stringify(P.prepared));
     } finally { await P.close(); current = S; }
     // the image has the package of the site, and LGitConfig frees with
-    // git_config_free, which a second set up leaves as it is
-    const R = session();
+    // git_config_free, an extension of OSWindow-Web, which a second set up
+    // leaves as it is (that LibGit-Core stays unmodified for Monticello is
+    // lane 66's to check, on stock images: here `edit` modified it, on
+    // Pharo 12, whose LibGit-Core has the two methods)
+    const R = session({}, noBoot);
     try {
       current = R;
       await R.started();
@@ -1496,10 +1517,31 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       R.send(FREES);
       await R.expectOut(val(`#(${webPackage} #config_free: 'git_config_free' 'OSWindow-Web')`));
       await R.prompt();
-      R.send('| m | m := LGitConfig class >> #config_free:. OSWebDriver setUpImage. (LGitConfig class >> #config_free:) == m\n');
-      await R.expectOut(val('true'));
+      R.send("| m | m := LGitConfig class >> #config_free:. OSWebDriver setUpImage. { (LGitConfig class >> #config_free:) == m. " +
+             "m protocolName asString. m isExtension }\n");
+      await R.expectOut(val("#(true '*OSWindow-Web' true)"));
       await R.prompt();
     } finally { await R.close(); current = S; }
+  };
+  if (libgit) await check('27 an image of version 5, whose LGitConfig frees with git_object_free, is prepared to 6 on the world boot; then it frees with git_config_free', async () => {
+    // LGitConfig without the free function of its own that the set up gives
+    // it (or that Pharo 12 has), so that it inherits #object_free:
+    await version5("LGitConfig class removeSelector: #config_free:; removeSelector: #freeFunctionSelector. " +
+                   "LGitConfig freeFunctionSelector\n", val('#object_free:'));
+  });
+  // As the boot of the Console or of the notebook leaves a stock Pharo 13 or
+  // later, which has no OSWindow-Web: web-libgit.st compiled the two methods
+  // in protocols of LibGit-Core.  The page prepares a stock image after such
+  // a boot, so it has them there before web-bootstrap.st files the package
+  // in: the set up must make them extensions of OSWindow-Web (here
+  // web-libgit.st compiles them so by taking the package for absent)
+  if (libgit) await check('27b an image of version 5 whose config_free: of web-libgit.st is in LibGit-Core is prepared to 6; then it is an extension of OSWindow-Web', async () => {
+    await version5("LGitConfig class removeSelector: #config_free:; removeSelector: #freeFunctionSelector. " +
+                   "Smalltalk compiler evaluate: ((FileLocator imageDirectory / 'st' / 'web-libgit.st') contents " +
+                   "copyReplaceAll: 'hasPackage: ''OSWindow-Web''' with: 'hasPackage: ''OSWindow-Web-absent'''). " +
+                   "{ LGitConfig freeFunctionSelector. (LGitConfig class >> #config_free:) package name asString. " +
+                   "(LGitConfig class >> #config_free:) isExtension }\n",
+                   val("#(#config_free: 'LibGit-Core' false)"));
   });
 
   // ---- the catalog and the slots (catalog.js, vm-storage.js)
