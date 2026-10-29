@@ -20,16 +20,29 @@
 # objects that it made are all gone after the full garbage collection (gc:
 # 0), freed by the finalization; and the commits after it read the
 # configuration of the repository again, which that finalization must have
-# left as it was.
+# left as it was.  LGitConfig>>#globalConfigurationPath answers nil before
+# the dialog and the path of HOME/.gitconfig after it, not the bytes of the
+# git_buf that libgit2 writes into the String that a stock LibGit-Core gives
+# it (web-libgit.st gives the callout an LGitBuf), and a second set up
+# compiles neither it nor its callout again.  The default action of
+# IceMergeResolutionRequest is the one of web-libgit.st, which runs Iceberg's
+# own in a world (#webWorldDefaultAction), which a second set up does not
+# compile again either; and a #webWorldDefaultAction that sends itself, as
+# the web-libgit.st of before OSWindow-Web 8 left an image that it patched
+# twice, is Iceberg's own again after the next set up.
 gitconfig before: none
 free function: config_free:
 free calls: git_config_free
 set up again: unchanged
+merge action: web-libgit.st, in a world Iceberg
+merge repair: itself, then Iceberg's again
 create repo: wasmidentity
 make class: WasmIdentityDemo
 add package: #(#WasmIdentityDemo)
+global config before: nil
 commit 1: <id>
 dialogs 1: 1
+global config: HOME/.gitconfig
 gc: 0
 gitconfig: Wasm Dialog <dialog@example.org>
 signature: Wasm Dialog <dialog@example.org>

@@ -40,7 +40,22 @@
 #             Pharo has it), whose callout is git_config_free, and a second
 #             setUpLibGit compiles nothing; the dialog was asked once, the
 #             user went into HOME/.gitconfig, and the three commits are
-#             there, by that user;
+#             there, by that user; LGitConfig>>#globalConfigurationPath
+#             answers nil before the dialog and HOME/.gitconfig after it
+#             (web-libgit.st gives git_config_find_global the git_buf, an
+#             LGitBuf, that it fills, where LibGit-Core gives it a String,
+#             into which libgit2 writes the bytes of the git_buf), and it
+#             and LGitConfig>>#config_find_global_path: are extensions of
+#             OSWindow-Web that web-libgit.st compiled, logged, the former
+#             freeing its buffer in an ensure: ('global config methods:
+#             OSWindow-Web/*OSWindow-Web OSWindow-Web/*OSWindow-Web marker
+#             true logged true frees true'); IceMergeResolutionRequest's
+#             default action is the one of web-libgit.st, which runs
+#             Iceberg's own in a world, and the second set up compiles
+#             neither again (the web-libgit.st of before OSWindow-Web 8
+#             compiled both again, and made #webWorldDefaultAction send
+#             itself), and a #webWorldDefaultAction made so is Iceberg's own
+#             again after one more set up;
 #   console <image>
 #             the same flow on each stock image of the site (image/stock,
 #             and image/stock-<id>), never set up, booted as the Console
@@ -50,13 +65,21 @@
 #             of the REPL are taken out of what it prints); the boot must
 #             have given LGitConfig its free function, so every line of
 #             git-identity.txt must be a line of what it prints, as for a
-#             world image;
+#             world image, but for the two methods of the global
+#             configuration, which the boot compiled in the protocols of
+#             LibGit-Core that the stock ones are in ('global config
+#             methods: LibGit-Core/libgit - calls LibGit-Core/accessing
+#             marker true logged true frees true'); the second evaluation of
+#             web-libgit.st (the set up again of git-identity.st) compiles
+#             nothing, and the one after a #webWorldDefaultAction that sends
+#             itself makes it Iceberg's own again;
 #   notebook <image>
 #             the same, booted as the notebook kernel: st --no-source
 #             st/web-notebook.st, NOTEBOOK_EVENTS a file, and a request
 #             that runs a cell which evaluates git-identity.st; the events
 #             must be hello, start and a done of status ok, and every line
-#             of git-identity.txt a line of what it prints;
+#             of git-identity.txt a line of what it prints, and the methods
+#             of the global configuration as for the console;
 #   prepared <image>
 #             each stock image booted as the page boots one that it prepares
 #             for the world (vm-worker.js: as the Console boots it, then
@@ -67,7 +90,17 @@
 #             package was there, and the set up (#setUpLibGit) must have made
 #             it an extension of OSWindow-Web, with LibGit-Core unmodified
 #             and without it in its snapshot (an image whose LibGit-Core has
-#             a config_free: of its own, Pharo 12, keeps it as it is);
+#             a config_free: of its own, Pharo 12, keeps it as it is); and
+#             the same of config_find_global_path: and
+#             globalConfigurationPath, which the boot compiled in
+#             LibGit-Core on every image (Pharo 12 too: all give
+#             git_config_find_global a String), and the set up again as
+#             extensions of OSWindow-Web, which take them out of the
+#             snapshot of LibGit-Core; and IceMergeResolutionRequest's
+#             default action must be the one of web-libgit.st, which its boot
+#             compiled, with Iceberg's own as #webWorldDefaultAction, which
+#             does not send itself (the set up, a second evaluation of
+#             web-libgit.st, compiled neither again);
 #   control <image>
 #             the same on each stock image of the site (image/stock, and
 #             image/stock-<id>), which nothing set up: when its LGitConfig
@@ -77,7 +110,14 @@
 #             garbage collection of its own), which shows that the identity
 #             check sees the bug that the set up removes; when it frees
 #             with config_free: (Pharo 12), the stock image must pass as a
-#             world image does;
+#             world image does, but for the global configuration; and on
+#             every stock image globalConfigurationPath must answer, before
+#             the dialog, a String of 256 characters with control
+#             characters ('not a path: 256 characters, ...'), the bug that
+#             web-libgit.st removes, from the methods of LibGit-Core, which
+#             nothing compiled ('global config methods: LibGit-Core/libgit -
+#             calls LibGit-Core/accessing marker false logged true frees
+#             false');
 #   adapted   the flow is run with PHARO_WASM_FFI_TRACE=1, which has the
 #             width adapter of the FFI (src/emscripten/ffiAdapt.c) name each
 #             function whose declaration it adapted, once, on stderr: every
@@ -325,7 +365,15 @@ booted() (
 # prints 'prepared: <major> <version of OSWindow-Web> <free function> <its
 # package>/<its protocol> ext <an extension> modified <LibGit-Core modified
 # for Monticello> snapshot <in the snapshot of LibGit-Core> marker
-# <compiled by web-libgit.st>'
+# <compiled by web-libgit.st>', and the next one 'prepared find: <its
+# package>/<its protocol> ext <an extension> snapshot <in the snapshot of
+# LibGit-Core> marker <compiled by web-libgit.st>' of
+# LGitConfig>>#config_find_global_path:, then the same of
+# LGitConfig>>#globalConfigurationPath, then ' modified <LibGit-Core modified
+# for Monticello>', and the next one 'prepared merge: <compiled by
+# web-libgit.st> <sends #webWorldDefaultAction>' of
+# IceMergeResolutionRequest>>#defaultAction, then the same of
+# #webWorldDefaultAction
 prepared_boot() (
     stage_st web-libgit.st web-repl.st web-bootstrap.st || exit 1
     cp "$WASM_DIR/web/st/OSWindow-Web.st" st/ || exit 1
@@ -337,6 +385,17 @@ prepared_boot() (
 	    "LGitConfig freeFunctionSelector , ' ' , m package name , '/' , m protocolName , ' ext ' , m isExtension printString ," \
 	    "' modified ' , lgc modified printString , ' snapshot ' , in printString ," \
 	    "' marker ' , ((m sourceCode ifNil: [ '' ]) includesSubstring: 'compiled by web-libgit.st') printString; lf; flush. nil"
+	echo "| lgc | lgc := MCWorkingCopy forPackageNamed: 'LibGit-Core'. Stdio stdout nextPutAll: 'prepared find:'." \
+	    "#( #config_find_global_path: #globalConfigurationPath ) do: [ :s | | m in |" \
+	    "m := LGitConfig >> s. in := lgc package snapshot definitions anySatisfy: [ :d | d isMethodDefinition and: [ d className = #LGitConfig and: [ d classIsMeta not and: [ d selector = s ] ] ] ]." \
+	    "Stdio stdout nextPutAll: ' ' , m package name , '/' , m protocolName , ' ext ' , m isExtension printString , ' snapshot ' , in printString ," \
+	    "' marker ' , ((m sourceCode ifNil: [ '' ]) includesSubstring: 'compiled by web-libgit.st') printString ]." \
+	    "Stdio stdout nextPutAll: ' modified ' , lgc modified printString; lf; flush. nil"
+	echo "Stdio stdout nextPutAll: 'prepared merge:'. #( #defaultAction #webWorldDefaultAction ) do: [ :s | | m |" \
+	    "m := IceMergeResolutionRequest compiledMethodAt: s ifAbsent: [ nil ]. Stdio stdout nextPutAll: ' ' , (m isNil" \
+	    "ifTrue: [ 'none' ] ifFalse: [ ((m sourceCode ifNil: [ '' ]) includesSubstring: 'web-libgit.st') printString , ' ' ," \
+	    "(m ast allChildren anySatisfy: [ :n | n isMessage and: [ n selector = #webWorldDefaultAction ] ]) printString ]) ]." \
+	    "Stdio stdout lf; flush. nil"
     } >input.txt
     vm_with "$WASM_DIR/node/pharo" st --no-source st/web-repl.st <input.txt >booted.out
     booted_status=$?
@@ -357,6 +416,24 @@ http_clone() (
 # value KEY: the value of the line 'KEY: ...' of smoke.out
 value() {
     sed -n "s/^$1: //p" smoke.out | head -n 1
+}
+# global_methods NAME EXPECTED: fails NAME and answers false when the line
+# 'global config methods' of smoke.out (git-identity.st) is not EXPECTED
+global_methods() {
+    if test "x$(value 'global config methods')" != "x$2"; then
+	fail "$1" "the methods of the global configuration are '$(value 'global config methods' | cut -c 1-200)', not '$2'"
+	return 1
+    fi
+    return 0
+}
+# not_a_path KEY: whether the line KEY of smoke.out (git-identity.st) shows
+# what a stock LibGit-Core answers, a String of 256 characters, the bytes of
+# the git_buf of libgit2 among them
+not_a_path() {
+    case $(value "$1") in
+	'not a path: 256 characters, '*) return 0 ;;
+    esac
+    return 1
 }
 # adapted: the functions that trace.err names, sorted, one a line
 adapted() {
@@ -507,10 +584,10 @@ for dir in "$WASM_DIR/image/web" "$WASM_DIR"/image/web-*; do
     empty_home
     stage_st web-libgit.st
     run "identity $image" identity && quiet "identity $image" && {
-	if differ smoke.out "$identity_golden"; then
-	    ok "identity $image" "Pharo $(value major), frees with $(value 'free calls'), $(value dialogs) dialog, commits $(value 'commit 1') $(value 'commit 2') $(value 'commit 3') by $(value gitconfig) after the finalization"
-	else
+	if ! differ smoke.out "$identity_golden"; then
 	    fail "identity $image" "differs from ${identity_golden#$SRCDIR/}: $(tr '\n' ';' <differ.txt | cut -c 1-1500)"
+	elif global_methods "identity $image" 'OSWindow-Web/*OSWindow-Web OSWindow-Web/*OSWindow-Web marker true logged true frees true'; then
+	    ok "identity $image" "Pharo $(value major), frees with $(value 'free calls'), $(value dialogs) dialog, commits $(value 'commit 1') $(value 'commit 2') $(value 'commit 3') by $(value gitconfig) after the finalization; global config $(value 'global config before'), then $(value 'global config')"
 	fi
     }
 done
@@ -527,19 +604,26 @@ for dir in "$WASM_DIR/image/stock" "$WASM_DIR"/image/stock-*; do
 	errors=$(value errors)
 	if test "x$(value 'add package')" != 'x#(#WasmIdentityDemo)' || test "x$(value 'dialogs 1')" != x1; then
 	    fail "control $image" "the steps before the first commit did not run: add package '$(value 'add package' | cut -c 1-200)', dialogs '$(value 'dialogs 1' | cut -c 1-100)'"
+	elif ! global_methods "control $image" 'LibGit-Core/libgit - calls LibGit-Core/accessing marker false logged true frees false'; then
+	    :
+	elif ! not_a_path 'global config before'; then
+	    fail "control $image" "globalConfigurationPath of a stock LibGit-Core answered '$(value 'global config before' | cut -c 1-200)' before the dialog, not the 256 characters of the String that libgit2 wrote its git_buf into: the identity check would not see the bug"
 	elif test "x$free" = 'xobject_free:'; then
 	    case $errors in
 		*"'commit 1'"*|*"'signature'"*|*"'commit 2'"*|*"'commit 3'"*)
-		    ok "control $image" "Pharo $(value major), LGitConfig frees with #object_free:, so $errors failed, with $(grep -c '' guard.err) failed callouts" ;;
+		    ok "control $image" "Pharo $(value major), LGitConfig frees with #object_free:, so $errors failed, with $(grep -c '' guard.err) failed callouts; globalConfigurationPath answers '$(value 'global config before')'" ;;
 		*) fail "control $image" "LGitConfig frees with object_free:, but no commit failed (errors: '$(echo "$errors" | cut -c 1-200)'): the identity check would not see the bug" ;;
 	    esac
 	elif test "x$free" = 'xconfig_free:'; then
 	    if test -s guard.err; then
 		fail "control $image" "LGitConfig frees with config_free:, but $(grep -c '' guard.err) callouts failed: $(head -n 1 guard.err)"
-	    elif ! differ smoke.out "$identity_golden"; then
-		fail "control $image" "LGitConfig frees with config_free:, but the flow differs from ${identity_golden#$SRCDIR/}: $(tr '\n' ';' <differ.txt | cut -c 1-1000)"
+	    elif ! grep -v '^global config\|^merge ' "$identity_golden" >control-golden.txt ||
+		    ! differ smoke.out control-golden.txt; then
+		fail "control $image" "LGitConfig frees with config_free:, but the flow differs from ${identity_golden#$SRCDIR/} (but for the global config and the merge): $(tr '\n' ';' <differ.txt | cut -c 1-1000)"
+	    elif ! not_a_path 'global config'; then
+		fail "control $image" "globalConfigurationPath of a stock LibGit-Core answered '$(value 'global config' | cut -c 1-200)' after the dialog, not the 256 characters of the String that libgit2 wrote its git_buf into"
 	    else
-		ok "control $image" "Pharo $(value major), LGitConfig frees with #config_free: already, and the flow passes"
+		ok "control $image" "Pharo $(value major), LGitConfig frees with #config_free: already, and the flow passes; globalConfigurationPath answers '$(value 'global config before')', then '$(value 'global config')'"
 	    fi
 	else
 	    fail "control $image" "LGitConfig frees with '$(echo "$free" | cut -c 1-200)'"
@@ -564,10 +648,10 @@ for dir in "$WASM_DIR/image/stock" "$WASM_DIR"/image/stock-*; do
 	    fi
 	    if test $kind = notebook && test "x$events" != 'xhello start done '; then
 		fail "$kind $image" "the events of the kernel are '$events', not hello, start and a done of status ok"
-	    elif differ smoke.out "$identity_golden"; then
-		ok "$kind $image" "Pharo $(value major), booted as the $kind boots it: frees with $(value 'free calls'), $(value dialogs) dialog, commits $(value 'commit 1') $(value 'commit 2') $(value 'commit 3') by $(value gitconfig) after the finalization"
-	    else
+	    elif ! differ smoke.out "$identity_golden"; then
 		fail "$kind $image" "differs from ${identity_golden#$SRCDIR/}: $(tr '\n' ';' <differ.txt | cut -c 1-1500)"
+	    elif global_methods "$kind $image" 'LibGit-Core/libgit - calls LibGit-Core/accessing marker true logged true frees true'; then
+		ok "$kind $image" "Pharo $(value major), booted as the $kind boots it: frees with $(value 'free calls'), $(value dialogs) dialog, commits $(value 'commit 1') $(value 'commit 2') $(value 'commit 3') by $(value gitconfig) after the finalization; global config $(value 'global config before'), then $(value 'global config')"
 	    fi
 	}
     done
@@ -582,13 +666,20 @@ for dir in "$WASM_DIR/image/stock" "$WASM_DIR"/image/stock-*; do
     empty_home
     run "prepared $image" prepared_boot && quiet "prepared $image" && {
 	got=$(sed -n 's/^prepared: //p' smoke.out | head -n 1)
-	case $got in
+	find=$(sed -n 's/^prepared find: //p' smoke.out | head -n 1)
+	merge=$(sed -n 's/^prepared merge: //p' smoke.out | head -n 1)
+	extension='OSWindow-Web/*OSWindow-Web ext true snapshot false marker true'
+	if test "x$find" != "x$extension $extension modified false"; then
+	    fail "prepared $image" "config_find_global_path: and globalConfigurationPath are '$(echo "$find" | cut -c 1-300)', not extensions of OSWindow-Web compiled by web-libgit.st, out of the snapshot of an unmodified LibGit-Core"
+	elif test "x$merge" != 'xtrue true false false'; then
+	    fail "prepared $image" "the default action of IceMergeResolutionRequest and #webWorldDefaultAction are '$(echo "$merge" | cut -c 1-200)' (compiled by web-libgit.st, sends #webWorldDefaultAction), not 'true true false false': the one of web-libgit.st, which sends #webWorldDefaultAction in a world, and Iceberg's own there, which does not send itself"
+	else case $got in
 	    *' config_free: OSWindow-Web/*OSWindow-Web ext true modified false snapshot false marker true')
-		ok "prepared $image" "$got: web-libgit.st compiled it at the boot, in LibGit-Core, and again as an extension once OSWindow-Web was in" ;;
+		ok "prepared $image" "$got: web-libgit.st compiled it at the boot, in LibGit-Core, and again as an extension once OSWindow-Web was in; config_find_global_path: and globalConfigurationPath too" ;;
 	    *' config_free: LibGit-Core/'*' ext false modified false snapshot true marker false')
-		ok "prepared $image" "$got: the image's own free function, left as it is" ;;
+		ok "prepared $image" "$got: the image's own free function, left as it is; config_find_global_path: and globalConfigurationPath compiled at the boot, in LibGit-Core, and again as extensions once OSWindow-Web was in" ;;
 	    *) fail "prepared $image" "LGitConfig frees with '$(echo "$got" | cut -c 1-300)', not the config_free: of web-libgit.st as an extension of OSWindow-Web (nor one of LibGit-Core itself)" ;;
-	esac
+	esac; fi
     }
 done
 

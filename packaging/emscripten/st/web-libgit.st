@@ -1,6 +1,7 @@
 "Give LGitConfig the free function of Pharo 12, git_config_free, in an image that frees its
- configurations with git_object_free (and Iceberg a provider of credentials that opens no dialog:
- see The credentials of a push, below).  It is the one copy of that patch: the Console and the
+ configurations with git_object_free (and the git_buf that git_config_find_global fills: see The
+ path of the global configuration; and Iceberg a provider of credentials that opens no dialog: see
+ The credentials of a push, below).  It is the one copy of that patch: the Console and the
  notebook kernel evaluate it at every boot (web-repl.st and web-notebook.st, from
  /pharo/st, where the page stages it next to them), whatever the image (the site's, one opened
  from a file, a saved one of any version of the site), and the set up of an image for the world
@@ -56,6 +57,38 @@
  of the method and nothing else: the source of a method compiled without a log (which the
  method keeps in its properties) would be lost, and the browsers would show none.
 
+ The path of the global configuration.  libgit2 1.4.4 declares int git_config_find_global(git_buf
+ *out): it fills the git_buf out, {char *ptr; size_t reserved; size_t size}, 24 bytes, whose ptr
+ it allocates, and the caller disposes of it; GIT_ENOTFOUND (-3) when HOME has no .gitconfig.
+ LibGit-Core of Pharo 12 to 15 declares out a String* (LGitConfig>>#config_find_global_path:),
+ and LGitConfig>>#globalConfigurationPath gives it a zeroed String of 256 characters, which it
+ answers: libgit2 writes the git_buf into its first 24 bytes, so it answers 256 characters of
+ binary junk, never the path nor nil, and leaks the 256 bytes that ptr points to at each call
+ (natively and in the web VMs alike; in the browser, HOME is /pharo/home, which has a .gitconfig
+ once Iceberg's dialog of the missing properties wrote it).  A String of fewer than 24 bytes
+ given to the callout itself is overrun, in the heap of the image, and one that is not zeroed has
+ libgit2 write through the junk it takes for ptr: a native VM crashes, a web VM traps the callout.
+ Nothing in Iceberg or LGit calls either method (Iceberg opens the global configuration with
+ git_config_open_global, declared right): a user reaches them only by evaluating them.  So compile
+ both again, the callout with the LGitBuf (24 bytes, char *ptr; size_t asize; size_t size, which
+ 1.4.4 lays out the same) that LGitConfig>>#getString:ifPresent:ifAbsent: gives to
+ git_config_get_string_buf, an LGitBuf new being GIT_BUF_INIT, and globalConfigurationPath
+ answering the path, or nil, and disposing of the buffer (LGitBuf>>#free, git_buf_free, which
+ 1.4.4 makes git_buf_dispose, and which frees nothing after GIT_ENOTFOUND).  The other callouts
+ of LGit that take a git_buf* declare it an LGitBuf*, and no other one fills a git_buf.
+ Only where the callout still declares git_config_find_global without LGitBuf, so that a
+ LibGit-Core that fixes it, or an image patched before, is left alone (and then nothing is
+ compiled or logged); and where an earlier evaluation put the two methods in LibGit-Core, before
+ the image had OSWindow-Web.  They go where the two methods of LGitConfig above go, by the same
+ rules: extensions of OSWindow-Web in an image that has it, which take them out of LibGit-Core
+ (Monticello does not see LibGit-Core modified, but its snapshot then lacks them), else the
+ protocols of LibGit-Core that the stock methods are in, without the announcements of the system,
+ and their source goes to the .changes when they are compiled, as for the two methods above (about
+ 900 bytes; so once for each boot of an image that is never saved patched, a stock image kept in
+ the browser and not saved since, say).  A load of LibGit-Core puts its own back, in either case:
+ the next boot of the Console or of the notebook compiles them again, and the world, which does
+ not evaluate this file at its boots, has the stock ones until its image is prepared again.
+
  The credentials of a push.  When a git host asks for credentials (a 401: github.com answers it
  to a push, and to a fetch or a clone of a private repository), the smart-HTTP transport of the
  web VM (src/emscripten/gitSupport.c) asks libgit2's credentials callback, which Iceberg answers
@@ -77,21 +110,40 @@
  Pharo 12, of Iceberg), and waits for it: in the Console and the notebook kernel, which have no
  world, nothing ever answers it, and the pull never returns (the VM stays busy until the page is
  stopped).  So the default action is compiled again, once (its source says 'compiled by
- web-libgit.st'), to answer false where Morphic's UIManager does not draw a world, after it
- signalled IceMergeAborted with what to do: the pull then fails at once, with the repository as it
+ web-libgit.st', on one line), to answer false where Morphic's UIManager does not draw a world,
+ after it signalled IceMergeAborted with what to do: the pull then fails at once, with the repository as it
  was but for what the fetch brought (the merge is made in the world, or by hand).  In a world it
  runs Iceberg's own, kept as #webWorldDefaultAction, its source unchanged but for its selector.
  Both in the protocol and the package of Iceberg's (an extension of Iceberg-TipUI, or Iceberg
  itself), without the announcements of the system, as for LGitConfig above, so that Monticello
  does not see that package modified; a load of it removes them, and the next boot compiles them
  again.  Only where the class is there and its default action is Iceberg's own (a unary method
- whose source starts with its selector); their source goes to the .changes, once.
+ whose source starts with its selector and does not name web-libgit.st); their source goes to the
+ .changes when they are compiled (about 800 bytes to 1 KB; so once for each boot of an image that
+ is never saved patched, as above).
+
+ Until the WebAssembly VMs of OSWindow-Web 8, that test looked for 'compiled by web-libgit.st',
+ which the default action of this file did not say (it said 'Compiled by', then broke the line):
+ each evaluation after the first compiled both again, and #webWorldDefaultAction became a copy of
+ the default action of this file, which in a world sends #webWorldDefaultAction, itself, so that
+ a merge with conflicts recursed without end in the world.  An image that was evaluated so twice
+ and saved keeps it: one that the page prepared for the world from a stock image (its boot as the
+ Console, then #setUpLibGit), or one that the Console saved after it booted an image saved patched
+ already, say.  So where
+ #webWorldDefaultAction sends itself, compile it again (in its protocol, without the announcements
+ of the system, logged) from Iceberg's own default action, found through the .changes: there the
+ source of a method is preceded by the pointer to the source that it replaced (prior:), so the
+ versions of #webWorldDefaultAction, then those of #defaultAction, lead to the first one that does
+ not name web-libgit.st, Iceberg's (copied to the .changes by the first evaluation, or in the
+ .sources).  Where none is found (a .changes condensed since, say), it aborts the merge as
+ without a world, rather than recurse.  Once: then it no longer sends itself, and a world image
+ of an older version gets it at its preparation, which boots it as the Console does.
 
  It answers nothing, and says nothing.  An error goes to the one that evaluates it: the boots of
  the Console and of the notebook report it on stderr, and start anyway; the set up of an image
  for the world fails with it."
 
-| config web method protocols provider request original |
+| config web method protocols found provider request original |
 config := Smalltalk globals at: #LGitConfig ifAbsent: [ nil ].
 web := PackageOrganizer default hasPackage: 'OSWindow-Web'.
 (config notNil and: [
@@ -126,13 +178,52 @@ web := PackageOrganizer default hasPackage: 'OSWindow-Web'.
 				withStamp: ''
 				notifying: nil
 				logSource: true ] ].
+found := config ifNotNil: [ config compiledMethodAt: #config_find_global_path: ifAbsent: [ nil ] ].
+(found notNil and: [
+	(Smalltalk globals includesKey: #LGitBuf) and: [
+		((found sourceCode includesSubstring: 'git_config_find_global')
+			and: [ (found sourceCode includesSubstring: 'LGitBuf') not ])
+		or: [
+			web and: [
+				found protocolName asString ~= '*OSWindow-Web'
+				and: [ found sourceCode includesSubstring: 'compiled by web-libgit.st' ] ] ] ] ])
+	ifTrue: [
+		protocols := web
+			ifTrue: [ #( '*OSWindow-Web' '*OSWindow-Web' ) ]
+			ifFalse: [ #( 'libgit - calls' 'accessing' ) ].
+		SystemAnnouncer uniqueInstance suspendAllWhile: [
+			config
+				compile: 'config_find_global_path: out
+	"int git_config_find_global(git_buf *out): libgit2 fills the git_buf out and allocates its ptr, which the caller disposes of (LGitBuf>>#free); GIT_ENOTFOUND (-3) when HOME has no .gitconfig. LibGit-Core declared out a String*, into whose bytes libgit2 wrote the git_buf: compiled by web-libgit.st of the WebAssembly VMs"
+
+	^ self
+		ffiCallSafely: #(int git_config_find_global #(LGitBuf *out))
+		options: #()'
+				classified: protocols first
+				withStamp: ''
+				notifying: nil
+				logSource: true.
+			config
+				compile: 'globalConfigurationPath
+	"The path of the global configuration of git, HOME/.gitconfig, or nil when there is none, compiled by web-libgit.st of the WebAssembly VMs"
+
+	| buf |
+	buf := LGitBuf new.
+	^ [
+	  (self config_find_global_path: buf) = 0
+		  ifTrue: [ buf prim_ptr utf8StringFromCString ]
+		  ifFalse: [ nil ] ] ensure: [ buf free ]'
+				classified: protocols last
+				withStamp: ''
+				notifying: nil
+				logSource: true ] ].
 provider := Smalltalk globals at: #IceCredentialsProvider ifAbsent: [ nil ].
 (provider notNil and: [ provider providerType name = #IceTipInteractiveCredentialsProvider ]) ifTrue: [
 	provider providerType: (Smalltalk globals at: #IceNonInteractiveCredentialsProvider) ].
 request := Smalltalk globals at: #IceMergeResolutionRequest ifAbsent: [ nil ].
 original := request ifNotNil: [ request compiledMethodAt: #defaultAction ifAbsent: [ nil ] ].
 (original notNil and: [
-	(original sourceCode includesSubstring: 'compiled by web-libgit.st') not
+	(original sourceCode includesSubstring: 'web-libgit.st') not
 		and: [ original sourceCode beginsWith: 'defaultAction' ] ]) ifTrue: [
 	SystemAnnouncer uniqueInstance suspendAllWhile: [
 		request
@@ -144,14 +235,59 @@ original := request ifNotNil: [ request compiledMethodAt: #defaultAction ifAbsen
 		request
 			compile: 'defaultAction
 	"Iceberg''s dialog of the merge (#webWorldDefaultAction) in a world; without one (the Console,
-	 the notebook kernel of a web page), where nothing could answer it, abort the merge.  Compiled by
-	 web-libgit.st of the WebAssembly VMs"
+	 the notebook kernel of a web page), where nothing could answer it, abort the merge:
+	 compiled by web-libgit.st of the WebAssembly VMs"
 
 	(UIManager default isKindOf: MorphicUIManager) ifTrue: [ ^ self webWorldDefaultAction ].
 	IceMergeAborted new signal: self messageText ,
 		'': the merge has conflicts, which Iceberg resolves in a dialog that only the world shows (world.html): pull there, or merge by hand; nothing was merged''.
 	^ false'
 			classified: original protocolName
+			withStamp: ''
+			notifying: nil
+			logSource: true ] ].
+method := request ifNotNil: [ request compiledMethodAt: #webWorldDefaultAction ifAbsent: [ nil ] ].
+(method notNil and: [ method sourceCode includesSubstring: 'self webWorldDefaultAction' ]) ifTrue: [
+	| source |
+	SourceFiles flushChangesFile.
+	{ method. request compiledMethodAt: #defaultAction ifAbsent: [ nil ] } do: [ :start |
+		| pointer steps |
+		pointer := (start ifNotNil: [ start sourcePointer ]) ifNil: [ 0 ].
+		steps := 0.
+		[ source isNil and: [ pointer > 0 and: [ (steps := steps + 1) <= 100 ] ] ] whileTrue: [
+			| text preamble index |
+			text := [ SourceFiles sourceCodeAt: pointer ] on: Error do: [ :error | nil ].
+			(text notNil and: [ (text includesSubstring: 'web-libgit.st') not ]) ifTrue: [
+				#( 'webWorldDefaultAction' 'defaultAction' ) do: [ :selector |
+					(source isNil and: [ text beginsWith: selector ]) ifTrue: [
+						source := 'webWorldDefaultAction' , (text allButFirst: selector size) ] ] ].
+			"the preamble of that source, '<class> methodsFor: <protocol> ... prior: <pointer>', read
+			 as ChangeRecord readers of Pharo do"
+			preamble := [
+				SourceFiles readOnlyDo: [ :files |
+					(files fileAt: (SourceFiles fileIndexFromSourcePointer: pointer) ifAbsent: [ nil ])
+						ifNotNil: [ :file |
+							| position chunk |
+							position := SourceFiles filePositionFromSourcePointer: pointer.
+							file position: (0 max: position - 300).
+							[ file position < (position - 1) ] whileTrue: [
+								chunk := (ChunkReadStream on: file) next ].
+							chunk ] ] ] on: Error do: [ :error | nil ].
+			index := preamble ifNil: [ 0 ] ifNotNil: [ preamble indexOfSubCollection: 'prior: ' ].
+			pointer := index = 0
+				ifTrue: [ 0 ]
+				ifFalse: [ ((preamble allButFirst: index + 6) readStream upTo: $ ) asInteger ifNil: [ 0 ] ] ] ].
+	SystemAnnouncer uniqueInstance suspendAllWhile: [
+		request
+			compile: (source ifNil: [ 'webWorldDefaultAction
+	"Iceberg''s dialog of the merge, which an earlier web-libgit.st made a call of this method itself,
+	 and whose source is lost: abort the merge, as without a world; compiled by web-libgit.st of the
+	 WebAssembly VMs"
+
+	IceMergeAborted new signal: self messageText ,
+		'': the merge has conflicts, and this image lost the dialog of the merge of Iceberg: merge by hand; nothing was merged''.
+	^ false' ])
+			classified: method protocolName
 			withStamp: ''
 			notifying: nil
 			logSource: true ] ].

@@ -50,7 +50,21 @@
 // OSWindow-Web by that set up (27b); and an image of version 6 whose
 // Iceberg has its own provider of credentials, which would open its dialog
 // inside libgit2's callback and hang the world, is prepared to version 7
-// on its world boot, and then has OSWebCredentialsProvider (case 28).
+// on its world boot, and then has OSWebCredentialsProvider (case 28); and an
+// image of version 7 whose LGitConfig gives git_config_find_global a String
+// (LibGit-Core's own config_find_global_path:), into which libgit2 writes
+// its git_buf, is prepared to version 8 on its world boot, and then gives it
+// an LGitBuf, an extension of OSWindow-Web, which a second set up leaves as
+// it is (case 29: run whenever the staged package sets LibGit up, so that a
+// package whose version stays at 7 fails there); and an image of version 7
+// whose IceMergeResolutionRequest>>#webWorldDefaultAction sends itself (the
+// web-libgit.st of before version 8 made it so at its second evaluation, as
+// when the page prepared a stock image: its boot as the Console, then the
+// set up), which recursed without end at a merge with conflicts in the
+// world, is prepared to version 8 on its world boot, as the page boots it
+// (web-libgit.st at the boot as the Console, then the set up), and then has
+// Iceberg's own again, found through the .changes, which neither evaluation
+// compiles again (case 30).
 // The notebook mode (W-NB1..4, init.mode 'notebook'): the kernel of
 // st/web-notebook.st, its events (output {fd: 3, bytes}), a request posted
 // before ready, Stop, the credit of the events, and a worker that boots the
@@ -1454,7 +1468,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
   // does without its version being raised above 5 fails here)
   const stagedPackage = path.join(webDir, 'st', 'OSWindow-Web.st');
   const libgit = versions && fs.existsSync(stagedPackage) && /setUpLibGit/.test(fs.readFileSync(stagedPackage, 'latin1'));
-  if (!libgit) console.log('# skip 27, 27b: ' + (!versions ? 'no versions (see 20-23)' : 'the staged OSWindow-Web.st has no setUpLibGit'));
+  if (!libgit) console.log('# skip 27, 27b, 29, 30: ' + (!versions ? 'no versions (see 20-23)' : 'the staged OSWindow-Web.st has no setUpLibGit'));
   // what LGitConfig frees with: its free function, the C functions that the
   // method of it names in its callout, and the package of that method
   const FREES = "| m | m := LGitConfig class lookupSelector: LGitConfig freeFunctionSelector. { OSWebDriver packageVersion. " +
@@ -1592,6 +1606,138 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
              'ready ' + JSON.stringify(R.ready));
       R.send('{ OSWebDriver packageVersion. IceCredentialsProvider providerType name }\n');
       await R.expectOut(val(`#(${webPackage} #OSWebCredentialsProvider)`));
+      await R.prompt();
+    } finally { await R.close(); current = S; }
+  });
+
+  // ---- version 7 of OSWindow-Web to 8: the git_buf of
+  // git_config_find_global, which LibGit-Core gives a String
+  // (LGitConfig>>#config_find_global_path:, #globalConfigurationPath); as in
+  // 27, only the set up of the preparation may compile them, so the
+  // sessions look for no web-libgit.st at their boot.  Run whenever the
+  // staged package sets LibGit up (as 27): a package left at version 7 fails
+  // here, since the page would never prepare again an image saved at 7, which
+  // would keep the String
+  // the methods of the global configuration: their package, and whether the
+  // callout gives git_config_find_global an LGitBuf
+  const FIND = "{ (LGitConfig >> #config_find_global_path:) package name asString. " +
+    "(LGitConfig >> #globalConfigurationPath) package name asString. " +
+    "(LGitConfig >> #config_find_global_path:) sourceCode includesSubstring: 'LGitBuf' }";
+  if (libgit) await check('29 an image of version 7, whose LGitConfig gives git_config_find_global a String, is prepared to 8 on the world boot; then it gives an LGitBuf, an extension of OSWindow-Web', async () => {
+    assert(webPackage >= 8, 'manifest.webPackage is ' + webPackage + ': OSWindow-Web was not raised to 8, so the page would not prepare ' +
+           'an image saved at version 7 again, and its LGitConfig would keep giving git_config_find_global a String');
+    memory.map.clear();
+    // the site's image, made what a site of version 7 saved: the two methods
+    // of the stock LibGit-Core, in its protocols, and version 7
+    const C = session({}, noBoot);
+    try {
+      current = C;
+      await C.started();
+      C.send("LGitConfig compile: 'config_find_global_path: out ^ self ffiCallSafely: #(int git_config_find_global(String* out))' " +
+             "classified: 'libgit - calls'; compile: 'globalConfigurationPath | outHandle | outHandle := ByteString new: 256. " +
+             "self config_find_global_path: outHandle. ^ outHandle' classified: 'accessing'. " +
+             "OSWebDriver class compile: 'packageVersion ^ 7'; compile: 'packageMarker ^ #OSWindowWebPackage7'. " +
+             "{ OSWebDriver packageVersion } , " + FIND + "\n");
+      await C.expectOut(val("#(7 'LibGit-Core' 'LibGit-Core' false)"));
+      await C.prompt();
+      C.post({ type: 'save' });
+      await waitFor('saved', () => C.saved.length, 60000);
+      await C.prompt(60000);
+      const m = C.saved[0];
+      assert(!m.error && m.webPackage === 7 && m.prepared === false, 'saved ' + JSON.stringify(m));
+    } finally { await C.close(); current = S; }
+    // the world boot prepares it
+    const P = session(world, Object.assign({ display: true }, noBoot));
+    try {
+      current = P;
+      await waitFor('prepared', () => P.prepared || P.crash || P.exit !== null, 300000);
+      P.alive();
+      assert(P.ready.preparing === true && P.ready.webPackage === 7, 'ready ' + JSON.stringify(P.ready));
+      assert(!P.prepared.error && P.prepared.saved === true && P.prepared.webPackage === webPackage,
+             'prepared ' + JSON.stringify(P.prepared));
+    } finally { await P.close(); current = S; }
+    // the image has the package of the site, and the two methods of
+    // web-libgit.st, extensions of OSWindow-Web, which a second set up
+    // leaves as they are
+    const R = session({}, noBoot);
+    try {
+      current = R;
+      await R.started();
+      assert(R.ready.source === 'saved' && R.ready.webPackage === webPackage && R.ready.prepared === true,
+             'ready ' + JSON.stringify(R.ready));
+      R.send("{ OSWebDriver packageVersion } , " + FIND + "\n");
+      await R.expectOut(val(`#(${webPackage} 'OSWindow-Web' 'OSWindow-Web' true)`));
+      await R.prompt();
+      R.send("| m | m := LGitConfig >> #config_find_global_path:. OSWebDriver setUpImage. { (LGitConfig >> #config_find_global_path:) == m. " +
+             "m protocolName asString. m isExtension }\n");
+      await R.expectOut(val("#(true '*OSWindow-Web' true)"));
+      await R.prompt();
+    } finally { await R.close(); current = S; }
+  });
+
+  // ---- version 7 of OSWindow-Web to 8: IceMergeResolutionRequest's
+  // #webWorldDefaultAction, which the web-libgit.st of before 8 made a copy
+  // of its own default action, which sends #webWorldDefaultAction, at its
+  // second evaluation; the preparation boots the image as the page does,
+  // web-libgit.st at the boot as the Console, then the set up, which must
+  // make it Iceberg's own again (from the versions of the method that the
+  // .changes keeps) and compile nothing more
+  // (whether #webWorldDefaultAction, then #defaultAction, sends
+  // #webWorldDefaultAction, and names web-libgit.st: the default action of
+  // web-libgit.st does both, Iceberg's own neither)
+  const MERGE = "#( #webWorldDefaultAction #defaultAction ) collect: [ :s | | m | m := IceMergeResolutionRequest >> s. " +
+    "{ m ast allChildren anySatisfy: [ :n | n isMessage and: [ n selector = #webWorldDefaultAction ] ]. " +
+    "m sourceCode includesSubstring: 'web-libgit.st' } ]";
+  if (libgit) await check('30 an image of version 7, whose webWorldDefaultAction sends itself, is prepared to 8 on the world boot, as the page boots it; then it is Iceberg\'s own again', async () => {
+    assert(webPackage >= 8, 'manifest.webPackage is ' + webPackage + ': OSWindow-Web was not raised to 8');
+    memory.map.clear();
+    // the site's image, made what the page saved when it prepared a stock
+    // image with the web-libgit.st of before 8 (its second evaluation), and
+    // version 7
+    const C = session({}, noBoot);
+    try {
+      current = C;
+      await C.started();
+      C.send(MERGE + "\n");
+      await C.expectOut(val('#(#(false false) #(true true))'));
+      await C.prompt();
+      C.send("| d | d := IceMergeResolutionRequest >> #defaultAction. SystemAnnouncer uniqueInstance suspendAllWhile: [ " +
+             "IceMergeResolutionRequest compile: 'webWorldDefaultAction' , (d sourceCode allButFirst: 'defaultAction' size) " +
+             "classified: d protocolName withStamp: '' notifying: nil logSource: true ]. " +
+             "OSWebDriver class compile: 'packageVersion ^ 7'; compile: 'packageMarker ^ #OSWindowWebPackage7'. " +
+             "{ OSWebDriver packageVersion } , (" + MERGE + ")\n");
+      await C.expectOut(val('#(7 #(true true) #(true true))'));
+      await C.prompt();
+      C.post({ type: 'save' });
+      await waitFor('saved', () => C.saved.length, 60000);
+      await C.prompt(60000);
+      const m = C.saved[0];
+      assert(!m.error && m.webPackage === 7 && m.prepared === false, 'saved ' + JSON.stringify(m));
+    } finally { await C.close(); current = S; }
+    // the world boot prepares it, booting it as the Console first
+    const P = session(world, { display: true });
+    try {
+      current = P;
+      await waitFor('prepared', () => P.prepared || P.crash || P.exit !== null, 300000);
+      P.alive();
+      assert(P.ready.preparing === true && P.ready.webPackage === 7, 'ready ' + JSON.stringify(P.ready));
+      assert(!P.prepared.error && P.prepared.saved === true && P.prepared.webPackage === webPackage,
+             'prepared ' + JSON.stringify(P.prepared));
+    } finally { await P.close(); current = S; }
+    // Iceberg's own again, which does not send itself, and which a boot as
+    // the Console, then a set up, leave as they are
+    const R = session();
+    try {
+      current = R;
+      await R.started();
+      assert(R.ready.source === 'saved' && R.ready.webPackage === webPackage && R.ready.prepared === true,
+             'ready ' + JSON.stringify(R.ready));
+      R.send("{ OSWebDriver packageVersion } , (" + MERGE + ")\n");
+      await R.expectOut(val(`#(${webPackage} #(false false) #(true true))`));
+      await R.prompt();
+      R.send("| m | m := IceMergeResolutionRequest >> #webWorldDefaultAction. OSWebDriver setUpImage. " +
+             "{ (IceMergeResolutionRequest >> #webWorldDefaultAction) == m. m protocolName = (IceMergeResolutionRequest >> #defaultAction) protocolName }\n");
+      await R.expectOut(val('#(true true)'));
       await R.prompt();
     } finally { await R.close(); current = S; }
   });

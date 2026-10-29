@@ -17,9 +17,13 @@
 # W-NB1..4: its requests, Stop, the credit of its events, and a slot it never
 # stores).  On a build of the world it also checks the preparation of the
 # stock image of image/stock (init.prepare, case 19) and the versions of
-# OSWindow-Web (manifest.webPackage, cases 20-23, and 25-27, from version 2
+# OSWindow-Web (manifest.webPackage, cases 20-23, and 25-30, from version 2
 # to 3, the AthensCairoSurface extension, from 3 to 4, Iceberg's https://
-# remotes, and from 5 to 6, the free function of LGitConfig), and, when
+# remotes, from 5 to 6, the free function of LGitConfig, from 6 to 7,
+# Iceberg's provider of credentials, and from 7 to 8, the git_buf that
+# LGitConfig gives git_config_find_global, and Iceberg's own dialog of the
+# merge in a world, where the web-libgit.st of before 8 made it call
+# itself), and, when
 # manifest.libraries has some, the placeholders of the libraries of the FFI
 # (24); a case whose build lacks what it needs says '# skip' and why.  On
 # sites of its own with a catalog of two images (C1-C11) it checks

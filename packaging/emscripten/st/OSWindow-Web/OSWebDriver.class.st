@@ -70,14 +70,14 @@ OSWebDriver class >> isSupported [
 OSWebDriver class >> packageMarker [
 	"A symbol of its own for each #packageVersion, which the image keeps as a literal of this method: the worker of the page finds the version of an image in its bytes without booting it. It is the name of the package and the version"
 
-	^ #OSWindowWebPackage7
+	^ #OSWindowWebPackage8
 ]
 
 { #category : 'versions' }
 OSWebDriver class >> packageVersion [
-	"The version of this package: web-bootstrap.st files the package in again over an older one, and the page sets an image of an older version up again (see #setUpImage). Version 1 had neither this method nor #setUpImage, and bitmap fonts; 2 keeps the FreeType fonts of the stock image when the VM has FreeType; 3 draws Athens with cairo without the SurfacePlugin, which the web VMs lack (the AthensCairoSurface extension of this package); 4 gives Iceberg https:// remotes (#setUpGit); 5 draws the world in device pixels on high-density displays (OSWebFormRenderer>>#outputExtent); 6 gives LGitConfig the free function of Pharo 12 (#setUpLibGit); 7 gives Iceberg the credentials of a push without a dialog inside libgit2's callback, which would hang the page (OSWebCredentialsProvider, #setUpGit). Change #packageMarker with it. packaging/emscripten/tools/stage.mjs reads both from this file, for the manifest of the page"
+	"The version of this package: web-bootstrap.st files the package in again over an older one, and the page sets an image of an older version up again (see #setUpImage). Version 1 had neither this method nor #setUpImage, and bitmap fonts; 2 keeps the FreeType fonts of the stock image when the VM has FreeType; 3 draws Athens with cairo without the SurfacePlugin, which the web VMs lack (the AthensCairoSurface extension of this package); 4 gives Iceberg https:// remotes (#setUpGit); 5 draws the world in device pixels on high-density displays (OSWebFormRenderer>>#outputExtent); 6 gives LGitConfig the free function of Pharo 12 (#setUpLibGit); 7 gives Iceberg the credentials of a push without a dialog inside libgit2's callback, which would hang the page (OSWebCredentialsProvider, #setUpGit); 8 gives LGitConfig>>#config_find_global_path: the git_buf (an LGitBuf) that git_config_find_global fills, where LibGit-Core gives it a String, and #globalConfigurationPath the path or nil, and gives Iceberg its own dialog of the merge back in a world whose IceMergeResolutionRequest>>#webWorldDefaultAction the web-libgit.st of before made call itself (#setUpLibGit). Change #packageMarker with it. packaging/emscripten/tools/stage.mjs reads both from this file, for the manifest of the page"
 
-	^ 7
+	^ 8
 ]
 
 { #category : 'primitives' }
@@ -147,7 +147,9 @@ OSWebDriver class >> setUpLibGit [
 
 	The page boots an image that it prepares as the Console boots it, so the boot has evaluated the file already, before web-bootstrap.st filed this package in, and put the two methods in LibGit-Core, as in an image without this package: evaluated again here, once the package is in, the file finds them there and makes them extensions of it.
 
-	Evaluate it here for the set up of an image for the world, whose page boots an image as it is: at build time (prepare-web-image.st), where it is in the st directory of the build, which PHARO_WEB_ST_DIR names (as PHARO_WEB_FONTS names the fonts, see #setUpFonts), and in the page (web-bootstrap.st), where it is in the st directory of the image, /pharo/st, as the page stages it. The package does so since its version 6, so the world page prepares an image of an older version again. A missing file is an error: the set up must not leave an image unpatched"
+	Evaluate it here for the set up of an image for the world, whose page boots an image as it is: at build time (prepare-web-image.st), where it is in the st directory of the build, which PHARO_WEB_ST_DIR names (as PHARO_WEB_FONTS names the fonts, see #setUpFonts), and in the page (web-bootstrap.st), where it is in the st directory of the image, /pharo/st, as the page stages it. The package does so since its version 6, so the world page prepares an image of an older version again. A missing file is an error: the set up must not leave an image unpatched.
+
+	The file also gives LGitConfig>>#config_find_global_path: the git_buf that git_config_find_global fills, an LGitBuf, where LibGit-Core declares a String* (and #globalConfigurationPath answers the path, or nil, instead of the bytes of that git_buf), as extensions of this package too, since version 8 of the package. Since then too, its default action of IceMergeResolutionRequest is compiled once, and an image where an earlier one made #webWorldDefaultAction call itself, at its second evaluation (a stock image prepared by the page say: the boot as the Console, then this set up), gets Iceberg's own back: the page prepares an image of version 7 again, booting it as the Console"
 
 	| directory file |
 	directory := OSEnvironment current at: 'PHARO_WEB_ST_DIR' ifAbsent: [ '' ].
