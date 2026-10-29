@@ -1,0 +1,152 @@
+{
+  "build": "e71b62356-9a85e8bb49b6",
+  "extraSources": [
+    {
+      "gzSize": 7806384,
+      "path": "Pharo15.0-64bit-4e572fe.sources",
+      "sha256": "97a5f02e86041c87c03905e9bd638e9176881e2d3291119ae91d0b08c95b7144",
+      "size": 46066164,
+      "url": "image/sources/Pharo15.0-64bit-4e572fe.sources.gz"
+    }
+  ],
+  "ffi": true,
+  "files": [
+    {
+      "gzSize": 13658,
+      "path": "Pharo.changes",
+      "sha256": "ee7446c037135946ca48e4f539792b407af9f5bcd4863f5bbcd709ad227da669",
+      "size": 48168,
+      "url": "image/Pharo.changes.gz"
+    },
+    {
+      "gzSize": 16914917,
+      "path": "Pharo.image",
+      "sha256": "72105257e79a564552a3749f097cacda650b83175b3e0b29e1a7a2229061873d",
+      "size": 61611096,
+      "url": "image/Pharo.image.gz"
+    },
+    {
+      "gzSize": 7821812,
+      "path": "Pharo15.0-64bit-b85960f.sources",
+      "sha256": "9b427a313eee68d419d338451a4d19a2eb843378aaf294188815f9794d70f3cd",
+      "size": 46073100,
+      "url": "image/Pharo15.0-64bit-b85960f.sources.gz"
+    }
+  ],
+  "fonts": "freetype",
+  "git": true,
+  "gitHttp": true,
+  "gitProxyDefault": "https://cors.isomorphic-git.org/",
+  "image": "Pharo.image",
+  "imageId": "p15",
+  "images": [
+    {
+      "files": [
+        {
+          "gzSize": 16450,
+          "path": "Pharo.changes",
+          "sha256": "35149b9990606e5361b7d115ae0620ab9833d1e688327fedeb671daf0baf9cfd",
+          "size": 57151,
+          "url": "image/p13/Pharo.changes.gz"
+        },
+        {
+          "gzSize": 15737336,
+          "path": "Pharo.image",
+          "sha256": "f9696efb971908b70c84b9d720615b4cbaee460294d4325484252aa552a6507d",
+          "size": 56091232,
+          "url": "image/p13/Pharo.image.gz"
+        },
+        {
+          "gzSize": 8420905,
+          "path": "Pharo13.1-64bit-d7c6f76.sources",
+          "sha256": "4f93dab730de36a49041b8a7e8a4b744a290eed3bf7e19fa18b8bf9ca8e3032a",
+          "size": 45283381,
+          "url": "image/p13/Pharo13.1-64bit-d7c6f76.sources.gz"
+        }
+      ],
+      "id": "p13",
+      "label": "Pharo 13.1",
+      "pharo": "13.1",
+      "pharoBuild": 749,
+      "webPackage": 8,
+      "world": true
+    },
+    {
+      "files": [
+        {
+          "gzSize": 13659,
+          "path": "Pharo.changes",
+          "sha256": "711596a8cb737d3165a2bbdf875990ca339514a02ead0db9d65917d790017330",
+          "size": 48168,
+          "url": "image/p14/Pharo.changes.gz"
+        },
+        {
+          "gzSize": 16911575,
+          "path": "Pharo.image",
+          "sha256": "f1ea364bfcf6b4e6854388c710c0d6ef46a884b3067ddcf9d2646175fccd2d95",
+          "size": 63618208,
+          "url": "image/p14/Pharo.image.gz"
+        },
+        {
+          "gzSize": 7809887,
+          "path": "Pharo14.0-64bit-74f3a1b.sources",
+          "sha256": "a7d18cdbd156468a60dffe3f3c71b00a0f4f3f2a0479b94ac32c0823a298c0c0",
+          "size": 46110108,
+          "url": "image/p14/Pharo14.0-64bit-74f3a1b.sources.gz"
+        }
+      ],
+      "id": "p14",
+      "label": "Pharo 14",
+      "pharo": "14.0",
+      "pharoBuild": 785,
+      "webPackage": 8,
+      "world": true
+    },
+    {
+      "default": true,
+      "files": [
+        {
+          "gzSize": 13658,
+          "path": "Pharo.changes",
+          "sha256": "ee7446c037135946ca48e4f539792b407af9f5bcd4863f5bbcd709ad227da669",
+          "size": 48168,
+          "url": "image/Pharo.changes.gz"
+        },
+        {
+          "gzSize": 16914917,
+          "path": "Pharo.image",
+          "sha256": "72105257e79a564552a3749f097cacda650b83175b3e0b29e1a7a2229061873d",
+          "size": 61611096,
+          "url": "image/Pharo.image.gz"
+        },
+        {
+          "gzSize": 7821812,
+          "path": "Pharo15.0-64bit-b85960f.sources",
+          "sha256": "9b427a313eee68d419d338451a4d19a2eb843378aaf294188815f9794d70f3cd",
+          "size": 46073100,
+          "url": "image/Pharo15.0-64bit-b85960f.sources.gz"
+        }
+      ],
+      "id": "p15",
+      "label": "Pharo 15",
+      "pharo": "15.0",
+      "pharoBuild": 50,
+      "webPackage": 8,
+      "world": true
+    }
+  ],
+  "libraries": [
+    "libcairo.so.2",
+    "libgit2.so.1.4.4"
+  ],
+  "memory64": 2,
+  "st": [
+    "st/OSWindow-Web.st",
+    "st/web-bootstrap.st",
+    "st/web-libgit.st",
+    "st/web-notebook.st",
+    "st/web-repl.st"
+  ],
+  "webPackage": 8,
+  "world": true
+}
