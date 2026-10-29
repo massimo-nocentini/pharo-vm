@@ -76,15 +76,38 @@ keep it safe from the browser's cleanup.
 ### Git
 
 Iceberg works in the VMs, on libgit2: repositories in the memory of the
-VM, and clones of http:// and https:// remotes.  Git servers, github.com
-among them, send no CORS headers, so a page reads them only through a CORS
-proxy.  By default it is the public proxy https://cors.isomorphic-git.org/,
-which sees what you clone; the Settings of the Console and of the world
-page (kept in this browser, and used by every page and the Notebook) choose
-the site's default, none (requests go to the git host itself, which works
-only for hosts that let the page in), or a proxy of your own.  The setting
-is never taken from a URL.  No credentials are sent, so only public
-repositories can be cloned, and pushing is not supported.
+VM, and clones, fetches, pulls and pushes of http:// and https:// remotes.
+Git servers, github.com among them, send no CORS headers, so a page reads
+them only through a CORS proxy.  By default it is the public proxy
+https://cors.isomorphic-git.org/, which sees what you clone; the Settings of
+the Console and of the world page (kept in this browser, and used by every
+page and the Notebook) choose the site's default, none (requests go to the
+git host itself, which works only for hosts that let the page in), or a
+proxy of your own.  The setting is never taken from a URL.
+
+A push (or a private repository) needs a user name and a token, which the
+VM sends only through a proxy you chose (My proxy, or None): never through
+the site's default, which would see them.  When a host asks for them there,
+the page says so and offers to choose that proxy for them.  In the world,
+Iceberg asks for the token once the push has failed, then push again; in
+the Console and the Notebook, store it first:
+
+    IceCredentialStore current
+        storeCredential: (IcePlaintextCredentials new username: 'me'; password: '<token>'; yourself)
+        forHostname: 'github.com'
+
+Iceberg keeps stored tokens in plain text, in the image and in
+pharo-local/iceberg/credentials.fuel, which a Save keeps in the browser and
+a Download carries: use a token limited to the repository, which expires.
+Do not put the token in the URL of a remote (https://me:token@...): Iceberg
+writes that URL into the clone's .git/config, the image and debug logs.  A
+proxy can read the token, and a host that redirects a push to another host
+through it makes the browser send it there too: the VM then stops, and says
+to revoke the token.
+
+A pull whose merge has conflicts is resolved in Iceberg's dialog, in the
+world only: in the Console and the Notebook it fails at once
+(IceMergeAborted), with nothing merged.
 
 ### Your own image
 

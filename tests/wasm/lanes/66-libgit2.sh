@@ -123,7 +123,74 @@
 #             (the requests never go to a proxy), both fail when the server
 #             does not start or the run of the VM fails, and both are skipped
 #             without the transport (WASM_LIBGIT2_HTTP=OFF), curl, or git
-#             with `git http-backend'.
+#             with `git http-backend';
+#   push <image>
+#             tests/wasm/st/git-http-push.st, on the stock image as the
+#             Console boots it (web-libgit.st evaluated first, which makes
+#             Iceberg's provider of credentials IceNonInteractiveCredentialsProvider)
+#             with the requests straight to the server, and on the world image
+#             (image/web, whose provider is OSWebCredentialsProvider) through
+#             the CORS proxy of git-http.mjs (PHARO_WASM_GIT_PROXY, as the user
+#             would choose it), pushes to git-http.mjs --push --auth, which
+#             takes a push only with HTTP Basic credentials, as github.com:
+#             without credentials in IceCredentialStore the push must fail with
+#             the transport's 401, which says that none was given, after one
+#             request; with a wrong password stored, with its refusal and what
+#             the server said ('Invalid username or token.'); with the right one
+#             stored it must push (the 401 of the advertisement, then the same
+#             GET and the POST of the pack with an Authorization, through the
+#             proxy for the world image), and with the user name and password
+#             in the URL of a second remote too (the same three requests: the
+#             first without them, and no URL with them, which the proxy would
+#             see); and with a provider of Iceberg's that gives a wrong password
+#             then the right one, after two rounds (a 401, a 401 with the wrong
+#             one, then the GET and the POST with the right one); with the same
+#             git_remote of libgit2 for two pushes, the second, once nothing is
+#             stored, must fail with the 401 of none given, not push with the
+#             credentials of the first (the close of the subtransport at the end
+#             of a push forgets them); the commits
+#             must then be on the server, as its own git logs them; the
+#             credentials must be in no request line nor any log, curl must
+#             have read them from a file (-H @<file>), never from its command
+#             line (a wrapper of curl first in PATH logs its arguments), and
+#             that file must be gone from TMPDIR; and the run, traced
+#             (PHARO_WASM_FFI_TRACE=1), must adapt no function that
+#             adapted-66.txt does not list;
+#   pull <image>
+#             in the same run, once the lane committed a method on the server
+#             (a handshake through files), a pull must fast-forward and load it,
+#             with the working copy clean; after a local commit and another
+#             commit on the server, a push must be refused (IceRemoteDesynchronized),
+#             the pull must merge (a commit 'Merge ...' of 2 parents, with the
+#             methods of both sides loaded) and the push of the merge must
+#             land: the server's git must log the merge, of 2 parents, above
+#             both commits; then, after a local commit and one of the server
+#             that change the same method, the pull must fail at once with
+#             IceMergeAborted (no world: the default action that web-libgit.st
+#             compiles opens no dialog of the merge, which nothing would
+#             answer), the head and the method left as they were, the server's
+#             commit incoming.  Both are skipped as redirect is, and each needs
+#             the image (no world image: push web and pull web are skipped);
+#   hosts     tests/wasm/st/git-http-hosts.st on the stock image, with
+#             web-libgit.st, against git-http.mjs --push --auth --mover:
+#             credentials stored for localhost, the host of the mover, must
+#             not reach the git server (127.0.0.1, another host): a push to a
+#             remote of the mover whose advertisement it redirects there (301),
+#             and one to a remote of the mover that asks for credentials (401)
+#             and then redirects the request that carries them (302), straight
+#             to the servers, and the latter through the proxy (which makes the
+#             redirect a path of its own), must each fail with the transport's
+#             'redirected the request to <git server>, ... not sent to another
+#             host', with no request of the git server that had an
+#             Authorization; and through a proxy of plain http:// on another
+#             computer (http://0.0.0.0:<port of the proxy>/, which is no
+#             loopback by its name), a push to the git server must fail with
+#             the transport's refusal, after a single request, which had none;
+#             and a push to a repository of the git server whose pre-receive
+#             hook declines it (the server answers 200, with 'ng <ref>' in its
+#             report) must fail with the transport's 'refused the push of
+#             refs/heads/master: pre-receive hook declined', and what the hook
+#             said, its commit not on the server.
 #
 # Every run must exit with 0, print no line of the guard of the callouts
 # ('FFI callout failed, its declaration does not match ...' or 'FFI callout
@@ -367,6 +434,15 @@ step_times() {
     done
 }
 
+# unlisted: the functions of trace.err that adapted-66.txt does not list,
+# each after a blank
+unlisted() {
+    known=$(grep -v '^#' "$adapted_list" | awk 'NF { print $1 }')
+    for name in $(adapted); do
+	echo "$known" | grep -qxF "$name" || printf ' %s' "$name"
+    done
+}
+
 # allowed NAME: the functions of trace.err against adapted-66.txt, whose
 # lines are '<function>' or '<function> required'
 allowed() {
@@ -595,10 +671,12 @@ stop_server() {
     fi
 }
 trap stop_server EXIT
-# start_server: starts it in the current directory, with the repository r,
-# and sets git_url; false when it did not start (see server.err)
+# start_server [ARG...]: starts it in the current directory, by default with
+# the repository r in the redirect mode (else with the options ARG...), and
+# sets git_url and proxy_url; false when it did not start (see server.err)
 start_server() {
-    "$NODE" "$SRCDIR/tests/wasm/lib/git-http.mjs" repos --redirect --seed r --log server.log \
+    test $# -gt 0 || set -- --redirect --seed r
+    "$NODE" "$SRCDIR/tests/wasm/lib/git-http.mjs" repos "$@" --log server.log \
 	>server.out 2>server.err </dev/null &
     server_pid=$!
     waited=0
@@ -611,7 +689,8 @@ start_server() {
 	sleep 0.1
     done
     git_url=$(sed -n 's/^git server \([^ ]*\).*/\1/p' server.out)
-    test -n "$git_url"
+    proxy_url=$(sed -n 's/^CORS proxy \([^ ]*\).*/\1/p' server.out)
+    test -n "$git_url" && test -n "$proxy_url"
 }
 # (whether node finds git with `git http-backend', as the server needs; the
 # module is named in the environment, since one named by process.argv[1]
@@ -671,6 +750,300 @@ else
 		fi ;;
 	    *) fail missing "the clone of ${git_url}nope did not fail with the 404 of the transport: '$(echo "$missing" | cut -c 1-200)'" ;;
 	esac
+    fi
+    stop_server
+fi
+
+# The push and pull checks: git-http.mjs with a push that asks for the
+# credentials push_user:push_password, its repository p, and the run of
+# git-http-push.st, on the stock image as the Console boots it (straight to
+# the server) and on the world image (through the proxy)
+push_user=wasm-pusher
+push_password=s3cret-wasm-token
+# (the host's git, without the configuration of the user who runs the lane)
+host_git() {
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
+	git -c user.name='Lane 66' -c user.email=lane66@example.org "$@"
+}
+# server_commit METHOD VALUE MESSAGE: a commit on the server's master that
+# adds the method METHOD (answering VALUE) to WasmPushDemo, which the VM
+# pushed, as Tonel has it; with the METHOD one, makes #one answer VALUE
+# instead
+server_commit() {
+    rm -rf work && host_git clone -q -b master repos/p.git work && {
+	if test "$1" = one; then
+	    tab=$(printf '\t')
+	    # (Tonel writes the method on a line of its own, or on the line of
+	    # its selector, as the Pharo goes)
+	    sed -e "s/^$tab\\^ 1\$/$tab^ $2/" -e "s/^\\(WasmPushDemo >> one \\[ \\)\\^ 1\$/\\1^ $2/" \
+		work/src/WasmPushDemo/WasmPushDemo.class.st >work/one.st &&
+		mv work/one.st work/src/WasmPushDemo/WasmPushDemo.class.st
+	else
+	    printf "\n{ #category : 'accessing' }\nWasmPushDemo >> %s [\n\n\t^ %s\n]\n" "$1" "$2" \
+		>>work/src/WasmPushDemo/WasmPushDemo.class.st
+	fi
+    } && host_git -C work commit -q -am "$3" && host_git -C work push -q origin master
+}
+# answer: the lane's side of the handshake, in the background while the VM
+# runs: each sync/<name>.wait gets its commit on the server, then
+# sync/<name>.done (a minute at most for each)
+answer() (
+    for step in remote-ff:two:2 remote-div:four:4 remote-conflict:one:111; do
+	name=${step%%:*} rest=${step#*:}
+	waited=0
+	while ! test -f "sync/$name.wait"; do
+	    test "$waited" -ge 600 && exit 1
+	    waited=$((waited + 1))
+	    sleep 0.1
+	done
+	server_commit "${rest%%:*}" "${rest#*:}" "$name" >"sync/$name.log" 2>&1
+	touch "sync/$name.done"
+    done
+)
+# wrap_curl: bin/curl, a wrapper of curl that logs the arguments of each run
+# to curl.args, one a line, then a line '--end--' (never the file of the
+# header, which -H @<file> names), first in PATH
+wrap_curl() {
+    real_curl=$(command -v curl) && mkdir -p bin && {
+	printf '#!/bin/sh\nfor a in "$@"; do printf "%%s\\n" "$a"; done >>"%s"\necho --end-- >>"%s"\nexec "%s" "$@"\n' \
+	    "$(pwd)/curl.args" "$(pwd)/curl.args" "$real_curl" >bin/curl
+    } && chmod +x bin/curl
+}
+# curl_read_file: whether curl.args has a '-H @<file>', and no argument with
+# Authorization, the user or the password
+curl_read_file() {
+    test -s curl.args &&
+	awk 'prev == "-H" && /^@/ { found = 1 } { prev = $0 } END { exit !found }' curl.args &&
+	! grep -qi -e authorization -e "$push_password" -e "$push_user" curl.args
+}
+# http_push VIA: the run of git-http-push.st, VIA direct (and web-libgit.st
+# evaluated first) or proxy
+http_push() (
+    unset PHARO_WASM_GIT_PROXY WASM_WEB_LIBGIT
+    PHARO_WASM_FFI_TRACE=1
+    export PHARO_WASM_FFI_TRACE
+    case $1 in
+	proxy) PHARO_WASM_GIT_PROXY=$proxy_url; export PHARO_WASM_GIT_PROXY ;;
+	*) WASM_WEB_LIBGIT=$SRCDIR/packaging/emscripten/st/web-libgit.st; export WASM_WEB_LIBGIT ;;
+    esac
+    script=$SRCDIR/tests/wasm/st/git-http-push.st
+    WASM_GIT_PUSH_REMOTE=${git_url}p.git WASM_GIT_PUSH_USER=$push_user WASM_GIT_PUSH_PASSWORD=$push_password
+    WASM_GIT_SYNC=$(pwd)/sync TMPDIR=$(pwd)/tmp PATH=$(pwd)/bin:$PATH
+    export WASM_GIT_PUSH_REMOTE WASM_GIT_PUSH_USER WASM_GIT_PUSH_PASSWORD WASM_GIT_SYNC TMPDIR PATH
+    answer &
+    answer_pid=$!
+    vm "$WASM_DIR/node/pharo"
+    vm_status=$?
+    kill "$answer_pid" 2>/dev/null
+    wait "$answer_pid" 2>/dev/null
+    exit $vm_status
+)
+# push_checks IMAGE VIA: the push and the pull checks of IMAGE (a directory of
+# $WASM_DIR/image)
+push_checks() {
+    image=$1 via=$2
+    fresh "push-$image" "$WASM_DIR/image/$image"
+    home
+    mkdir -p repos sync tmp
+    if ! wrap_curl; then
+	checks=$((checks + 2))
+	fail "push $image" "could not make the wrapper of curl"
+	fail "pull $image" "could not make the wrapper of curl"
+	return
+    fi
+    if ! start_server --push --auth "$push_user:$push_password" --seed p; then
+	checks=$((checks + 2))
+	fail "push $image" "the git server did not start: $(head -n 1 server.err | cut -c 1-200)"
+	fail "pull $image" "the git server did not start"
+	return
+    fi
+    if ! { run "push $image" http_push "$via" && quiet "push $image"; }; then
+	stop_server
+	checks=$((checks + 1))
+	fail "pull $image" "the run failed (see push $image)"
+	return
+    fi
+    stop_server
+    host=${git_url#http://}
+    host=${host%/}
+    receive="GET /p.git/info/refs?service=git-receive-pack"
+    # (the requests of the git server, and of the proxy, for the push)
+    grep '^git ' server.log >git.log
+    grep '^proxy ' server.log >proxy.log
+    host_git -C repos/p.git log --format='%s (%p)' master >remote.log 2>&1
+    none=$(value 'push none') wrong=$(value 'push wrong')
+    if test "x$(value provider)" != "x$(test "$via" = proxy && echo OSWebCredentialsProvider || echo IceNonInteractiveCredentialsProvider)"; then
+	fail "push $image" "the provider of credentials is '$(value provider | cut -c 1-100)'"
+    elif test "x$(value clone)" != xmaster || test "x$(value 'commit 1')" != 'xpushed from wasm'; then
+	fail "push $image" "the clone or the commit: '$(value clone | cut -c 1-200)', '$(value 'commit 1' | cut -c 1-200)'"
+    elif case $none in "error "*"git http: $host answered 401: "*"none was given"*"$host says: No anonymous write access.") false ;; *) true ;; esac; then
+	fail "push $image" "without credentials, not the transport's 401 of none given: '$(echo "$none" | cut -c 1-300)'"
+    elif case $wrong in "error "*"git http: $host refused the user name and password or token (401); $host says: Invalid username or token.") false ;; *) true ;; esac; then
+	fail "push $image" "with a wrong password, not the transport's refusal: '$(echo "$wrong" | cut -c 1-300)'"
+    elif test "x$(value 'push stored')" != xok || test "x$(value 'push url')" != xok ||
+	test "x$(value 'push rounds')" != 'xok, answers left 0'; then
+	fail "push $image" "with the stored credentials: '$(value 'push stored' | cut -c 1-200)', with those of the URL: '$(value 'push url' | cut -c 1-200)', with a second round: '$(value 'push rounds' | cut -c 1-200)'"
+    elif test "x$(value 'push reuse 1')$(value 'push reuse 3')" != xokok ||
+	case $(value 'push reuse 2') in "error "*"git http: $host answered 401: "*"none was given"*) false ;; *) true ;; esac; then
+	fail "push $image" "two pushes through the same git_remote: '$(value 'push reuse 1' | cut -c 1-100)', then with nothing stored '$(value 'push reuse 2' | cut -c 1-200)' (the 401 of none given, not the credentials of the first), then '$(value 'push reuse 3' | cut -c 1-100)'"
+    elif test "x$(sed -n 3p git.log)" != "xgit $receive 401"; then
+	fail "push $image" "the push without credentials did not ask once, without them: $(sed -n 3,4p git.log | tr '\n' ';')"
+    elif test "x$(sed -n 4,8p git.log | tr '\n' ';')" != "xgit $receive 401;git $receive 401 authorization;git $receive 401;git $receive 200 authorization;git POST /p.git/git-receive-pack 200 authorization;"; then
+	fail "push $image" "the wrong password, then the right one: not a 401, the same GET with an Authorization, then the POST with it: $(sed -n 4,8p git.log | tr '\n' ';')"
+    elif test "x$(sed -n 9,11p git.log | tr '\n' ';')" != "xgit $receive 401;git $receive 200 authorization;git POST /p.git/git-receive-pack 200 authorization;"; then
+	fail "push $image" "the credentials of the URL: not a request without them first, then the same GET and the POST with an Authorization: $(sed -n 9,11p git.log | tr '\n' ';')"
+    elif test "x$(sed -n 12,15p git.log | tr '\n' ';')" != "xgit $receive 401;git $receive 401 authorization;git $receive 200 authorization;git POST /p.git/git-receive-pack 200 authorization;"; then
+	fail "push $image" "two rounds of credentials: not a 401, a 401 with the wrong ones, then the GET and the POST with the right ones: $(sed -n 12,15p git.log | tr '\n' ';')"
+    elif test "$via" = proxy && ! grep -qx "proxy POST /$host/p.git/git-receive-pack 200 authorization" proxy.log; then
+	fail "push $image" "the proxy did not forward the POST of the pack with its Authorization: $(tr '\n' ';' <proxy.log | cut -c 1-400)"
+    elif test "$via" != proxy && test -s proxy.log; then
+	fail "push $image" "requests went to the proxy: $(head -n 2 proxy.log | tr '\n' ';')"
+    elif ! grep -q '^second push (' remote.log || ! grep -q '^pushed from wasm (' remote.log; then
+	fail "push $image" "the server's git does not log the pushed commits: $(tr '\n' ';' <remote.log | cut -c 1-300)"
+    elif grep -q "$push_password\|$push_user" server.log smoke.out smoke.err; then
+	fail "push $image" "the credentials are in a log: $(grep -h "$push_password\|$push_user" server.log smoke.out smoke.err | head -n 1 | cut -c 1-200)"
+    elif test -n "$(ls tmp)"; then
+	fail "push $image" "curl's header is left in TMPDIR: $(ls tmp | tr '\n' ' ')"
+    elif ! curl_read_file; then
+	fail "push $image" "curl did not read the credentials from a file (-H @<file>), or got them on its command line: $(grep -i -m 1 -e authorization -e '^@' curl.args | cut -c 1-100)"
+    elif test -n "$(unlisted)"; then
+	fail "push $image" "adapted functions that ${adapted_list#$SRCDIR/} does not list:$(unlisted)"
+    else
+	ok "push $image" "$(test "$via" = proxy && echo 'through the proxy' || echo 'straight to the server'), with $(value provider): a 401 of none given, a refusal of the wrong password, then pushed with the stored credentials, with those of the URL, and after two rounds, the same git_remote asked again, $(grep -c ' authorization$' git.log) requests with credentials, curl's from a file"
+    fi
+    checks=$((checks + 1))
+    if test "x$(value 'pull ff')" != xok || test "x$(value 'ff head')" != 'xremote-ff, parents 1' ||
+	test "x$(value 'ff selectors')" != 'x#(#one #reuse #rounds #two #zero)' || test "x$(value 'ff modified')" != xfalse; then
+	fail "pull $image" "the fast-forward: pull '$(value 'pull ff' | cut -c 1-200)', head '$(value 'ff head')', selectors '$(value 'ff selectors')', modified '$(value 'ff modified')'"
+    elif case $(value 'push behind') in 'error IceRemoteDesynchronized'*) false ;; *) true ;; esac; then
+	fail "pull $image" "a push behind the server was not refused: '$(value 'push behind' | cut -c 1-200)'"
+    elif test "x$(value 'pull merge')" != xok || test "x$(value 'merge head')" != 'xMerge, parents 2' ||
+	test "x$(value 'merge selectors')" != 'x#(#four #one #reuse #rounds #three #two #zero)' || test "x$(value 'merge modified')" != xfalse; then
+	fail "pull $image" "the merge: pull '$(value 'pull merge' | cut -c 1-200)', head '$(value 'merge head')', selectors '$(value 'merge selectors')', modified '$(value 'merge modified')'"
+    elif test "x$(value 'push merge')" != xok || test "x$(value after)" != x7; then
+	fail "pull $image" "the push of the merge: '$(value 'push merge' | cut -c 1-200)', after '$(value after)'"
+    elif ! sed -n 2p remote.log | grep -q '^Merge [0-9a-f]* ([0-9a-f]* [0-9a-f]*)$' || ! head -n 1 remote.log | grep -q '^remote-conflict (' ||
+	! sed -n 3,4p remote.log | grep -q '^local change (' || ! sed -n 3,4p remote.log | grep -q '^remote-div ('; then
+	fail "pull $image" "the server's git does not log the merge of 2 parents above both commits (under remote-conflict): $(tr '\n' ';' <remote.log | cut -c 1-300)"
+    elif case $(value 'pull conflict') in 'error IceMergeAborted: '*'the merge has conflicts, which Iceberg resolves in a dialog that only the world shows'*) false ;; *) true ;; esac; then
+	fail "pull $image" "a pull whose merge conflicts did not fail with the IceMergeAborted of web-libgit.st: '$(value 'pull conflict' | cut -c 1-300)'"
+    elif test "x$(value 'conflict head')" != 'xlocal one, parents 1, one 11' || test "x$(value 'conflict incoming')" != x1; then
+	fail "pull $image" "after the conflict, not as it was: head '$(value 'conflict head' | cut -c 1-200)', incoming '$(value 'conflict incoming' | cut -c 1-100)'"
+    else
+	ok "pull $image" "fast-forward, then a merge of 2 parents pushed: $(sed -n 2,4p remote.log | sed 's/ ([^)]*)//' | tr '\n' ';' | cut -c 1-120); a conflict aborted the next pull at once"
+    fi
+}
+if ! grep -Eiq '^WASM_LIBGIT2_HTTP:BOOL=(ON|TRUE|YES|Y|1)$' "$WASM_DIR/cmake/CMakeCache.txt" 2>/dev/null; then
+    push_skip="no smart-HTTP transport (WASM_LIBGIT2_HTTP=OFF)"
+elif ! command -v curl >/dev/null 2>&1; then
+    push_skip="no curl, which the node VM makes its HTTP requests with"
+elif ! has_git; then
+    push_skip="no git, or no git http-backend, to serve the repositories"
+else
+    push_skip=
+fi
+for pushed in stock:direct web:proxy; do
+    image=${pushed%%:*}
+    if test -n "$push_skip"; then
+	skip_check "push $image" "$push_skip"
+	skip_check "pull $image" "$push_skip"
+    elif ! ls "$WASM_DIR/image/$image"/*.image >/dev/null 2>&1; then
+	skip_check "push $image" "no image in $WASM_DIR/image/$image (WASM_WORLD=OFF, or no WASM_HOST_PHARO)"
+	skip_check "pull $image" "no image in $WASM_DIR/image/$image"
+    else
+	push_checks "$image" "${pushed#*:}"
+	stop_server
+    fi
+done
+
+# The hosts check: git-http-hosts.st on the stock image, with web-libgit.st,
+# against git-http.mjs --push --auth --mover (mover_url, the mover, named
+# localhost); hosts_run NAME PROXY REMOTE...: a run of it, its output in
+# NAME.out, with PHARO_WASM_GIT_PROXY=PROXY unless PROXY is empty
+hosts_run() (
+    name=$1 via=$2
+    shift 2
+    unset PHARO_WASM_GIT_PROXY
+    test -n "$via" && { PHARO_WASM_GIT_PROXY=$via; export PHARO_WASM_GIT_PROXY; }
+    script=$SRCDIR/tests/wasm/st/git-http-hosts.st
+    WASM_WEB_LIBGIT=$SRCDIR/packaging/emscripten/st/web-libgit.st
+    WASM_GIT_HOSTS_REMOTES=$* WASM_GIT_HOSTS_USER=$push_user WASM_GIT_HOSTS_PASSWORD=$push_password TMPDIR=$(pwd)/tmp
+    export WASM_WEB_LIBGIT WASM_GIT_HOSTS_REMOTES WASM_GIT_HOSTS_USER WASM_GIT_HOSTS_PASSWORD TMPDIR
+    vm "$WASM_DIR/node/pharo" >"$name.out"
+)
+# hosts_value NAME KEY: the value of the line 'KEY: ...' of NAME.out
+hosts_value() {
+    sed -n "s/^$2: //p" "$1.out" | head -n 1
+}
+if test -n "$push_skip"; then
+    skip_check hosts "$push_skip"
+elif ! ls "$stock"/*.image >/dev/null 2>&1; then
+    skip_check hosts "no image in $stock"
+else
+    fresh hosts "$stock"
+    home
+    mkdir -p repos tmp
+    checks=$((checks + 1))
+    if ! start_server --push --auth "$push_user:$push_password" --mover --seed p --seed declined; then
+	fail hosts "the git server did not start: $(head -n 1 server.err | cut -c 1-200)"
+    else
+	printf '#!/bin/sh\necho "protected branch: pushes to master are declined" >&2\nexit 1\n' >repos/declined.git/hooks/pre-receive &&
+	    chmod +x repos/declined.git/hooks/pre-receive
+	mover_url=$(sed -n 's/^mover \([^ ]*\).*/\1/p' server.out)
+	mover=${mover_url#http://}
+	mover=${mover%/}
+	host=${git_url#http://}
+	host=${host%/}
+	proxy_port=${proxy_url##*:}
+	proxy_port=${proxy_port%/}
+	redirected="git http: $mover redirected the request to $host, which asks for a user name and a password or token (401): the credentials of $mover are not sent to another host"
+	plain="git http: $host asks for a user name and a password or token (401), which this VM does not send through the proxy http://0.0.0.0:$proxy_port over plain http://"
+	# (the runs one after the other, on the same copy of the image)
+	direct_ok=0 proxied_ok=0 plain_ok=0
+	: >guards.err
+	hosts_run direct '' "${mover_url}adv/p.git" "${mover_url}auth/p.git" "${git_url}declined.git" 2>direct.err && direct_ok=1
+	cat guard.err >>guards.err
+	lines_direct=$(wc -l <server.log)
+	hosts_run proxied "$proxy_url" "${mover_url}auth/p.git" 2>proxied.err && proxied_ok=1
+	cat guard.err >>guards.err
+	lines_proxied=$(wc -l <server.log)
+	hosts_run plain "http://0.0.0.0:$proxy_port/" "${git_url}p.git" 2>plain.err && plain_ok=1
+	cat guard.err >>guards.err
+	stop_server
+	sed -n "$((lines_proxied + 1)),\$p" server.log | grep '^git ' | grep 'git-receive-pack' >plain.log
+	# (vm() leaves on stderr all but the lines of the guard and the trace)
+	if test "$direct_ok$proxied_ok$plain_ok" != 111 || test -s direct.err || test -s proxied.err || test -s plain.err ||
+	    test -s guards.err || test -s PharoDebug.log; then
+	    fail hosts "a run failed (direct $direct_ok, proxied $proxied_ok, plain $plain_ok), or wrote on stderr, or a callout failed, or it wrote PharoDebug.log: $(cat direct.err proxied.err plain.err guards.err PharoDebug.log 2>/dev/null | head -n 1 | cut -c 1-200)"
+	elif test "x$(hosts_value direct 'clone 1')$(hosts_value direct 'clone 2')$(hosts_value direct 'clone 3')$(hosts_value proxied 'clone 1')$(hosts_value plain 'clone 1')" != xmastermastermastermastermaster; then
+	    fail hosts "the clones: $(grep -h '^clone' direct.out proxied.out plain.out | tr '\n' ';' | cut -c 1-400)"
+	elif case $(hosts_value direct 'push 1') in "error "*"$redirected"*) false ;; *) true ;; esac; then
+	    fail hosts "a push whose advertisement $mover redirects to $host, which asks for credentials: not the refusal of the redirect: '$(hosts_value direct 'push 1' | cut -c 1-300)'"
+	elif case $(hosts_value direct 'push 2') in "error "*"$redirected"*) false ;; *) true ;; esac; then
+	    fail hosts "a push whose request with credentials $mover redirects to $host: not the refusal of the redirect: '$(hosts_value direct 'push 2' | cut -c 1-300)'"
+	elif case $(hosts_value proxied 'push 1') in "error "*"$redirected"*) false ;; *) true ;; esac; then
+	    fail hosts "the same through the proxy: not the refusal of the redirect: '$(hosts_value proxied 'push 1' | cut -c 1-300)'"
+	elif grep '^git ' server.log | grep -v ' /declined\.git/' | grep -q ' authorization$'; then
+	    fail hosts "the git server got the credentials stored for $mover: $(grep '^git .* authorization$' server.log | grep -v ' /declined\.git/' | head -n 2 | tr '\n' ';')"
+	elif test "$(sed -n "1,${lines_direct}p" server.log | grep -c '^mover GET /auth/p.git/info/refs?service=git-receive-pack 302 authorization$')" -ne 1 ||
+	    test "$(sed -n "$((lines_direct + 1)),${lines_proxied}p" server.log | grep -c '^mover GET /auth/p.git/info/refs?service=git-receive-pack 302 authorization$')" -ne 1; then
+	    fail hosts "$mover did not get the request with its credentials once in each run, which it redirects: $(grep '^mover' server.log | tr '\n' ';' | cut -c 1-400)"
+	elif ! sed -n "$((lines_direct + 1)),${lines_proxied}p" server.log | grep -q "^proxy GET /$host/p.git/info/refs?service=git-receive-pack 401$"; then
+	    fail hosts "through the proxy, the redirect did not go to $host through it, without credentials: $(sed -n "$((lines_direct + 1)),${lines_proxied}p" server.log | grep '^proxy' | tr '\n' ';' | cut -c 1-400)"
+	elif case $(hosts_value plain 'push 1') in "error "*"$plain"*) false ;; *) true ;; esac; then
+	    fail hosts "through a proxy of plain http:// on another computer: not the refusal of the transport: '$(hosts_value plain 'push 1' | cut -c 1-300)'"
+	elif test "x$(tr '\n' ';' <plain.log)" != "xgit GET /p.git/info/refs?service=git-receive-pack 401;"; then
+	    fail hosts "through a proxy of plain http://, not a single request of the push, without credentials: $(tr '\n' ';' <plain.log | cut -c 1-300)"
+	elif case $(hosts_value direct 'push 3') in "error "*"git http: $host refused the push of refs/heads/master: pre-receive hook declined; $host says: protected branch: pushes to master are declined") false ;; *) true ;; esac; then
+	    fail hosts "a push that the hook of the server declines: not the transport's refusal of the ref: '$(hosts_value direct 'push 3' | cut -c 1-300)'"
+	elif ! grep -qx "git POST /declined.git/git-receive-pack 200 authorization" server.log ||
+	    test "x$(host_git -C repos/declined.git log --format=%s master 2>&1 | tr '\n' ';')" != 'xfirst;'; then
+	    fail hosts "the declined push: not a POST answered 200, or its commit is on the server: $(host_git -C repos/declined.git log --format=%s master 2>&1 | tr '\n' ';' | cut -c 1-200)"
+	elif test "x$(hosts_value plain after)" != x7 || test -n "$(ls tmp)"; then
+	    fail hosts "the VM did not go on ('$(hosts_value plain after)'), or curl's header is left in TMPDIR: $(ls tmp | tr '\n' ' ')"
+	else
+	    ok hosts "the credentials of $mover never reached $host (a redirected advertisement, a redirected request with them, straight and through the proxy), nor went through a proxy of plain http://; a push that the server's hook declined failed"
+	fi
     fi
     stop_server
 fi

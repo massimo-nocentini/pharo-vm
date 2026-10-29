@@ -47,7 +47,10 @@
 // freeFunctionSelector were compiled by web-libgit.st in LibGit-Core, as a
 // boot of the Console leaves a stock Pharo 13 or later, without
 // OSWindow-Web, before the page prepares it, has them made extensions of
-// OSWindow-Web by that set up (27b).
+// OSWindow-Web by that set up (27b); and an image of version 6 whose
+// Iceberg has its own provider of credentials, which would open its dialog
+// inside libgit2's callback and hang the world, is prepared to version 7
+// on its world boot, and then has OSWebCredentialsProvider (case 28).
 // The notebook mode (W-NB1..4, init.mode 'notebook'): the kernel of
 // st/web-notebook.st, its events (output {fd: 3, bytes}), a request posted
 // before ready, Stop, the credit of the events, and a worker that boots the
@@ -66,7 +69,8 @@
 // but not st/, the placeholders or the REPL's file, and too many of them
 // keep the tree of before (treeError), and so does a store without room
 // for them, which keeps the image all the same (C7b); init.gitProxy null
-// is the site's default; a slot gets the .sources of its name from another
+// is the site's default, through which credentials may not go
+// (ready.gitCredentials false); a slot gets the .sources of its name from another
 // entry or manifest.extraSources, and none (sourcesMissing) when the site
 // has none of that name; a save never overwrites another image under the
 // id of the slot of its VM (another createdAt: C11), a slot deleted comes
@@ -1544,6 +1548,54 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
                    val("#(#config_free: 'LibGit-Core' false)"));
   });
 
+  // ---- version 6 of OSWindow-Web to 7: Iceberg's credentials, which
+  // OSWebCredentialsProvider asks for outside libgit2's callback
+  const credentials = versions && webPackage >= 7;
+  if (credentials) await check('28 an image of version 6, whose Iceberg asks for credentials inside the callback, is prepared to 7 on the world boot; then OSWebCredentialsProvider gives them', async () => {
+    memory.map.clear();
+    // the site's image, made what a site of version 6 saved: Iceberg's own
+    // provider (the default, which opens its dialog inside the callback),
+    // and version 6
+    const C = session();
+    try {
+      current = C;
+      await C.started();
+      C.send('IceCredentialsProvider providerType name\n');
+      await C.expectOut(val('#OSWebCredentialsProvider'));
+      await C.prompt();
+      C.send("IceCredentialsProvider providerType: IceTipInteractiveCredentialsProvider. OSWebDriver class compile: 'packageVersion ^ 6'; " +
+             "compile: 'packageMarker ^ #OSWindowWebPackage6'. { OSWebDriver packageVersion. IceCredentialsProvider providerType name }\n");
+      await C.expectOut(val('#(6 #IceTipInteractiveCredentialsProvider)'));
+      await C.prompt();
+      C.post({ type: 'save' });
+      await waitFor('saved', () => C.saved.length, 60000);
+      await C.prompt(60000);
+      const m = C.saved[0];
+      assert(!m.error && m.webPackage === 6 && m.prepared === false, 'saved ' + JSON.stringify(m));
+    } finally { await C.close(); current = S; }
+    // the world boot prepares it
+    const P = session(world, { display: true });
+    try {
+      current = P;
+      await waitFor('prepared', () => P.prepared || P.crash || P.exit !== null, 300000);
+      P.alive();
+      assert(P.ready.preparing === true && P.ready.webPackage === 6, 'ready ' + JSON.stringify(P.ready));
+      assert(!P.prepared.error && P.prepared.saved === true && P.prepared.webPackage === webPackage,
+             'prepared ' + JSON.stringify(P.prepared));
+    } finally { await P.close(); current = S; }
+    // the image has the package of the site, and its provider of credentials
+    const R = session();
+    try {
+      current = R;
+      await R.started();
+      assert(R.ready.source === 'saved' && R.ready.webPackage === webPackage && R.ready.prepared === true,
+             'ready ' + JSON.stringify(R.ready));
+      R.send('{ OSWebDriver packageVersion. IceCredentialsProvider providerType name }\n');
+      await R.expectOut(val(`#(${webPackage} #OSWebCredentialsProvider)`));
+      await R.prompt();
+    } finally { await R.close(); current = S; }
+  });
+
   // ---- the catalog and the slots (catalog.js, vm-storage.js)
   //
   // Sites of their own, in TEST_DIR: WEB_DIR's files (linked), with a
@@ -1898,10 +1950,10 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     } finally { treeQuota = false; await N.close(); }
   });
 
-  await check('C8 init.gitProxy: null or absent is the site\'s default, \'\' none, a URL that one', async () => {
-    const cases = [[null, 'http://127.0.0.1:9/'], [undefined, 'http://127.0.0.1:9/'], ['', ''], ['ftp://x/', ''],
-                   ['https://proxy.example/', 'https://proxy.example/']];
-    for (const [given, want] of cases) {
+  await check('C8 init.gitProxy: null or absent is the site\'s default, \'\' none, a URL that one; credentials not through the default', async () => {
+    const cases = [[null, 'http://127.0.0.1:9/', false], [undefined, 'http://127.0.0.1:9/', false], ['', '', true],
+                   ['ftp://x/', '', true], ['https://proxy.example/', 'https://proxy.example/', true]];
+    for (const [given, want, credentials] of cases) {
       const init = { persist: false };
       if (given !== undefined) init.gitProxy = given;
       const G = session(init, on(C));
@@ -1909,16 +1961,16 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
         current = G;
         await waitFor('ready', () => G.ready || G.crash, 60000);
         G.alive();
-        assert(G.ready.gitProxy === want && G.ready.gitProxyDefault === 'http://127.0.0.1:9/',
-               JSON.stringify(given) + ': ready ' + JSON.stringify(G.ready));
+        assert(G.ready.gitProxy === want && G.ready.gitProxyDefault === 'http://127.0.0.1:9/' &&
+               G.ready.gitCredentials === credentials, JSON.stringify(given) + ': ready ' + JSON.stringify(G.ready));
       } finally { await G.close(); }
     }
     // a site without a default: none
     const G = session({ persist: false, gitProxy: null });
     try {
       await waitFor('ready', () => G.ready || G.crash, 60000);
-      assert(G.ready.gitProxy === (manifest.gitProxyDefault || '') && G.ready.gitProxyDefault === (manifest.gitProxyDefault || ''),
-             'ready ' + JSON.stringify(G.ready));
+      assert(G.ready.gitProxy === (manifest.gitProxyDefault || '') && G.ready.gitProxyDefault === (manifest.gitProxyDefault || '') &&
+             G.ready.gitCredentials === !manifest.gitProxyDefault, 'ready ' + JSON.stringify(G.ready));
     } finally { await G.close(); }
   });
 

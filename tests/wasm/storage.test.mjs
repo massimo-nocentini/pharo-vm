@@ -19,7 +19,10 @@
 // and with null deletes it; a backend without keys() lists main only.
 // Then the choice of a git proxy (git-proxy.js, PharoGitProxy.parse and
 // describe): a proxy typed without its // is written as the browser writes
-// it, which the worker takes.
+// it, which the worker takes; the notices of the first request through the
+// default, of the first credentials through a proxy (once per proxy), of
+// credentials refused through the site's default, and of the failures (a
+// 403 of the proxy, not of the host).
 // Then the catalog of catalog.js (PharoCatalog) on a manifest with images
 // and on one of before them.  Prints every check and their count, and
 // exits with status 1 if any fails.  Lane 70
@@ -365,6 +368,27 @@ await check('PharoGitProxy.describe: the first request through the default once,
   assert(/refused the request to h\./.test(PharoGitProxy.describe({ event: 'failed', host: 'h', proxy: 'https://p',
                                                                     status: 403 })), '403');
   eq(PharoGitProxy.describe({ event: 'failed', host: 'h', proxy: 'https://p', status: 404 }), '', '404: the error says it');
+  eq(PharoGitProxy.describe({ event: 'failed', host: 'h', proxy: 'https://p', status: 403, proxyRefused: false }), '',
+     "a host's 403 through the proxy: the error says it");
+  assert(/refused the request to h\./.test(PharoGitProxy.describe({ event: 'failed', host: 'h', proxy: 'https://p',
+                                                                    status: 403, proxyRefused: true })), "the proxy's 403");
+});
+
+await check('PharoGitProxy.describe: credentials refused through the default, and the first ones through a proxy once', async () => {
+  const refused = PharoGitProxy.describe({ event: 'failed', host: 'github.com', proxy: 'https://cors.example', status: 401,
+                                           credentials: 'refused' });
+  assert(/^github\.com asks for a user name and token, .*the public proxy https:\/\/cors\.example, would see them/.test(refused),
+         'refused: ' + refused);
+  eq(PharoGitProxy.describe({ event: 'failed', host: 'h', proxy: 'https://p', status: 401 }), '', 'a 401: the error says it');
+  const sent = { event: 'credentials', host: 'github.com', proxy: 'https://mine.example', status: 200 };
+  assert(/github\.com asked for go through the git proxy https:\/\/mine\.example, which can read them/.test(PharoGitProxy.describe(sent)),
+         'told');
+  eq(PharoGitProxy.describe(sent), '', 'once');
+  eq(PharoGitProxy.describe({ event: 'credentials', host: 'h', proxy: '', status: 200 }), '', 'no proxy: nothing');
+  assert(PharoGitProxy.describe({ event: 'credentials', host: 'h', proxy: 'https://other.example', status: 200 }), 'another proxy: told');
+  const w = PharoGitProxy.useForCredentials('https://cors.example');
+  eq([w.mode, w.value, PharoGitProxy.initValue()], ['custom', 'https://cors.example/', 'https://cors.example/'], 'My proxy');
+  PharoGitProxy.write('default');
 });
 
 // ---- catalog.js

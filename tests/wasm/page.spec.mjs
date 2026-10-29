@@ -1004,9 +1004,11 @@ await run(async t => {
     }
     await context.addInitScript(blocked => {
       window.gitProxySent = [];
+      window.interruptsSent = 0;
       const post = Worker.prototype.postMessage;
       Worker.prototype.postMessage = function (m, ...rest) {
         if (m && (m.type === 'init' || m.type === 'gitProxy')) window.gitProxySent.push([m.type, m.gitProxy]);
+        if (m && m.type === 'interrupt') window.interruptsSent++;
         if (m && m.type === 'init') window.__worker = this;
         return post.call(this, m, ...rest);
       };
@@ -1119,7 +1121,10 @@ await run(async t => {
         assert(!(await p.$eval('#settings-dialog', d => d.open)) && await stored(p) === PROXY + '/', close + ' keeps it');
       }
       assert((await sent(p)).length === 2, 'nothing more sent: ' + JSON.stringify(await sent(p)));
-      assert(await p.$eval('#status', e => e.dataset.state) === 'waiting', 'Escape in the dialog stops nothing');
+      // (no Stop went to the worker; the VM, which may be busy for a slice
+      // of its own meanwhile, waits for input again)
+      assert(await p.evaluate(() => window.interruptsSent) === 0, 'Escape in the dialog stops nothing');
+      await p.waitForFunction(() => document.getElementById('status').dataset.state === 'waiting', null, { timeout: 10000 });
 
       // a reload, from a link that names another proxy
       await p.reload();

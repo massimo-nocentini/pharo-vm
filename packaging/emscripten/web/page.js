@@ -69,7 +69,12 @@
 //   code and credentials, to a proxy of its choosing.  The dialog and a note
 //   at the start name the origin that the requests go to; the first request
 //   through the site's public default says so once, and a request that
-//   failed says why (the worker's "git").
+//   failed says why (the worker's "git").  The credentials of a push go only
+//   through a proxy of the user's (or none), never through the site's
+//   default: when a host asks for them there, the notice says so and offers
+//   to make that proxy My proxy (PharoGitProxy.useForCredentials), after
+//   which the push is tried again; the first credentials through a proxy are
+//   told once, per proxy.
 // - History, the theme and the proxy live in localStorage when available;
 //   everything works without it (the proxy then only for this session).
 // - The Notebook tab (notebook.js) runs a second VM, in a worker of its own
@@ -985,12 +990,30 @@
   }
 
   // What the worker says of git's requests: the first one through the
-  // site's public default, once; one that failed, why
+  // site's public default, once; the first credentials through a proxy,
+  // once; one that failed, why; and when a host asked for credentials that
+  // would have gone through the site's default, the choice of it for them
   function onGit(m) {
     const text = GitProxy.describe(m);
     if (!text) return;
     note(text + ' (Settings)');
-    showNotice(text, 'Settings', openSettings, 15000);
+    const def = gitProxyDefault || (manifest && manifest.gitProxyDefault) || '';
+    if (m.event === 'failed' && m.credentials === 'refused' && def)
+      showNotice(text, 'Settings', openSettings, 0,
+                 { label: 'Use ' + GitProxy.originOf(def) + ' for them', action: () => useForCredentials(def) });
+    else showNotice(text, 'Settings', openSettings, 15000);
+  }
+  // The site's default proxy made My proxy, so that the credentials of a
+  // push may go through it: kept as the Settings dialog keeps a choice, and
+  // given to the running VMs
+  function useForCredentials(def) {
+    const w = GitProxy.useForCredentials(def);
+    if (worker) worker.postMessage({ type: 'gitProxy', gitProxy: GitProxy.initValue() });
+    settingsChanged();
+    const origin = GitProxy.originOf(def);
+    note('Git requests, and the credentials of a push, now go through the proxy at ' + origin + ' (My proxy in Settings).');
+    showNotice('Git credentials now go through ' + origin + ' (My proxy in Settings): try again.' +
+               (w.kept ? '' : ' This browser cannot keep the setting: it holds for this session only.'), null, null, 10000);
   }
 
   // ---- Images (images.js): the images of the site and those of this browser

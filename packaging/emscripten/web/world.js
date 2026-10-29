@@ -95,7 +95,13 @@
 //   takes it from its URL.  The worker says when git made its first request
 //   (git {event: 'request'}): through the site's default, the page tells
 //   once, per proxy, that the public proxy sees what is cloned; and when one
-//   failed, why, with a link to Settings.
+//   failed, why, with a link to Settings.  The credentials of a push go only
+//   through a proxy of the user's (or none): when a host asks for them while
+//   the proxy is the site's default, the notice says so, and its button makes
+//   that proxy My proxy (PharoGitProxy.useForCredentials), after which the
+//   push is tried again; the first credentials through a proxy are told
+//   once, per proxy.  Iceberg asks for them (OSWebCredentialsProvider of
+//   OSWindow-Web) once the push has failed.
 //
 // window.PharoWorld tells tests and the curious how it goes: stats (the
 // workers started, the frames of this one, when they came and the size of
@@ -1202,7 +1208,16 @@
   const SETTINGS = 'Settings';
   function onGit(m) {
     const text = GitProxy.describe(m);
-    if (text) showNotice(text, SETTINGS, gitSettings.open, 15000);
+    if (!text) return;
+    const def = (manifest && manifest.gitProxyDefault) || '';
+    if (m.event === 'failed' && m.credentials === 'refused' && def)
+      showNotice(text, 'Use ' + GitProxy.originOf(def) + ' for them', () => {
+        const w = GitProxy.useForCredentials(def);
+        if (worker) worker.postMessage({ type: 'gitProxy', gitProxy: GitProxy.initValue() });
+        showNotice('Git credentials now go through ' + GitProxy.originOf(def) + ' (My proxy in Settings): try again.' +
+                   (w.kept ? '' : ' This browser cannot keep the setting: it holds for this page only.'), null, null, 10000);
+      }, 0);
+    else showNotice(text, SETTINGS, gitSettings.open, 15000);
   }
 
   const refocus = () => { if (framed) focusSink(); };

@@ -5,7 +5,7 @@ I am suitable only when the page provides a display (primitiveWebDisplayIsAvaila
 
 My class-side #startUp: is registered with the SessionManager. The stock image saves OSSDL2Driver as the driver class, so I install myself before the world opens whenever the page provides a display.
 
-My class side also sets an image up for the web VMs (#setUpImage), when this package is loaded at build time and when the page files it in, and numbers this package (#packageVersion): the page sets up again, once, an image saved with an older version.
+My class side also sets an image up for the web VMs (#setUpImage), when this package is loaded at build time and when the page files it in, and numbers this package (#packageVersion): the page sets up again, once, an image saved with an older version. The set up of Iceberg (#setUpGit) gives it https:// remotes, and OSWebCredentialsProvider for the credentials of a push.
 
 The page queues its input as records of 8 integers:
 	type, timestamp, x, y, button | keySym | width, modifiers | (buttons << 8), scanCode | codePoint | dx | height, repeat | dy
@@ -70,14 +70,14 @@ OSWebDriver class >> isSupported [
 OSWebDriver class >> packageMarker [
 	"A symbol of its own for each #packageVersion, which the image keeps as a literal of this method: the worker of the page finds the version of an image in its bytes without booting it. It is the name of the package and the version"
 
-	^ #OSWindowWebPackage6
+	^ #OSWindowWebPackage7
 ]
 
 { #category : 'versions' }
 OSWebDriver class >> packageVersion [
-	"The version of this package: web-bootstrap.st files the package in again over an older one, and the page sets an image of an older version up again (see #setUpImage). Version 1 had neither this method nor #setUpImage, and bitmap fonts; 2 keeps the FreeType fonts of the stock image when the VM has FreeType; 3 draws Athens with cairo without the SurfacePlugin, which the web VMs lack (the AthensCairoSurface extension of this package); 4 gives Iceberg https:// remotes (#setUpGit); 5 draws the world in device pixels on high-density displays (OSWebFormRenderer>>#outputExtent); 6 gives LGitConfig the free function of Pharo 12 (#setUpLibGit). Change #packageMarker with it. packaging/emscripten/tools/stage.mjs reads both from this file, for the manifest of the page"
+	"The version of this package: web-bootstrap.st files the package in again over an older one, and the page sets an image of an older version up again (see #setUpImage). Version 1 had neither this method nor #setUpImage, and bitmap fonts; 2 keeps the FreeType fonts of the stock image when the VM has FreeType; 3 draws Athens with cairo without the SurfacePlugin, which the web VMs lack (the AthensCairoSurface extension of this package); 4 gives Iceberg https:// remotes (#setUpGit); 5 draws the world in device pixels on high-density displays (OSWebFormRenderer>>#outputExtent); 6 gives LGitConfig the free function of Pharo 12 (#setUpLibGit); 7 gives Iceberg the credentials of a push without a dialog inside libgit2's callback, which would hang the page (OSWebCredentialsProvider, #setUpGit). Change #packageMarker with it. packaging/emscripten/tools/stage.mjs reads both from this file, for the manifest of the page"
 
-	^ 6
+	^ 7
 ]
 
 { #category : 'primitives' }
@@ -132,10 +132,13 @@ OSWebDriver class >> setUpFreeTypeFonts [
 
 { #category : 'image setup' }
 OSWebDriver class >> setUpGit [
-	"Iceberg makes the remote of a github:// repository an SSH one (#scpUrl) by default, which no web VM can reach: they have no libssh2, and a browser opens no socket. An https:// remote goes through the smart-HTTP transport of a web VM built with libgit2 (WASM_LIBGIT2), behind the CORS proxy of the Console's Settings. Set it whatever the VM, also at build time on a native VM, whose libgit2 does not tell what the web VM has: nothing else works in a browser. An image without Iceberg is left alone"
+	"Iceberg makes the remote of a github:// repository an SSH one (#scpUrl) by default, which no web VM can reach: they have no libssh2, and a browser opens no socket. An https:// remote goes through the smart-HTTP transport of a web VM built with libgit2 (WASM_LIBGIT2), behind the CORS proxy of the Console's Settings. Set it whatever the VM, also at build time on a native VM, whose libgit2 does not tell what the web VM has: nothing else works in a browser.
+
+	The credentials that a push asks for (or a private repository) come from OSWebCredentialsProvider, which never opens Iceberg's dialog inside libgit2's callback, where it would hang the page, but once the callout has returned (since version 7 of this package). An image without Iceberg is left alone"
 
 	(Smalltalk hasClassNamed: #Iceberg) ifFalse: [ ^ self ].
-	(Smalltalk at: #Iceberg) remoteTypeSelector: #httpsUrl
+	(Smalltalk at: #Iceberg) remoteTypeSelector: #httpsUrl.
+	(Smalltalk at: #IceCredentialsProvider) providerType: OSWebCredentialsProvider
 ]
 
 { #category : 'image setup' }
@@ -168,7 +171,9 @@ OSWebDriver class >> setUpImage [
 
 { #category : 'system startup' }
 OSWebDriver class >> shutDown: quitting [
-	"OSWindowDriver is registered too, and shuts the current driver down"
+	"OSWindowDriver is registered too, and shuts the current driver down. Forget the git credentials given for this session only, before the image is saved (OSWebCredentialsProvider class>>#forgetUnstored)"
+
+	OSWebCredentialsProvider forgetUnstored
 ]
 
 { #category : 'system startup' }

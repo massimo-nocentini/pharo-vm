@@ -17,7 +17,8 @@
 //                           prepared, webPackage, preparing, sources,
 //                           storageError, fonts, git, gitHttp, mode,
 //                           slot, imageId, pharo, slotMissing, freshMissing,
-//                           sourcesMissing, gitProxy, gitProxyDefault},
+//                           sourcesMissing, gitProxy, gitProxyDefault,
+//                           gitCredentials},
 //                    output {fd, text}, output {fd: 3, bytes},
 //                    state {state, waiting}, tick,
 //                    interrupted {registered}, edited {edited},
@@ -29,7 +30,8 @@
 //                    exit {code}, crash {message, stack, stacks},
 //                    fs-result {id, ...}, file {id, name, data, count},
 //                    error {id, message}, display {...},
-//                    git {event, method, host, proxy, status, error}
+//                    git {event, method, host, proxy, status, error,
+//                         credentials, redirectedTo, proxyRefused}
 //
 // Messages that arrive before "ready" are queued and replayed after it;
 // "ready" always precedes the first "state".  When the VM cannot start, or
@@ -225,11 +227,30 @@
 // each request, so a change holds from the next one.  It goes nowhere else:
 // not into the environment of the image, nor to any server but the proxy
 // itself.  ready.gitProxy is the proxy in effect ('' for none),
-// ready.gitProxyDefault the site's.  The transport calls Module.onGitHttp
-// ({method, host, proxy, status, error}) after every request, and the
-// worker posts "git {event: 'request'}" at the first one of its VM, and
-// "git {event: 'failed'}" when one got no answer (status < 0) or an HTTP
-// error (400 and up), at most every GIT_FAILED_MS, for the page to say why.
+// ready.gitProxyDefault the site's.
+// The credentials that a host asks for (a push to github.com, a private
+// repository: the transport asks Iceberg for them after a 401, and sends
+// them in an Authorization header) go through a proxy only when the user
+// chose it: Module.gitHttpCredentials is false while the proxy is the
+// site's default (gitProxy null, and a default there is), a public proxy
+// that would see them, and the transport then refuses them before it asks
+// Iceberg; true with a proxy of the user's (My proxy, which may be the
+// site's default, chosen there) or none (TLS goes to the host itself).
+// ready.gitCredentials says which.
+// The transport calls Module.onGitHttp ({method, host, proxy, status,
+// error, authorization, retried, credentials, redirectedTo, proxyRefused})
+// after every request, and the worker posts "git {event: 'request'}" at the
+// first one of its VM, "git {event: 'credentials'}" at the first one that
+// carried credentials through a proxy, and "git {event: 'failed'}" when one
+// got no answer (status < 0) or an HTTP error (400 and up), at most every
+// GIT_FAILED_MS, for the page to say why: never for a 401 that the
+// transport answers with credentials (retried), and always when it refused
+// to send credentials through the proxy (credentials 'refused'), which the
+// page then offers to choose for them, and when a host redirected a request
+// with credentials to another host, redirectedTo, through the proxy, which
+// sent them there (credentials 'redirected', whatever the status: the
+// transport stopped the request).  None of these says what the credentials
+// are.
 // ready.git says whether the VM has libgit2 (manifest.git, WASM_LIBGIT2),
 // ready.gitHttp whether it has that transport (manifest.gitHttp,
 // WASM_LIBGIT2_HTTP), which is what the proxy is for.
@@ -312,8 +333,9 @@ let saveAsName = null;
 // what the image is: the name of its .sources when known (the one it reads,
 // whoever serves it), its version and its catalog id
 let sourcesName = null, pharo = null, imageId = null;
-// git's requests: whether one was made, and when one last failed
-let gitRequested = false, gitFailedAt = -Infinity;
+// git's requests: whether one was made, whether one carried credentials
+// through a proxy, and when one last failed
+let gitRequested = false, gitCredentialed = false, gitFailedAt = -Infinity;
 // the meta of the slot that this VM booted from or saved, while it is the
 // stored one
 let owned = null, syncTimer = 0, syncedKey = '', syncedAt = 0, settleTimer = 0;
@@ -359,6 +381,9 @@ const defaultProxy = () => proxyOf(manifest && manifest.gitProxyDefault);
 // The proxy of git's requests for what the page gave: null or undefined
 // for the site's default, else its choice ('' none; the page checked it)
 const gitProxyOf = p => p == null ? defaultProxy() : proxyOf(p);
+// Whether credentials may go through that proxy: not through the site's
+// default (see Git above)
+const gitCredentialsOf = p => p != null || !defaultProxy();
 
 // ---- output
 
@@ -1088,6 +1113,7 @@ async function boot(m) {
   }
   const gitProxy = gitProxyOf(m.gitProxy);
   if (gitProxy) config.gitHttpProxy = gitProxy;
+  config.gitHttpCredentials = gitCredentialsOf(m.gitProxy);
   config.onGitHttp = gitHttp;
   const image = DIR + '/' + manifest.image;
   const env = mode === 'console' ? { PHARO_WEB_WORLD_FILE: WORLD_FILE } : {};
@@ -1141,7 +1167,8 @@ async function boot(m) {
   const ready = { type: 'ready', image, source, persisted: stored, savedAt, world: !!manifest.world, prepared,
                   webPackage, preparing: !!preparing, sources, storageError, fonts: manifest.fonts || null,
                   git: !!manifest.git, gitHttp: !!(manifest.git && manifest.gitHttp),
-                  slot: loaded.slot, imageId, pharo, gitProxy, gitProxyDefault: defaultProxy() };
+                  slot: loaded.slot, imageId, pharo, gitProxy, gitProxyDefault: defaultProxy(),
+                  gitCredentials: config.gitHttpCredentials };
   for (const k of ['slotMissing', 'freshMissing', 'sourcesMissing']) if (loaded[k]) ready[k] = loaded[k];
   if (mode === 'notebook') ready.mode = mode;
   post(ready);
@@ -1149,18 +1176,27 @@ async function boot(m) {
 }
 
 // Module.onGitHttp (gitSupport.c): git's smart-HTTP transport made a
-// request, {method, host, proxy, status, error}.  Called inside a slice:
-// it only posts.
+// request, {method, host, proxy, status, error, authorization, retried,
+// credentials, proxyRefused}.  Called inside a slice: it only posts.
 function gitHttp(r) {
   const status = Number(r && r.status);
   const said = { type: 'git', method: String((r && r.method) || ''), host: String((r && r.host) || ''),
-                 proxy: String((r && r.proxy) || ''), status, error: String((r && r.error) || '') };
+                 proxy: String((r && r.proxy) || ''), status, error: String((r && r.error) || ''),
+                 credentials: r && (r.credentials === 'refused' || r.credentials === 'redirected') ? r.credentials : '',
+                 redirectedTo: r && r.credentials === 'redirected' ? String(r.redirectedTo || '') : '',
+                 proxyRefused: !!(r && r.proxyRefused) };
   if (!gitRequested) {
     gitRequested = true;
     post(Object.assign({ event: 'request' }, said));
   }
+  if (r && r.authorization && said.proxy && !gitCredentialed) {
+    gitCredentialed = true;
+    post(Object.assign({ event: 'credentials' }, said));
+  }
+  // (a 401 that the same request with credentials follows is no failure)
+  if (r && r.retried) return;
   const t = performance.now();
-  if ((status < 0 || status >= 400) && t - gitFailedAt >= GIT_FAILED_MS) {
+  if ((status < 0 || status >= 400 || said.credentials === 'redirected') && (t - gitFailedAt >= GIT_FAILED_MS || said.credentials)) {
     gitFailedAt = t;
     post(Object.assign({ event: 'failed' }, said));
   }
@@ -1296,7 +1332,10 @@ function handle(m) {
     if (display && live) PharoDisplay.onMessage(m, drv);
     break;
   case 'gitProxy':
-    if (drv) drv.module.gitHttpProxy = gitProxyOf(m.gitProxy);
+    if (drv) {
+      drv.module.gitHttpProxy = gitProxyOf(m.gitProxy);
+      drv.module.gitHttpCredentials = gitCredentialsOf(m.gitProxy);
+    }
     break;
   }
 }

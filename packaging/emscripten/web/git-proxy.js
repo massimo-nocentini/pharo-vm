@@ -19,13 +19,27 @@
 //                 or fragment (parse); anything else counts as none
 //
 // so that a build of before, which read the value as a URL, takes 'none' as
-// none too.  Without localStorage (a private window, blocked site data) the
+// none too.
+//
+// Credentials.  A push, or a fetch of a private repository, needs a user name
+// and a token, which the VM's transport asks Iceberg for when the host
+// answers 401, and sends in an Authorization header: through a proxy, the
+// proxy can read them.  So they go only where the user chose: straight to
+// the host (none), or through My proxy, never through the site's default,
+// a public proxy that the user did not choose (the worker tells the
+// transport, Module.gitHttpCredentials).  There the transport refuses them,
+// and the page says so (describe), and offers to choose the site's proxy
+// as My proxy (useForCredentials), which then holds for all git requests,
+// as any proxy of the user's.  The first request that carries credentials
+// through a proxy is told once per proxy (CREDENTIALS_NOTED_KEY).  Without localStorage (a private window, blocked site data) the
 // choice holds for the page (a variable of this module), and so does one
 // that could not be kept.  The choice is set only by the dialog, never from
 // the URL: a link must not send someone's git traffic, code and
 // credentials, to a proxy of its choosing.
 //
 //   PharoGitProxy.KEY, NOTED_KEY       'pharo-wasm.gitProxy', 'pharo-wasm.gitProxyNoted'
+//   PharoGitProxy.CREDENTIALS_NOTED_KEY
+//                                      'pharo-wasm.gitCredentialsNoted'
 //   PharoGitProxy.parse(text)          {value: ''} (empty), {value, origin} or {error};
 //                                      value is the URL as the browser writes it
 //   PharoGitProxy.read()               {mode: 'default'|'none'|'custom', value: ''|url}
@@ -35,18 +49,30 @@
 //                                      an empty one is none); kept false when this
 //                                      browser could not keep it (it holds for the page)
 //   PharoGitProxy.originOf(url)        its origin, or ''
-//   PharoGitProxy.noted(origin), markNoted(origin)
+//   PharoGitProxy.noted(origin, key = NOTED_KEY), markNoted(origin, key = NOTED_KEY)
 //                                      whether the page told the user once that the
 //                                      requests go through the public proxy origin
 //                                      (NOTED_KEY keeps the origin told; without
-//                                      storage, for the page)
+//                                      storage, for the page), or, with
+//                                      CREDENTIALS_NOTED_KEY, that credentials went
+//                                      through the proxy origin
+//   PharoGitProxy.useForCredentials(url)
+//                                      {kept, ...}: makes url (the site's default)
+//                                      My proxy, as write('custom', url) does
 //   PharoGitProxy.onChange(cb)         cb(initValue()) when another page changed it
 //                                      (storage events)
 //   PharoGitProxy.describe(m)          what a page tells of the worker's message
-//                                      git {event, host, proxy, status}, or '': the
-//                                      first request through the site's default,
-//                                      once per proxy (then noted), or why a
-//                                      request failed
+//                                      git {event, host, proxy, status, credentials,
+//                                      redirectedTo, proxyRefused}, or '': the first request
+//                                      through the site's default, once per proxy
+//                                      (then noted), the first one that carried
+//                                      credentials through a proxy, once per proxy
+//                                      (noted too), or why a request failed: with
+//                                      credentials 'refused', that the host asked
+//                                      for credentials, which would go through the
+//                                      site's public proxy; with 'redirected', that a
+//                                      host redirected a request with credentials to
+//                                      another host, which the proxy sent them to
 //   PharoGitProxy.wireDialog({defaultProxy, onSaved, refocus})
 //                                      -> {open()}: the Settings dialog of the
 //                                      document, which has the ids below
@@ -75,6 +101,7 @@
   'use strict';
 
   const KEY = 'pharo-wasm.gitProxy', NOTED_KEY = 'pharo-wasm.gitProxyNoted';
+  const CREDENTIALS_NOTED_KEY = 'pharo-wasm.gitCredentialsNoted';
   const NONE = 'none';
 
   // The proxy as typed: {value: ''} for none, else {value, origin} for an
@@ -151,21 +178,28 @@
     return { kept, mode: choice.mode, value: choice.value };
   }
 
-  // The origin of the public proxy that the page told the user of
-  let notedHere = null;
-  function noted(origin) {
+  // The origin of the public proxy that the page told the user of (and of
+  // the proxy that it told credentials went through, under its own key)
+  const notedHere = {};
+  function noted(origin, key = NOTED_KEY) {
     const ls = storage();
     if (ls) {
-      try { if (ls.getItem(NOTED_KEY) === origin) return true; } catch (e) { /* the page's */ }
+      try { if (ls.getItem(key) === origin) return true; } catch (e) { /* the page's */ }
     }
-    return notedHere === origin;
+    return notedHere[key] === origin;
   }
-  function markNoted(origin) {
-    notedHere = origin;
+  function markNoted(origin, key = NOTED_KEY) {
+    notedHere[key] = origin;
     const ls = storage();
     if (ls) {
-      try { ls.setItem(NOTED_KEY, origin); } catch (e) { /* the page's */ }
+      try { ls.setItem(key, origin); } catch (e) { /* the page's */ }
     }
+  }
+
+  // The site's default proxy url made My proxy, so that credentials may go
+  // through it (see Credentials above)
+  function useForCredentials(url) {
+    return write('custom', url);
   }
 
   // Another page of the site changed it (a key of null: storage cleared)
@@ -190,10 +224,25 @@
       return 'Git requests (Iceberg clones, Metacello github://) go through the public CORS proxy ' + proxy +
         ', which sees what you clone.';
     }
+    if (m.event === 'credentials') {
+      if (!proxy || noted(proxy, CREDENTIALS_NOTED_KEY)) return '';
+      markNoted(proxy, CREDENTIALS_NOTED_KEY);
+      return 'The user name and token that ' + m.host + ' asked for go through the git proxy ' + proxy +
+        ', which can read them.';
+    }
     if (m.event !== 'failed') return '';
+    if (m.credentials === 'redirected')
+      return m.host + ' redirected a request with your user name and token to ' + (m.redirectedTo || 'another host') +
+        ', and the git proxy ' + proxy + ' sent them there: the request was stopped. Revoke that token if ' +
+        (m.redirectedTo || 'that host') + ' is not yours.';
+    if (m.credentials === 'refused')
+      return m.host + ' asks for a user name and token, which this page sends only through a git proxy you chose: ' +
+        "the site's default, the public proxy " + proxy + ', would see them. Choose it, or your own, then try again.';
     if (!proxy && m.status < 0) return "The browser blocked git's request to " + m.host + ' (CORS): git over HTTPS needs a proxy here.';
     if (proxy && m.status < 0) return 'The git proxy ' + proxy + ' did not answer.';
-    if (proxy && m.status === 403) return 'The git proxy ' + proxy + ' refused the request to ' + m.host + '.';
+    // (a 403 of the host, a token that may not push say, has a body: the
+    // transport's error says it; proxyRefused is absent before it was told)
+    if (proxy && m.status === 403 && m.proxyRefused !== false) return 'The git proxy ' + proxy + ' refused the request to ' + m.host + '.';
     return '';
   }
 
@@ -294,5 +343,6 @@
     return { open };
   }
 
-  return { KEY, NOTED_KEY, parse, read, initValue, write, originOf, noted, markNoted, onChange, describe, wireDialog };
+  return { KEY, NOTED_KEY, CREDENTIALS_NOTED_KEY, parse, read, initValue, write, useForCredentials, originOf, noted, markNoted,
+           onChange, describe, wireDialog };
 });
