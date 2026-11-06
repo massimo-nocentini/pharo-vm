@@ -22,8 +22,8 @@ works.
     serve.mjs       a static HTTP server for web/ (node, no dependencies)
     node-try.sh     runs the node VM on the default image of web/
 
-GitHub Pages serves the site of the latest build of `pharo-12` from
-the root of branch `gh-pages`; where this folder is served, the pages are
+GitHub Pages serves the site of the latest build of `pharo-12`;
+where this folder is served, the pages are
 [web/](web/) (the Console and the Notebook) and
 [web/world.html](web/world.html) (the Pharo world).
 

@@ -23,8 +23,7 @@
 # images saved in a browser from it), with serve.mjs and
 # packaging/emscripten/dist (README.md, which names the commit, and
 # node-try.sh).  On a push to pharo-12, its web/ is also deployed to
-# the root of branch gh-pages, which GitHub Pages serves, once every file of
-# its manifest is checked (and small enough for git).
+# GitHub Pages once every file of its manifest is checked.
 #
 # Every job compiles C with clang and C++ with clang++: CC and CXX on Linux
 # and macOS (AppleClang there), -DCMAKE_C_COMPILER and -DCMAKE_CXX_COMPILER
@@ -532,17 +531,20 @@ jobs:
           archive: false
           if-no-files-found: error
 
-  # The site of the WebAssembly zip at the root of gh-pages, as a single
-  # commit (force-pushed, so that the branch does not keep every build of
-  # the image), with .nojekyll so that GitHub Pages serves the files as they
-  # are.  Settings > Pages must deploy from branch gh-pages, folder /.
+  # The site of the WebAssembly zip, deployed to GitHub Pages directly from
+  # the workflow (Settings > Pages > Build and deployment > Source must be
+  # set to GitHub Actions).
   pages:
     name: GitHub Pages
     if: github.event_name == 'push' && github.ref == 'refs/heads/pharo-12'
     needs: wasm
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -550,9 +552,7 @@ jobs:
           path: artifacts
           skip-decompress: true
 
-      - name: Deploy the site to gh-pages
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Check the site of the zip
         run: |
           # one artifact is saved in artifacts itself, several each in a
           # directory of its own: take the one file wherever it is
@@ -562,22 +562,20 @@ jobs:
           unzip -q "$zip" -d unpacked
           mkdir site
           cp -R unpacked/PharoVM-*-WebAssembly/web/. site/
-          touch site/.nojekyll
-          # every file of the manifest is there, as large as it says, and
-          # small enough for git (GitHub refuses files over 100 MB)
+          # every file of the manifest is there and as large as it says
           node -e 'const fs=require("fs"),m=JSON.parse(fs.readFileSync("site/manifest.json"));
             const all=[...m.files,...(m.images||[]).flatMap(i=>i.files),...(m.extraSources||[])];
-            for(const f of all){const s=fs.statSync("site/"+f.url).size; if(s!==f.gzSize) throw new Error("bad "+f.url);
-              if(s>95e6) throw new Error("too large for git "+f.url);}
+            for(const f of all){const s=fs.statSync("site/"+f.url).size; if(s!==f.gzSize) throw new Error("bad "+f.url);}
             if(!m.images||m.images.length!==3) throw new Error("expected 3 images");'
           du -sh site
-          cd site
-          git init -q -b gh-pages
-          git add -A
-          git -c user.name='github-actions[bot]' \
-              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-              commit -q -m "Deploy the WebAssembly site of $GITHUB_SHA"
-          git push --force "https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY.git" gh-pages
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
 
   release:
     name: Release
