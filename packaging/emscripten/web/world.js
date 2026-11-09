@@ -116,7 +116,7 @@
 
   const RUNNING = 0, WAITING = 1, BUSY = 2, SLEEPING = 4;
   // The record types of OSWebDriver
-  const MOVE = 1, PRESS = 2, RELEASE = 3, WHEEL = 4, KEY_DOWN = 5, KEY_UP = 6, TEXT = 7, FOCUS = 9, SAVE_REQUEST = 11;
+  const MOVE = 1, PRESS = 2, RELEASE = 3, WHEEL = 4, KEY_DOWN = 5, KEY_UP = 6, TEXT = 7, FOCUS = 9, SAVE_REQUEST = 11, FILE_IN_REQUEST = 12;
   const WATCHDOG_MS = 3000;
   const RESIZE_MS = 100;                // a resize is sent when the size stayed so long
   const PASTE_MS = 200;                 // Ctrl+V waits so long for its paste event
@@ -222,7 +222,7 @@
   function updateControls() {
     const on = !!worker && alive && ready && !preparing;
     $('stop').disabled = !on;
-    $('save').disabled = $('save-as').disabled = !(on && framed);
+    $('save').disabled = $('save-as').disabled = $('file-in').disabled = !(on && framed);
     $('download').disabled = !(worker && ready);
     $('open').disabled = !!unavailable || opening;
     $('images').disabled = !!unavailable;
@@ -790,7 +790,7 @@
 
   function send(rec) {
     if (!live()) return;
-    if (rec[0] === PRESS || rec[0] === KEY_DOWN || rec[0] === TEXT) noteInput();
+    if (rec[0] === PRESS || rec[0] === KEY_DOWN || rec[0] === TEXT || rec[0] === FILE_IN_REQUEST) noteInput();
     worker.postMessage({ type: 'display', kind: 'event', event: rec });
   }
   // a record of OSWebDriver: type, timestamp, x, y, a, mods | buttons << 8, c, d
@@ -1087,13 +1087,41 @@
     showNotice('Downloaded ' + files.map(f => f.name + ' (' + mb(f.data.length) + ')').join(' and ') + '.', null, null, 6000);
   }
 
-  // ---- Open: an image of your own (open-image.js)
+  // ---- Open: an image of your own (open-image.js), or file in .st files
+
+  const isStFile = f => !!(f && /\.st$/i.test(f.name));
+  async function fileInFiles(files) {
+    files = (files || []).filter(isStFile);
+    if (!files.length || !live()) return;
+    const paths = [], names = [];
+    for (const f of files) {
+      const name = f.name.replace(/^.*[\\/]/, '') || 'file.st';
+      let data;
+      try { data = new Uint8Array(await f.arrayBuffer()); }
+      catch (e) { showNotice('Could not read ' + name + ': ' + ((e && e.message) || e), null, null, 6000); continue; }
+      try { await request({ type: 'fs', op: 'writeFile', path: '/pharo/' + name, data }); }
+      catch (e) { showNotice('Could not write ' + name + ': ' + ((e && e.message) || e), null, null, 6000); continue; }
+      paths.push('/pharo/' + name);
+      names.push(name);
+    }
+    if (!paths.length || !live()) return;
+    const listBytes = new TextEncoder().encode(paths.join('\n') + '\n');
+    try { await request({ type: 'fs', op: 'writeFile', path: '/pharo/.web-file-in', data: listBytes }); }
+    catch (e) { showNotice('Could not file in: ' + ((e && e.message) || e), null, null, 6000); return; }
+    record(FILE_IN_REQUEST);
+    showNotice('Filed in ' + names.join(', ') + '.', null, null, 6000);
+  }
 
   // Open the files chosen or dropped; the VM is replaced only once they are
   // unpacked and checked.  The progress goes to the notice, which is kept
   // quiet meanwhile (aria-busy): the live region says what is unpacked, once.
+  // Smalltalk .st files dropped on the page are filed into the running world.
   async function openFiles(files) {
     if (unavailable || opening || !files.length) return;
+    if (files.every(isStFile)) {
+      await fileInFiles(files);
+      return;
+    }
     opening = true;
     updateControls();
     let opened = null;
@@ -1232,6 +1260,13 @@
     const files = [...e.target.files];
     e.target.value = '';
     openFiles(files);
+  });
+  $('file-in').addEventListener('click', () => $('file-in-input').click());
+  $('file-in-input').addEventListener('change', e => {
+    const files = [...e.target.files];
+    e.target.value = '';
+    fileInFiles(files);
+    refocus();
   });
   $('notice-action').addEventListener('click', () => { const f = noticeAction; hideNotice(); if (f) f(); refocus(); });
   $('notice-close').addEventListener('click', () => { hideNotice(); refocus(); });

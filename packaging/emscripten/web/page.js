@@ -400,7 +400,7 @@
   function updateControls() {
     const on = !!worker && ready && alive;
     line.disabled = !on;
-    for (const id of ['send', 'stop', 'save', 'save-as']) $(id).disabled = !on;
+    for (const id of ['send', 'stop', 'save', 'save-as', 'file-in']) $(id).disabled = !on;
     $('download').disabled = !(worker && ready);
     $('reset').disabled = !(worker && deletable());
     $('images').disabled = !!unavailable;
@@ -477,6 +477,55 @@
 
   const HTTP_HINT = 'This page must be served over HTTP, for example with "make wasm-serve".';
   const NO_MEMORY64 = 'This browser has no 64-bit WebAssembly memory (memory64), which this build needs.';
+  const NB_FS_OFFSET = 0x40000000;
+  let nbClient = null, nbBusy = false, nbInterrupted = false, nbPending = [];
+  function sendNb(m) {
+    if (nbClient && typeof nbClient.onmessage === 'function') nbClient.onmessage({ data: m });
+  }
+  function hasDoneEvent(bytes) {
+    try { return /"ev":"done"/.test(new TextDecoder().decode(bytes)); }
+    catch (e) { return false; }
+  }
+  function notebookWorker() {
+    nbBusy = nbInterrupted = false;
+    const client = {
+      onmessage: null,
+      onerror: null,
+      onmessageerror: null,
+      postMessage(m) {
+        if (nbClient !== client) return;
+        let msg = m;
+        if (m && m.type === 'fs' && Number.isInteger(m.id)) {
+          msg = Object.assign({}, m, { id: m.id + NB_FS_OFFSET });
+        } else if (m && m.type === 'input' && typeof m.text === 'string') {
+          if (/^\{"op":"run"/.test(m.text)) {
+            nbBusy = true;
+            nbInterrupted = false;
+            evaluated = true;
+          } else if (/^\{"op":"file-in"/.test(m.text)) {
+            evaluated = true;
+          }
+        } else if (m && m.type === 'init') {
+          nbBusy = nbInterrupted = false;
+        } else if (m && m.type === 'interrupt') {
+          nbInterrupted = true;
+        }
+        if (worker && alive) worker.postMessage(msg);
+        else nbPending.push(msg);
+      },
+      terminate() {
+        if (nbClient !== client) return;
+        const wasBusy = nbBusy, wasInt = nbInterrupted;
+        nbClient = null;
+        nbBusy = nbInterrupted = false;
+        nbPending = [];
+        if (wasBusy && wasInt && worker && alive) respawn();
+        else if (wasBusy && worker && alive) worker.postMessage({ type: 'interrupt' });
+      },
+    };
+    nbClient = client;
+    return client;
+  }
 
   function kill() {
     gen++;
@@ -487,12 +536,15 @@
     state = null;
     evaluated = edited = storing = false;
     afterSave = null;
+    nbBusy = nbInterrupted = false;
     for (const r of reqs.values()) r.reject(new Error('the VM was restarted'));
     reqs.clear();
     ackChars = 0;
   }
 
   function fatal(msg) {
+    if (nbClient && typeof nbClient.onerror === 'function')
+      nbClient.onerror({ message: msg, preventDefault() {} });
     kill();
     setStatus('error', 'Unavailable');
     note(msg);
@@ -545,6 +597,7 @@
       name: upload ? upload.name : undefined,
       gitProxy: GitProxy.initValue(),
     });
+    while (nbPending.length) w.postMessage(nbPending.shift());
   }
 
   // The VM ended; the worker stays, for Download and Reset.  Before its
@@ -633,17 +686,36 @@
       break;
     }
     case 'ready':
+      if (m.mode === 'notebook') { sendNb(m); break; }
       onReady(m);
       break;
     case 'output':
+      if (m.fd === 3) {
+        if (m.bytes && hasDoneEvent(m.bytes)) nbBusy = nbInterrupted = false;
+        sendNb(m);
+        break;
+      }
+      if (nbBusy && nbClient) {
+        sendNb(m);
+        break;
+      }
       emit(m.fd === 2 ? 'err' : 'out', m.text, true);
       if (!prompted && atPrompt()) { prompted = true; updateStatus(); }
       break;
     case 'state':
+      if (nbBusy && nbClient) {
+        sendNb(m);
+        break;
+      }
       state = m.state;
       updateStatus();
+      if (nbClient) sendNb(m);
       break;
     case 'interrupted':
+      if (nbBusy && nbClient) {
+        sendNb(m);
+        break;
+      }
       // nothing to stop it with: start afresh.  Before the first prompt the
       // REPL has registered nothing yet, and the watchdog covers a hung boot.
       if (!m.registered && alive && prompted && state !== WAITING) respawn();
@@ -697,16 +769,22 @@
       onGit(m);
       break;
     case 'exit':
+      if (nbClient) sendNb(m);
       if (eofSent && m.code === 0) ended('exited', 'Exited (0)', 'The session ended.');
       else ended('exited', 'Exited (' + m.code + ')', 'Pharo quit with exit code ' + m.code + '.');
       note('Pharo quit (exit code ' + m.code + ')');
       break;
     case 'crash':
+      if (nbClient) sendNb(m);
       emit('err', String(m.message).replace(/\n?$/, '\n') + (m.stacks ? m.stacks.replace(/\n?$/, '\n') : ''));
       ended('crashed', 'Crashed', 'The VM crashed.');
       note('The VM crashed');
       break;
     case 'fs-result': case 'reset': case 'file': case 'error': {
+      if ((m.type === 'fs-result' || m.type === 'error') && Number.isInteger(m.id) && m.id > NB_FS_OFFSET) {
+        sendNb(Object.assign({}, m, { id: m.id - NB_FS_OFFSET }));
+        break;
+      }
       const r = reqs.get(m.id);
       if (!r) break;
       if (m.type === 'file') {           // one message per file
@@ -814,12 +892,41 @@
     note('Downloaded ' + files.map(f => f.name + ' (' + mb(f.data.length) + ')').join(' and ') + '.');
   }
 
+  const isStFile = f => !!(f && /\.st$/i.test(f.name));
+  async function fileInFiles(files) {
+    files = (files || []).filter(isStFile);
+    if (!files.length || !worker || !alive || !ready) return;
+    const paths = [];
+    for (const f of files) {
+      const name = f.name.replace(/^.*[\\/]/, '') || 'file.st';
+      let data;
+      try { data = new Uint8Array(await f.arrayBuffer()); }
+      catch (e) { note('Could not read ' + name + ': ' + ((e && e.message) || e)); continue; }
+      try { await request({ type: 'fs', op: 'writeFile', path: '/pharo/' + name, data }); }
+      catch (e) { note('Could not write ' + name + ': ' + ((e && e.message) || e)); continue; }
+      paths.push('/pharo/' + name);
+    }
+    if (!paths.length) return;
+    const lit = p => "'" + p.replace(/'/g, "''") + "'";
+    const expr = paths.length === 1
+      ? 'CodeImporter evaluateFileNamed: ' + lit(paths[0])
+      : '{ ' + paths.map(lit).join('. ') + ' } do: [ :p | CodeImporter evaluateFileNamed: p ]';
+    evaluated = true;
+    echo(expr);
+    worker.postMessage({ type: 'input', text: expr + '\n' });
+  }
+
   // Open the files chosen or dropped (open-image.js); the VM is replaced
   // only once they are unpacked and checked.  The progress goes to the
   // notice, which is kept quiet meanwhile (aria-busy): the live region says
-  // what is unpacked, once.
+  // what is unpacked, once.  Smalltalk .st files dropped on the page are
+  // filed into the running VM directly.
   async function openFiles(files) {
     if (unavailable || opening || !files.length) return;
+    if (files.every(isStFile)) {
+      await fileInFiles(files);
+      return;
+    }
     opening = true;
     updateControls();
     let opened = null, what = '';
@@ -1175,6 +1282,12 @@
     e.target.value = '';
     openFiles(files);
   });
+  $('file-in').addEventListener('click', () => $('file-in-input').click());
+  $('file-in-input').addEventListener('change', e => {
+    const files = [...e.target.files];
+    e.target.value = '';
+    fileInFiles(files).then(() => refocus());
+  });
   $('reset').addEventListener('click', resetSaved);
   $('clear').addEventListener('click', () => { clearTerm(); refocus(); });
   $('theme').addEventListener('click', cycleTheme);
@@ -1249,6 +1362,7 @@
     unavailable: () => unavailable || (noMemory64 ? NO_MEMORY64 : null),
     wasmModule,                         // Promise<WebAssembly.Module>, compiled once
     workerUrl: 'vm-worker.js' + Q,
+    notebookWorker,                     // shared VM worker adapter for the notebook kernel
     gitProxy: () => GitProxy.initValue(),   // null for the site's default, '' for none, or the URL
     bootChoice: () => Object.assign({}, current),   // the image of the Console: {slot}, {fresh} or {}
     gitHttp: () => gitHttp,             // the VM has libgit2's smart-HTTP transport (ready)

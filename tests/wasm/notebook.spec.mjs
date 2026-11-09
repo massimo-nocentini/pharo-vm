@@ -244,11 +244,11 @@ await run(async t => {
 
   await page.goto(base + 'index.html');
 
-  await check('the kernel starts on the first visit to the tab: one VM worker before it, two after', async () => {
+  await check('the kernel starts on the first visit to the tab, sharing the Console\'s VM worker', async () => {
     await started();
     assert(vmWorkers() === 1, 'one VM worker before the first visit: ' + vmWorkers());
     assert(await page.$eval('#nb-status', e => e.dataset.state) === 'off', 'the kernel is not started');
-    assert(await notebookInits() === 0, 'no notebook worker yet');
+    assert(await notebookInits() === 0, 'no notebook init yet');
     await page.evaluate(() => {
       window.__nbStates = [];
       const s = document.getElementById('nb-status');
@@ -261,11 +261,8 @@ await run(async t => {
     const states = await page.evaluate(() => window.__nbStates);
     assert(states.indexOf('loading') >= 0 && states.indexOf('loading') < states.lastIndexOf('ready'), 'states ' + states);
     assert(/^Pharo 1[2-9]\.\d+ \u00b7 wasm64$/.test(await page.textContent('#nb-info')), 'info ' + await page.textContent('#nb-info'));
-    assert(vmWorkers() === 2, 'two VM workers after it: ' + vmWorkers());
+    assert(vmWorkers() === 1, 'one shared VM worker after it: ' + vmWorkers());
     assert(await notebookInits() === 1, 'one notebook init: ' + JSON.stringify(await posts()));
-    // without an image saved in this browser, the kernel fetches the one of
-    // the site again: how often reaches the server is logged, not asserted
-    // (the HTTP cache of workers differs between browsers)
     const served = t.requests.slice(n);
     console.log(`  # the kernel was ready ${ms} ms after the visit; it fetched the image ` +
                 served.filter(u => u === imageUrl).length + ' time(s), the .sources ' +
@@ -300,7 +297,7 @@ await run(async t => {
     await page.keyboard.press('End');
     assert(await sel() === 'tab-notebook' && await consistent(), 'End');
     assert(await page.evaluate(() => document.activeElement.id) === 'tab-notebook', 'the focus follows');
-    assert(vmWorkers() === 2, 'no more workers: ' + vmWorkers());
+    assert(vmWorkers() === 1, 'no more workers: ' + vmWorkers());
   });
   await page.click('#tab-notebook');    // whatever happened above
 
@@ -391,22 +388,16 @@ await run(async t => {
     assert(parts.join('|') === 'nb-stream stdout:one|nb-stream stderr:two|nb-stream stdout:three', 'outputs ' + parts.join('|'));
   });
 
-  await check('a VM of its own: the Console does not see the notebook\'s variables, nor it the Console\'s', async () => {
-    const a = await nb.eval('nbOnly := 1');
-    assert((await nb.values(a)).join() === '1', 'assigned: ' + await nb.out(a));
-    const loop = await nb.add('[true] whileTrue');
-    await nb.run(loop);
-    await nb.wait(loop, /^running$/);
+  await check('shared VM with the Console: variables and globals are shared in both directions', async () => {
+    const a = await nb.eval('nbShared := 17');
+    assert((await nb.values(a)).join() === '17', 'assigned: ' + await nb.out(a));
     await page.click('#tab-console');
-    assert(/Undeclared/.test(await evalIn(page, 'nbOnly', /\nst> $/)), 'the Console: ' + (await term()).slice(-300));
-    await evalIn(page, '3 + 4', /\n7\nst> $/);
+    await evalIn(page, 'nbShared + 3', /\n20\nst> $/);
+    await evalIn(page, 'consoleShared := 25', /\n25\nst> $/);
     await evalIn(page, 'Smalltalk at: #NbConsoleLate put: 5', /\n5\nst> $/);
     await page.click('#tab-notebook');
-    assert(await nb.status(loop) === 'running', 'the cell still runs');
-    await page.click('#nb-stop');
-    await nb.wait(loop, /^interrupted$/, 5000);
-    const b = await nb.eval('Smalltalk at: #NbConsoleLate ifAbsent: [ #none ]');
-    assert((await nb.values(b)).join() === '#none', 'the notebook: ' + await nb.out(b));
+    const b = await nb.eval('consoleShared + (Smalltalk at: #NbConsoleLate ifAbsent: [ 0 ])');
+    assert((await nb.values(b)).join() === '30', 'the notebook: ' + await nb.out(b));
   });
 
   await check('Stop: the button, i i and Ctrl+C; Esc in an editor stops nothing', async () => {
@@ -1210,21 +1201,27 @@ await run(async t => {
     assert(await nb.src(a).inputValue() === '10 + 1', 'Shift+Tab: ' + JSON.stringify(await nb.src(a).inputValue()));
   });
 
-  await check('Upload from More, then a file-in in a cell; a drop on the tab uploads too', async () => {
+  await check('Upload from More, then a file-in in a cell; File in and a drop on the tab file .st in directly', async () => {
     const [fc] = await Promise.all([page.waitForEvent('filechooser'), nb.menu('upload')]);
     await fc.setFiles({ name: 'nbup.st', mimeType: 'text/plain', buffer: Buffer.from('Smalltalk at: #NbUpVal put: 99!\n') });
     await page.waitForFunction(() => /nbup\.st/.test(document.getElementById('nb-toast-text').textContent));
     const i = await nb.eval("'nbup.st' asFileReference fileIn. Smalltalk at: #NbUpVal");
     assert((await nb.values(i)).join() === '99', 'value ' + await nb.out(i));
-    // a drop on the tab: the kernel gets the file, the Console opens nothing
+    // a drop on the tab: the kernel files in the .st file directly, the Console opens nothing
     const before = await term(), said = await page.textContent('#notice-text');
     const d = await dropOn(page, '#panel-notebook', [{ name: 'nbdrop.st', data: 'Smalltalk at: #NbDropVal put: 98!\n' }]);
     assert(!d.shown && d.took && d.hidden, 'the drop ' + JSON.stringify(d));
-    await page.waitForFunction(() => /nbdrop\.st/.test(document.getElementById('nb-toast-text').textContent));
-    const j = await nb.eval("'nbdrop.st' asFileReference fileIn. Smalltalk at: #NbDropVal");
+    await page.waitForFunction(() => /Filed in nbdrop\.st/.test(document.getElementById('nb-toast-text').textContent));
+    const j = await nb.eval('Smalltalk at: #NbDropVal');
     assert((await nb.values(j)).join() === '98', 'value ' + await nb.out(j));
     assert(await term() === before && await page.textContent('#notice-text') === said,
            'the Console: ' + (await term()).slice(before.length) + ' / ' + await page.textContent('#notice-text'));
+    // the File in button on the Notebook toolbar files in .st directly and shares it with the Console
+    const [fc2] = await Promise.all([page.waitForEvent('filechooser'), page.click('#nb-file-in')]);
+    await fc2.setFiles({ name: 'nbfilein.st', mimeType: 'text/plain', buffer: Buffer.from('Smalltalk at: #NbFileInVal put: 97!\n') });
+    await page.waitForFunction(() => /Filed in nbfilein\.st/.test(document.getElementById('nb-toast-text').textContent));
+    const k = await nb.eval('Smalltalk at: #NbFileInVal');
+    assert((await nb.values(k)).join() === '97', 'value ' + await nb.out(k));
   });
 
   await check('the theme of More re-themes the notebook without a restart; Settings only where git has HTTP', async () => {
@@ -1909,14 +1906,14 @@ await run(async t => {
     assert((await nb.values(i)).join() === '1', 'the kernel booted the first slot: ' + await nb.out(i));
   });
 
-  await check('two VMs in one page: the memory, logged', async () => {
+  await check('one shared VM in the page: the memory, logged', async () => {
     const m = await page.evaluate(async () => {
       if (!self.crossOriginIsolated || !performance.measureUserAgentSpecificMemory)
         return 'not measured (the page is not cross-origin isolated)';
       return Math.round((await performance.measureUserAgentSpecificMemory()).bytes / 1e6) + ' MB';
     });
-    assert(vmWorkers() === 2, 'two VM workers: ' + vmWorkers());
-    console.log('  # the memory of the page with two VMs: ' + m);
+    assert(vmWorkers() === 1, 'one shared VM worker: ' + vmWorkers());
+    console.log('  # the memory of the page with one shared VM: ' + m);
   });
 
   // ---- lockouts

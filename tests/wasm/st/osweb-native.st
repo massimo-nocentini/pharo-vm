@@ -279,6 +279,14 @@ OSWebDriver isSuitable ifFalse: [
 			waitFor value: [ popupMenus value notEmpty ] ] ].
 	key value: 27 value: 0.
 
+	(FileLocator imageDirectory / 'osweb-filein.st') writeStreamDo: [ :stream |
+		stream nextPutAll: 'Smalltalk at: #OSWebFiledIn put: 123'; lf ].
+	(FileLocator imageDirectory / '.web-file-in') writeStreamDo: [ :stream |
+		stream nextPutAll: (FileLocator imageDirectory / 'osweb-filein.st') fullName; lf ].
+	push value: #( 12 0 0 0 0 0 0 0 ).
+	check value: 'file-in request evaluates .web-file-in' value: [
+		waitFor value: [ (Smalltalk at: #OSWebFiledIn ifAbsent: [ nil ]) = 123 ] ].
+
 	say value: 'osweb-native: ' , failures printString , ' failed'.
 	Smalltalk exit: (failures = 0
 			 ifTrue: [ 0 ]

@@ -80,6 +80,8 @@ start
 	"Before every save: see noteWorld.  A registration replaces the one of the same name"
 	SessionManager default registerUserClassNamed: self name.
 	self noteWorld.
+	self startNotebook.
+	self handleErrors.
 	InterruptSemaphore ifNotNil: [ :old | Smalltalk unregisterExternalObject: old ].
 	semaphore := InterruptSemaphore := Semaphore new.
 	self primSetInterruptSemaphore: (Smalltalk registerExternalObject: semaphore).
@@ -89,6 +91,12 @@ start
 	Loop := [ self loop: generation ]
 		forkAt: Processor userSchedulingPriority
 		named: 'WebRepl'! !
+
+!WebRepl class methodsFor: 'running'!
+isInSession
+	"Whether WebRepl is running in this session"
+
+	^ Session == Smalltalk session! !
 
 !WebRepl class methodsFor: 'error handling'!
 handleError: anError
@@ -109,9 +117,12 @@ handleErrors
 	"Be the error handler of the processes that have none of their own, and keep the one it
 	 replaces in Fallback.  Every start of the session, also after a snapshot, installs another
 	 one (ErrorHandlerSessionHandler): so the loop calls this before every prompt.  Pharo 12
-	 keeps it in ErrorHandler defaultErrorHandler, and Pharo 15 in ErrorHandler default"
+	 keeps it in ErrorHandler defaultErrorHandler, and Pharo 15 in ErrorHandler default.  When
+	 NotebookKernel is attached in this VM, let it keep the error handler and Transcript"
 
 	| handler |
+	self isNotebookAttached ifTrue: [
+		^ (Smalltalk at: #NotebookKernel) assertEnvironment ].
 	(ErrorHandler respondsTo: #defaultErrorHandler:)
 		ifTrue: [
 			handler := ErrorHandler defaultErrorHandler.
@@ -249,11 +260,26 @@ isCurrent: generation
 	^ generation = Generation and: [ Session == Smalltalk session ]! !
 
 !WebRepl class methodsFor: 'private'!
+isNotebookAttached
+	"Whether NotebookKernel is attached to this REPL in the same VM"
+
+	| kernel |
+	kernel := Smalltalk globals at: #NotebookKernel ifAbsent: [ ^ false ].
+	^ (kernel respondsTo: #isAttached) and: [ kernel isAttached ]! !
+
+!WebRepl class methodsFor: 'private'!
+isNotebookRequest: aByteArray
+	"Whether aByteArray is a JSON request line of the Notebook kernel: starts with {op:"
+
+	^ aByteArray beginsWith: #[123 34 111 112 34 58]! !
+
+!WebRepl class methodsFor: 'private'!
 loop: generation
 	"Prompt, then evaluate every line that comes on stdin, up to its LF, and prompt again.  At the
 	 end of the input, evaluate what is left of it and quit"
 
 	| pending chunk end |
+	self isNotebookAttached ifTrue: [ ^ self loopWithNotebook: generation ].
 	pending := ByteArray new.
 	self prompt.
 	[ (chunk := self readChunk) isEmpty ] whileFalse: [
@@ -264,6 +290,33 @@ loop: generation
 			(self isCurrent: generation) ifFalse: [ ^ self ].
 			self prompt ] ].
 	self evaluate: (self decode: pending) generation: generation.
+	(self isCurrent: generation) ifFalse: [ ^ self ].
+	self write: String lf on: Stdio stdout.
+	Smalltalk snapshot: false andQuit: true! !
+
+!WebRepl class methodsFor: 'private'!
+loopWithNotebook: generation
+	"Read stdin through NotebookKernel>>#nextLine, serving JSON notebook requests on the event
+	 stream and evaluating Console lines with shared workspace variables"
+
+	| kernel line |
+	kernel := Smalltalk at: #NotebookKernel.
+	self prompt.
+	[ (line := kernel nextLine) notNil ] whileTrue: [
+		(self isCurrent: generation) ifFalse: [ ^ self ].
+		(self isNotebookRequest: line)
+			ifTrue: [
+				AtPrompt := false.
+				kernel serveFromRepl: line.
+				(self isCurrent: generation) ifFalse: [ ^ self ].
+				AtPrompt := true ]
+			ifFalse: [
+				kernel clearServing.
+				self evaluate: (self decode: line) generation: generation.
+				(self isCurrent: generation) ifFalse: [ ^ self ].
+				self prompt ] ].
+	(self isCurrent: generation) ifFalse: [ ^ self ].
+	self evaluate: (self decode: kernel takePending) generation: generation.
 	(self isCurrent: generation) ifFalse: [ ^ self ].
 	self write: String lf on: Stdio stdout.
 	Smalltalk snapshot: false andQuit: true! !
@@ -317,7 +370,10 @@ run: aString generation: generation
 
 	| text failed |
 	failed := false.
-	text := [ (Smalltalk compiler evaluate: aString) printString ]
+	text := [
+		(self isNotebookAttached
+			ifTrue: [ (Smalltalk at: #NotebookKernel) evaluateInRepl: aString ]
+			ifFalse: [ Smalltalk compiler evaluate: aString ]) printString ]
 		on: UnhandledException
 		do: [ :exception |
 			((exception isKindOf: UnhandledError) and: [ exception exception isKindOf: Warning ])
@@ -329,21 +385,44 @@ run: aString generation: generation
 	self write: text , String lf on: (failed ifTrue: [ Stdio stderr ] ifFalse: [ Stdio stdout ])! !
 
 !WebRepl class methodsFor: 'private'!
+startNotebook
+	"When the driver opened the notebook events device (NOTEBOOK_EVENTS), load web-notebook.st
+	 without logging to the .changes so NotebookKernel attaches to this REPL in the same VM"
+
+	| path notebook importer |
+	path := OSEnvironment current at: 'NOTEBOOK_EVENTS' ifAbsent: [ nil ].
+	(path isNil or: [ path isEmpty ]) ifTrue: [ ^ self ].
+	notebook := FileLocator imageDirectory / 'st' / 'web-notebook.st'.
+	notebook exists ifFalse: [ ^ self ].
+	[	importer := CodeImporter fileNamed: notebook fullName.
+		importer logSource: false.
+		importer parseChunks.
+		importer evaluate ]
+		on: Error
+		do: [ :error |
+			self write: 'web-notebook.st: ' , error description , String lf on: Stdio stderr ]! !
+
+!WebRepl class methodsFor: 'private'!
 watch: aSemaphore
-	"Stop signals aSemaphore: terminate the evaluation that runs.  When none runs, do nothing.  The
-	 ensure: of the evaluation tells the loop that it ended, and terminate waits for it.  But an
-	 evaluation that did not start yet (a process of its priority, which an earlier one forked, was
-	 ahead of it) has no ensure: to unwind: tell the loop then.  A second signal of the semaphore
-	 of an evaluation that ended does no harm, nobody waits on it again"
+	"Stop signals aSemaphore: terminate the evaluation that runs.  When none runs and the notebook
+	 kernel is attached, let it stop its running or queued cell.  The ensure: of the evaluation
+	 tells the loop that it ended, and terminate waits for it.  But an evaluation that did not start
+	 yet (a process of its priority, which an earlier one forked, was ahead of it) has no ensure: to
+	 unwind: tell the loop then.  A second signal of the semaphore of an evaluation that ended does
+	 no harm, nobody waits on it again"
 
 	[	aSemaphore wait; consumeAllSignals.
-		EvalProcess ifNotNil: [ :process |
-			| done |
-			done := EvalDone.
-			EvalProcess := EvalDone := nil.
-			self write: 'Interrupted.' , String lf on: Stdio stderr.
-			process terminate.
-			done ifNotNil: [ done signal ] ] ] repeat! !
+		EvalProcess
+			ifNotNil: [ :process |
+				| done |
+				done := EvalDone.
+				EvalProcess := EvalDone := nil.
+				self write: 'Interrupted.' , String lf on: Stdio stderr.
+				process terminate.
+				done ifNotNil: [ done signal ] ]
+			ifNil: [
+				self isNotebookAttached ifTrue: [
+					(Smalltalk at: #NotebookKernel) stop ] ] ] repeat! !
 
 !WebRepl class methodsFor: 'private'!
 write: aString on: aStream

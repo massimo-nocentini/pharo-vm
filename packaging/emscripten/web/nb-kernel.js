@@ -394,8 +394,8 @@
     let tasks = [], running = false;
     // the Stop watchdog: when the Stop was, and the deadline
     let watchdog = null, stopAt = 0, deadline = 0;
-    // stopBackground()'s and writeFile()'s answers to come
-    let stopWaiters = [], fsWaiters = new Map(), fsId = 0;
+    // stopBackground()'s, fileIn()'s and writeFile()'s answers to come
+    let stopWaiters = [], fileInWaiters = new Map(), fileInRid = 0x20000000, fsWaiters = new Map(), fsId = 0;
     let gitProxy;                       // setGitProxy()'s, else init's
     let disposed = false;
 
@@ -422,6 +422,8 @@
       // nothing is left in the background, nor any file to write
       for (const f of stopWaiters) f(0);
       stopWaiters = [];
+      for (const f of fileInWaiters.values()) f('the kernel was stopped');
+      fileInWaiters = new Map();
       for (const f of fsWaiters.values()) f('the kernel was stopped');
       fsWaiters = new Map();
     }
@@ -462,7 +464,7 @@
 
     // ---- the worker
 
-    function spawn() {
+    function spawn(reset) {
       kill();
       const g = gen;
       execCount = 0;
@@ -490,6 +492,7 @@
           worker.onmessageerror = () => { if (g === gen) log('protocol', 'a message of the worker could not be decoded'); };
           const init = Object.assign({}, get(o.init, {}));
           if (gitProxy !== undefined) init.gitProxy = gitProxy;
+          if (reset) init.reset = true;
           worker.postMessage(Object.assign(init, { type: 'init', mode: 'notebook', wasmModule }));
           // (the worker keeps them until it is ready, and the first run
           // comes after hello)
@@ -739,6 +742,14 @@
         if (f) f(isCount(ev.count) ? ev.count : 0);
         break;
       }
+      case 'filed-in': {
+        const f = fileInWaiters.get(ev.rid);
+        if (f) {
+          fileInWaiters.delete(ev.rid);
+          f(ev.error ? String(ev.error) : null);
+        }
+        break;
+      }
       case 'pong': break;
       case 'bad-request':
         log('protocol', 'bad request: ' + String(ev.text));
@@ -863,7 +874,19 @@
         if (current) finish({ status: 'killed', reason: 'restart' });
         cancelQueue('restart');
         if (was !== 'off' && was !== 'unavailable') log('kernel', 'kernel restarted');
-        return spawn();
+        return spawn(true);
+      },
+      // File in each path in paths into the kernel: answers null once filed
+      // in, or the error string; never rejects
+      fileIn(paths) {
+        const list = Array.isArray(paths) ? paths.map(String).filter(Boolean) : [];
+        if (!list.length) return Promise.resolve(null);
+        return spawnIfNeeded().then(() => new Promise(resolve => {
+          if (!w || disposed) { resolve('the kernel is not running'); return; }
+          const rid = ++fileInRid;
+          fileInWaiters.set(rid, resolve);
+          request({ op: 'file-in', rid, files: list });
+        }), e => (e && e.reason) || 'the kernel is not running');
       },
       // Terminate the processes that cells forked: answers how many (0 when
       // there is no kernel).  Served after the running cell.

@@ -658,6 +658,24 @@ await run(async t => {
     await evalTo(sourcesSize, new RegExp('\\n' + siteSources.size + '\\nst> $'));
   });
 
+  await check('File in button and dropping a .st file on the Console file it into the running image', async () => {
+    const st1 = path.join(tmp, t.name + '-filein1.st');
+    const st2 = path.join(tmp, t.name + '-filein2.st');
+    fs.writeFileSync(st1, 'Smalltalk at: #ConsoleFileIn1 put: 41!\n');
+    fs.writeFileSync(st2, 'Smalltalk at: #ConsoleFileIn2 put: 42!\n');
+    await mark();
+    await page.setInputFiles('#file-in-input', st1);
+    await waitSince(/CodeImporter evaluateFileNamed: '\/pharo\/[^']*filein1\.st'[\s\S]*st> $/, 30000);
+    await waitStatus('waiting');
+    await evalTo('Smalltalk at: #ConsoleFileIn1', /\n41\nst> $/);
+    await mark();
+    const d = await dropFiles(page, [st2]);
+    assert(d.shown && d.took && d.hidden, 'the .st drop ' + JSON.stringify(d));
+    await waitSince(/CodeImporter evaluateFileNamed: '\/pharo\/[^']*filein2\.st'[\s\S]*st> $/, 30000);
+    await waitStatus('waiting');
+    await evalTo('Smalltalk at: #ConsoleFileIn2', /\n42\nst> $/);
+  });
+
   // An image without OSWindow-Web, the stock one of the build, is offered
   // the preparation for the world page
   const stock = path.join(t.webDir, '..', 'image', 'stock');

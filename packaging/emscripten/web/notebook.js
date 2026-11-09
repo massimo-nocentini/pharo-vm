@@ -156,7 +156,7 @@
     if (kernel) return kernel;
     if (unavailable() || !K) return null;
     kernel = K.create({
-      createWorker: () => new Worker(P.workerUrl),
+      createWorker: () => (P.notebookWorker ? P.notebookWorker() : new Worker(P.workerUrl)),
       getModule: () => P.wasmModule(),  // the Console's: compiled once
       // (asked at each start: the Console may run another image by then)
       init: () => Object.assign({ manifestUrl: 'manifest.json' + P.Q, build: P.BUILD, persist: true, gitProxy: P.gitProxy() },
@@ -1103,7 +1103,7 @@
   // nothing can run in this page (P.unavailable): the controls that would
   // are disabled, and the notice says why
   function lockOut() {
-    for (const id of ['nb-run-all', 'nb-restart']) $(id).disabled = true;
+    for (const id of ['nb-run-all', 'nb-restart', 'nb-file-in']) $(id).disabled = true;
     for (const act of ['restart-run', 'upload', 'stop-background']) {
       const b = menuItem(act);
       if (b) b.setAttribute('aria-disabled', 'true');
@@ -1585,11 +1585,13 @@
     announce('Imported ' + f.name + ': ' + res.cells.length + ' cells');
   });
 
-  // into the kernel's /pharo, now when it runs, and into every new one
-  async function upload(files) {
+  // into the kernel's /pharo, now when it runs, and into every new one;
+  // .st files from File in or a drop on the tab are filed in at once
+  async function upload(files, autoFileIn) {
     if (!files.length) return;
     if (unavailable() || !K) { unavailableNow(); return; }
     const names = [];
+    const live = kernel && kernelState !== 'off' && kernelState !== 'dead';
     for (const f of files) {
       const name = f.name.replace(/^.*[\\/]/, '') || 'upload';
       let data;
@@ -1598,21 +1600,39 @@
       uploads.set(name, data);
       names.push(name);
       // (a kernel not running gets it when it starts: files)
-      const why = kernel && kernelState !== 'off' && kernelState !== 'dead' && await kernel.writeFile(HOME + name, data);
+      const why = live && await kernel.writeFile(HOME + name, data);
       if (why) log('kernel', 'could not write ' + name + ': ' + why);
     }
     if (!names.length) return;
+    const stNames = autoFileIn ? names.filter(n => /\.st$/i.test(n)) : [];
+    if (stNames.length) {
+      const k = ensureKernel();
+      if (!k) return;
+      const err = await k.fileIn(stNames.map(n => HOME + n));
+      if (err) {
+        showNotice('upload', 'Could not file in ' + clip(stNames.join(', '), 60) + ': ' + err);
+        return;
+      }
+      toast('Filed in ' + clip(names.join(', '), 60) + '.', null, null, 6000);
+      return;
+    }
     toast('Uploaded ' + clip(names.join(', '), 60) + '. File it in with \'' + names[0] + '\' asFileReference fileIn.', null, null, 6000);
   }
   $('nb-upload').addEventListener('change', e => {
     const files = [...e.target.files];
     e.target.value = '';
-    upload(files);
+    upload(files, false);
   });
-  // Files dropped on the tab are uploaded.  page.js's handlers, on the
-  // capture phase of window, see the drag first: they count it, but show
-  // their overlay and open an image only while the Console's tab shows, and
-  // leave dragover over this panel to these.
+  $('nb-file-in').addEventListener('click', () => $('nb-file-in-input').click());
+  $('nb-file-in-input').addEventListener('change', e => {
+    const files = [...e.target.files];
+    e.target.value = '';
+    upload(files, true);
+  });
+  // Files dropped on the tab are uploaded (and .st files filed in).  page.js's
+  // handlers, on the capture phase of window, see the drag first: they count
+  // it, but show their overlay and open an image only while the Console's tab
+  // shows, and leave dragover over this panel to these.
   const hasFiles = e => !!e.dataTransfer && [...e.dataTransfer.types].includes('Files');
   panel.addEventListener('dragover', e => {
     if (!hasFiles(e)) return;
@@ -1627,7 +1647,7 @@
     if (!hasFiles(e)) return;
     e.preventDefault();
     e.stopPropagation();
-    upload([...e.dataTransfer.files]);
+    upload([...e.dataTransfer.files], true);
   });
 
   // the git proxy goes to a running kernel at once

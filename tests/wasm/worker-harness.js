@@ -187,8 +187,8 @@ function session(init = {}, { autoAck = true, encodeGzip = false, display = fals
       s.progress.push(m);
       break;
     case 'ready':
-      if (s.states.length) s.error = s.error || new Error('ready after the first state');
-      s.ready = m;
+      if (!s.ready && s.states.length) s.error = s.error || new Error('ready after the first state');
+      if (!s.ready) s.ready = m;
       break;
     case 'output':
       // the events of the notebook kernel are bytes, acked as such
@@ -706,6 +706,39 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       X.post(request(3, '6 * 7'));
       assert(JSON.stringify((await doneOf(X, 3)).values) === '["42"]', 'the kernel goes on');
     } finally { await X.close(); current = S; }
+  });
+
+  await check('W-NB5 shared Console and Notebook VM: shared variables and globals, file-in, and hello reset', async () => {
+    current = S;
+    S.send('sharedFromConsole := 10. Smalltalk at: #SharedGlobal put: 20. #ok\n');
+    await S.expectOut(val('#ok'));
+    await S.prompt();
+    const m0 = S.msgs.length;
+    S.post({ type: 'init', mode: 'notebook', reset: false });
+    await waitFor('notebook ready', () => S.msgs.slice(m0).find(m => m.type === 'ready' && m.mode === 'notebook'));
+    await waitFor('hello', () => events(S).find(e => e.ev === 'hello'));
+    S.post(request(10, 'nbFromCell := sharedFromConsole + (Smalltalk at: #SharedGlobal)'));
+    const done10 = await doneOf(S, 10);
+    assert(done10.status === 'ok' && JSON.stringify(done10.values) === '["30"]', 'done10 ' + JSON.stringify(done10));
+    S.mark();
+    S.send('nbFromCell + 5\n');
+    await S.expectOut(val('35'));
+    await S.prompt();
+    await S.fs('writeFile', '/pharo/shared-filein.st',
+               { data: new TextEncoder().encode('Smalltalk at: #SharedFiledIn put: 77!\n') });
+    S.post({ type: 'input', text: JSON.stringify({ op: 'file-in', rid: 99, files: ['/pharo/shared-filein.st'] }) + '\n' });
+    const filedIn = await waitFor('filed-in', () => events(S).find(e => e.ev === 'filed-in' && e.rid === 99));
+    assert(!filedIn.error, 'filedIn ' + JSON.stringify(filedIn));
+    S.mark();
+    S.send('Smalltalk at: #SharedFiledIn\n');
+    await S.expectOut(val('77'));
+    await S.prompt();
+    const hellosBefore = events(S).filter(e => e.ev === 'hello').length;
+    S.post({ type: 'init', mode: 'notebook', reset: true });
+    await waitFor('second hello', () => events(S).filter(e => e.ev === 'hello').length > hellosBefore);
+    S.post(request(11, 'nbFromCell'));
+    const done11 = await doneOf(S, 11);
+    assert(done11.status === 'error' && /Undeclared/i.test(done11.error.text), 'done11 ' + JSON.stringify(done11));
   });
 
   await check('11 a store that refuses: saved {error} says Download, and the REPL goes on', async () => {

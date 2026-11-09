@@ -784,6 +784,22 @@ await run(async t => {
     p = await probe('the world of the dropped image', p => p.driver === 'OSWebDriver' && p.menubar.length);
   });
 
+  await check('File in button and dropping a .st file on the world file it into the running image', async () => {
+    const st1 = path.join(tmp, t.name + '-world-filein1.st');
+    const st2 = path.join(tmp, t.name + '-world-filein2.st');
+    fs.writeFileSync(st1, "'/pharo/world-filein1.txt' asFileReference writeStreamDo: [ :s | s nextPutAll: 'one' ]!\n");
+    fs.writeFileSync(st2, "'/pharo/world-filein2.txt' asFileReference writeStreamDo: [ :s | s nextPutAll: 'two' ]!\n");
+    await page.setInputFiles('#file-in-input', st1);
+    await noticeSays(/^Filed in .*world-filein1\.st\.$/, 10000);
+    await page.waitForFunction(() => window.PharoWorld.readFile('/pharo/world-filein1.txt').then(d => new TextDecoder().decode(d) === 'one', () => false),
+                               null, { timeout: 15000 });
+    const d = await dropFiles(page, [st2]);
+    assert(d.shown && d.took && d.hidden, 'the .st drop ' + JSON.stringify(d));
+    await noticeSays(/^Filed in .*world-filein2\.st\.$/, 10000);
+    await page.waitForFunction(() => window.PharoWorld.readFile('/pharo/world-filein2.txt').then(d => new TextDecoder().decode(d) === 'two', () => false),
+                               null, { timeout: 15000 });
+  });
+
   // ---- the images saved in this browser (images.js)
 
   // Images open, and its saved rows: [slot, name, running, href of the Console]
