@@ -17,7 +17,8 @@
 #          SimdJSON-Tests.st; compat: SimdJSON-NeoTests.st, which generates
 #          the SJ* classes from NeoJSON's tests;
 #   test   the package SimdJSON-Tests (SimdJSONSlowTests are skipped unless
-#          SJ_SLOW is set); compat: SimdJSON-NeoTests, then the report of the
+#          SJ_SLOW is set); compat: SimdJSON-NeoTests and the package of the
+#          SJ* classes, SimdJSON-NeoTests-Generated, then the report of the
 #          SJ* classes (SimdJSONNeoTestGenerator report): what passed, and
 #          which tests NeoJSON passes only by its leniency.
 #
@@ -174,6 +175,7 @@ run_package() {
 run_package SimdJSON-Tests
 if test -n "$COMPAT"; then
     run_package SimdJSON-NeoTests
+    run_package SimdJSON-NeoTests-Generated
     pharo eval 'SimdJSONNeoTestGenerator report' >"$WORK/report.out" 2>&1
     sed 's/^/    /' "$WORK/report.out"
     total=$(sed -n "s/^'SJ\*: \([0-9]*\)\/\([0-9]*\) passed'$/\1 \2/p" "$WORK/report.out")

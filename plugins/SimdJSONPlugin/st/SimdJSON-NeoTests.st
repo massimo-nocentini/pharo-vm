@@ -25,13 +25,15 @@ in does not matter.
 	                           SJ<name>, with every method that reads or writes
 	                           JSON recompiled to do it with SimdJSONReader and
 	                           SimdJSONWriter, and to expect SimdJSON's errors; a test that only NeoJSON's
-	                           leniency passes is skipped (lenientTests).  The
+	                           leniency passes is skipped (lenientTests), in
+	                           the package SimdJSON-NeoTests-Generated.  The
 	                           last chunk of this file runs it.
 	                           SimdJSONNeoTestGenerator report runs those
 	                           classes and prints what passed.
 
 	pharo --headless X.image --no-default-preferences st --save --quit SimdJSON-NeoTests.st
 	pharo --headless X.image --no-default-preferences test --fail-on-failure SimdJSON-NeoTests
+	pharo --headless X.image --no-default-preferences test --fail-on-failure SimdJSON-NeoTests-Generated
 	pharo --headless X.image --no-default-preferences eval 'SimdJSONNeoTestGenerator report'
 
 The file is ASCII; every method has a methodsFor: section of its own; NeoJSON
@@ -537,6 +539,13 @@ generatedClasses
 		thenSelect: [ :each | each notNil ]! !
 
 !SimdJSONNeoTestGenerator class methodsFor: 'accessing'!
+generatedPackageName
+	"The package of the SJ<name> classes: not SimdJSON-NeoTests, whose repository does not
+	 track them"
+
+	^ 'SimdJSON-NeoTests-Generated'! !
+
+!SimdJSONNeoTestGenerator class methodsFor: 'accessing'!
 lenientTests
 	"The tests of NeoJSON, by class, that read an input which only NeoJSON's leniency
 	 accepts, and which SimdJSONReader refuses: testIntegers reads 00123, -0123 and 00,
@@ -563,7 +572,7 @@ generateFor: aClass
 	| class |
 	class := (aClass << ('SJ' , aClass name) asSymbol
 		tag: 'Generated';
-		package: 'SimdJSON-NeoTests') install.
+		package: self generatedPackageName) install.
 	class class compile: 'shouldInheritSelectors' , String cr , String tab , '^ true' classified: 'testing'.
 	(self selectorsToRewriteIn: aClass) do: [ :each |
 		class compile: (self rewrite: (aClass lookupSelector: each) sourceCode) classified: 'simdjson' ].
