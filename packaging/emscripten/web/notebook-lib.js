@@ -1353,6 +1353,64 @@
     return out.join('');
   }
 
+  // The markup of an SVG without the attributes of event handlers (a name,
+  // or the local part of one, that starts with on), in time linear in it.
+  // rebuild drops them anyway, but Chromium reports each one that a parser
+  // sees as a violation of the page's CSP (script-src-attr), even in an
+  // inert document.  It follows the start tags of well-formed XML; at
+  // anything else (an attribute without a quoted value, an unclosed
+  // comment) it leaves the rest as it is, which the parser rejects, or
+  // whose handlers rebuild drops as before.
+  function dropHandlers(src) {
+    const s = String(src), n = s.length, out = [];
+    const ws = c => c === ' ' || c === '\t' || c === '\n' || c === '\r';
+    const past = (from, to) => { const e = s.indexOf(to, from); return e < 0 ? -1 : e + to.length; };
+    let from = 0, i = s.indexOf('<');
+    scan: while (i >= 0) {
+      if (s.startsWith('<!--', i)) i = past(i + 4, '-->');
+      else if (s.startsWith('<![CDATA[', i)) i = past(i + 9, ']]>');
+      else if (s.startsWith('<?', i) || s[i + 1] === '/') i = past(i + 2, s[i + 1] === '/' ? '>' : '?>');
+      else if (s[i + 1] === '!') {                 // a doctype: its subset in [], quoted strings
+        let j = i + 2, depth = 0;
+        for (; j < n; j++) {
+          const c = s[j];
+          if (c === '"' || c === '\'') { j = s.indexOf(c, j + 1); if (j < 0) break; }
+          else if (c === '[') depth++;
+          else if (c === ']') depth--;
+          else if (c === '>' && depth <= 0) break;
+        }
+        i = j < 0 || j >= n ? -1 : j + 1;
+      } else {
+        let j = i + 1;
+        while (j < n && !ws(s[j]) && s[j] !== '/' && s[j] !== '>') j++;
+        for (;;) {                                  // j: past the name or the last attribute
+          let k = j;
+          while (k < n && ws(s[k])) k++;
+          if (k >= n) break scan;
+          if (s[k] === '>' || s[k] === '/') { i = k; break; }
+          let m = k;
+          while (m < n && !ws(s[m]) && s[m] !== '=' && s[m] !== '/' && s[m] !== '>') m++;
+          let q = m;
+          while (q < n && ws(s[q])) q++;
+          if (s[q] !== '=') break scan;
+          q++;
+          while (q < n && ws(s[q])) q++;
+          if (s[q] !== '"' && s[q] !== '\'') break scan;
+          const end = s.indexOf(s[q], q + 1);
+          if (end < 0) break scan;
+          const name = s.slice(k, m);
+          if (/^on/i.test(name.slice(name.indexOf(':') + 1))) { out.push(s.slice(from, j)); from = end + 1; }
+          j = end + 1;
+        }
+      }
+      if (i < 0) break;
+      i = s.indexOf('<', i);
+    }
+    if (!out.length) return s;
+    out.push(s.slice(from));
+    return out.join('');
+  }
+
   function sanitizeMarkup(str, kind, idPrefix, doc) {
     doc = doc || document;
     const prefix = idPrefix || '';
@@ -1360,7 +1418,7 @@
     // as many elements from uses as the markup has characters
     const budget = Math.max(2000, String(str).length);
     if (kind === 'svg') {
-      const d = P.parseFromString(String(str), 'image/svg+xml');
+      const d = P.parseFromString(dropHandlers(str), 'image/svg+xml');
       if (d.getElementsByTagName('parsererror').length || !d.documentElement || d.documentElement.namespaceURI !== SVG_NS)
         throw new Error('the SVG is not well-formed XML');
       const frag = doc.createDocumentFragment();
@@ -1523,7 +1581,7 @@
     };
   }
 
-  return { renderMarkdown, sanitizeMarkup, tidyHtml, rebuildHtml, toJson, fromJson, cleanOutput, cleanError, limitOutputs,
+  return { renderMarkdown, sanitizeMarkup, tidyHtml, dropHandlers, rebuildHtml, toJson, fromJson, cleanOutput, cleanError, limitOutputs,
            highlightLines, highlightDom, colorCode, newId, safeHref, safeImageSrc, slug, LIMITS, MAX_NEST, MAX_WORK,
            HIGHLIGHT_MAX };
 });

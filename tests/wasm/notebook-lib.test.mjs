@@ -765,6 +765,36 @@ await check('tidyHtml is linear: 4 MB of <, of comments, of unclosed tags, attri
   }
 });
 
+// (sanitizeMarkup parses an SVG of it: Chromium reports each handler that a
+// parser sees to the page's CSP, even in an inert document)
+await check('dropHandlers takes the handlers out of an SVG, and nothing else; linear on 4 MB inputs', () => {
+  const cases = [
+    ['<svg xmlns="http://www.w3.org/2000/svg"><rect onclick="x" width="2"/></svg>',
+     '<svg xmlns="http://www.w3.org/2000/svg"><rect width="2"/></svg>'],
+    ['<rect width="2" ONLOAD = \'a>"b\' />', '<rect width="2" />'],
+    ['<a xlink:onclick="x" href="#h">t</a>', '<a href="#h">t</a>'],
+    ['<g\n\tonmouseover="x"\n>t</g>', '<g\n>t</g>'],
+    ['<rect opacity="1" one="1" on="2"/>', '<rect opacity="1"/>'],
+    ['<!-- <rect onclick="x"/> --><rect onclick="y"/>', '<!-- <rect onclick="x"/> --><rect/>'],
+    ['<text>a > b</text><rect onclick="x"/>', '<text>a > b</text><rect/>'],
+    ['</g ><rect onclick="x"/>', '</g ><rect/>'],
+    ['<!DOCTYPE svg [<!ENTITY e "x>y"> <!-- ] -->]><svg onload="x"/>', '<!DOCTYPE svg [<!ENTITY e "x>y"> <!-- ] -->]><svg/>'],
+    ['<![CDATA[<rect onclick="x"/>]]>'], ['<?pi <rect onclick="x"/> ?>'], ['<!-- <rect onclick="x"/>'],
+    ['<rect width="2"/>'], ['<rect onclick=x width="2"/>'], ['<rect width="2" onclick="x'], ['<rect onclick'], ['a < b'],
+  ];
+  for (const [src, want] of cases) eq(Lib.dropHandlers(src), want === undefined ? src : want, J(src));
+  const inputs = {
+    'handlers': '<r a="1" onclick="x"/>'.repeat(200000), '<': '<'.repeat(4000000), 'attributes': '<r ' + 'a="1" '.repeat(700000),
+    'quotes': '<r a="' + '\''.repeat(4000000), 'doctype': '<!DOCTYPE [' + '"]'.repeat(2000000), 'comments': '<!--'.repeat(1000000),
+  };
+  for (const [k, src] of Object.entries(inputs)) {
+    const t = now();
+    const r = Lib.dropHandlers(src);
+    const ms = now() - t;
+    assert(ms < 3000 && (k !== 'handlers' || r === '<r a="1"/>'.repeat(200000)), k + ' in ' + ms.toFixed(0) + ' ms');
+  }
+});
+
 // ---- the scanner of the image
 
 // The methods that tests/wasm/st/nb-scan-corpus.st writes, [name, source,

@@ -1144,8 +1144,8 @@ await run(async t => {
         '<option>a<br>b</option>c', '<fieldset><legend>l</legend>x<b>y</fieldset>z', '<option><b>x</option>y',
         '<p>a<form>b<input value=1>c</form>d', '<select><option>a<option>b</select>c', '<canvas>t<!---->u</canvas>v',
         '<bdi>a<b>b</b></bdi>c', '<p dir=rtl>x<bdi dir=ltr>y</bdi><span dir=auto>z</span>', '<foo bar=1>x<div>y</div></foo>z',
-        '<listing>a<li>b</listing>c', '<menu><li>a<li>b</menu>', '<details name=a open onclick=x><summary>s</summary>d</details>',
-        '<svg><foreignObject><b>x</b></foreignObject><desc>d<b>e</b></desc><animate/><rect onclick=f width=2 viewBox="0 0 1 1"/></svg>',
+        '<listing>a<li>b</listing>c', '<menu><li>a<li>b</menu>', '<details name=a open><summary>s</summary>d</details>',
+        '<svg><foreignObject><b>x</b></foreignObject><desc>d<b>e</b></desc><animate/><rect width=2 viewBox="0 0 1 1"/></svg>',
         '<math><mi>x</mi></math>y', '<div>'.repeat(70) + 'deep<p>er</p>', '<b>'.repeat(70) + 'deep', 'a&amp<option>x</option>;b',
         '<table><tr><td><select><option>1</select>x</td></tr></table>', '<p>1<object>2<p>3</object>4', '<ul><li>a<dialog>b</ul>c',
       ];
