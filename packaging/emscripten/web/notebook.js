@@ -156,7 +156,7 @@
     if (kernel) return kernel;
     if (unavailable() || !K) return null;
     kernel = K.create({
-      createWorker: () => (P.notebookWorker ? P.notebookWorker() : new Worker(P.workerUrl)),
+      createWorker: () => new Worker(P.workerUrl),
       getModule: () => P.wasmModule(),  // the Console's: compiled once
       // (asked at each start: the Console may run another image by then)
       init: () => Object.assign({ manifestUrl: 'manifest.json' + P.Q, build: P.BUILD, persist: true, gitProxy: P.gitProxy() },
@@ -1356,7 +1356,7 @@
   // ---- toolbar, menu, notices
 
   function updateToolbar() {
-    const busy = !!(kernel && (kernel.current || kernel.queueLength));
+    const busy = !!(kernel && (kernel.current || kernel.queueLength || kernel.filingIn));
     $('nb-stop').setAttribute('aria-disabled', String(!busy));
   }
   $('nb-run-all').addEventListener('click', runAll);
@@ -1606,14 +1606,16 @@
     if (!names.length) return;
     const stNames = autoFileIn ? names.filter(n => /\.st$/i.test(n)) : [];
     if (stNames.length) {
+      const others = names.filter(n => !stNames.includes(n));
+      const also = others.length ? ' Uploaded ' + clip(others.join(', '), 60) + '.' : '';
       const k = ensureKernel();
       if (!k) return;
       const err = await k.fileIn(stNames.map(n => HOME + n));
       if (err) {
-        showNotice('upload', 'Could not file in ' + clip(stNames.join(', '), 60) + ': ' + err);
+        showNotice('upload', 'Could not file in ' + clip(stNames.join(', '), 60) + ': ' + err + '.' + also);
         return;
       }
-      toast('Filed in ' + clip(names.join(', '), 60) + '.', null, null, 6000);
+      toast('Filed in ' + clip(stNames.join(', '), 60) + '.' + also, null, null, 6000);
       return;
     }
     toast('Uploaded ' + clip(names.join(', '), 60) + '. File it in with \'' + names[0] + '\' asFileReference fileIn.', null, null, 6000);

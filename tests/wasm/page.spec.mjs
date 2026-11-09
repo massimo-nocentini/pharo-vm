@@ -674,6 +674,15 @@ await run(async t => {
     await waitSince(/CodeImporter evaluateFileNamed: '\/pharo\/[^']*filein2\.st'[\s\S]*st> $/, 30000);
     await waitStatus('waiting');
     await evalTo('Smalltalk at: #ConsoleFileIn2', /\n42\nst> $/);
+    // a quote in the name is doubled in the literal; a control character
+    // would end the line of the REPL: it becomes _
+    await mark();
+    await page.setInputFiles('#file-in-input', [
+      { name: "o'filein3.st", mimeType: 'text/plain', buffer: Buffer.from('Smalltalk at: #ConsoleFileIn3 put: 43!\n') },
+      { name: 'filein\t4.st', mimeType: 'text/plain', buffer: Buffer.from('Smalltalk at: #ConsoleFileIn4 put: 44!\n') }]);
+    await waitSince(/\{ '\/pharo\/o''filein3\.st'\. '\/pharo\/filein_4\.st' \} do: \[ :p \| CodeImporter evaluateFileNamed: p \][\s\S]*st> $/, 30000);
+    await waitStatus('waiting');
+    await evalTo('(Smalltalk at: #ConsoleFileIn3) + (Smalltalk at: #ConsoleFileIn4)', /\n87\nst> $/);
   });
 
   // An image without OSWindow-Web, the stock one of the build, is offered

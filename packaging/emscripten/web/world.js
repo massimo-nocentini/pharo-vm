@@ -1090,12 +1090,24 @@
   // ---- Open: an image of your own (open-image.js), or file in .st files
 
   const isStFile = f => !!(f && /\.st$/i.test(f.name));
+  // the name of a file in /pharo: no directory, and no control characters,
+  // which would split the list of paths (OSWebDriver>>#fileInPending)
+  const stName = f => f.name.replace(/^.*[\\/]/, '').replace(/[\x00-\x1f\x7f]/g, '_') || 'file.st';
+  // every file-in request writes a list of its own, which the image takes
+  // when the request comes: they sort in the order of the requests
+  let fileInSeq = 0;
+  const fileInList = () => '/pharo/.web-file-in-' + String(Date.now()).padStart(15, '0') + '-' +
+                           String(++fileInSeq).padStart(6, '0');
+  // Write the .st files chosen or dropped to /pharo, list them, and ask the
+  // world to file them in (FILE_IN_REQUEST): it does on a process of its
+  // own, which shows its errors in the world
   async function fileInFiles(files) {
-    files = (files || []).filter(isStFile);
-    if (!files.length || !live()) return;
+    const st = (files || []).filter(isStFile);
+    if (!st.length) { showNotice('Only Smalltalk source files (.st) can be filed in.', null, null, 6000); return; }
+    if (!live()) { showNotice('The world is not running: file in once it shows.', null, null, 6000); return; }
     const paths = [], names = [];
-    for (const f of files) {
-      const name = f.name.replace(/^.*[\\/]/, '') || 'file.st';
+    for (const f of st) {
+      const name = stName(f);
       let data;
       try { data = new Uint8Array(await f.arrayBuffer()); }
       catch (e) { showNotice('Could not read ' + name + ': ' + ((e && e.message) || e), null, null, 6000); continue; }
@@ -1104,12 +1116,13 @@
       paths.push('/pharo/' + name);
       names.push(name);
     }
-    if (!paths.length || !live()) return;
+    if (!paths.length) return;
+    if (!live()) { showNotice('The world stopped: nothing was filed in.', null, null, 6000); return; }
     const listBytes = new TextEncoder().encode(paths.join('\n') + '\n');
-    try { await request({ type: 'fs', op: 'writeFile', path: '/pharo/.web-file-in', data: listBytes }); }
+    try { await request({ type: 'fs', op: 'writeFile', path: fileInList(), data: listBytes }); }
     catch (e) { showNotice('Could not file in: ' + ((e && e.message) || e), null, null, 6000); return; }
     record(FILE_IN_REQUEST);
-    showNotice('Filed in ' + names.join(', ') + '.', null, null, 6000);
+    showNotice('Filing in ' + names.join(', ') + ' in the world.', null, null, 6000);
   }
 
   // Open the files chosen or dropped; the VM is replaced only once they are

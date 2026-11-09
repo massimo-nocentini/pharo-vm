@@ -350,8 +350,6 @@ let ownSources = null;
 // the preparation (init.prepare): 0 none, 1 the REPL boots, 2 it evaluates
 // PREPARE, 3 over; what it wrote on stderr meanwhile, and whether it saved
 let preparing = 0, prepareErr = '', prepareSaved = false;
-let inNotebookCell = false;             // true while a notebook cell runs in the shared console VM
-let bootReady = null;                   // the ready message of boot(), for a notebook init on the shared VM
 let imagePath = DIR + '/Pharo.image', changesPath = DIR + '/Pharo.changes';
 let storing = Promise.resolve();        // the storage work, in order
 // the output not posted yet: {fd, text}, or {fd: 3, chunks} (Uint8Arrays)
@@ -391,7 +389,6 @@ const gitCredentialsOf = p => p != null || !defaultProxy();
 
 function addOut(fd, bytes) {
   if (fd === 3) {
-    if (inNotebookCell && hasBytes(bytes, '"ev":"done"')) inNotebookCell = false;
     const last = out[out.length - 1];
     if (last && last.fd === 3) last.chunks.push(bytes); else out.push({ fd, chunks: [bytes] });
     outLen += bytes.length;
@@ -1124,7 +1121,7 @@ async function boot(m) {
   if (m.sliceMs > 0) env.PHARO_WASM_SLICE_MS = String(m.sliceMs);
   const options = {
     args: PharoVMDriver.vmArgs(mode, image),
-    events: mode === 'notebook' || (mode === 'console' && !preparing),
+    events: mode === 'notebook',
     files,
     cwd: DIR,
     thisProgram: DIR + '/pharo',
@@ -1136,15 +1133,7 @@ async function boot(m) {
     canRun: () => unacked < HIGH,
     onOutput: addOut,
     onState,
-    onHost: (kind, text) => {
-      if (kind !== HOST_IMAGE_SAVED) return;
-      if (mode === 'notebook' || inNotebookCell) {
-        syncedKey = changesKey();
-        editedBase = syncedKey;
-        return;
-      }
-      imageSaved(text);
-    },
+    onHost: (kind, text) => { if (kind === HOST_IMAGE_SAVED && mode !== 'notebook') imageSaved(text); },
     onExit: code => {
       flushOut();
       stopSync();
@@ -1182,7 +1171,6 @@ async function boot(m) {
                   gitCredentials: config.gitHttpCredentials };
   for (const k of ['slotMissing', 'freshMissing', 'sourcesMissing']) if (loaded[k]) ready[k] = loaded[k];
   if (mode === 'notebook') ready.mode = mode;
-  bootReady = ready;
   post(ready);
   drv.begin();
 }
@@ -1228,32 +1216,8 @@ function fsOp(m, f) {
 function handle(m) {
   const live = drv && !drv.dead;
   switch (m.type) {
-  case 'init':
-    if (mode === 'console' && m.mode === 'notebook') {
-      inNotebookCell = false;
-      if (m.gitProxy !== undefined && drv) {
-        drv.module.gitHttpProxy = gitProxyOf(m.gitProxy);
-        drv.module.gitHttpCredentials = gitCredentialsOf(m.gitProxy);
-      }
-      const nbReady = Object.assign({}, bootReady || {}, {
-        type: 'ready',
-        mode: 'notebook',
-        savedAt: owned ? owned.savedAt : (bootReady ? bootReady.savedAt : null),
-        slot: bound ? slotSaid() : (bootReady ? bootReady.slot : null),
-      });
-      post(nbReady);
-      if (live) {
-        drv.feed(JSON.stringify({ op: 'hello', reset: !!m.reset }) + '\n');
-        stateDirty = true;
-      }
-    }
-    break;
   case 'input':
-    if (live) {
-      if (typeof m.text === 'string' && /^\{"op":"run"/.test(m.text)) inNotebookCell = true;
-      drv.feed(m.text);
-      stateDirty = true;
-    }
+    if (live) { drv.feed(m.text); stateDirty = true; }
     break;
   case 'eof':
     if (live) { drv.eof(); stateDirty = true; }
@@ -1384,7 +1348,7 @@ function replay() {
 }
 
 onmessage = ({ data: m }) => {
-  if (m.type !== 'init' || (mode === 'console' && m.mode === 'notebook')) {
+  if (m.type !== 'init') {
     if (settled) handle(m); else queue.push(m);
     return;
   }

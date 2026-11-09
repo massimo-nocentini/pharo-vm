@@ -123,25 +123,18 @@ initialize
 nextPutAll: aCollection
 	"What the running cell and the kernel show goes to stdout, what the processes of other cells show
 	 goes to them, as stream events.  It is sent within 50 ms (see NotebookKernel>>#tick), before
-	 every event, at 64 KB, or on flush; in the Console outside a cell, it is written at once"
+	 every event, at 64 KB, or on flush"
 
-	| text rid |
+	| text |
 	text := aCollection asString.
-	rid := NotebookCell value.
-	self critical: [ (self bufferFor: rid) nextPutAll: text ].
-	(rid isNil and: [ NotebookKernel activeRid isNil ])
-		ifTrue: [ self flushLocal ]
-		ifFalse: [ self flushIfFull ]! !
+	self critical: [ (self bufferFor: NotebookCell value) nextPutAll: text ].
+	self flushIfFull! !
 
 !NotebookTranscript methodsFor: 'streaming'!
 nextPut: aCharacter
 
-	| rid |
-	rid := NotebookCell value.
-	self critical: [ (self bufferFor: rid) nextPut: aCharacter ].
-	(rid isNil and: [ NotebookKernel activeRid isNil ])
-		ifTrue: [ self flushLocal ]
-		ifFalse: [ self flushIfFull ]! !
+	self critical: [ (self bufferFor: NotebookCell value) nextPut: aCharacter ].
+	self flushIfFull! !
 
 !NotebookTranscript methodsFor: 'streaming'!
 newLine
@@ -561,22 +554,14 @@ escape: aString on: aStream
 
 !NotebookKernel class methodsFor: 'starting'!
 startIfRequested
-	"Start the kernel when NOTEBOOK_EVENTS names the file of the events, as the driver does.  When
-	 WebRepl is already running in this session, attach to it in the same VM instead of starting a
-	 second stdin loop.  Filed in from the Console without NOTEBOOK_EVENTS, only say that the classes
-	 are there.  When the file cannot be opened, nobody would hear of the kernel: say why on stderr,
-	 and quit"
+	"Start the kernel when NOTEBOOK_EVENTS names the file of the events, as the driver does.  Filed in
+	 from the Console, where it is not set, only say that the classes are there.  When the file cannot
+	 be opened, nobody would hear of the kernel: say why on stderr, and quit"
 
-	| path repl |
+	| path |
 	path := OSEnvironment current at: 'NOTEBOOK_EVENTS' ifAbsent: [ nil ].
 	(path isNil or: [ path isEmpty ]) ifTrue: [
 		^ Transcript show: 'NotebookKernel is defined: it starts when NOTEBOOK_EVENTS names the file of its events'; cr ].
-	repl := Smalltalk globals at: #WebRepl ifAbsent: [ nil ].
-	(repl notNil and: [ (repl respondsTo: #isInSession) and: [ repl isInSession ] ]) ifTrue: [
-		[ ^ self attachOn: path ]
-			on: Error
-			do: [ :error |
-				^ self writeError: 'NotebookKernel: cannot attach on ' , path , ': ' , (self messageOf: error) ] ].
 	[ self startOn: path ]
 		on: Error
 		do: [ :error |
@@ -620,39 +605,6 @@ startOn: path
 	Flusher := self fork: [ self flushEvery: 50 ] at: Processor userSchedulingPriority + 1 named: 'NotebookKernel flusher'.
 	Idler := WebVM ifTrue: [ self fork: [ self idle: Generation ] at: Processor lowestPriority + 1 named: 'NotebookKernel idler' ].
 	WebVM ifTrue: [ self patchCairo ].
-	self emitHello! !
-
-!NotebookKernel class methodsFor: 'starting'!
-attachOn: path
-	"Attach the kernel to WebRepl in the same VM: WebRepl reads stdin through #nextLine and dispatches
-	 JSON requests here (#serveFromRepl:) while evaluating Console expressions with our workspace
-	 bindings (#evaluateInRepl:).  The hello event is sent when the Notebook tab asks for it"
-
-	Generation := (Generation ifNil: [ 0 ]) + 1.
-	Session := Smalltalk session.
-	{ Loop. Watcher. Flusher. Idler } do: [ :process |
-		(process isNil or: [ process == Processor activeProcess ]) ifFalse: [
-			[ process terminate ] on: Error do: [ :error | error return ] ] ].
-	Loop := Watcher := nil.
-	Events := self openEvents: path.
-	EvalProcess := EvalDone := Serving := ActiveRid := LastError := nil.
-	StopNext := Fell := false.
-	Pending := ByteArray new.
-	Taken := ZeroWakes := 0.
-	Bindings ifNil: [ Bindings := Dictionary new ].
-	OurTranscript := NotebookTranscript new.
-	self assertEnvironment.
-	Wake ifNotNil: [ :old | Smalltalk unregisterExternalObject: old ].
-	Wake := Semaphore new.
-	WakeIndex := Smalltalk registerExternalObject: Wake.
-	WebVM := (self primSetInterruptSemaphore: 0) notNil.
-	Flusher := self fork: [ self flushEvery: 50 ] at: Processor userSchedulingPriority + 1 named: 'NotebookKernel flusher'.
-	Idler := WebVM ifTrue: [ self fork: [ self idle: Generation ] at: Processor lowestPriority + 1 named: 'NotebookKernel idler' ]! !
-
-!NotebookKernel class methodsFor: 'starting'!
-emitHello
-
-	WebVM == true ifTrue: [ self patchCairo ].
 	self emit: {
 		#ev -> 'hello'.
 		#proto -> 1.
@@ -663,12 +615,6 @@ emitHello
 		#wordSize -> Smalltalk wordSize }! !
 
 !NotebookKernel class methodsFor: 'starting'!
-isAttached
-	"Whether the kernel is attached to WebRepl in this session"
-
-	^ Events notNil and: [ Session == Smalltalk session and: [ self isRunning not ] ]! !
-
-!NotebookKernel class methodsFor: 'starting'!
 isRunning
 	"Whether the loop of this session runs"
 
@@ -677,10 +623,11 @@ isRunning
 !NotebookKernel class methodsFor: 'starting'!
 terminateOldProcesses
 	"The processes of the kernel, and of the Console's REPL, that an image saved after a file-in of this
-	 script, or by a cell, holds from an older session; never the active process"
+	 script, or by a cell, holds from an older session; never the active process.  The REPL's loop ends
+	 by itself (WebRepl>>#isCurrent:)"
 
 	| names |
-	names := #('NotebookKernel loop' 'NotebookKernel watcher' 'NotebookKernel flusher' 'NotebookKernel idler' 'WebRepl' 'WebRepl watcher' 'WebRepl evaluation').
+	names := #('NotebookKernel loop' 'NotebookKernel watcher' 'NotebookKernel flusher' 'NotebookKernel idler' 'WebRepl watcher' 'WebRepl evaluation').
 	(Process allSubInstances select: [ :process |
 		process ~~ Processor activeProcess
 			and: [ process isTerminated not
@@ -912,70 +859,20 @@ endOfInput
 	Smalltalk exit: 0! !
 
 !NotebookKernel class methodsFor: 'loop'!
-serveFromRepl: aByteArray
-	"Serve a JSON request line that WebRepl read from stdin"
-
-	self assertEnvironment.
-	self serve: aByteArray.
-	Serving := nil.
-	StopNext := false.
-	self assertEnvironment! !
-
-!NotebookKernel class methodsFor: 'loop'!
-clearServing
-	"A line taken by #nextLine turned out to be a Console line, not a Notebook request"
-
-	Serving := nil.
-	StopNext := false! !
-
-!NotebookKernel class methodsFor: 'loop'!
-takePending
-	"What is left in Pending at the end of stdin"
-
-	| bytes |
-	bytes := Pending ifNil: [ ByteArray new ].
-	Pending := ByteArray new.
-	Serving := nil.
-	StopNext := false.
-	^ bytes! !
-
-!NotebookKernel class methodsFor: 'loop'!
 serve: aByteArray
 
 	| request op |
 	request := self parse: aByteArray.
 	request ifNil: [ ^ self badRequest: aByteArray ].
 	op := request at: 'op'.
-	op = 'hello' ifTrue: [
-		(request at: 'reset' ifAbsent: [ false ]) == true ifTrue: [
-			self
-				stopBackgroundSilently;
-				forgetVariables ].
-		^ self emitHello ].
-	op = 'file-in' ifTrue: [
-		^ self fileIn: (request at: 'files') rid: (request at: 'rid') ].
 	op = 'run' ifTrue: [
 		^ self
 			runCell: (request at: 'code')
 			rid: (request at: 'rid')
 			name: (request at: 'name' ifAbsent: [ 'In[' , (self decimal: (request at: 'rid')) , ']' ]) ].
 	op = 'ping' ifTrue: [ ^ self emit: { #ev -> 'pong'. #rid -> (request at: 'rid') } ].
+	op = 'file-in' ifTrue: [ ^ self fileIn: (request at: 'files') rid: (request at: 'rid') ].
 	self stopBackground! !
-
-!NotebookKernel class methodsFor: 'loop'!
-fileIn: paths rid: rid
-	"File in each path in paths, logging to the .changes, and report the outcome"
-
-	| errorText |
-	errorText := nil.
-	[ paths do: [ :path | CodeImporter evaluateFileNamed: path ] ]
-		on: UnhandledException
-		do: [ :exception |
-			((exception isKindOf: UnhandledError) and: [ exception exception isKindOf: Warning ])
-				ifTrue: [ exception pass ].
-			errorText := self textOf: exception ].
-	self assertEnvironment.
-	self emit: { #ev -> 'filed-in'. #rid -> rid. #files -> paths asArray. #error -> errorText }! !
 
 !NotebookKernel class methodsFor: 'loop'!
 parse: aByteArray
@@ -996,10 +893,6 @@ parse: aByteArray
 	request isDictionary ifFalse: [ ^ nil ].
 	op := request at: 'op' ifAbsent: [ nil ].
 	(self isText: op) ifFalse: [ ^ nil ].
-	op = 'hello' ifTrue: [
-		| reset |
-		reset := request at: 'reset' ifAbsent: [ false ].
-		^ (reset == true or: [ reset == false ]) ifTrue: [ request ] ifFalse: [ nil ] ].
 	op = 'stop-background' ifTrue: [ ^ request ].
 	rid := request at: 'rid' ifAbsent: [ nil ].
 	(rid class == SmallInteger and: [ rid between: 1 and: 16r3FFFFFFF ]) ifFalse: [ ^ nil ].
@@ -1123,34 +1016,50 @@ runCell: code rid: rid name: name
 	ActiveRid := nil! !
 
 !NotebookKernel class methodsFor: 'cells'!
-evaluateInRepl: aString
-	"Evaluate aString for WebRepl, sharing the workspace variables of Bindings so variables assigned
-	 in the Console are visible in the Notebook and vice versa"
+fileIn: paths rid: rid
+	"File in each of paths, as the page's File in asks, logging to the .changes.  As a cell (see
+	 #runCell:rid:name:), in a process of its own, which Stop may terminate, and wait for it.  Report
+	 the outcome: a filed-in event, whose error is nil, the error that stopped the file-in, or why it
+	 did not end"
 
-	| tree assigned temps scope method value |
+	| outcome finished session |
+	Serving := rid.
+	finished := false.
+	session := Session.
+	StopNext == true ifFalse: [
+		| done process |
+		done := Semaphore new.
+		process := [
+			[	StopNext == true ifFalse: [
+					outcome := self fileInAll: paths.
+					finished := true ] ]
+				ensure: [ done signal ] ] newProcess.
+		process priority: Processor userSchedulingPriority.
+		process name: 'NotebookKernel file-in'.
+		[	EvalDone := done.
+			EvalProcess := process.
+			process resume ] valueUnpreemptively.
+		done wait.
+		session == Smalltalk session ifFalse: [ ^ self ].
+		EvalProcess := EvalDone := nil ].
+	finished ifFalse: [
+		outcome := StopNext == true ifTrue: [ 'interrupted' ] ifFalse: [ 'terminated' ] ].
 	self assertEnvironment.
-	Bindings ifNil: [ Bindings := Dictionary new ].
-	tree := [ Smalltalk compiler source: aString; isScripting: true; parse ]
-		on: Error
-		do: [ :error | error return: nil ].
-	assigned := (tree notNil and: [ (self syntaxErrorIn: tree code: aString) isNil ])
-		ifTrue: [ self assignedNamesIn: tree ]
-		ifFalse: [ Set new ].
-	temps := (tree notNil and: [ tree body notNil ])
-		ifTrue: [ tree body temporaries collect: [ :each | each name asSymbol ] ]
-		ifFalse: [ #() ].
-	scope := Dictionary new.
-	Bindings associationsDo: [ :each | (temps includes: each key) ifFalse: [ scope add: each ] ].
-	method := self
-		compile: aString
-		scope: scope
-		assigned: assigned
-		ifError: [ :error | ^ Smalltalk compiler bindings: scope; evaluate: aString ].
-	value := nil withArgs: #() executeMethod: method.
-	[ OurTranscript ifNotNil: [ :transcript | transcript flushLocal ] ]
-		on: Error
-		do: [ :error | error return ].
-	^ value! !
+	self emit: { #ev -> 'filed-in'. #rid -> rid. #files -> paths asArray. #error -> outcome }! !
+
+!NotebookKernel class methodsFor: 'cells'!
+fileInAll: paths
+	"File in each of paths, in order: answer nil, or the text of the error that stopped it"
+
+	paths do: [ :path |
+		[ CodeImporter evaluateFileNamed: path ]
+			on: UnhandledException
+			do: [ :exception |
+				"A Warning goes on to its default action, which reports it and resumes"
+				((exception isKindOf: UnhandledError) and: [ exception exception isKindOf: Warning ])
+					ifTrue: [ exception pass ].
+				^ path , ': ' , (self textOf: exception) ] ].
+	^ nil! !
 
 !NotebookKernel class methodsFor: 'cells'!
 evaluate: code rid: rid name: name
@@ -1598,18 +1507,14 @@ textOf: anException
 !NotebookKernel class methodsFor: 'error handling'!
 handleError: anError
 	"An error, or a Halt, that nothing handled in another process than a cell's, which catches its own:
-	 report it to the cell that forked the process, and terminate the process.  When attached to
-	 WebRepl and the error came from a Console process (rid is nil and no cell is active), let WebRepl
-	 report it with stack frames and re-prompt.  The kernel's own processes are started again; the
-	 handler that the kernel replaced quits the image when that fails"
+	 report it to the cell that forked the process, and terminate the process.  The kernel's own
+	 processes are started again; the handler that the kernel replaced quits the image when that
+	 fails"
 
-	| process rid repl |
+	| process rid |
 	process := Processor activeProcess.
 	(self isKernelProcess: process) ifTrue: [ ^ self restart: process after: anError ].
 	rid := [ NotebookCell value ] on: Error do: [ :error | error return: nil ].
-	(rid isNil and: [ ActiveRid isNil and: [ self isAttached ] ]) ifTrue: [
-		repl := Smalltalk globals at: #WebRepl ifAbsent: [ nil ].
-		(repl notNil and: [ repl respondsTo: #handleError: ]) ifTrue: [ ^ repl handleError: anError ] ].
 	[	rid
 			ifNil: [ self writeError: (self textOf: anError) ]
 			ifNotNil: [
@@ -1642,14 +1547,8 @@ restart: process after: anError
 !NotebookKernel class methodsFor: 'error handling'!
 handleWarning: aWarning
 	"A Warning that nothing handled: report it on stderr, and let its process go on, as the headless
-	 image does.  When attached to WebRepl and no cell is active, let WebRepl report it with stack
-	 frames"
+	 image does"
 
-	| rid repl |
-	rid := [ NotebookCell value ] on: Error do: [ :error | error return: nil ].
-	(rid isNil and: [ ActiveRid isNil and: [ self isAttached ] ]) ifTrue: [
-		repl := Smalltalk globals at: #WebRepl ifAbsent: [ nil ].
-		(repl notNil and: [ repl respondsTo: #handleWarning: ]) ifTrue: [ ^ repl handleWarning: aWarning ] ].
 	[	OurTranscript ifNotNil: [ :transcript | transcript flushLocal ].
 		self write: 'Warning: ' , (self messageOf: aWarning) , String lf on: Stdio stderr ]
 		on: Error
@@ -1735,17 +1634,11 @@ stopBackground
 	"Terminate the processes that cells forked, but not those above the priority of the cells, and not
 	 the system's that a cell made start, as the Morphic UI process.  Stop never does"
 
-	self emit: { #ev -> 'stopped'. #count -> self stopBackgroundSilently }! !
-
-!NotebookKernel class methodsFor: 'stop'!
-stopBackgroundSilently
-	"Terminate the processes that cells forked and answer how many were stopped"
-
 	| index victims |
 	index := NotebookCell soleInstance index.
 	victims := Process allSubInstances select: [ :process | self isBackground: process index: index ].
 	victims do: [ :process | [ process terminate ] on: Error do: [ :error | error return ] ].
-	^ victims size! !
+	self emit: { #ev -> 'stopped'. #count -> victims size }! !
 
 !NotebookKernel class methodsFor: 'stop'!
 isBackground: aProcess index: index
@@ -2003,11 +1896,8 @@ writeError: aString
 flushEvery: milliseconds
 	"Send what the Transcript has, and take the environment back, every so often"
 
-	| generation |
-	generation := Generation.
-	[ self isCurrent: generation ] whileTrue: [
-		(Delay forMilliseconds: milliseconds) wait.
-		(self isCurrent: generation) ifTrue: [ self tick ] ]! !
+	[	(Delay forMilliseconds: milliseconds) wait.
+		self tick ] repeat! !
 
 !NotebookKernel class methodsFor: 'flushing'!
 tick

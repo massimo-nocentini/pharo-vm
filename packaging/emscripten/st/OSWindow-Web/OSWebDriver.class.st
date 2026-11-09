@@ -75,7 +75,7 @@ OSWebDriver class >> packageMarker [
 
 { #category : 'versions' }
 OSWebDriver class >> packageVersion [
-	"The version of this package: web-bootstrap.st files the package in again over an older one, and the page sets an image of an older version up again (see #setUpImage). Version 1 had neither this method nor #setUpImage, and bitmap fonts; 2 keeps the FreeType fonts of the stock image when the VM has FreeType; 3 draws Athens with cairo without the SurfacePlugin, which the web VMs lack (the AthensCairoSurface extension of this package); 4 gives Iceberg https:// remotes (#setUpGit); 5 draws the world in device pixels on high-density displays (OSWebFormRenderer>>#outputExtent); 6 gives LGitConfig the free function of Pharo 12 (#setUpLibGit); 7 gives Iceberg the credentials of a push without a dialog inside libgit2's callback, which would hang the page (OSWebCredentialsProvider, #setUpGit); 8 gives LGitConfig>>#config_find_global_path: the git_buf (an LGitBuf) that git_config_find_global fills, where LibGit-Core gives it a String, and #globalConfigurationPath the path or nil, and gives Iceberg its own dialog of the merge back in a world whose IceMergeResolutionRequest>>#webWorldDefaultAction the web-libgit.st of before made call itself (#setUpLibGit); 9 adds event type 12 (#fileInPending) so the world page can file in .st files directly. Change #packageMarker with it. packaging/emscripten/tools/stage.mjs reads both from this file, for the manifest of the page"
+	"The version of this package: web-bootstrap.st files the package in again over an older one, and the page sets an image of an older version up again (see #setUpImage). Version 1 had neither this method nor #setUpImage, and bitmap fonts; 2 keeps the FreeType fonts of the stock image when the VM has FreeType; 3 draws Athens with cairo without the SurfacePlugin, which the web VMs lack (the AthensCairoSurface extension of this package); 4 gives Iceberg https:// remotes (#setUpGit); 5 draws the world in device pixels on high-density displays (OSWebFormRenderer>>#outputExtent); 6 gives LGitConfig the free function of Pharo 12 (#setUpLibGit); 7 gives Iceberg the credentials of a push without a dialog inside libgit2's callback, which would hang the page (OSWebCredentialsProvider, #setUpGit); 8 gives LGitConfig>>#config_find_global_path: the git_buf (an LGitBuf) that git_config_find_global fills, where LibGit-Core gives it a String, and #globalConfigurationPath the path or nil, and gives Iceberg its own dialog of the merge back in a world whose IceMergeResolutionRequest>>#webWorldDefaultAction the web-libgit.st of before made call itself (#setUpLibGit); 9 adds the file-in request, event type 12, which files in the .st files that the page lists (#fileInPending). Change #packageMarker with it. packaging/emscripten/tools/stage.mjs reads both from this file, for the manifest of the page"
 
 	^ 9
 ]
@@ -226,15 +226,18 @@ OSWebDriver >> eventLoop [
 
 { #category : 'events' }
 OSWebDriver >> fileInPending [
-	"The page wrote .web-file-in with paths of .st files to file in; evaluate them on a user process so the event loop keeps running"
+	"The page wrote a list of the paths of .st files to file in, one path a line, in a file of its own for every request (.web-file-in-<n>, which sort in the order of the requests). Take every list now, on the event loop, so that no later request can come in between, then file the paths in on a user process, so that the event loop goes on"
 
-	[
-	| list paths |
-	list := FileLocator imageDirectory / '.web-file-in'.
-	list exists ifTrue: [
-		paths := list contents lines reject: [ :each | each isEmpty ].
-		list ensureDelete.
-		paths do: [ :path | CodeImporter evaluateFileNamed: path ] ] ]
+	| paths |
+	paths := OrderedCollection new.
+	[	((FileLocator imageDirectory asFileReference children select: [ :each | each basename beginsWith: '.web-file-in-' ])
+			asSortedCollection: [ :a :b | a basename <= b basename ]) do: [ :list |
+				paths addAll: (list contents lines reject: [ :each | each isEmpty ]).
+				list ensureDelete ] ]
+		on: Error
+		do: [ :error | error return ].
+	paths isEmpty ifTrue: [ ^ self ].
+	[ paths do: [ :path | CodeImporter evaluateFileNamed: path ] ]
 		forkAt: Processor userSchedulingPriority
 		named: 'Web file-in'
 ]

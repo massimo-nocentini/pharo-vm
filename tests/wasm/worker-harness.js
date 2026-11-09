@@ -187,8 +187,8 @@ function session(init = {}, { autoAck = true, encodeGzip = false, display = fals
       s.progress.push(m);
       break;
     case 'ready':
-      if (!s.ready && s.states.length) s.error = s.error || new Error('ready after the first state');
-      if (!s.ready) s.ready = m;
+      if (s.states.length) s.error = s.error || new Error('ready after the first state');
+      s.ready = m;
       break;
     case 'output':
       // the events of the notebook kernel are bytes, acked as such
@@ -609,6 +609,38 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
     assert(next.status === 'ok' && JSON.stringify(next.values) === '["7"]', 'done ' + JSON.stringify(next));
     assert(!N.msgs.some(m => m.type === 'output' && m.fd !== 3), 'no output on fds 1 and 2: ' + JSON.stringify(N.out));
   });
+  if (N && N.ready) await check('W-NB2b file-in: the files are filed in, an error is reported, and interrupt stops a file-in that does not end', async () => {
+    current = N;
+    const fileIn = (rid, files) => N.post({ type: 'input', text: JSON.stringify({ op: 'file-in', rid, files }) + '\n' });
+    const filedIn = (rid, ms) => waitFor('filed-in ' + rid, () => { N.alive(); return events(N).find(e => e.ev === 'filed-in' && e.rid === rid); }, ms || 60000);
+    const enc = t => new TextEncoder().encode(t);
+    await N.fs('writeFile', '/pharo/nb-a.st', { data: enc('Smalltalk at: #NbFiledInA put: 61!\n') });
+    await N.fs('writeFile', '/pharo/nb-b.st', { data: enc('Smalltalk at: #NbFiledInB put: (Smalltalk at: #NbFiledInA) + 1!\n') });
+    fileIn(0x20000001, ['/pharo/nb-a.st', '/pharo/nb-b.st']);
+    const ok = await filedIn(0x20000001);
+    assert(ok.error === null && JSON.stringify(ok.files) === '["/pharo/nb-a.st","/pharo/nb-b.st"]', 'filed-in ' + JSON.stringify(ok));
+    N.post(request(4, 'Smalltalk at: #NbFiledInB'));
+    const v = await doneOf(N, 4);
+    assert(v.status === 'ok' && JSON.stringify(v.values) === '["62"]', 'done ' + JSON.stringify(v));
+    // a missing file: the error, and the kernel goes on
+    fileIn(0x20000002, ['/pharo/nb-missing.st']);
+    const bad = await filedIn(0x20000002);
+    assert(typeof bad.error === 'string' && /nb-missing\.st/.test(bad.error), 'filed-in ' + JSON.stringify(bad));
+    // a file-in that does not end: interrupt terminates it, as a cell's
+    await N.fs('writeFile', '/pharo/nb-loop.st', { data: enc('[ true ] whileTrue!\n') });
+    fileIn(0x20000003, ['/pharo/nb-loop.st']);
+    await sleep(1000);
+    assert(!events(N).some(e => e.ev === 'filed-in' && e.rid === 0x20000003), 'the loop runs');
+    N.post({ type: 'interrupt' });
+    const stopped = await filedIn(0x20000003, 5000);
+    assert(stopped.error === 'interrupted', 'filed-in ' + JSON.stringify(stopped));
+    N.post(request(5, '3 + 4'));
+    const next = await doneOf(N, 5);
+    assert(next.status === 'ok' && JSON.stringify(next.values) === '["7"]', 'done ' + JSON.stringify(next));
+    // a malformed file-in is a bad request
+    N.post({ type: 'input', text: JSON.stringify({ op: 'file-in', rid: 0x20000004, files: [] }) + '\n' });
+    await waitFor('bad-request', () => events(N).some(e => e.ev === 'bad-request' && /file-in/.test(e.text)));
+  });
   if (N) await N.close();
   current = S;
 
@@ -706,39 +738,6 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       X.post(request(3, '6 * 7'));
       assert(JSON.stringify((await doneOf(X, 3)).values) === '["42"]', 'the kernel goes on');
     } finally { await X.close(); current = S; }
-  });
-
-  await check('W-NB5 shared Console and Notebook VM: shared variables and globals, file-in, and hello reset', async () => {
-    current = S;
-    S.send('sharedFromConsole := 10. Smalltalk at: #SharedGlobal put: 20. #ok\n');
-    await S.expectOut(val('#ok'));
-    await S.prompt();
-    const m0 = S.msgs.length;
-    S.post({ type: 'init', mode: 'notebook', reset: false });
-    await waitFor('notebook ready', () => S.msgs.slice(m0).find(m => m.type === 'ready' && m.mode === 'notebook'));
-    await waitFor('hello', () => events(S).find(e => e.ev === 'hello'));
-    S.post(request(10, 'nbFromCell := sharedFromConsole + (Smalltalk at: #SharedGlobal)'));
-    const done10 = await doneOf(S, 10);
-    assert(done10.status === 'ok' && JSON.stringify(done10.values) === '["30"]', 'done10 ' + JSON.stringify(done10));
-    S.mark();
-    S.send('nbFromCell + 5\n');
-    await S.expectOut(val('35'));
-    await S.prompt();
-    await S.fs('writeFile', '/pharo/shared-filein.st',
-               { data: new TextEncoder().encode('Smalltalk at: #SharedFiledIn put: 77!\n') });
-    S.post({ type: 'input', text: JSON.stringify({ op: 'file-in', rid: 99, files: ['/pharo/shared-filein.st'] }) + '\n' });
-    const filedIn = await waitFor('filed-in', () => events(S).find(e => e.ev === 'filed-in' && e.rid === 99));
-    assert(!filedIn.error, 'filedIn ' + JSON.stringify(filedIn));
-    S.mark();
-    S.send('Smalltalk at: #SharedFiledIn\n');
-    await S.expectOut(val('77'));
-    await S.prompt();
-    const hellosBefore = events(S).filter(e => e.ev === 'hello').length;
-    S.post({ type: 'init', mode: 'notebook', reset: true });
-    await waitFor('second hello', () => events(S).filter(e => e.ev === 'hello').length > hellosBefore);
-    S.post(request(11, 'nbFromCell'));
-    const done11 = await doneOf(S, 11);
-    assert(done11.status === 'error' && /Undeclared/i.test(done11.error.text), 'done11 ' + JSON.stringify(done11));
   });
 
   await check('11 a store that refuses: saved {error} says Download, and the REPL goes on', async () => {

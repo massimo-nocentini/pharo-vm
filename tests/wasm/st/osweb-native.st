@@ -279,13 +279,18 @@ OSWebDriver isSuitable ifFalse: [
 			waitFor value: [ popupMenus value notEmpty ] ] ].
 	key value: 27 value: 0.
 
-	(FileLocator imageDirectory / 'osweb-filein.st') writeStreamDo: [ :stream |
-		stream nextPutAll: 'Smalltalk at: #OSWebFiledIn put: 123'; lf ].
-	(FileLocator imageDirectory / '.web-file-in') writeStreamDo: [ :stream |
-		stream nextPutAll: (FileLocator imageDirectory / 'osweb-filein.st') fullName; lf ].
+	"two requests before the event loop takes either: each has its list, they run in order"
+	#( 1 2 ) do: [ :n |
+		(FileLocator imageDirectory / ('osweb-filein' , n printString , '.st')) writeStreamDo: [ :stream |
+			stream nextPutAll: 'Smalltalk at: #OSWebFiledIn put: ((Smalltalk at: #OSWebFiledIn ifAbsent: [ #() ]) copyWith: ' , n printString , ')'; lf ].
+		(FileLocator imageDirectory / ('.web-file-in-' , (n printString padLeftTo: 6 with: $0))) writeStreamDo: [ :stream |
+			stream nextPutAll: (FileLocator imageDirectory / ('osweb-filein' , n printString , '.st')) fullName; lf ] ].
 	push value: #( 12 0 0 0 0 0 0 0 ).
-	check value: 'file-in request evaluates .web-file-in' value: [
-		waitFor value: [ (Smalltalk at: #OSWebFiledIn ifAbsent: [ nil ]) = 123 ] ].
+	push value: #( 12 0 0 0 0 0 0 0 ).
+	check value: 'file-in requests file in every .web-file-in-<n>, in order' value: [
+		(waitFor value: [ (Smalltalk at: #OSWebFiledIn ifAbsent: [ nil ]) = #( 1 2 ) ])
+			and: [ (FileLocator imageDirectory asFileReference children
+				noneSatisfy: [ :each | each basename beginsWith: '.web-file-in' ]) ] ].
 
 	say value: 'osweb-native: ' , failures printString , ' failed'.
 	Smalltalk exit: (failures = 0

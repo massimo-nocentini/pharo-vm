@@ -785,19 +785,34 @@ await run(async t => {
   });
 
   await check('File in button and dropping a .st file on the world file it into the running image', async () => {
-    const st1 = path.join(tmp, t.name + '-world-filein1.st');
-    const st2 = path.join(tmp, t.name + '-world-filein2.st');
-    fs.writeFileSync(st1, "'/pharo/world-filein1.txt' asFileReference writeStreamDo: [ :s | s nextPutAll: 'one' ]!\n");
-    fs.writeFileSync(st2, "'/pharo/world-filein2.txt' asFileReference writeStreamDo: [ :s | s nextPutAll: 'two' ]!\n");
-    await page.setInputFiles('#file-in-input', st1);
-    await noticeSays(/^Filed in .*world-filein1\.st\.$/, 10000);
-    await page.waitForFunction(() => window.PharoWorld.readFile('/pharo/world-filein1.txt').then(d => new TextDecoder().decode(d) === 'one', () => false),
-                               null, { timeout: 15000 });
-    const d = await dropFiles(page, [st2]);
+    const st = n => path.join(tmp, t.name + '-world-filein' + n + '.st');
+    for (const n of [1, 2, 3, 4])
+      fs.writeFileSync(st(n), `'/pharo/world-filein${n}.txt' asFileReference writeStreamDo: [ :s | s nextPutAll: 'v${n}' ]!\n`);
+    // until the image wrote the file (a predicate of waitForFunction that
+    // answers a promise would be taken as true at once)
+    const wrote = async (n, ms = 15000) => {
+      const p = '/pharo/world-filein' + n + '.txt', until = Date.now() + ms;
+      for (;;) {
+        const text = await page.evaluate(p => window.PharoWorld.readFile(p).then(d => new TextDecoder().decode(d), () => null), p);
+        if (text === 'v' + n) return;
+        assert(Date.now() < until, p + ' not written: ' + JSON.stringify(text));
+        await new Promise(r => setTimeout(r, 200));
+      }
+    };
+    await page.setInputFiles('#file-in-input', st(1));
+    await noticeSays(/^Filing in .*world-filein1\.st in the world\.$/, 10000);
+    await wrote(1);
+    const d = await dropFiles(page, [st(2)]);
     assert(d.shown && d.took && d.hidden, 'the .st drop ' + JSON.stringify(d));
-    await noticeSays(/^Filed in .*world-filein2\.st\.$/, 10000);
-    await page.waitForFunction(() => window.PharoWorld.readFile('/pharo/world-filein2.txt').then(d => new TextDecoder().decode(d) === 'two', () => false),
-                               null, { timeout: 15000 });
+    await noticeSays(/^Filing in .*world-filein2\.st in the world\.$/, 10000);
+    await wrote(2);
+    // two requests in a row: each has its list, neither is lost
+    await page.setInputFiles('#file-in-input', st(3));
+    await page.setInputFiles('#file-in-input', st(4));
+    await wrote(3);
+    await wrote(4);
+    const left = await page.evaluate(() => window.PharoWorld.fs('listDir', '/pharo').then(r => r.entries));
+    assert(!left.some(n => n.startsWith('.web-file-in')), 'no list left: ' + JSON.stringify(left));
   });
 
   // ---- the images saved in this browser (images.js)

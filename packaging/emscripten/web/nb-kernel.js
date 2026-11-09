@@ -28,10 +28,13 @@
 // Then k.start() (a promise of hello), run(cellId, source), runMany([{cellId,
 // source}]), cancel(cellId) (a queued cell), stop(), restart(),
 // stopBackground() (a promise of how many processes of cells the kernel
-// terminated), writeFile(path, data) (a promise of null once written, or of
-// why not; it never rejects), setGitProxy(p) (a URL, '' for none, null for
-// the site's default) and dispose(); k.state, k.info, k.count (the last
-// cell's), k.current (the cellId of the cell in flight) and k.queueLength.  The module also exports FrameReader,
+// terminated), fileIn(paths) (a promise of null once the kernel filed the .st
+// files at paths in, or of the error; it never rejects, and Stop interrupts
+// it as it does a cell), writeFile(path, data) (a promise of null once
+// written, or of why not; it never rejects), setGitProxy(p) (a URL, '' for
+// none, null for the site's default) and dispose(); k.state, k.info, k.count
+// (the last cell's), k.current (the cellId of the cell in flight),
+// k.queueLength and k.filingIn (a file-in is in flight).  The module also exports FrameReader,
 // bgraToPng and pngOf (below), with crc32 and base64.
 //
 // The kernel is a second Pharo VM, booted read-only from the image that the
@@ -40,7 +43,8 @@
 // one cell at a time: run() queues, and the next cell is sent only after the
 // kernel reported "done" for the last.  Requests are JSON lines on the VM's
 // stdin ({"op":"run","rid":R,"name":"In[R]","code":...}, with rid the cell's
-// count, ping and stop-background); events are JSON lines on /dev/nbevents,
+// count, {"op":"file-in","rid":R,"files":[paths]}, ping and stop-background);
+// events are JSON lines on /dev/nbevents,
 // which the worker posts as output {fd: 3, bytes}.  An event with "bytes": N
 // is followed by N raw bytes and an LF (FrameReader).  Every event is
 // untrusted (a cell can write them too): the headers are checked before
@@ -464,7 +468,7 @@
 
     // ---- the worker
 
-    function spawn(reset) {
+    function spawn() {
       kill();
       const g = gen;
       execCount = 0;
@@ -492,7 +496,6 @@
           worker.onmessageerror = () => { if (g === gen) log('protocol', 'a message of the worker could not be decoded'); };
           const init = Object.assign({}, get(o.init, {}));
           if (gitProxy !== undefined) init.gitProxy = gitProxy;
-          if (reset) init.reset = true;
           worker.postMessage(Object.assign(init, { type: 'init', mode: 'notebook', wasmModule }));
           // (the worker keeps them until it is ready, and the first run
           // comes after hello)
@@ -590,7 +593,7 @@
       case 'state': workerState(m.state); break;
       case 'interrupted':
         // nothing to stop the cell with: the deadline is now
-        if (!m.registered && watchdog && current) expire();
+        if (!m.registered && watchdog && (current || fileInWaiters.size)) expire();
         break;
       case 'fs-result': case 'error': {
         const f = fsWaiters.get(m.id);
@@ -734,7 +737,7 @@
         // it) must not end the cell in flight with someone else's result
         if (ev.rid !== current.rid) { log('protocol', 'done for rid ' + ev.rid + ', current ' + current.rid); break; }
         finish(ev, true);
-        setState('idle');
+        setState(fileInWaiters.size ? 'busy' : 'idle');
         pump();
         break;
       case 'stopped': {
@@ -746,7 +749,10 @@
         const f = fileInWaiters.get(ev.rid);
         if (f) {
           fileInWaiters.delete(ev.rid);
+          if (!fileInWaiters.size) disarmIfIdle();
+          if (!current && !fileInWaiters.size) setState('idle');
           f(ev.error ? String(ev.error) : null);
+          pump();
         }
         break;
       }
@@ -763,8 +769,10 @@
       }
     }
 
+    // (a cell waits for a file-in in flight: Stop then stops the file-in,
+    // and cancels the cell)
     function pump() {
-      if (!hello || current || !queue.length || disposed) return;
+      if (!hello || current || fileInWaiters.size || !queue.length || disposed) return;
       const q = queue.shift();
       const count = ++execCount, rid = count, name = 'In[' + count + ']';
       current = { cellId: q.cellId, rid, count, resolve: q.resolve, t0: now(), shown: false, started: false };
@@ -810,14 +818,16 @@
     function wait() {
       watchdog = setTimeout(() => {
         watchdog = null;
-        if (!current) return;
+        if (!current && !fileInWaiters.size) return;
         if (now() < deadline) wait(); else expire();
       }, Math.max(1, Math.ceil(deadline - now())));
     }
+    // a file-in that ended disarms the watchdog that no cell needs
+    function disarmIfIdle() { if (!current) disarm(); }
     function expire() {
       disarm();
       kill();
-      finish({ status: 'killed', reason: 'unresponsive' });
+      if (current) finish({ status: 'killed', reason: 'unresponsive' });
       cancelQueue('stopped');
       log('kernel', 'kernel did not respond to Stop and was restarted');
       spawn();
@@ -861,7 +871,7 @@
         emitState();
       },
       stop() {
-        if (current && w) {
+        if ((current || fileInWaiters.size) && w) {
           post({ type: 'interrupt' });
           arm();
         }
@@ -874,7 +884,7 @@
         if (current) finish({ status: 'killed', reason: 'restart' });
         cancelQueue('restart');
         if (was !== 'off' && was !== 'unavailable') log('kernel', 'kernel restarted');
-        return spawn(true);
+        return spawn();
       },
       // File in each path in paths into the kernel: answers null once filed
       // in, or the error string; never rejects
@@ -886,6 +896,7 @@
           const rid = ++fileInRid;
           fileInWaiters.set(rid, resolve);
           request({ op: 'file-in', rid, files: list });
+          if (!current) setState('busy');
         }), e => (e && e.reason) || 'the kernel is not running');
       },
       // Terminate the processes that cells forked: answers how many (0 when
@@ -917,6 +928,7 @@
       get state() { return state; },
       get current() { return current ? current.cellId : null; },
       get queueLength() { return queue.length; },
+      get filingIn() { return fileInWaiters.size > 0; },
       get count() { return execCount; },
       get execCount() { return execCount; },
       get info() { return info; },
