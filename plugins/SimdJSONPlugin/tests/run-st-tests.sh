@@ -9,13 +9,13 @@
 # the image in a directory of its own (SJ_WORK_DIR, or a new one in TMPDIR),
 # and:
 #
-#   lint   every .st file it files in is ASCII, and has one method a
-#          methodsFor: section (Pharo 15 reads only the first one);
-#   load   compat: NeoJSON first, with load-neojson.st (NEOJSON_DIR names
-#          the clone), only to compare the reader with it; then SimdJSON.st,
-#          whose banner must show SimdJSONReader under SimdJSONMapper, and
-#          SimdJSON-Tests.st; compat: SimdJSON-NeoTests.st, which generates
-#          the SJ* classes from NeoJSON's tests;
+#   load   load-simdjson.st loads the Smalltalk code with Metacello from the
+#          submodule plugins/SimdJSONPlugin/simdjson.st (git submodule update
+#          --init): the groups Core and Tests of BaselineOfSimdJSON, and
+#          SimdJSONReader must be under SimdJSONMapper; compat: all of them,
+#          NeoTests too, with NeoJSON and its tests from the clone that
+#          NEOJSON_DIR names (only to compare with), and the SJ* classes that
+#          SimdJSON-NeoTests generates from NeoJSON's tests;
 #   test   the package SimdJSON-Tests (SimdJSONSlowTests are skipped unless
 #          SJ_SLOW is set); compat: SimdJSON-NeoTests and the package of the
 #          SJ* classes, SimdJSON-NeoTests-Generated, then the report of the
@@ -24,6 +24,8 @@
 #
 # A JUnit file of each package is left in the directory.  The status is 0
 # when every step passed.
+#
+# Metacello makes UUIDs: <vm-dir> needs the UUIDPlugin.
 #
 # Environment: NEOJSON_DIR (compat), SJ_CORPUS (the jsonexamples directory of
 # simdjson-data, for the corpus and jsonchecker tests of SimdJSON-NeoTests),
@@ -37,15 +39,19 @@ fi
 VM_DIR=$(cd "$1" && pwd) || exit 2
 IMAGE=$2
 COMPAT=${3:-}
-ST=$(cd "$(dirname "$0")/../st" && pwd)
+PLUGIN=$(cd "$(dirname "$0")/.." && pwd)
 
 case $COMPAT in
-'')     FILES="SimdJSON.st SimdJSON-Tests.st" ;;
-compat) FILES="load-neojson.st SimdJSON.st SimdJSON-Tests.st SimdJSON-NeoTests.st" ;;
+'')     load_groups='Core Tests' ;;
+compat) load_groups='default' ;;
 *)      echo "the third argument is compat or nothing, not '$COMPAT'" >&2; exit 2 ;;
 esac
 if ! test -x "$VM_DIR/pharo"; then
     echo "FAIL: no $VM_DIR/pharo" >&2
+    exit 1
+fi
+if ! test -d "$PLUGIN/simdjson.st/src/BaselineOfSimdJSON"; then
+    echo "FAIL: no $PLUGIN/simdjson.st/src: git submodule update --init plugins/SimdJSONPlugin/simdjson.st" >&2
     exit 1
 fi
 if test -n "$COMPAT" && ! test -d "$NEOJSON_DIR/repository"; then
@@ -55,36 +61,6 @@ fi
 
 failed=0
 fail() { echo "FAIL $*"; failed=1; }
-
-# lint
-nonascii=$(printf '[\200-\377]')
-for file in $FILES; do
-    if LC_ALL=C grep -n "$nonascii" "$ST/$file" >/dev/null; then
-	fail "lint: $file has characters that are not ASCII:"
-	LC_ALL=C grep -n "$nonascii" "$ST/$file" | head -5
-    fi
-    # the first chunk of a section must end the section ('! !'): a chunk that
-    # ends with a single '!' is a second method, which Pharo 15 loses
-    # (kept in a variable: the script writes nothing in the current directory)
-    lint=$(awk -v file="$file" '
-	/^!.*methodsFor:.*!$/ { open = NR; sections++; next }
-	open && /!$/ {
-	    match($0, /!+$/)
-	    if (RLENGTH % 2 == 0) next          # !! is a ! in a string
-	    if ($0 ~ /! !$/) methods++
-	    else print file ": the section of line " open " has a second method at line " NR
-	    open = 0
-	}
-	END {
-	    if (sections != methods) print file ": " sections " methodsFor: sections, " methods " methods"
-	}' "$ST/$file")
-    if test -n "$lint"; then
-	fail "lint:"
-	printf '%s\n' "$lint"
-    fi
-done
-test $failed = 0 || exit 1
-echo "lint: $FILES"
 
 # a copy of the image
 WORK=${SJ_WORK_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/sj-st-tests.XXXXXX")} || exit 1
@@ -122,21 +98,21 @@ pharo() {
 	$limit "$VM_DIR/pharo" --headless SimdJSON.image --no-default-preferences "$@")
 }
 
-# load: one file a run, saved
-for file in $FILES; do
-    pharo st --save --quit "$ST/$file" >"$WORK/$file.out" 2>&1
-    status=$?
-    sed 's/^/    /' "$WORK/$file.out"
-    if test $status -ne 0 || test -f "$WORK/PharoDebug.log"; then
-	fail "load: $file (exit status $status, see $WORK)"
-	exit 1
-    fi
-    echo "load: $file"
-done
-if ! grep "SimdJSON: SimdJSONReader loaded, a subclass of SimdJSONMapper" "$WORK/SimdJSON.st.out" >/dev/null; then
-    fail "load: SimdJSON.st did not make SimdJSONReader a subclass of SimdJSONMapper"
+# load: the groups, saved
+(if test -z "$COMPAT"; then unset NEOJSON_DIR; fi
+ SJ_PLUGIN_DIR=$PLUGIN SJ_GROUPS=$load_groups; export SJ_PLUGIN_DIR SJ_GROUPS
+ pharo st --save --quit "$PLUGIN/tests/load-simdjson.st") >"$WORK/load.out" 2>&1
+status=$?
+sed 's/^/    /' "$WORK/load.out"
+if test $status -ne 0 || test -f "$WORK/PharoDebug.log"; then
+    fail "load: $load_groups (exit status $status, see $WORK)"
     exit 1
 fi
+if ! grep "SimdJSON: SimdJSONReader loaded, a subclass of SimdJSONMapper" "$WORK/load.out" >/dev/null; then
+    fail "load: SimdJSONReader is not a subclass of SimdJSONMapper"
+    exit 1
+fi
+echo "load: $load_groups ($(git -C "$PLUGIN/simdjson.st" log -1 --format=%h 2>/dev/null || echo 'simdjson.st'))"
 
 # test: one package a run, then the summary of its JUnit file
 run_package() {

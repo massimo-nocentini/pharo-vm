@@ -1,9 +1,9 @@
 /* SimdJSONPlugin.c -- the VM side of the SimdJSONPlugin: the module
- * functions, the five primitives of plugins/SimdJSONPlugin/st/SimdJSON.st,
- * the builder (sjBridge.h) through which src/cxx/sjEngine.cpp makes the
- * objects of a JSON value, and the walk of primitiveWrite, which writes the
- * JSON of a value.  This file never includes simdjson.h, and the
- * engine never includes a VM header.
+ * functions, the five primitives of the package SimdJSON (the submodule
+ * plugins/SimdJSONPlugin/simdjson.st), the builder (sjBridge.h) through
+ * which src/cxx/sjEngine.cpp makes the objects of a JSON value, and the
+ * walk of primitiveWrite, which writes the JSON of a value.  This file
+ * never includes simdjson.h, and the engine never includes a VM header.
  *
  * Natively it is the shared library libSimdJSONPlugin.so, whose module
  * functions, primitives and primitiveXAccessorDepth variables the VM finds

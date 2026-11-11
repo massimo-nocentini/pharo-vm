@@ -12,7 +12,8 @@
 #                 node/pharo, and wasm-web-node, its web/pharo-web.js driven
 #                 by web-bench.js in node
 #   --node NODE   the node of the WebAssembly VMs (default: node)
-#   --image IMAGE a Pharo 15 image with NeoJSON loaded, with its .changes and
+#   --image IMAGE a Pharo 15 image with NeoJSON loaded (tests/load-simdjson.st
+#                 with NEOJSON_DIR loads it), with its .changes and
 #                 one .sources next to it
 #   --corpus DIR  the JSON files (fetch-corpus.sh)
 #   --out DIR     where the results go: LABEL.runN.tsv, the output of SJBench,

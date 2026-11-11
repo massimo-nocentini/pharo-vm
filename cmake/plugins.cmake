@@ -97,11 +97,12 @@ if(FEATURE_PLUGIN_SSL)
 endif()
 
 # SimdJSONPlugin: JSON reading with simdjson 5.0.5 (C++17), the plugin of
-# plugins/SimdJSONPlugin/st/SimdJSON.st.  Declared here, with the plugin,
-# rather than next to FEATURE_PLUGIN_UUID in CMakeLists.txt.  ON everywhere;
-# verified on Linux and Emscripten only: macOS (a .dylib with the libc++ of
-# the system) and Windows (MSYS2, whose C++ runtime DLLs the install step of
-# cmake/Windows.cmake bundles) have never built it
+# the package SimdJSON (the submodule plugins/SimdJSONPlugin/simdjson.st).
+# Declared here, with the plugin, rather than next to FEATURE_PLUGIN_UUID in
+# CMakeLists.txt.  ON everywhere; verified on Linux and Emscripten only:
+# macOS (a .dylib with the libc++ of the system) and Windows (MSYS2, whose
+# C++ runtime DLLs the install step of cmake/Windows.cmake bundles) have
+# never built it
 option(FEATURE_PLUGIN_SIMDJSON "Build the SimdJSONPlugin (simdjson JSON reader, C++17)" ON)
 if(FEATURE_PLUGIN_SIMDJSON)
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/simdjson.cmake)

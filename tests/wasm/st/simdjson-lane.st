@@ -2,8 +2,8 @@
 
 	pharo --headless Pharo.image --no-default-preferences st --quit simdjson-lane.st
 
- On an image into which plugins/SimdJSONPlugin/st/SimdJSON.st, then
- SimdJSON-Tests.st, were filed, runs the test classes of the package
+ On an image into which the groups Core and Tests of BaselineOfSimdJSON
+ were loaded (plugins/SimdJSONPlugin/tests/load-simdjson.st), runs the test classes of the package
  SimdJSON-Tests but SimdJSONSlowTests (opt-in: a 12 MB document, and an
  old-space cap), and prints
 

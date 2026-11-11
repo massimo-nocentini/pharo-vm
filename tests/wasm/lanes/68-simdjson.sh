@@ -5,9 +5,11 @@
 # stock image (plugins/SimdJSONPlugin, docs/SimdJSON.md):
 #
 #   builtin  Smalltalk vm listBuiltinModules has 'SimdJSONPlugin (i)';
-#   load     plugins/SimdJSONPlugin/st/SimdJSON.st, then SimdJSON-Tests.st,
-#            filed in and saved: the checks below run on copies of that image;
-#   info     SimdJSONReader is a subclass of SimdJSONMapper (SimdJSON.st
+#   load     plugins/SimdJSONPlugin/tests/load-simdjson.st loads the groups
+#            Core and Tests of BaselineOfSimdJSON with Metacello from the
+#            submodule plugins/SimdJSONPlugin/simdjson.st, and the image is
+#            saved: the checks below run on copies of it;
+#   info     SimdJSONReader is a subclass of SimdJSONMapper (SimdJSON
 #            needs no NeoJSON), and the plugin answers its platform,
 #            'emscripten', the implementation of simdjson, 'fallback'
 #            (simdjson has no kernel for WebAssembly), and the version of
@@ -27,8 +29,9 @@
 #            REPL of the Console page, as lane 60 runs them.
 #
 # Skipped when the CMake cache of the build turns FEATURE_PLUGIN_SIMDJSON off,
-# or when the stock image is older than Pharo 15, for which SimdJSON.st is
-# written: build with WASM_IMAGE_ZIP=<a Pharo 15 zip>.  The suite and the web
+# or when the stock image is older than Pharo 15, for which SimdJSON is
+# written: build with WASM_IMAGE_ZIP=<a Pharo 15 zip>.  Fails when the
+# submodule is not checked out (git submodule update --init).  The suite and the web
 # run are each stopped after 600 s.
 #
 # Environment (from make wasm-check): NODE, WASM_DIR, SRCDIR, TEST_DIR, and
@@ -39,7 +42,7 @@ TEST_DIR=${TEST_DIR:+$TEST_DIR/68-simdjson}
 # (the defaults of WASM_DIR, TEST_DIR and NODE, and the checks)
 . "$SRCDIR/tests/wasm/lib/common.sh"
 lane=simdjson
-ST=$SRCDIR/plugins/SimdJSONPlugin/st
+PLUGIN=$SRCDIR/plugins/SimdJSONPlugin
 LANE_ST=$SRCDIR/tests/wasm/st/simdjson-lane.st
 
 if ! grep -Eiq '^FEATURE_PLUGIN_SIMDJSON:BOOL=(ON|TRUE|YES|Y|1)$' "$WASM_DIR/cmake/CMakeCache.txt" 2>/dev/null; then
@@ -55,20 +58,23 @@ for f in "$WASM_DIR/node/pharo" "$WASM_DIR/web/pharo-web.js" "$WASM_DIR/web/phar
 	exit 1
     fi
 done
-for f in "$ST/SimdJSON.st" "$ST/SimdJSON-Tests.st"; do
-    if ! test -f "$f"; then
-	echo "FAIL 68-simdjson: no $f"
-	exit 1
-    fi
-done
+if ! test -d "$PLUGIN/simdjson.st/src/BaselineOfSimdJSON"; then
+    echo "FAIL 68-simdjson: no $PLUGIN/simdjson.st/src (git submodule update --init plugins/SimdJSONPlugin/simdjson.st)"
+    exit 1
+fi
 echo "68-simdjson: $WASM_DIR/node/pharo, Pharo $version"
 
 pharo_run() { limit "$timeout" "$WASM_DIR/node/pharo" "$@"; }
 P="pharo_run --headless Pharo.image --no-default-preferences"
-# (the image with SimdJSON.st and SimdJSON-Tests.st, which load saves)
+# (the image with SimdJSON and SimdJSON-Tests, which load saves)
 loaded=$TEST_DIR/simdjson-image
 
-load() { $P st --save --quit "$ST/SimdJSON.st" && $P st --save --quit "$ST/SimdJSON-Tests.st"; }
+# (the VM of node reads the environment and the files of the host)
+load() (
+    SJ_PLUGIN_DIR=$PLUGIN SJ_GROUPS='Core Tests'; export SJ_PLUGIN_DIR SJ_GROUPS
+    unset NEOJSON_DIR
+    $P st --save --quit "$PLUGIN/tests/load-simdjson.st"
+)
 suite() { limit 600 "$WASM_DIR/node/pharo" --headless Pharo.image --no-default-preferences st --quit "$LANE_ST"; }
 cap() (
     PHARO_WASM_OLD_SPACE_BASE=0x40000000; export PHARO_WASM_OLD_SPACE_BASE

@@ -8,7 +8,7 @@
      canada.json        #Top whose features are SJBFeatures, with an SJBGeometry whose
                         coordinates are rings of points (#Pt, a decoder answering a Point)
  Keys that a mapping does not name are read and dropped, as NeoJSON does.  NeoJSON must be
- loaded: #Top is a NeoJSONObject.  File in after SimdJSON.st and before SJBench.st
+ loaded: #Top is a NeoJSONObject.  File in after the package SimdJSON and before SJBench.st
  (prepare-image.st does)."
 
 (Object << #SJBTweet

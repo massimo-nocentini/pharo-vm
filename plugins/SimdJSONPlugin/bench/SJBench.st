@@ -1,6 +1,6 @@
 "SJBench.st - SimdJSONReader against NeoJSONReader, on the same inputs (Pharo 15, chunk format)
 
- prepare-image.st files this in, after SimdJSON.st and SJBenchMapping.st, into a copy of an
+ prepare-image.st files this in, after the package SimdJSON and SJBenchMapping.st, into a copy of an
  image with NeoJSON, natively; the saved image then runs on every VM with run-bench.st:
      pharo --headless sjbench.image --no-default-preferences st --quit run-bench.st
  run-bench.sh does both.  Environment:

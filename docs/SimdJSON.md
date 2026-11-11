@@ -1,6 +1,6 @@
 # SimdJSON: a JSON reader on simdjson
 
-The SimdJSONPlugin parses JSON with [simdjson](https://github.com/simdjson/simdjson) 5.0.5, and `plugins/SimdJSONPlugin/st/SimdJSON.st` gives Pharo 15 a reader with the API of NeoJSON's `NeoJSONReader` on top of it: `SimdJSONReader`, which needs no NeoJSON.
+The SimdJSONPlugin parses JSON with [simdjson](https://github.com/simdjson/simdjson) 5.0.5, and the package `SimdJSON` (the submodule `plugins/SimdJSONPlugin/simdjson.st`) gives Pharo 15 a reader with the API of NeoJSON's `NeoJSONReader` on top of it: `SimdJSONReader`, which needs no NeoJSON.
 The plugin builds the whole value of a JSON document in one primitive call: Dictionaries and Arrays built in C when the reader is configured as NeoJSON's defaults, or else a tree that the reader turns into the configured classes, or walks for NeoJSON's mappings.
 Values, number classes, string classes and stream positions are NeoJSON's, with the exceptions listed below; the errors are classes of its own.
 `SimdJSONWriter` writes JSON as NeoJSON's `NeoJSONWriter` does, byte for byte, with its protocol and the writing side of the mappings; a primitive walks the plain data in C (see Writing).
@@ -13,8 +13,8 @@ Files, in `plugins/SimdJSONPlugin`:
 - `src/common/sjText.c`, `include/common/sjText.h`: the scanner of the end of a value, the transcoding and the sizes (C99);
 - `include/common/sjBridge.h`: the interface between the two;
 - `include/win/sjNoThreads.h`: included first on Windows, to keep simdjson's threads off;
-- `st/SimdJSON.st`: the Smalltalk side;
-- `st/SimdJSON-Tests.st`, `st/SimdJSON-NeoTests.st`, `tests/`: the tests;
+- `simdjson.st/`: the Smalltalk side, a git submodule of [simdjson.st](https://github.com/massimo-nocentini/simdjson.st) (`git submodule update --init plugins/SimdJSONPlugin/simdjson.st`): Tonel packages in `src/` with `BaselineOfSimdJSON`, whose commit is the version of the Smalltalk code that goes with the plugin;
+- the packages `SimdJSON-Tests` and `SimdJSON-NeoTests` of the submodule, and `tests/`: the tests;
 - `bench/`: the benchmark.
 
 ## Building
@@ -50,15 +50,24 @@ In the WebAssembly VMs the plugin links libc++ and libc++abi into `pharo.wasm` a
 
 ## Loading the Smalltalk side
 
-`SimdJSON.st` is one file in the chunk format of Pharo 15, with no dependency but the plugin.
+The Smalltalk code is in the submodule `simdjson.st`, as Tonel packages that Metacello loads with `BaselineOfSimdJSON`.
+Its groups: `Core` (the package `SimdJSON`, with no dependency but the plugin), `Tests` (`SimdJSON-Tests`), `NeoTests` (`SimdJSON-NeoTests`, which needs NeoJSON with its tests, and generates the `SJ<name>` classes into `SimdJSON-NeoTests-Generated` after it is loaded) and `default` (all of them).
 `SimdJSONReader` is a subclass of `SimdJSONMapper`, a port of NeoJSON's mapper and mapping classes (the reading side), and it is strict RFC 8259.
 NeoJSON need not be in the image; when it is, whether it was loaded before or after, nothing changes: no NeoJSON class is in the hierarchy of `SimdJSONReader` or of its errors, and no method of the package `SimdJSON` names one (`SimdJSONReaderTests>>testStandalone` checks both).
 
-    pharo --headless Pharo.image --no-default-preferences st --save --quit plugins/SimdJSONPlugin/st/SimdJSON.st
+    Metacello new
+        baseline: 'SimdJSON';
+        repository: 'tonel://<repository>/plugins/SimdJSONPlugin/simdjson.st/src';
+        load: 'Core'.
 
-The file prints `SimdJSON: SimdJSONReader loaded, a subclass of SimdJSONMapper`.
-Filing it in again is harmless.
-Over an image where an older `SimdJSON.st` made `SimdJSONReader` a subclass of `NeoJSONReader` (its former neo mode), the class is made again; its class-side settings (`maxInputUnits:`, `nativeDictionaries:`) go back to their defaults.
+or, from the command line, `tests/load-simdjson.st`, which the tests and the benchmark use:
+
+    SJ_PLUGIN_DIR=plugins/SimdJSONPlugin SJ_GROUPS='Core Tests' \
+    pharo --headless Pharo.image --no-default-preferences st --save --quit plugins/SimdJSONPlugin/tests/load-simdjson.st
+
+It loads the groups of `SJ_GROUPS` (`Core Tests` by default), first NeoJSON's groups `core` and `tests` from the clone that `NEOJSON_DIR` names, when it is set (and locks it, so that nothing comes from the network; a group that needs NeoJSON otherwise loads it from GitHub), and prints `SimdJSON: SimdJSONReader loaded, a subclass of SimdJSONMapper`.
+Metacello makes UUIDs: the VM needs its UUIDPlugin.
+To change the Smalltalk code, commit in the submodule (Iceberg can open its checkout), push it to simdjson.st, and commit the new submodule commit here, with the plugin changes it goes with.
 Without the plugin, reading signals `SimdJSONResourceError` ('SimdJSONPlugin not available').
 
 ## API
@@ -182,7 +191,7 @@ A class that the plugin writes, Array or Dictionary for one, is written by the p
 
 ## Primitive contract
 
-The module `SimdJSONPlugin` has five primitives; `SimdJSON.st` calls them from the class side of `SimdJSONReader`, and `primitiveWrite` from that of `SimdJSONWriter`.
+The module `SimdJSONPlugin` has five primitives; the package `SimdJSON` calls them from the class side of `SimdJSONReader`, and `primitiveWrite` from that of `SimdJSONWriter`.
 `primitiveInfo` answers the protocol version first, and the image uses the plugin only when it is the one it speaks (`SimdJSONReader protocol`, 2).
 `primitiveWrite` came later, without a change of the protocol, since the reading primitives did not change: on a plugin without it, writing signals `SimdJSONResourceError`.
 
@@ -253,11 +262,11 @@ The primitive fails only with `PrimErrBadNumArgs` or `PrimErrBadArgument`, `Prim
 
     sh plugins/SimdJSONPlugin/tests/run-c-tests.sh --simdjson <simdjson tree> --corpus <simdjson-data>    # C: clang++, g++ with ASan and UBSan, em++
     sh plugins/SimdJSONPlugin/tests/run-st-tests.sh build/build/vm <Pharo 15 image or zip>                # SUnit: SimdJSON-Tests
-    sh plugins/SimdJSONPlugin/tests/run-st-tests.sh build/build/vm <Pharo 15 image or zip> compat         # also SimdJSON-NeoTests, against NeoJSON
+    sh plugins/SimdJSONPlugin/tests/run-st-tests.sh build/build/vm <Pharo 15 image or zip> compat         # also SimdJSON-NeoTests and the SJ* classes, against NeoJSON
 
-`run-st-tests.sh <vm-dir> <image.zip or .image> [compat]` works on a copy of the image: it checks that every `.st` file is ASCII with one method a `methodsFor:` section, files them in, checks the banner of `SimdJSON.st`, runs each package with a JUnit file and summarises it.
+`run-st-tests.sh <vm-dir> <image.zip or .image> [compat]` works on a copy of the image: it loads the groups `Core` and `Tests` (compat: `default`) with `load-simdjson.st` from the submodule, checks its banner, runs each package with a JUnit file and summarises it.
 Its environment: `NEOJSON_DIR` (compat: a clone of NeoJSON), `SJ_CORPUS` (the `jsonexamples` directory of simdjson-data, for the corpus and jsonchecker tests), `SJ_SLOW` (runs `SimdJSONSlowTests`: 2 million boxed Floats, and an `OutOfMemory` at a capped old space, reading and writing), `SJ_NUM_TOKENS` (random number tokens, 100000 by default), `SJ_WORK_DIR` (where the image copy goes, else a new directory in `TMPDIR`) and `SJ_TIMEOUT` (seconds a step may take, 3600 by default).
-`compat` loads NeoJSON from `NEOJSON_DIR` (`st/load-neojson.st`) before `SimdJSON.st`, only to compare with it: `SimdJSONCompatTests` reads the semantics table, random number tokens and the corpus (`SJ_CORPUS`) with both readers and requires the same values, classes and stream positions, an error where NeoJSON has one, and a `SimdJSONParseError` only where NeoJSON is lenient, never on an RFC 8259 input of its list; it writes 2,000 edge values (Fractions, Sets, OrderedDictionary, NeoJSONObject... among them) and the corpus as NeoJSONReader reads it (Fractions included) with both writers, plain, pretty, `asciiOnly` and with CR LF, and requires the same characters; then NeoJSON's own test classes, its writer tests included, run against `SimdJSONReader` and `SimdJSONWriter` (as `SJ<name>`, expecting SimdJSON's errors), but `testIntegers`, which only NeoJSON's leniency passes.
+`compat` loads NeoJSON from `NEOJSON_DIR` first, only to compare with it: `SimdJSONCompatTests` reads the semantics table, random number tokens and the corpus (`SJ_CORPUS`) with both readers and requires the same values, classes and stream positions, an error where NeoJSON has one, and a `SimdJSONParseError` only where NeoJSON is lenient, never on an RFC 8259 input of its list; it writes 2,000 edge values (Fractions, Sets, OrderedDictionary, NeoJSONObject... among them) and the corpus as NeoJSONReader reads it (Fractions included) with both writers, plain, pretty, `asciiOnly` and with CR LF, and requires the same characters; then NeoJSON's own test classes, its writer tests included, run against `SimdJSONReader` and `SimdJSONWriter` (as `SJ<name>`, in the package `SimdJSON-NeoTests-Generated`, expecting SimdJSON's errors), but `testIntegers`, which only NeoJSON's leniency passes.
 `SimdJSONWriterTests` compares the Floats with `printString` on 40,000 random values, and T11 of `run-c-tests.sh` the C texts of the writer: the escapes, integers of up to 300 bytes against a decimal conversion of its own, the spelling of Floats, and the round trip of 300,000 random doubles.
 In the WebAssembly build, lane 68 of `make wasm-check` runs the suite with the node and the web VMs (see docs/WebAssembly.md).
 
@@ -271,7 +280,7 @@ In the WebAssembly build, lane 68 of `make wasm-check` runs the suite with the n
     python3 -I plugins/SimdJSONPlugin/bench/summarize.py $OUT/bench/*.tsv
 
 - `fetch-corpus.sh` downloads simdjson-data at commit 3519499 (its archive is checked against SHA256 `a2623f4c…a884`; `SJ_CORPUS_ZIP=<file>` takes it from a file).
-- `run-bench.sh` prepares the image once, natively (`prepare-image.st` files `SimdJSON.st`, whose `SimdJSONReader` must be a subclass of `SimdJSONMapper`, `SJBenchMapping.st` and `SJBench.st` in; NeoJSON is in the image only to be compared with), then runs `run-bench.st` on a fresh copy of it with each VM in turn, pinned to one CPU (`taskset -c 2`), and the whole matrix twice; each run writes a TSV file, which `summarize.py` turns into the tables below.
+- `run-bench.sh` prepares the image once, natively (`prepare-image.st` loads the group `Core` from the submodule, whose `SimdJSONReader` must be a subclass of `SimdJSONMapper`, and files `SJBenchMapping.st` and `SJBench.st` in; NeoJSON is in the image only to be compared with), then runs `run-bench.st` on a fresh copy of it with each VM in turn, pinned to one CPU (`taskset -c 2`), and the whole matrix twice; each run writes a TSV file, which `summarize.py` turns into the tables below.
 - The timed inputs are 13 files of the corpus (13.8 MB: twitter, citm_catalog, canada, gsoc-2018, mesh, numbers, random, twitterescaped, github_events, update-center, apache_builds, instruments, marine_ik), an NDJSON file of 20,000 small objects (1.37 MB), and documents of 200 bytes and 2 KB.
 - Every value is first compared with NeoJSON's, on all 30 JSON files of the corpus: deep equality, with the classes of numbers, strings and collections, from the String, from the bytes, in tree mode, then with Symbol keys, as NeoJSONObjects, through the mappings, on the NDJSON; and NeoJSONWriter's text of each timed file with SimdJSONWriter's, plain and pretty (CHECK `write` and `write-pretty`).
 - A series is a full GC, warm-up runs, then samples of k runs each, k doubled until a sample lasts 50 ms (the clock of the WebAssembly VMs has a resolution of 1 ms), 10 samples natively and 5 in WebAssembly, within 20 s; the median of the samples counts, and MB/s is always over the UTF-8 bytes of the input.
@@ -639,7 +648,7 @@ In `primitiveInfo`'s statistics `gateHits` counts the gate's openings, and `enum
 
 - simdjson is under the Apache License 2.0 or the MIT licence, at the user's choice: both texts are installed as `LICENSE.simdjson` and `LICENSE.simdjson-MIT`, next to the plugin on Linux and Windows (`build/vm`, the `lib` directory of the Linux zip) and in `Pharo.app/Contents/Resources` on macOS, and go into the `THIRD-PARTY-NOTICES.txt` of the WebAssembly VMs, with those of libc++ and libc++abi (Apache License 2.0 with LLVM exceptions), which the plugin links there.
 - The doubles of the writer go through simdjson's port of Dragonbox (Junekey Jeon), which simdjson's sources carry under the Boost Software License 1.0.
-- The mapper, the mapping classes and the number parser of `SimdJSON.st` are ports of NeoJSON, under its MIT licence (Copyright (C) 2012 Sven Van Caekenberghe), which the file carries.
+- The mapper, the mapping classes and the number parser of the package `SimdJSON` are ports of NeoJSON, under its MIT licence (Copyright (C) 2012 Sven Van Caekenberghe), whose notice the class comment of `ManifestSimdJSON` carries.
 - The benchmark corpus is not part of this repository: `fetch-corpus.sh` downloads it, and its files keep the terms of their sources.
 
 This is not legal advice.
@@ -647,7 +656,7 @@ This is not legal advice.
 ## Limitations
 
 - The writer writes the plain data of a value in one primitive call, into memory before the stream: the web VM does not return to its page meanwhile.
-- Pharo 15 only: `SimdJSON.st` is written in the class syntax and chunk format of Pharo 15.
+- Pharo 15 only: the packages are written for Pharo 15.
 - Only Dictionaries and Arrays are built in C; OrderedDictionary, NeoJSONObject, SmallDictionary and OrderedCollection go through the tree.
 - A value is parsed whole: a stream other than a ReadStream on a String or a ByteArray is read to its end first, and the web VM does not return to its page during a primitive call.
 - macOS, Windows and Linux aarch64 are untested until CI runs the step that loads the plugin.
