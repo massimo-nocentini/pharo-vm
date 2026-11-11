@@ -181,7 +181,7 @@ setUpFromEnvironment
 line: anArray
 
 	anArray do: [ :each | out nextPutAll: each asString ] separatedBy: [ out nextPut: Character tab ].
-	out lf; flush! !
+	out nextPutAll: OSPlatform current lineEnding; flush! !
 
 !SJBench methodsFor: 'printing'!
 fail: anArray

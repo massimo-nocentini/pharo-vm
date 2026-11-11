@@ -26,6 +26,6 @@ Stdio stdout
 		ifNil: [ 'SimdJSONPlugin did not load' ]
 		ifNotNil: [ 'SimdJSONPlugin ', (ok ifTrue: [ '' ] ifFalse: [ 'FAILED ' ]), (info at: 5), ' ', (info at: 4),
 			' wrote ', (written ifNil: [ 'nothing' ] ifNotNil: [ (written at: 2) printString ]) ]);
-	lf;
+	nextPutAll: OSPlatform current lineEnding;
 	flush.
 Smalltalk exit: (ok ifTrue: [ 0 ] ifFalse: [ 1 ])

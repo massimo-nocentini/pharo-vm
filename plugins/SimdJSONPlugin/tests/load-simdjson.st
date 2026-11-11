@@ -25,7 +25,7 @@ Metacello makes UUIDs for the packages it loads: the VM needs its UUIDPlugin."
 environment := OSEnvironment current.
 out := Stdio stdout.
 fail := [ :message |
-	Stdio stderr nextPutAll: 'load-simdjson: '; nextPutAll: message; lf; flush.
+	Stdio stderr nextPutAll: 'load-simdjson: '; nextPutAll: message; nextPutAll: OSPlatform current lineEnding; flush.
 	Smalltalk exitFailure ].
 plugin := (environment at: 'SJ_PLUGIN_DIR' ifAbsent: [ nil ])
 	ifNil: [ fail value: 'SJ_PLUGIN_DIR is not set' ]
@@ -41,7 +41,8 @@ load := [ :what :block |
 	[ block value ]
 		on: Warning
 		do: [ :warning |
-			out nextPutAll: what; nextPutAll: ': '; nextPutAll: warning messageText; lf; flush.
+			out nextPutAll: what; nextPutAll: ': '; nextPutAll: warning messageText;
+				nextPutAll: OSPlatform current lineEnding; flush.
 			warning resume ] ].
 
 neoDir := environment at: 'NEOJSON_DIR' ifAbsent: [ nil ].
@@ -79,8 +80,8 @@ undeclared ifNotEmpty: [
 	fail value: 'undeclared variables in '
 		, (undeclared collect: [ :method | method printString ]) asArray printString ].
 out
-	nextPutAll: 'SimdJSON: SimdJSONReader loaded, a subclass of SimdJSONMapper'; lf;
+	nextPutAll: 'SimdJSON: SimdJSONReader loaded, a subclass of SimdJSONMapper'; nextPutAll: OSPlatform current lineEnding;
 	nextPutAll: 'SimdJSON: groups '; nextPutAll: groups printString;
-	nextPutAll: ', packages '; nextPutAll: packages printString; lf;
+	nextPutAll: ', packages '; nextPutAll: packages printString; nextPutAll: OSPlatform current lineEnding;
 	flush.
 !

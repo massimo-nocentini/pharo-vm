@@ -34,11 +34,11 @@ Stdio stdout
 	nextPutAll: ' failures, ';
 	print: result errorCount;
 	nextPutAll: ' errors';
-	lf.
+	nextPutAll: OSPlatform current lineEnding.
 result failures asArray , result errors asArray do: [ :each |
 	Stdio stdout
 		nextPutAll: each class name;
 		nextPutAll: '>>#';
 		nextPutAll: each selector;
-		lf ].
+		nextPutAll: OSPlatform current lineEnding ].
 Stdio stdout flush.

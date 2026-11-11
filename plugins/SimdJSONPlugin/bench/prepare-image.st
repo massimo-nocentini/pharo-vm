@@ -17,11 +17,11 @@ dir := (environment
 	at: 'SJ_PLUGIN_DIR'
 	ifAbsent: [ self error: 'prepare-image: SJ_PLUGIN_DIR is not set' ]) asFileReference.
 (Smalltalk globals includesKey: #NeoJSONReader) ifFalse: [
-	Stdio stderr nextPutAll: 'prepare-image: NeoJSON is not loaded in this image'; lf; flush.
+	Stdio stderr nextPutAll: 'prepare-image: NeoJSON is not loaded in this image'; nextPutAll: OSPlatform current lineEnding; flush.
 	Smalltalk exitFailure ].
 
 (dir / 'simdjson.st' / 'src' / 'BaselineOfSimdJSON') isDirectory ifFalse: [
-	Stdio stderr nextPutAll: 'prepare-image: no simdjson.st: git submodule update --init plugins/SimdJSONPlugin/simdjson.st'; lf; flush.
+	Stdio stderr nextPutAll: 'prepare-image: no simdjson.st: git submodule update --init plugins/SimdJSONPlugin/simdjson.st'; nextPutAll: OSPlatform current lineEnding; flush.
 	Smalltalk exitFailure ].
 [ Metacello new
 	baseline: 'SimdJSON';
@@ -34,7 +34,7 @@ dir := (environment
 
 reader := Smalltalk globals at: #SimdJSONReader ifAbsent: [ nil ].
 (reader notNil and: [ reader superclass name == #SimdJSONMapper ]) ifFalse: [
-	Stdio stderr nextPutAll: 'prepare-image: SimdJSONReader is not a subclass of SimdJSONMapper'; lf; flush.
+	Stdio stderr nextPutAll: 'prepare-image: SimdJSONReader is not a subclass of SimdJSONMapper'; nextPutAll: OSPlatform current lineEnding; flush.
 	Smalltalk exitFailure ].
 undeclared := (#( 'SimdJSON' 'SimdJSON-Bench' ) flatCollect: [ :name | name asPackage methods ])
 	select: [ :method | method usesUndeclareds ].
@@ -42,7 +42,7 @@ undeclared ifNotEmpty: [
 	Stdio stderr
 		nextPutAll: 'prepare-image: undeclared variables in ';
 		nextPutAll: (undeclared collect: [ :method | method printString ]) asArray printString;
-		lf;
+		nextPutAll: OSPlatform current lineEnding;
 		flush.
 	Smalltalk exitFailure ].
 
@@ -52,5 +52,5 @@ info := [ reader pluginAvailable ifTrue: [ reader pluginInfo ] ifFalse: [ nil ] 
 Stdio stdout
 	nextPutAll: 'prepare-image: SimdJSON and SimdJSON-Bench loaded, plugin: ';
 	nextPutAll: (info ifNil: [ 'not available' ] ifNotNil: [ (info at: 2) , ' simdjson ' , (info at: 3) ]);
-	lf;
+	nextPutAll: OSPlatform current lineEnding;
 	flush.
