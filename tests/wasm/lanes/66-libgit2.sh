@@ -55,7 +55,10 @@
 #             neither again (the web-libgit.st of before OSWindow-Web 8
 #             compiled both again, and made #webWorldDefaultAction send
 #             itself), and a #webWorldDefaultAction made so is Iceberg's own
-#             again after one more set up;
+#             again after one more set up; and the #getGitHubRepository of
+#             Iceberg's clone from github.com is the one of web-libgit.st,
+#             which answers nil where api.github.com cannot be resolved,
+#             with Iceberg's own kept as #webGetGitHubRepository;
 #   console <image>
 #             the same flow on each stock image of the site (image/stock,
 #             and image/stock-<id>), never set up, booted as the Console
@@ -617,9 +620,9 @@ for dir in "$WASM_DIR/image/stock" "$WASM_DIR"/image/stock-*; do
 	elif test "x$free" = 'xconfig_free:'; then
 	    if test -s guard.err; then
 		fail "control $image" "LGitConfig frees with config_free:, but $(grep -c '' guard.err) callouts failed: $(head -n 1 guard.err)"
-	    elif ! grep -v '^global config\|^merge ' "$identity_golden" >control-golden.txt ||
+	    elif ! grep -v '^global config\|^merge \|^github ' "$identity_golden" >control-golden.txt ||
 		    ! differ smoke.out control-golden.txt; then
-		fail "control $image" "LGitConfig frees with config_free:, but the flow differs from ${identity_golden#$SRCDIR/} (but for the global config and the merge): $(tr '\n' ';' <differ.txt | cut -c 1-1000)"
+		fail "control $image" "LGitConfig frees with config_free:, but the flow differs from ${identity_golden#$SRCDIR/} (but for the global config, the merge and the clone from GitHub): $(tr '\n' ';' <differ.txt | cut -c 1-1000)"
 	    elif ! not_a_path 'global config'; then
 		fail "control $image" "globalConfigurationPath of a stock LibGit-Core answered '$(value 'global config' | cut -c 1-200)' after the dialog, not the 256 characters of the String that libgit2 wrote its git_buf into"
 	    else

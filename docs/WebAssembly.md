@@ -693,6 +693,15 @@ Where `#webWorldDefaultAction` sends itself, `web-libgit.st` now compiles it aga
 The world page prepares an image of version 7 again, booting it as the Console, so its saved images get it back at their next world boot, and the Console and the Notebook at their next boot.
 The callouts of a pull and a push are adapted as those of the other flows (no other function than those of `adapted-66.txt`).
 
+#### Clone from GitHub
+
+Iceberg's "Clone from github.com" (`IceTipGitHubRepositoryPanel`) clones over git, then asks GitHub's REST API whether the repository is a fork, to add its parent as a remote too (`getGitHubRepository`).
+That request goes through Zinc, which needs sockets and name resolution, which the web VMs do not have: it fails with `NameLookupFailure: cannot resolve 'api.github.com'`, which Iceberg does not catch, so the clone ended in that error and the repository it cloned was not registered.
+Since OSWindow-Web 10, `web-libgit.st` keeps Iceberg's method as `#webGetGitHubRepository` and compiles a `getGitHubRepository` that answers nil on a `NetworkError`, as Iceberg does for a private repository: the clone has its remote, without that of the parent of a fork.
+Once, in Iceberg's protocol and package, without the announcements of the system, as the default action of the merge above; the world page prepares an image of an older version again, so its saved images get it too.
+"Clone remote repository" with the `https://` URL never asked the API, and Metacello's `github://` repositories clone over git only.
+Iceberg's other uses of GitHub's API (its pull requests, the removal of remote branches) still fail so in the web VMs.
+
 ### What else differs
 
 - The Release build defines NDEBUG, as CMake's Release flags do: with the asserts, a 1M-deep recursion took 34 s instead of 1 s.

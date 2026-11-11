@@ -38,12 +38,15 @@ first, it prints a line each, '<key>: <value>':
 	                of the free function, LGitConfig>>#config_find_global_path:,
 	                LGitConfig>>#globalConfigurationPath, and
 	                IceMergeResolutionRequest>>#defaultAction and
-	                #webWorldDefaultAction are the same afterwards, as they
+	                #webWorldDefaultAction, and
+	                IceTipGitHubRepositoryPanel>>#getGitHubRepository and
+	                #webGetGitHubRepository are the same afterwards, as they
 	                must be (web-libgit.st compiles only where LGitConfig frees
 	                with object_free:, where config_find_global_path: still
 	                gives git_config_find_global something else than an
-	                LGitBuf, where the default action is Iceberg's, or where
-	                #webWorldDefaultAction sends itself); unchanged too with
+	                LGitBuf, where the default action is Iceberg's, where
+	                #webWorldDefaultAction sends itself, or where
+	                #getGitHubRepository is Iceberg's); unchanged too with
 	                neither
 	global config methods
 	                the package and protocol of config_find_global_path: and
@@ -72,6 +75,16 @@ first, it prints a line each, '<key>: <value>':
 	                (as above): 'itself, then Iceberg's again' when it is
 	                Iceberg's own again, the source it had before, in its
 	                protocol; 'none' without a set up or the method
+	github clone    IceTipGitHubRepositoryPanel>>#getGitHubRepository, of
+	                Iceberg's clone from github.com, on a panel of
+	                massimo-nocentini/simdjson.st: 'web-libgit.st' when that
+	                file compiled it, else 'Iceberg'; whether Iceberg's own is
+	                kept as #webGetGitHubRepository; and what it answers, or
+	                the class of its error: the web VMs cannot resolve
+	                api.github.com, which Iceberg's asks whether the
+	                repository is a fork (NameLookupFailure), and the one of
+	                web-libgit.st answers nil then, as for a private
+	                repository; 'none' without Iceberg-Plugin-GitHub
 	create repo     a new repository, identity/demo, its code in src: its name
 	make class      a class WasmIdentityDemo, in a package WasmIdentityDemo
 	add package     that package added to the repository: its packages
@@ -199,7 +212,10 @@ methods := [
 	  LGitConfig compiledMethodAt: #globalConfigurationPath ifAbsent: [ nil ] } ,
 	(#( #defaultAction #webWorldDefaultAction ) collect: [ :selector |
 		(Smalltalk at: #IceMergeResolutionRequest ifAbsent: [ nil ])
-			ifNotNil: [ :request | request compiledMethodAt: selector ifAbsent: [ nil ] ] ]) ].
+			ifNotNil: [ :request | request compiledMethodAt: selector ifAbsent: [ nil ] ] ]) ,
+	(#( #getGitHubRepository #webGetGitHubRepository ) collect: [ :selector |
+		(Smalltalk at: #IceTipGitHubRepositoryPanel ifAbsent: [ nil ])
+			ifNotNil: [ :panel | panel compiledMethodAt: selector ifAbsent: [ nil ] ] ]) ].
 "the set up of the image again: answers false when there is none"
 setUp := [
 	| libgit |
@@ -287,6 +303,22 @@ step value: 'merge repair' value: [
 				and: [ (request >> #webWorldDefaultAction) protocolName = protocol ] ])
 					ifTrue: [ 'Iceberg''s again' ]
 					ifFalse: [ inWorld value ]) ] ].
+step value: 'github clone' value: [
+	(Smalltalk at: #IceTipGitHubRepositoryPanel ifAbsent: [ nil ])
+		ifNil: [ 'none' ]
+		ifNotNil: [ :panelClass |
+			| panel answer |
+			panel := panelClass new.
+			panel userNameInputText text: 'massimo-nocentini'.
+			panel projectNameInputText text: 'simdjson.st'.
+			answer := [ panel getGitHubRepository printString ] on: Error do: [ :error | error class name ].
+			(((panelClass >> #getGitHubRepository) sourceCode includesSubstring: 'web-libgit.st')
+				ifTrue: [ 'web-libgit.st' ]
+				ifFalse: [ 'Iceberg' ]) ,
+			', Iceberg''s kept ' , ((panelClass includesSelector: #webGetGitHubRepository)
+				and: [ ((panelClass >> #webGetGitHubRepository) sourceCode includesSubstring: 'web-libgit.st') not ])
+					printString ,
+			', answers ' , answer ] ].
 step value: 'create repo' value: [
 	repo := IceRepositoryCreator new
 		location: dir;

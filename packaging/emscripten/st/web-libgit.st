@@ -139,11 +139,27 @@
  without a world, rather than recurse.  Once: then it no longer sends itself, and a world image
  of an older version gets it at its preparation, which boots it as the Console does.
 
+ The clone from GitHub.  Iceberg's clone from github.com (IceTipGitHubRepositoryPanel, of
+ Iceberg-Plugin-GitHub) clones over git, then asks the API of GitHub, through Zinc, whether the
+ repository is a fork, to add the parent as a remote too (#getGitHubRepository, from
+ #newRepository).  Zinc needs sockets, which the web VMs do not have: a NameLookupFailure ('cannot
+ resolve 'api.github.com'') that #getGitHubRepository does not catch (it takes only a missing
+ credential, and a 'Not Found' as a private repository), so the clone ends in an error, and Iceberg
+ does not register the repository it cloned.  So, once, Iceberg's method is kept as
+ #webGetGitHubRepository, its source unchanged but for its selector, and #getGitHubRepository
+ calls it and answers nil on a NetworkError, as for a private repository: the clone has its
+ remote, and that of the parent of a fork is not added.  Both in the protocol and the package of
+ Iceberg's, without the announcements of the system, as the default action of the merge above;
+ only where the class is there and its #getGitHubRepository is Iceberg's own (whose source starts
+ with its selector and does not name web-libgit.st), so that a second evaluation compiles nothing
+ and the method never calls itself.  Iceberg's other uses of the API of GitHub (its pull requests,
+ say) still fail so: they need Zinc.
+
  It answers nothing, and says nothing.  An error goes to the one that evaluates it: the boots of
  the Console and of the notebook report it on stderr, and start anyway; the set up of an image
  for the world fails with it."
 
-| config web method protocols found provider request original |
+| config web method protocols found provider request original panel github |
 config := Smalltalk globals at: #LGitConfig ifAbsent: [ nil ].
 web := PackageOrganizer default hasPackage: 'OSWindow-Web'.
 (config notNil and: [
@@ -288,6 +304,31 @@ method := request ifNotNil: [ request compiledMethodAt: #webWorldDefaultAction i
 		'': the merge has conflicts, and this image lost the dialog of the merge of Iceberg: merge by hand; nothing was merged''.
 	^ false' ])
 			classified: method protocolName
+			withStamp: ''
+			notifying: nil
+			logSource: true ] ].
+panel := Smalltalk globals at: #IceTipGitHubRepositoryPanel ifAbsent: [ nil ].
+github := panel ifNotNil: [ panel compiledMethodAt: #getGitHubRepository ifAbsent: [ nil ] ].
+(github notNil and: [
+	(github sourceCode includesSubstring: 'web-libgit.st') not
+		and: [ github sourceCode beginsWith: 'getGitHubRepository' ] ]) ifTrue: [
+	SystemAnnouncer uniqueInstance suspendAllWhile: [
+		panel
+			compile: 'webGetGitHubRepository' , (github sourceCode allButFirst: 'getGitHubRepository' size)
+			classified: github protocolName
+			withStamp: ''
+			notifying: nil
+			logSource: true.
+		panel
+			compile: 'getGitHubRepository
+	"Iceberg''s (#webGetGitHubRepository), which asks the API of GitHub through Zinc whether the
+	 repository is a fork; the web VMs have no sockets for Zinc (cannot resolve api.github.com):
+	 then nil, as for a private repository. Compiled by web-libgit.st of the WebAssembly VMs"
+
+	^ [ self webGetGitHubRepository ]
+		on: NetworkError
+		do: [ :error | nil ]'
+			classified: github protocolName
 			withStamp: ''
 			notifying: nil
 			logSource: true ] ].
