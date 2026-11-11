@@ -436,10 +436,13 @@ jobs:
       CC: clang
       CXX: clang++
     steps:
+      # (with the submodule plugins/SimdJSONPlugin/simdjson.st, the
+      # Smalltalk code that lane 68 of wasm-check loads)
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
+          submodules: true
 
       - name: Fetch the release tags
         run: |
