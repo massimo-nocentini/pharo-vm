@@ -115,15 +115,19 @@ jobs:
           "$RUNNER_TEMP/vm/pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences eval '3 + 4' | tee "$RUNNER_TEMP/eval.txt"
           grep -qx 7 "$RUNNER_TEMP/eval.txt"
 
-      # The plugin is C++: it must load, and need no libstdc++ newer than the
-      # GLIBCXX_3.4.21 of GCC 5 (cmake/simdjson.cmake)
-      - name: Load the SimdJSONPlugin of the zip
+      # The plugin and libSimdJSONFFI are C++: they must load (the library
+      # through the FFI), and need no libstdc++ newer than the GLIBCXX_3.4.21
+      # of GCC 5 (cmake/simdjson.cmake)
+      - name: Load the SimdJSONPlugin and libSimdJSONFFI of the zip
         run: |
           "$RUNNER_TEMP/vm/pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/SimdJSONPlugin/tests/ci-load.st | tee "$RUNNER_TEMP/simdjson.txt"
           grep -q '^SimdJSONPlugin native ' "$RUNNER_TEMP/simdjson.txt"
-          glibcxx=$(objdump -T "$RUNNER_TEMP/vm/lib/libSimdJSONPlugin.so" | grep -o 'GLIBCXX_[0-9.]*' | sort -uV | tail -n 1)
-          echo "$glibcxx"
-          test "$(printf '%s\n' "$glibcxx" GLIBCXX_3.4.21 | sort -V | tail -n 1)" = GLIBCXX_3.4.21
+          grep -q '^SimdJSONFFI 1 ' "$RUNNER_TEMP/simdjson.txt"
+          for lib in libSimdJSONPlugin.so libSimdJSONFFI.so; do
+            glibcxx=$(objdump -T "$RUNNER_TEMP/vm/lib/$lib" | grep -o 'GLIBCXX_[0-9.]*' | sort -uV | tail -n 1)
+            echo "$lib: $glibcxx"
+            test "$(printf '%s\n' "$glibcxx" GLIBCXX_3.4.21 | sort -V | tail -n 1)" = GLIBCXX_3.4.21
+          done
 
       - uses: actions/upload-artifact@v7
         with:

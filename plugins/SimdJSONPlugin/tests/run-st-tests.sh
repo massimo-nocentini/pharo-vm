@@ -11,13 +11,16 @@
 #
 #   load   load-simdjson.st loads the Smalltalk code with Metacello from the
 #          submodule plugins/SimdJSONPlugin/simdjson.st (git submodule update
-#          --init): the groups Core and Tests of BaselineOfSimdJSON, and
+#          --init): the groups Core, Tests, FFI and FFITests of
+#          BaselineOfSimdJSON, and
 #          SimdJSONReader must be under SimdJSONMapper; compat: all of them,
 #          NeoTests too, with NeoJSON and its tests from the clone that
 #          NEOJSON_DIR names (only to compare with), and the SJ* classes that
 #          SimdJSON-NeoTests generates from NeoJSON's tests;
-#   test   the package SimdJSON-Tests (SimdJSONSlowTests are skipped unless
-#          SJ_SLOW is set); compat: SimdJSON-NeoTests and the package of the
+#   test   the packages SimdJSON-Tests (SimdJSONSlowTests are skipped unless
+#          SJ_SLOW is set) and SimdJSON-FFI-Tests, which reads through
+#          libSimdJSONFFI with the plugin hidden (skipped when <vm-dir> has
+#          no libSimdJSONFFI); compat: SimdJSON-NeoTests and the package of the
 #          SJ* classes, SimdJSON-NeoTests-Generated, then the report of the
 #          SJ* classes (SimdJSONNeoTestGenerator report): what passed, and
 #          which tests NeoJSON passes only by its leniency.
@@ -42,7 +45,7 @@ COMPAT=${3:-}
 PLUGIN=$(cd "$(dirname "$0")/.." && pwd)
 
 case $COMPAT in
-'')     load_groups='Core Tests' ;;
+'')     load_groups='Core Tests FFI FFITests' ;;
 compat) load_groups='default' ;;
 *)      echo "the third argument is compat or nothing, not '$COMPAT'" >&2; exit 2 ;;
 esac
@@ -149,6 +152,7 @@ run_package() {
 }
 
 run_package SimdJSON-Tests
+run_package SimdJSON-FFI-Tests
 if test -n "$COMPAT"; then
     run_package SimdJSON-NeoTests
     run_package SimdJSON-NeoTests-Generated

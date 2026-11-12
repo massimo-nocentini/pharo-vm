@@ -1,8 +1,9 @@
 #!/bin/sh
 # run-c-tests.sh - C-level tests of the SimdJSONPlugin engine
 #
-# Builds tests/sjtest.cpp with sjEngine.cpp, sjText.c and the simdjson
-# amalgamation, and runs it (checks T1-T8 and T11, see sjtest.cpp) with
+# Builds tests/sjtest.cpp with sjEngine.cpp, sjText.c, sjFFI.c (the
+# library libSimdJSONFFI) and the simdjson amalgamation, and runs it
+# (checks T1-T8 and T11-T13, see sjtest.cpp) with
 #
 #   clang++ -O2
 #   g++ -O2 -fsanitize=address,undefined
@@ -148,7 +149,7 @@ if test -n "$emsdk" && test -z "$node"; then
     node=$(ls -d "$emsdk"/node/*/bin/node 2>/dev/null | sort -V | tail -n 1)
 fi
 
-common="-std=c++17 -g0 -fno-exceptions -DSIMDJSON_EXCEPTIONS=0 -I$simdjson -I$SRCDIR/include/common"
+common="-std=c++17 -g0 -fno-exceptions -DSIMDJSON_EXCEPTIONS=0 -I$simdjson -I$SRCDIR/include/common -I$SRCDIR/include/ffi"
 
 # lane NAME CXX CC "FLAGS" "LINK FLAGS" RUNNER: builds $build/NAME/sjtest[.js]
 lane_build() {
@@ -160,9 +161,10 @@ lane_build() {
         $cxx $common $flags -c "$simdjson/simdjson.cpp" -o "$dir/simdjson.o" || return 1
     fi
     $cc -std=c99 -g0 $flags -I"$SRCDIR/include/common" -c "$SRCDIR/src/common/sjText.c" -o "$dir/sjText.o" &&
+    $cc -std=c99 -g0 $flags -I"$SRCDIR/include/common" -I"$SRCDIR/include/ffi" -c "$SRCDIR/src/ffi/sjFFI.c" -o "$dir/sjFFI.o" &&
     $cxx $common $flags -DSJ_TEST_HOOKS -c "$SRCDIR/src/cxx/sjEngine.cpp" -o "$dir/sjEngine.o" &&
     $cxx $common $flags -c "$SRCDIR/tests/sjtest.cpp" -o "$dir/sjtest.o" &&
-    $cxx $flags $link -o "$dir/$6" "$dir/sjtest.o" "$dir/sjEngine.o" "$dir/sjText.o" "$dir/simdjson.o"
+    $cxx $flags $link -o "$dir/$6" "$dir/sjtest.o" "$dir/sjEngine.o" "$dir/sjText.o" "$dir/sjFFI.o" "$dir/simdjson.o"
 }
 
 lane_run() {

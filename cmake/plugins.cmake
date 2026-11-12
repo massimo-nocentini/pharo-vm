@@ -119,6 +119,32 @@ if(FEATURE_PLUGIN_SIMDJSON)
     set_target_properties(SimdJSONPlugin PROPERTIES
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
         CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+
+    # libSimdJSONFFI: the same engine for the FFI of the image (the package
+    # SimdJSON-FFI), on a VM without the plugin: not a plugin, it has no VM
+    # header, and only its sj_ffi_* functions are exported (sjFFI.h).
+    # Natively only: the web VMs have the plugin built in
+    if(NOT EMSCRIPTEN)
+        option(FEATURE_SIMDJSON_FFI "Build libSimdJSONFFI, simdjson for the FFI of the package SimdJSON-FFI" ON)
+    endif()
+    if(FEATURE_SIMDJSON_FFI AND NOT EMSCRIPTEN)
+        set(sj_dir ${CMAKE_CURRENT_SOURCE_DIR}/plugins/SimdJSONPlugin)
+        addIndependentLibraryWithRPATH(SimdJSONFFI
+            ${sj_dir}/src/ffi/sjFFI.c
+            ${sj_dir}/src/common/sjText.c
+            ${sj_dir}/src/cxx/sjEngine.cpp)
+        add_dependencies(${VM_EXECUTABLE_NAME} SimdJSONFFI)
+        target_include_directories(SimdJSONFFI PRIVATE ${sj_dir}/include/common ${sj_dir}/include/ffi)
+        target_link_libraries(SimdJSONFFI PRIVATE pharo_simdjson)
+        target_compile_definitions(SimdJSONFFI PRIVATE SJ_SIMDJSON_VERSION="${PHARO_SIMDJSON_VERSION}")
+        target_compile_options(SimdJSONFFI PRIVATE -O3 -g0)
+        foreach(option IN LISTS PHARO_SIMDJSON_CXX_OPTIONS)
+            target_compile_options(SimdJSONFFI PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${option}>)
+        endforeach()
+        set_target_properties(SimdJSONFFI PROPERTIES
+            CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
+            C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+    endif()
 endif()
 
 # UnixOSProcessPlugin (it needs fork(), which Emscripten has not)

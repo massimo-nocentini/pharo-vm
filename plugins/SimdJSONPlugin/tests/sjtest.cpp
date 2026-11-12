@@ -28,6 +28,16 @@
  *       code points, asciiOnly), integers of any size against a decimal
  *       conversion of their own, and doubles: Float>>printOn:'s layout,
  *       its rounding of ties, and the round trip of random bit patterns
+ *   T12 libSimdJSONFFI (src/ffi/sjFFI.c, linked in): the tape of sj_ffi_read,
+ *       decoded here, is the value of the fake builder, with the same status,
+ *       code and next0, on crafted inputs, random values in the three
+ *       encodings, NEXT reads and the corpus; inline in the buffer and copied
+ *       by sj_ffi_take; tickets, refusals and the words of the WideStrings
+ *   T13 sj_ffi_write: the DOM of each input written as a write tape, its JSON
+ *       written plain, pretty, asciiOnly, as UTF-8 and as a String, parsed
+ *       again and the same value; holes and their positions, the copy by
+ *       sj_ffi_take_output, tickets, the errors and their culprits, maxBytes,
+ *       malformed tapes
  *
  * Usage: sjtest [--corpus DIR] [--only T1,T2,...] [--slow] [--report]
  * DIR is the jsonexamples directory (default: $SJ_CORPUS); without it the
@@ -51,6 +61,7 @@
 #include "simdjson.h"
 #include "sjBridge.h"
 #include "sjText.h"
+#include "sjFFI.h"
 
 extern "C" int sj_test_number_fault;
 
@@ -1846,6 +1857,499 @@ selected(const std::string &only, const char *test)
 	return list.find(std::string(",") + test + ",") != std::string::npos;
 }
 
+/*** T12: libSimdJSONFFI ***/
+
+struct Tape {
+	int64_t rc;
+	int64_t answer[SJ_FFI_A_SLOTS];
+	std::vector<uint8_t> bytes;	/* the tape */
+	std::vector<uint32_t> words;
+	size_t at, wordAt;
+	bool bad;
+};
+
+/* One sj_ffi_read, and sj_ffi_take when something was kept */
+static Tape
+ffiRead(const Source &src, size_t start0, size_t stop0, unsigned flags, int64_t maxUnits, size_t capacity)
+{
+	Tape t{};
+	std::vector<uint8_t> buffer(capacity);
+	t.rc = sj_ffi_read(src.base(), src.encoding, int64_t(src.units()), int64_t(start0), int64_t(stop0), flags, maxUnits,
+		buffer.data(), int64_t(capacity));
+	if (t.rc != 0)
+		return t;
+	memcpy(t.answer, buffer.data(), sizeof t.answer);
+	if (t.answer[SJ_FFI_A_STATUS] != SJ_OK)
+		return t;
+	size_t size = size_t(t.answer[SJ_FFI_A_SIZE]), count = size_t(t.answer[SJ_FFI_A_WORDS]);
+	bool inlined = t.answer[SJ_FFI_A_INLINE] == 1;
+	t.words.resize(count);
+	if (inlined)
+		t.bytes.assign(buffer.begin() + SJ_FFI_HEADER, buffer.begin() + SJ_FFI_HEADER + size);
+	else
+		t.bytes.resize(size);
+	if (!inlined || count)
+		CHECK(sj_ffi_take(t.bytes.data(), inlined ? 0 : int64_t(size), t.words.data(), int64_t(count),
+			t.answer[SJ_FFI_A_TICKET]) == 0);
+	return t;
+}
+
+static uint64_t
+tapeSlot(Tape &t)
+{
+	uint64_t w = 0;
+	if (t.at + 8 > t.bytes.size()) {
+		t.bad = true;
+		return 0;
+	}
+	memcpy(&w, t.bytes.data() + t.at, 8);
+	t.at += 8;
+	return w;
+}
+
+static uint64_t
+tapeHalves(Tape &t)
+{
+	uint32_t h[2] = {0, 0};
+	if (t.at + 8 > t.bytes.size()) {
+		t.bad = true;
+		return 0;
+	}
+	memcpy(h, t.bytes.data() + t.at, 8);
+	t.at += 8;
+	return uint64_t(h[0]) << 32 | h[1];
+}
+
+/* The canonical form of the value at t.at, as canonNode writes the fake builder's */
+static void
+canonTape(Tape &t, std::string &out)
+{
+	int64_t header = int64_t(tapeSlot(t));
+	int tag = int(header & 255);
+	int64_t payload = header >> 8;	/* arithmetic: the SMALLINT payload is signed */
+	if (t.bad) { out += "!end"; return; }
+	switch (tag) {
+	case SJ_TAPE_SMALLINT: out += 'i' + std::to_string(payload); break;
+	case SJ_TAPE_INT64: out += 'i' + std::to_string(int64_t(tapeHalves(t))); break;
+	case SJ_TAPE_UINT64: out += 'i' + std::to_string(tapeHalves(t)); break;
+	case SJ_TAPE_FLOAT: {
+		uint64_t bits = tapeSlot(t);
+		double d;
+		memcpy(&d, &bits, 8);
+		canonDouble(d, out);
+		break;
+	}
+	case SJ_TAPE_NULL: out += 'n'; break;
+	case SJ_TAPE_TRUE: out += 'T'; break;
+	case SJ_TAPE_FALSE: out += 'F'; break;
+	case SJ_TAPE_BYTESTRING: case SJ_TAPE_NUMBERTEXT: {
+		size_t n = size_t(payload), padded = (n + 7) & ~size_t(7);
+		if (t.at + padded > t.bytes.size()) { t.bad = true; out += "!end"; return; }
+		const uint8_t *p = t.bytes.data() + t.at;
+		for (size_t i = n; i < padded; i++)
+			if (p[i]) { out += "!padding"; break; }
+		if (tag == SJ_TAPE_NUMBERTEXT)
+			out += 't' + std::string((const char *)p, n);
+		else {
+			std::u32string cps(p, p + n);
+			canonString(cps, out);
+		}
+		t.at += padded;
+		break;
+	}
+	case SJ_TAPE_WIDESTRING: {
+		size_t n = size_t(payload);
+		if (t.wordAt + n > t.words.size()) { t.bad = true; out += "!words"; return; }
+		std::u32string cps(t.words.begin() + t.wordAt, t.words.begin() + t.wordAt + n);
+		t.wordAt += n;
+		char32_t max = 0;
+		for (char32_t c : cps) max = std::max(max, c);
+		if (max <= 0xFF) out += "!narrow";
+		canonString(cps, out);
+		break;
+	}
+	case SJ_TAPE_ARRAY:
+		out += '[';
+		for (int64_t i = 0; i < payload && !t.bad; i++) {
+			if (i) out += ',';
+			canonTape(t, out);
+		}
+		out += ']';
+		break;
+	case SJ_TAPE_OBJECT: {
+		std::vector<std::pair<std::string, std::string>> pairs;
+		for (int64_t i = 0; i < payload && !t.bad; i++) {
+			std::string k, v;
+			canonTape(t, k);
+			canonTape(t, v);
+			pairs.emplace_back(k, v);
+		}
+		canonPairs(pairs, false, out);
+		break;
+	}
+	default: out += "!tag" + std::to_string(tag); t.bad = true; break;
+	}
+}
+
+/* The library and the fake builder read the same: status, code (or need), next0, value */
+static void
+ffiCompare(const Source &src, size_t start0, size_t stop0, unsigned flags, int64_t maxUnits, const char *what)
+{
+	Result r = readWith(src, start0, stop0, flags, -1, 0, maxUnits);
+	for (size_t capacity : {size_t(SJ_FFI_HEADER), size_t(65536)}) {
+		Tape t = ffiRead(src, start0, stop0, flags, maxUnits, capacity);
+		if (!CHECKF(t.rc == 0 && r.rc == SJ_RC_DONE, "%s: rc %lld, engine %d", what, (long long)t.rc, r.rc))
+			continue;
+		if (!CHECKF(t.answer[SJ_FFI_A_STATUS] == r.out.status, "%s: status %lld, engine %d", what,
+				(long long)t.answer[SJ_FFI_A_STATUS], r.out.status))
+			continue;
+		if (r.out.status == SJ_ERROR)
+			CHECKF(t.answer[SJ_FFI_A_CODE] == r.out.code, "%s: code %lld, engine %d", what,
+				(long long)t.answer[SJ_FFI_A_CODE], r.out.code);
+		else if (r.out.status == SJ_TOO_LARGE)
+			CHECKF(t.answer[SJ_FFI_A_CODE] == r.out.need, "%s: need", what);
+		else {
+			CHECKF(t.answer[SJ_FFI_A_NEXT] == int64_t(r.out.next0), "%s: next0 %lld, engine %zu", what,
+				(long long)t.answer[SJ_FFI_A_NEXT], r.out.next0);
+			CHECKF(t.answer[SJ_FFI_A_INLINE] == (t.bytes.size() <= capacity - SJ_FFI_HEADER), "%s: inline", what);
+			std::string value;
+			canonTape(t, value);
+			CHECKF(!t.bad && t.at == t.bytes.size() && t.wordAt == t.words.size(), "%s: the tape is not one value", what);
+			CHECKF(value == canon(r), "%s capacity %zu flags %u:\n  ffi    %.300s\n  engine %.300s", what, capacity, flags,
+				value.c_str(), canon(r).c_str());
+		}
+	}
+}
+
+static void
+testFFI()
+{
+	static const char *cases[] = {
+		"0", "-0", "-7", "4503599627370495", "4503599627370496", "-4503599627370495", "-4503599627370496",
+		"1152921504606846976", "-1152921504606846977", "-2305843009213693952", "9223372036854775807",
+		"-9223372036854775808", "9223372036854775808", "18446744073709551615", "12345678901234567890123456789",
+		"1.5", "-0.0", "1e2", "1E+2", "1e-2", "1e300", "5e-324", "null", "true", "false", "\"\"", "\"abc\"",
+		"\"\\u00e9\\u00ff\"", "\"\\u20ac\"", "\"\\ud834\\udd1e x\"", "\"1234567\"", "\"12345678\"", "[]", "{}",
+		"[null,true,false,[],{}]", "{\"a\":null,\"b\":[1,{\"c\":false}],\"\\u20ac\":\"\\u20ac\",\"a\":2}",
+		"[1e2,2,3.5e1,[4E0],{\"k\":7e0}]", "  [1] ", "[1,", "{\"a\" 1}", "\"\\ud800\"", "\xEF\xBB\xBF[1]", "", " "};
+	char what[64];
+	int i = 0;
+	for (const char *json : cases) {
+		snprintf(what, sizeof what, "case %d", i++);
+		for (unsigned flags : {0u, unsigned(SJ_F_EXACT)})
+			ffiCompare(Source::utf8(json), 0, strlen(json), flags, -1, what);
+	}
+	/* random values, in the three encodings, read one after the other */
+	for (int round = 0; round < 300; round++) {
+		int encoding = round % 3;
+		std::u32string text;
+		int n = 1 + rnd(4);
+		for (int k = 0; k < n; k++)
+			text += randomValue(0, encoding == SJ_ENC_LATIN1) + randomWhite() + U" ";
+		Source src = sourceOf(text, encoding);
+		size_t at = 0;
+		for (int k = 0; k < n && at < src.units(); k++) {
+			snprintf(what, sizeof what, "random %d value %d", round, k);
+			unsigned flags = (k ? SJ_F_NEXT : 0) | (round & 4 ? SJ_F_EXACT : 0);
+			ffiCompare(src, at, src.units(), flags, -1, what);
+			Result r = readWith(src, at, src.units(), flags | SJ_F_NEXT);
+			if (!ok(r)) break;
+			at = r.out.next0;
+		}
+	}
+	/* maxUnits: the whole rest gives way to the value, a value over it is refused */
+	ffiCompare(Source::utf8("[1,2] [3,4]"), 0, 11, 0, 5, "maxUnits 5");
+	ffiCompare(Source::utf8("[1,2] [3,4]"), 0, 11, 0, 4, "maxUnits 4");
+	for (const CorpusFile &f : corpus())
+		for (unsigned flags : {0u, unsigned(SJ_F_EXACT)})
+			ffiCompare(Source::utf8(f.json), 0, f.json.size(), flags, -1, f.name.c_str());
+
+	/* a read in between loses what was kept; refusals */
+	std::vector<uint8_t> buffer(SJ_FFI_HEADER);
+	int64_t answer[SJ_FFI_A_SLOTS];
+	CHECK(sj_ffi_read("[1,2]", SJ_ENC_UTF8, 5, 0, 5, 0, -1, buffer.data(), SJ_FFI_HEADER) == 0);
+	memcpy(answer, buffer.data(), sizeof answer);
+	CHECK(answer[SJ_FFI_A_INLINE] == 0 && answer[SJ_FFI_A_TICKET] > 0);
+	CHECK(sj_ffi_read("[3]", SJ_ENC_UTF8, 3, 0, 3, 0, -1, buffer.data(), SJ_FFI_HEADER) == 0);
+	std::vector<uint8_t> tape(static_cast<size_t>(answer[SJ_FFI_A_SIZE]));
+	CHECK(sj_ffi_take(tape.data(), answer[SJ_FFI_A_SIZE], nullptr, 0, answer[SJ_FFI_A_TICKET]) == -1);
+	memcpy(answer, buffer.data(), sizeof answer);
+	tape.resize(size_t(answer[SJ_FFI_A_SIZE]));
+	CHECK(sj_ffi_take(tape.data(), int64_t(tape.size()) + 8, nullptr, 0, answer[SJ_FFI_A_TICKET]) == -1);
+	CHECK(sj_ffi_take(tape.data(), int64_t(tape.size()), nullptr, 0, answer[SJ_FFI_A_TICKET]) == 0);
+	CHECK(sj_ffi_take(tape.data(), int64_t(tape.size()), nullptr, 0, answer[SJ_FFI_A_TICKET]) == -1);
+	CHECK(sj_ffi_read("[1]", SJ_ENC_UTF8, 3, 0, 3, 0, -1, buffer.data(), SJ_FFI_HEADER - 1) == -1);
+	CHECK(sj_ffi_read("[1]", 7, 3, 0, 3, 0, -1, buffer.data(), SJ_FFI_HEADER) == -1);
+	CHECK(sj_ffi_read("[1]", SJ_ENC_UTF8, 3, -1, 3, 0, -1, buffer.data(), SJ_FFI_HEADER) == -1);
+	CHECK(sj_ffi_read("[1]", SJ_ENC_UTF8, 3, 2, 1, 0, -1, buffer.data(), SJ_FFI_HEADER) == 0);
+	memcpy(answer, buffer.data(), sizeof answer);
+	CHECK(answer[SJ_FFI_A_STATUS] == SJ_ERROR && answer[SJ_FFI_A_CODE] == simdjson::INDEX_OUT_OF_BOUNDS);
+	CHECK(sj_ffi_protocol() == SJ_FFI_PROTOCOL);
+	CHECK(!strcmp(sj_ffi_error_message(SJ_ERR_BOM), sj_error_message(SJ_ERR_BOM)));
+	CHECK(!strcmp(sj_ffi_error_message(-1), "") && !strcmp(sj_ffi_error_message(int64_t(1) << 40), ""));
+	CHECK(strlen(sj_ffi_implementation()) > 0 && !strcmp(sj_ffi_simdjson_version(), "5.0.5"));
+	sj_ffi_release(1);
+	ffiCompare(Source::utf8("[\"after\",\"release\"]"), 0, 19, 0, -1, "after release");
+}
+
+/*** T13: sj_ffi_write ***/
+
+struct WTape {
+	std::vector<uint8_t> bytes;
+	std::vector<uint32_t> words;
+	int64_t numbers = 0;
+	void slot(uint64_t v) { size_t at = bytes.size(); bytes.resize(at + 8); memcpy(&bytes[at], &v, 8); }
+	void header(int tag, int64_t payload) { slot(uint64_t(payload) << 8 | uint64_t(tag)); }
+	void raw(const void *p, size_t n) { size_t at = bytes.size(); bytes.resize(at + ((n + 7) & ~size_t(7)), 0); memcpy(&bytes[at], p, n); }
+	void string(const std::u32string &cps)
+	{
+		char32_t max = 0;
+		for (char32_t c : cps) max = std::max(max, c);
+		if (max <= 0xFF) {
+			std::string latin1(cps.begin(), cps.end());
+			header(SJ_WTAPE_BYTESTRING, int64_t(latin1.size()));
+			raw(latin1.data(), latin1.size());
+		} else {
+			header(SJ_WTAPE_WIDESTRING, int64_t(cps.size()));
+			slot(uint64_t(++numbers));
+			words.insert(words.end(), cps.begin(), cps.end());
+		}
+	}
+	void element(dom::element e)
+	{
+		switch (e.type()) {
+		case dom::element_type::NULL_VALUE: header(SJ_WTAPE_NULL, 0); break;
+		case dom::element_type::BOOL: header(e.get_bool().value_unsafe() ? SJ_WTAPE_TRUE : SJ_WTAPE_FALSE, 0); break;
+		case dom::element_type::INT64: {
+			int64_t v = e.get_int64().value_unsafe();
+			if (v > -(int64_t(1) << 52) && v < (int64_t(1) << 52)) header(SJ_WTAPE_SMALLINT, v);
+			else { header(SJ_WTAPE_INT64, 0); slot(uint64_t(v)); }
+			break;
+		}
+		case dom::element_type::UINT64: {
+			uint64_t v = e.get_uint64().value_unsafe();
+			uint8_t le[8];
+			size_t n = 0;
+			for (; v; v >>= 8) le[n++] = uint8_t(v);
+			header(SJ_WTAPE_POSITIVE, int64_t(n));
+			raw(le, n);
+			break;
+		}
+		case dom::element_type::DOUBLE: {
+			double d = e.get_double().value_unsafe();
+			uint64_t bits;
+			memcpy(&bits, &d, 8);
+			header(SJ_WTAPE_FLOAT, 0);
+			slot(bits);
+			break;
+		}
+		case dom::element_type::BIGINT: header(SJ_WTAPE_HOLE, ++numbers); break;
+		case dom::element_type::STRING: {
+			std::string_view v = e.get_string().value_unsafe();
+			string(decodeUtf8(v.data(), v.size()));
+			break;
+		}
+		case dom::element_type::ARRAY: {
+			dom::array a = e.get_array().value_unsafe();
+			size_t n = 0;
+			for (dom::element c : a) { (void)c; n++; }
+			header(SJ_WTAPE_ARRAY, int64_t(n));
+			for (dom::element c : a) element(c);
+			break;
+		}
+		case dom::element_type::OBJECT: {
+			dom::object o = e.get_object().value_unsafe();
+			size_t n = 0;
+			for (dom::key_value_pair kv : o) { (void)kv; n++; }
+			header(SJ_WTAPE_OBJECT, int64_t(n));
+			for (dom::key_value_pair kv : o) {
+				string(decodeUtf8(kv.key.data(), kv.key.size()));
+				element(kv.value);
+			}
+			break;
+		}
+		}
+	}
+};
+
+struct WOut {
+	int64_t rc;
+	int64_t answer[SJ_FFI_W_SLOTS];
+	std::string utf8;			/* the output, as UTF-8 */
+	std::vector<int64_t> holes;
+};
+
+static WOut
+ffiWrite(const WTape &t, int64_t flags, const std::string &newLine, int64_t level, int64_t maxBytes, size_t capacity)
+{
+	WOut o{};
+	std::vector<uint8_t> buffer(capacity);
+	o.rc = sj_ffi_write(t.bytes.data(), int64_t(t.bytes.size()), t.words.data(), int64_t(t.words.size()), flags,
+		newLine.data(), int64_t(newLine.size()), level, maxBytes, buffer.data(), int64_t(capacity));
+	if (o.rc != 0) return o;
+	memcpy(o.answer, buffer.data(), sizeof o.answer);
+	if (o.answer[SJ_FFI_W_STATUS] != 0) return o;
+	int64_t kind = o.answer[SJ_FFI_W_KIND], units = o.answer[SJ_FFI_W_UNITS], bytes = o.answer[SJ_FFI_W_BYTES];
+	size_t holeCount = size_t(o.answer[SJ_FFI_W_HOLES]);
+	std::vector<uint8_t> out(size_t(bytes) + 1);
+	o.holes.resize(3 * holeCount);
+	if (o.answer[SJ_FFI_W_INLINE]) {
+		CHECK(kind != 2);
+		if (holeCount)
+			memcpy(o.holes.data(), buffer.data() + SJ_FFI_W_HEADER, 24 * holeCount);
+		memcpy(out.data(), buffer.data() + SJ_FFI_W_HEADER + 24 * holeCount, size_t(bytes));
+	} else
+		CHECK(sj_ffi_take_output(o.holes.data(), int64_t(holeCount), out.data(), bytes, o.answer[SJ_FFI_W_TICKET]) == 0);
+	CHECK(bytes == (kind == 2 ? 4 * units : units));
+	if (kind == 0)
+		o.utf8.assign((const char *)out.data(), size_t(bytes));
+	else if (kind == 1)
+		o.utf8 = encodeUtf8(std::u32string(out.begin(), out.begin() + units));
+	else {
+		std::u32string cps(size_t(units), U'\0');
+		memcpy(&cps[0], out.data(), size_t(bytes));
+		o.utf8 = encodeUtf8(cps);
+	}
+	return o;
+}
+
+/* Write the DOM of json in every mode, parse each output, compare */
+static void
+writeRoundTrip(const std::string &json, const char *what)
+{
+	dom::parser parser;
+	dom::element root;
+	if (parser.parse(json).get(root)) return;
+	WTape t;
+	t.element(root);
+	std::string expected = canonOf(root);
+	bool holes = t.numbers > int64_t(std::count(expected.begin(), expected.end(), 'w'));	/* big integers */
+	for (int64_t flags : {0, 1, 2, 3, 4, 5, 6, 7})
+		for (size_t capacity : {size_t(SJ_FFI_W_HEADER), size_t(1) << 20}) {
+			WOut o = ffiWrite(t, flags, "\r\n", 0, -1, capacity);
+			if (!CHECKF(o.rc == 0 && o.answer[SJ_FFI_W_STATUS] == 0, "%s flags %lld: rc %lld status %lld", what,
+					(long long)flags, (long long)o.rc, (long long)o.answer[SJ_FFI_W_STATUS]))
+				continue;
+			CHECKF((flags & 4) ? o.answer[SJ_FFI_W_KIND] == 0 : o.answer[SJ_FFI_W_KIND] != 0, "%s: kind", what);
+			if ((flags & 2))
+				CHECKF(std::all_of(o.utf8.begin(), o.utf8.end(), [](char c) { return (unsigned char)c < 0x80; }),
+					"%s: asciiOnly", what);
+			if (holes) continue;
+			dom::parser again;
+			dom::element back;
+			if (!CHECKF(!again.parse(o.utf8).get(back), "%s flags %lld: the output does not parse: %.200s", what,
+					(long long)flags, o.utf8.c_str()))
+				continue;
+			CHECKF(canonOf(back) == expected, "%s flags %lld:\n  wrote %.300s\n  canon %.300s\n  input %.300s", what,
+				(long long)flags, o.utf8.c_str(), canonOf(back).c_str(), expected.c_str());
+		}
+}
+
+static void
+testFFIWrite()
+{
+	static const char *cases[] = {
+		"null", "true", "false", "0", "-7", "4503599627370495", "4503599627370496", "-9223372036854775808",
+		"9223372036854775807", "18446744073709551615", "0.1", "-0.0", "1e300", "5e-324", "100.0", "1e6", "1e-5",
+		"\"\"", "\"a\\\"b\\\\c/\\t\\u0001\\u007f\"", "\"\\u00e9\\u00ff\"", "\"\\u20ac\\ud834\\udd1e\"", "[]", "{}",
+		"[[],{},[[]]]", "{\"a\":{\"b\":[1,{\"c\":null}]},\"\\u20ac\":\"\\u20ac\"}", "[1,2,3]",
+		"12345678901234567890123456789"};
+	char what[64];
+	int i = 0;
+	for (const char *json : cases) {
+		snprintf(what, sizeof what, "case %d", i++);
+		writeRoundTrip(json, what);
+	}
+	for (int round = 0; round < 200; round++) {
+		snprintf(what, sizeof what, "random %d", round);
+		writeRoundTrip(encodeUtf8(randomValue(0, round & 1)), what);
+	}
+	for (const CorpusFile &f : corpus())
+		writeRoundTrip(f.json, f.name.c_str());
+
+	/* the exact text: pretty, at a level, and a hole in characters */
+	WTape t;
+	t.header(SJ_WTAPE_ARRAY, 3);
+	t.header(SJ_WTAPE_SMALLINT, 1);
+	t.string(U"\u20ac");
+	t.header(SJ_WTAPE_HOLE, 2);
+	WOut o = ffiWrite(t, 1, "\n", 1, -1, 4096);
+	CHECKF(o.rc == 0 && o.utf8 == "[\n\t\t1,\n\t\t\"\u20ac\",\n\t\t\n\t]", "pretty: %s", o.utf8.c_str());
+	CHECKF(o.answer[SJ_FFI_W_KIND] == 2 && o.holes.size() == 3 && o.holes[0] == 16 && o.holes[1] == 2 && o.holes[2] == 2,
+		"hole at character %lld", o.holes.empty() ? -1LL : (long long)o.holes[0]);	/* after "[\n\t\t1,\n\t\t"€",\n\t\t" */
+	o = ffiWrite(t, 4, "\n", 0, -1, 4096);
+	CHECKF(o.rc == 0 && o.utf8 == "[1,\"\u20ac\",]" && o.holes.size() == 3 && o.holes[0] == 9 && o.holes[2] == 1,
+		"hole at byte %lld", o.holes.empty() ? -1LL : (long long)o.holes[0]);	/* € is 3 bytes */
+	WTape empty;
+	empty.header(SJ_WTAPE_OBJECT, 0);
+	o = ffiWrite(empty, 1, "\n", 0, -1, 4096);
+	CHECK(o.rc == 0 && o.utf8 == "{ }");
+
+	/* errors and their culprits, in the order of the walk */
+	WTape bad;
+	bad.header(SJ_WTAPE_OBJECT, 2);
+	bad.string(U"k");
+	bad.header(SJ_WTAPE_FLOAT, 7);
+	double nan = std::nan("");
+	uint64_t bits;
+	memcpy(&bits, &nan, 8);
+	bad.slot(bits);
+	bad.header(SJ_WTAPE_BADKEY, 8);
+	bad.header(SJ_WTAPE_NULL, 0);
+	o = ffiWrite(bad, 0, "\n", 0, -1, 4096);
+	CHECK(o.rc == 0 && o.answer[SJ_FFI_W_STATUS] == 2 && o.answer[SJ_FFI_W_CODE] == 2 && o.answer[SJ_FFI_W_CULPRIT] == 7);
+	o = ffiWrite(bad, 8, "\n", 0, -1, 4096);
+	CHECK(o.rc == 0 && o.answer[SJ_FFI_W_STATUS] == 2 && o.answer[SJ_FFI_W_CODE] == 1 && o.answer[SJ_FFI_W_CULPRIT] == 8);
+	WTape deep;
+	deep.header(SJ_WTAPE_ARRAY, 1);
+	deep.header(SJ_WTAPE_DEEP, 5);
+	o = ffiWrite(deep, 0, "\n", 0, -1, 4096);
+	CHECK(o.rc == 0 && o.answer[SJ_FFI_W_STATUS] == 2 && o.answer[SJ_FFI_W_CODE] == 3 && o.answer[SJ_FFI_W_CULPRIT] == 5);
+	WTape far;
+	far.string(U"a\U0010FFFF");
+	far.words[1] = 0x110000;
+	o = ffiWrite(far, 0, "\n", 0, -1, 4096);
+	CHECK(o.rc == 0 && o.answer[SJ_FFI_W_STATUS] == 2 && o.answer[SJ_FFI_W_CODE] == 4 && o.answer[SJ_FFI_W_CULPRIT] == 1);
+	WTape long_;
+	long_.string(std::u32string(100, U'a'));
+	CHECK(ffiWrite(long_, 0, "", 0, 50, 4096).answer[SJ_FFI_W_STATUS] == 3);
+	CHECK(ffiWrite(long_, 0, "", 0, 102, 4096).answer[SJ_FFI_W_STATUS] == 0);
+
+	/* malformed tapes and bad arguments */
+	WTape cut = t;
+	cut.bytes.resize(cut.bytes.size() - 8);
+	CHECK(ffiWrite(cut, 0, "", 0, -1, 4096).rc == -1);
+	WTape extra = t;
+	extra.header(SJ_WTAPE_NULL, 0);
+	CHECK(ffiWrite(extra, 0, "", 0, -1, 4096).rc == -1);
+	WTape tag;
+	tag.header(99, 0);
+	CHECK(ffiWrite(tag, 0, "", 0, -1, 4096).rc == -1);
+	WTape wide;
+	wide.string(U"\u20ac\u20ac");
+	wide.words.pop_back();
+	CHECK(ffiWrite(wide, 0, "", 0, -1, 4096).rc == -1);
+	WTape longString;
+	longString.header(SJ_WTAPE_BYTESTRING, 1000);
+	CHECK(ffiWrite(longString, 0, "", 0, -1, 4096).rc == -1);
+	CHECK(ffiWrite(t, 32, "", 0, -1, 4096).rc == -1);
+	CHECK(ffiWrite(t, 0, "", -1, -1, 4096).rc == -1);
+	CHECK(ffiWrite(t, 0, "", 0, -2, 4096).rc == -1);
+	CHECK(ffiWrite(t, 0, "", 0, -1, SJ_FFI_W_HEADER - 1).rc == -1);
+
+	/* a write in between loses what was kept */
+	std::vector<uint8_t> buffer(SJ_FFI_W_HEADER);
+	int64_t answer[SJ_FFI_W_SLOTS];
+	CHECK(sj_ffi_write(t.bytes.data(), int64_t(t.bytes.size()), t.words.data(), int64_t(t.words.size()), 0, "", 0, 0, -1,
+		buffer.data(), SJ_FFI_W_HEADER) == 0);
+	memcpy(answer, buffer.data(), sizeof answer);
+	CHECK(answer[SJ_FFI_W_INLINE] == 0);
+	CHECK(ffiWrite(empty, 0, "", 0, -1, 4096).rc == 0);
+	std::vector<int64_t> holes(3);
+	std::vector<uint32_t> out(static_cast<size_t>(answer[SJ_FFI_W_UNITS]) + 1);
+	CHECK(sj_ffi_take_output(holes.data(), 1, out.data(), answer[SJ_FFI_W_BYTES], answer[SJ_FFI_W_TICKET]) == -1);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1868,7 +2372,8 @@ main(int argc, char **argv)
 		printf("sjtest: no corpus (--corpus DIR or SJ_CORPUS): the corpus checks are skipped\n");
 	struct { const char *name; void (*run)(); } tests[] = {
 		{"T1", [] { testScannerCases(); testScannerFuzz(); }}, {"T2", testNumberTokens}, {"T3", testNumberPolicy},
-		{"T4", testTranscoding}, {"T5", testKeys}, {"T6", testMeasure}, {"T7", testIdempotence}, {"T11", testWriter}};
+		{"T4", testTranscoding}, {"T5", testKeys}, {"T6", testMeasure}, {"T7", testIdempotence}, {"T11", testWriter},
+		{"T12", testFFI}, {"T13", testFFIWrite}};
 	for (auto &t : tests) {
 		if (!selected(only, t.name)) continue;
 		currentTest = t.name;

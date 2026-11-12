@@ -5,6 +5,7 @@ The plugin builds the whole value of a JSON document in one primitive call: Dict
 Values, number classes, string classes and stream positions are NeoJSON's, with the exceptions listed below; the errors are classes of its own.
 `SimdJSONWriter` writes JSON as NeoJSON's `NeoJSONWriter` does, byte for byte, with its protocol and the writing side of the mappings; a primitive walks the plain data in C (see Writing).
 The plugin builds natively (Cog and Stack VMs) and in the WebAssembly VMs, where it is a builtin plugin.
+On a VM without the plugin, the package `SimdJSON-FFI` reads and writes through the FFI of the image with `libSimdJSONFFI`, the same engine as a library of its own (see Without the plugin).
 
 Files, in `plugins/SimdJSONPlugin`:
 
@@ -12,9 +13,10 @@ Files, in `plugins/SimdJSONPlugin`:
 - `src/cxx/sjEngine.cpp`: the parser, its cache, the budget and the walk of simdjson's DOM (C++17, without the VM's headers);
 - `src/common/sjText.c`, `include/common/sjText.h`: the scanner of the end of a value, the transcoding and the sizes (C99);
 - `include/common/sjBridge.h`: the interface between the two;
+- `src/ffi/sjFFI.c`, `include/ffi/sjFFI.h`: `libSimdJSONFFI`, the engine for the FFI (C99, without the VM's headers);
 - `include/win/sjNoThreads.h`: included first on Windows, to keep simdjson's threads off;
 - `simdjson.st/`: the Smalltalk side, a git submodule of [simdjson.st](https://github.com/massimo-nocentini/simdjson.st) (`git submodule update --init plugins/SimdJSONPlugin/simdjson.st`): Tonel packages in `src/` with `BaselineOfSimdJSON`, whose commit is the version of the Smalltalk code that goes with the plugin;
-- the packages `SimdJSON-Tests` and `SimdJSON-NeoTests` of the submodule, and `tests/`: the tests;
+- the packages `SimdJSON-Tests`, `SimdJSON-FFI-Tests` and `SimdJSON-NeoTests` of the submodule, and `tests/`: the tests;
 - `bench/`: the benchmark.
 
 ## Building
@@ -43,15 +45,19 @@ Platforms:
 - macOS (a `.dylib` against the system's libc++) and Windows (MSYS2 UCRT64 with clang on x86_64, MSYS2 CLANGARM64 on arm64, where the C++ runtime is libc++; the install step of `cmake/Windows.cmake` bundles the C++ runtime DLLs) are written for, but **untested**: no build of them has run.
   On Windows, `-U_MT` cannot keep simdjson's threads off, since the mingw-w64 `_mingw.h` defines `_MT` again whenever it is missing; `include/win/sjNoThreads.h`, included first (`-include`) in simdjson.cpp and sjEngine.cpp, reads `_mingw.h` and then undefines `_MT` (checked with the headers of llvm-mingw, which are those of MSYS2).
   Build with `-DFEATURE_PLUGIN_SIMDJSON=OFF` there if the build breaks.
-  Each native job of `.github/workflows/build.yml` loads the plugin of its zip with `plugins/SimdJSONPlugin/tests/ci-load.st` (and, on Linux, checks that it needs no libstdc++ newer than GLIBCXX_3.4.21), so the first CI run tells;
+  Each native job of `.github/workflows/build.yml` loads the plugin of its zip with `plugins/SimdJSONPlugin/tests/ci-load.st` (and, on Linux, checks that it needs no libstdc++ newer than GLIBCXX_3.4.21), so the first CI run tells; `ci-load.st` also calls `libSimdJSONFFI` through the FFI, which the Linux job requires (with the same GLIBCXX check) and the macOS and Windows jobs only print;
 - Linux aarch64 compiles simdjson's arm64 kernel, which has not run either.
+
+`FEATURE_SIMDJSON_FFI` (natively, `ON` by default with the plugin) also builds `libSimdJSONFFI` (`libSimdJSONFFI.so`, `.dylib`, or `SimdJSONFFI.dll` on Windows) from `src/ffi/sjFFI.c`, `sjText.c`, `sjEngine.cpp` and `pharo_simdjson`, next to the plugins, so that it is in the zips.
+It has hidden visibility and exports only its nine `sj_ffi_*` functions, so that a plugin loaded in the same process never resolves to its copy of the engine; it needs `GLIBCXX_3.4.21` at most, as the plugin does.
+It is not a plugin and needs nothing of the VM: copied next to any Pharo 15 VM, or named with `SimdJSONLibrary libraryPath:`, it serves that VM's image.
 
 In the WebAssembly VMs the plugin links libc++ and libc++abi into `pharo.wasm` and `pharo-web.wasm`, about 120 KB, and the C++ link driver links them; their licences, and simdjson's, go into `THIRD-PARTY-NOTICES.txt` (see docs/WebAssembly.md).
 
 ## Loading the Smalltalk side
 
 The Smalltalk code is in the submodule `simdjson.st`, as Tonel packages that Metacello loads with `BaselineOfSimdJSON`.
-Its groups: `Core` (the package `SimdJSON`, with no dependency but the plugin), `Tests` (`SimdJSON-Tests`), `NeoTests` (`SimdJSON-NeoTests`, which needs NeoJSON with its tests, and generates the `SJ<name>` classes into `SimdJSON-NeoTests-Generated` after it is loaded) and `default` (all of them).
+Its groups: `Core` (the package `SimdJSON`, with no dependency but the plugin), `Tests` (`SimdJSON-Tests`), `FFI` (`SimdJSON-FFI`, the reader and the writer without the plugin), `FFITests` (`SimdJSON-FFI-Tests`), `NeoTests` (`SimdJSON-NeoTests`, which needs NeoJSON with its tests, and generates the `SJ<name>` classes into `SimdJSON-NeoTests-Generated` after it is loaded) and `default` (all of them).
 `SimdJSONReader` is a subclass of `SimdJSONMapper`, a port of NeoJSON's mapper and mapping classes (the reading side), and it is strict RFC 8259.
 NeoJSON need not be in the image; when it is, whether it was loaded before or after, nothing changes: no NeoJSON class is in the hierarchy of `SimdJSONReader` or of its errors, and no method of the package `SimdJSON` names one (`SimdJSONReaderTests>>testStandalone` checks both).
 
@@ -68,7 +74,7 @@ or, from the command line, `tests/load-simdjson.st`, which the tests and the ben
 It loads the groups of `SJ_GROUPS` (`Core Tests` by default), first NeoJSON's groups `core` and `tests` from the clone that `NEOJSON_DIR` names, when it is set (and locks it, so that nothing comes from the network; a group that needs NeoJSON otherwise loads it from GitHub), and prints `SimdJSON: SimdJSONReader loaded, a subclass of SimdJSONMapper`.
 Metacello makes UUIDs: the VM needs its UUIDPlugin.
 To change the Smalltalk code, commit in the submodule (Iceberg can open its checkout), push it to simdjson.st, and commit the new submodule commit here, with the plugin changes it goes with.
-Without the plugin, reading signals `SimdJSONResourceError` ('SimdJSONPlugin not available').
+Without the plugin, reading and writing go through `SimdJSON-FFI` when it is loaded and finds its library, and otherwise signal `SimdJSONResourceError` ('SimdJSONPlugin not available').
 
 ## API
 
@@ -149,6 +155,82 @@ The plugin writes nil, Booleans, SmallIntegers, LargeIntegers, Floats, ByteStrin
 
 The values a hole holds are written by the plugin again, at the indentation of the hole, so the output is the same, plain or pretty, as for their plain equivalents; a value made only of holes (a Set of Sets) is written by the image alone, at the speed of NeoJSONWriter.
 A class that the plugin writes, Array or Dictionary for one, is written by the plugin even when it has a `neoJsonOn:` of its own.
+
+## Without the plugin
+
+On a VM without the SimdJSONPlugin (a stock VM, one built with `-DFEATURE_PLUGIN_SIMDJSON=OFF`), `SimdJSONReader` and `SimdJSONWriter` go through the package `SimdJSON-FFI` (group `FFI`) and the library `libSimdJSONFFI` (see Building), and answer the same values and the same text.
+The library runs the plugin's engine, `sjEngine.cpp` and `sjText.c`, unchanged.
+The plugin makes and walks Pharo objects in C, which an FFI callout cannot: a callback per value would cost more than NeoJSON's whole parse, and an object that a callback allocates may move while C holds its address.
+So the image and the library exchange tapes, flat buffers of 8-byte slots in pre-order (a header, `payload << 8 | tag`, then its data), with the code points of the WideStrings in a second area of 32-bit words; `include/ffi/sjFFI.h` has both layouts.
+
+- `SimdJSONReader class>>fallback` answers `SimdJSONLibrary` when the package is loaded and the library speaks its protocol (asked once a session), `backend` answers `#plugin`, `#ffi` or nil; with the plugin, the package is not used.
+- The library is looked for as `libSimdJSONFFI.so`, `libSimdJSONFFI.dylib` or `SimdJSONFFI.dll` by the library finders of the FFI (the directories of the VM and of the image, then the system's); `SimdJSONLibrary libraryPath: '/path/to/libSimdJSONFFI.so'` names it, before the first call of a session.
+- The test hook `#fallbackMissing` hides the package, as `#pluginMissing` hides the plugin.
+
+### Reading
+
+The builder of `src/ffi/sjFFI.c` writes the value as a tape instead of making objects, and `SimdJSONTapeDecoder` makes them in the image, with the raw accessors of `ByteArray` (`int64AtOffset:`, `float64AtOffset:`, `uint32AtOffset:`), one `replaceFrom:to:with:startingAt:` for each string (a WideString's from a `WordArray`, since none copies from a `ByteArray` into a WideString), and nothing else.
+
+- `SimdJSONLibrary class>>read:from:to:flags:maxUnits:` answers what `primRead:` answers: the same status, value, next index, fixups of the number texts (which `finish:` converts with NeoJSON's rules, as the plugin's) and code, and fails with the same codes on the same bad arguments; but it has no budget (no status 1), with `flagSymbolKeys` its keys are Symbols already (no Array of keys), and with `flagDict` the decoder makes the Dictionaries in the image (`Dictionary new: n`, then `at:put:`).
+- One callout reads into a scratch buffer of 64 KB, which holds the answer, and the tape when it fits; a larger tape, and the words, are copied by a second callout, `sj_ffi_take`, into a `ByteArray` and a `WordArray` of their size.
+- The FFI passes the String or the ByteArray in place, as UTF-8, Latin-1 or UTF-32, after pinning it, as it does any byte object; the package adds `WideString>>tfPointerAddress`, which ByteString has and WideString lacks, and copies a Symbol into a String first.
+
+### Writing
+
+`SimdJSONTapeEncoder` walks the value in the image as `primitiveWrite` walks it, the same classes of exactly these classes, the depth checked at the same values, and writes a tape of it: the numbers, the bytes of the ByteStrings and of the magnitudes of the LargeIntegers, the code points of the WideStrings in the words, and, by a number, each object the library may have to name: the holes (the objects the walk does not write), the keys that are not strings, the values deeper than `maxDepth`, the NaNs and infinities and the WideStrings.
+`sj_ffi_write` writes the JSON from the tape with the appenders of `sjText.c` and `sj_print_double`, the plugin's own, with the same newlines, indentation, separators and checks in the same order, so the same text, the same error first, and the same positions of the holes.
+
+- `SimdJSONLibrary class>>write:flags:newLine:level:maxDepth:maxBytes:` answers what `primWrite:` answers, `{ status. output. holes. code. culprit }`, the holes and the culprit as objects; `SimdJSONWriter` fills the holes as with the plugin.
+- The output and the holes follow the answer in the scratch buffer when they fit and the output is not UTF-32; otherwise `sj_ffi_take_output` copies them, the output straight into the ByteArray, ByteString or WideString that the writer answers.
+- The tape and the words of a write are kept for the next one (up to 16 MB).
+
+### Common
+
+- A call takes the scratch buffer while it uses it, so that a process that calls meanwhile makes one of its own; the library keeps one result of each kind at a time, and a ticket tells a `sj_ffi_take` or `sj_ffi_take_output` that came after another process's call to call again.
+- Before allocating a tape or an output of 1 MB or more, the library grows the memory by twice its size when the free old space is under that: `new:` of an object that does not fit collects all the garbage first (`handleFailingBasicNew:`), where the plugin, which allocates in the VM, grows the memory; a 12 MB WideString cost 46 ms with 9 full collections in 10 allocations, and 11 ms with 1 after the growth.
+- `ByteArray>>int64AtOffset:` (primitive 608) answers wrong values beyond the SmallIntegers on this VM: the interpreter answers 0 for the bytes of -2^61 and 2^60 - 1 for those of -2^60 - 1, and the JIT -2^60 for those of 2^60.
+  So no slot is read with it beyond ±2^60: the read tape writes an integer beyond ±2^52 as two native `uint32`, the high one first, which the decoder reads with `uint32AtOffset:`; the write tape holds only SmallIntegers in its int64 slots, which `int64AtOffset:put:` stores correctly, and the library reads them in C.
+
+Tests: T12 of `run-c-tests.sh` reads every input with both builders and requires the same value, status, code and next index, on crafted cases, random values in the three encodings, reads in NEXT mode and the corpus, with the tape inline and copied; T13 writes the DOM of crafted cases, random values and the corpus as write tapes, in the eight combinations of PRETTY, ASCII_ONLY and BYTES, inline and copied, parses each output again and requires the same value, and checks the exact text of pretty printing at a level, the positions of holes in bytes and characters, each error with its culprit, `maxBytes`, tickets and malformed tapes (both with ASan and UBSan in the g++ lane, and in the two em++ lanes).
+`SimdJSON-FFI-Tests` runs the reader, mapping and writer tests of `SimdJSON-Tests` again with the plugin hidden (`SimdJSONFFIReaderTests`, `SimdJSONFFIMappingTests`, `SimdJSONFFIWriterTests`), and `SimdJSONFFITests` the tags, the copies, tickets, number texts, sources, WideStrings, holes, culprits, and the same values and texts as the plugin's in each mode.
+On a VM without the plugin, `SimdJSON-Tests` skips the tests of the plugin itself (its primitives, its budget, the Dictionaries it builds) and passes, `SimdJSON-FFI-Tests` passes, and so do the `compat` run of `run-st-tests.sh`, `SimdJSONCompatTests` (NeoJSONWriter's text on the corpus and on 2,000 edge values) and the 110 SJ* classes, reading and writing through the library.
+
+Times, on 2026-11-12, on the machine of Benchmarks (native Cog, Pharo 15 b41, NeoJSON 11e274d, pinned to one CPU), the median of 7 samples; every value and every text equal to the plugin's and NeoJSON's.
+NeoJSON's times move by up to 2 times between runs with the collections of the garbage that the other series leave (twitter.json writes in 14 ms in one run, 29 in another): only the order of magnitude of its ratios is worth reading.
+
+Reading, `fromString:` of each file:
+
+| file | KB | NeoJSON ms | plugin ms | FFI ms | NeoJSON / FFI | FFI / plugin |
+|---|---:|---:|---:|---:|---:|---:|
+| twitter.json | 617 | 52.1 | 3.12 | 6.17 | 8.5 | 2.0 |
+| citm_catalog.json | 1687 | 131.4 | 4.87 | 10.83 | 12.1 | 2.2 |
+| canada.json | 2198 | 487.0 | 6.54 | 11.84 | 41.1 | 1.8 |
+| mesh.json | 707 | 128.4 | 2.59 | 4.59 | 28.0 | 1.8 |
+| numbers.json | 147 | 28.3 | 0.43 | 0.80 | 35.2 | 1.9 |
+| github_events.json | 64 | 4.51 | 0.19 | 0.54 | 8.3 | 2.9 |
+| gsoc-2018.json | 3250 | 242.0 | 5.82 | 16.25 | 14.9 | 2.8 |
+| marine_ik.json | 2914 | 422.5 | 16.00 | 30.98 | 13.6 | 1.9 |
+| update-center.json | 521 | 52.0 | 2.67 | 6.88 | 7.6 | 2.6 |
+| apache_builds.json | 124 | 8.49 | 0.39 | 1.16 | 7.3 | 3.0 |
+
+Writing, `toString:` of the value NeoJSONReader reads of each file (Fractions included, which are holes):
+
+| file | NeoJSON ms | plugin ms | FFI ms | NeoJSON / FFI | FFI / plugin |
+|---|---:|---:|---:|---:|---:|
+| twitter.json | 29.1 | 3.40 | 4.39 | 6.6 | 1.3 |
+| citm_catalog.json | 28.9 | 4.83 | 14.89 | 1.9 | 3.1 |
+| canada.json | 202.2 | 17.82 | 24.53 | 8.2 | 1.4 |
+| mesh.json | 73.0 | 5.05 | 7.27 | 10.0 | 1.4 |
+| numbers.json | 14.9 | 1.10 | 1.58 | 9.4 | 1.4 |
+| github_events.json | 1.57 | 0.25 | 0.38 | 4.2 | 1.5 |
+| gsoc-2018.json | 241.8 | 25.91 | 20.77 | 11.6 | 0.8 |
+| marine_ik.json | 224.9 | 28.39 | 32.39 | 6.9 | 1.1 |
+| update-center.json | 41.7 | 4.11 | 4.58 | 9.1 | 1.1 |
+| apache_builds.json | 2.91 | 0.40 | 0.70 | 4.2 | 1.7 |
+
+The series are `SimdJSONReader fromString:` and `SimdJSONWriter toString:` with the plugin and with the plugin hidden by `#pluginMissing`, and NeoJSON's; the script is not part of `bench/`.
+Decoding a tape costs more than the plugin's build in C, and encoding one more than the plugin's walk in C, citm_catalog.json the most (Dictionaries of small values); both cost much less than NeoJSON's work on the text.
+gsoc-2018.json writes faster through the library than through the plugin in this series because its output, a WideString of 3 million characters, is allocated after the memory grew, where the plugin's allocations leave collections to the series after it.
 
 ## Semantics against NeoJSON
 
@@ -261,10 +343,10 @@ The primitive fails only with `PrimErrBadNumArgs` or `PrimErrBadArgument`, `Prim
 ## Tests
 
     sh plugins/SimdJSONPlugin/tests/run-c-tests.sh --simdjson <simdjson tree> --corpus <simdjson-data>    # C: clang++, g++ with ASan and UBSan, em++
-    sh plugins/SimdJSONPlugin/tests/run-st-tests.sh build/build/vm <Pharo 15 image or zip>                # SUnit: SimdJSON-Tests
+    sh plugins/SimdJSONPlugin/tests/run-st-tests.sh build/build/vm <Pharo 15 image or zip>                # SUnit: SimdJSON-Tests, SimdJSON-FFI-Tests
     sh plugins/SimdJSONPlugin/tests/run-st-tests.sh build/build/vm <Pharo 15 image or zip> compat         # also SimdJSON-NeoTests and the SJ* classes, against NeoJSON
 
-`run-st-tests.sh <vm-dir> <image.zip or .image> [compat]` works on a copy of the image: it loads the groups `Core` and `Tests` (compat: `default`) with `load-simdjson.st` from the submodule, checks its banner, runs each package with a JUnit file and summarises it.
+`run-st-tests.sh <vm-dir> <image.zip or .image> [compat]` works on a copy of the image: it loads the groups `Core`, `Tests`, `FFI` and `FFITests` (compat: `default`) with `load-simdjson.st` from the submodule, checks its banner, runs each package with a JUnit file and summarises it.
 Its environment: `NEOJSON_DIR` (compat: a clone of NeoJSON), `SJ_CORPUS` (the `jsonexamples` directory of simdjson-data, for the corpus and jsonchecker tests), `SJ_SLOW` (runs `SimdJSONSlowTests`: 2 million boxed Floats, and an `OutOfMemory` at a capped old space, reading and writing), `SJ_NUM_TOKENS` (random number tokens, 100000 by default), `SJ_WORK_DIR` (where the image copy goes, else a new directory in `TMPDIR`) and `SJ_TIMEOUT` (seconds a step may take, 3600 by default).
 `compat` loads NeoJSON from `NEOJSON_DIR` first, only to compare with it: `SimdJSONCompatTests` reads the semantics table, random number tokens and the corpus (`SJ_CORPUS`) with both readers and requires the same values, classes and stream positions, an error where NeoJSON has one, and a `SimdJSONParseError` only where NeoJSON is lenient, never on an RFC 8259 input of its list; it writes 2,000 edge values (Fractions, Sets, OrderedDictionary, NeoJSONObject... among them) and the corpus as NeoJSONReader reads it (Fractions included) with both writers, plain, pretty, `asciiOnly` and with CR LF, and requires the same characters; then NeoJSON's own test classes, its writer tests included, run against `SimdJSONReader` and `SimdJSONWriter` (as `SJ<name>`, in the package `SimdJSON-NeoTests-Generated`, expecting SimdJSON's errors), but `testIntegers`, which only NeoJSON's leniency passes.
 `SimdJSONWriterTests` compares the Floats with `printString` on 40,000 random values, and T11 of `run-c-tests.sh` the C texts of the writer: the escapes, integers of up to 300 bytes against a decimal conversion of its own, the spelling of Floats, and the round trip of 300,000 random doubles.
@@ -657,6 +739,7 @@ This is not legal advice.
 
 - The writer writes the plain data of a value in one primitive call, into memory before the stream: the web VM does not return to its page meanwhile.
 - Pharo 15 only: the packages are written for Pharo 15.
+- Without the plugin, `SimdJSON-FFI` reads in 2 to 3 times the plugin's time and writes in 1 to 3 times its time.
 - Only Dictionaries and Arrays are built in C; OrderedDictionary, NeoJSONObject, SmallDictionary and OrderedCollection go through the tree.
 - A value is parsed whole: a stream other than a ReadStream on a String or a ByteArray is read to its end first, and the web VM does not return to its page during a primitive call.
 - macOS, Windows and Linux aarch64 are untested until CI runs the step that loads the plugin.

@@ -1,9 +1,14 @@
 "Load the SimdJSONPlugin of the VM, as the CI jobs do with the VMMaker image, and write a
 small value with primitiveWrite: prints 'SimdJSONPlugin <platform> <implementation> wrote
 <json>' and exits 0, else prints 'SimdJSONPlugin FAILED ...' (which the jobs' grep of
-'SimdJSONPlugin native' does not match) and exits 1"
+'SimdJSONPlugin native' does not match) and exits 1.
 
-| info layout written ok |
+Then call libSimdJSONFFI (the package SimdJSON-FFI) through the FFI, found as
+SimdJSONLibrary finds it: prints 'SimdJSONFFI <protocol> <implementation>', or
+'SimdJSONFFI not loaded: <error>'; that line does not change the exit status (the Linux
+job greps it)"
+
+| info layout written ok ffi |
 Object compile: 'sjCiInfo <primitive: ''primitiveInfo'' module: ''SimdJSONPlugin''> ^ nil' classified: 'probe'.
 Object compile: 'sjCiWrite: v flags: f newLine: n level: e maxDepth: d maxBytes: b classes: c layout: l
 	<primitive: ''primitiveWrite'' module: ''SimdJSONPlugin''> ^ nil' classified: 'probe'.
@@ -28,4 +33,18 @@ Stdio stdout
 			' wrote ', (written ifNil: [ 'nothing' ] ifNotNil: [ (written at: 2) printString ]) ]);
 	nextPutAll: OSPlatform current lineEnding;
 	flush.
+ffi := [ | platform path |
+	platform := OSPlatform current.
+	path := platform isWindows
+		ifTrue: [ FFIWindowsLibraryFinder findAnyLibrary: #( 'SimdJSONFFI.dll' 'libSimdJSONFFI.dll' ) ]
+		ifFalse: [
+			platform isMacOS
+				ifTrue: [ FFIMacLibraryFinder findLibrary: 'libSimdJSONFFI.dylib' ]
+				ifFalse: [ FFIUnix64LibraryFinder findLibrary: 'libSimdJSONFFI.so' ] ].
+	Object compile: 'sjCiFFIProtocol ^ self ffiCall: #( int64 sj_ffi_protocol ( ) ) module: ' , path printString classified: 'probe'.
+	Object compile: 'sjCiFFIImplementation ^ self ffiCall: #( String sj_ffi_implementation ( ) ) module: ' , path printString classified: 'probe'.
+	'SimdJSONFFI ' , nil sjCiFFIProtocol printString , ' ' , nil sjCiFFIImplementation ]
+		on: Error
+		do: [ :error | error return: 'SimdJSONFFI not loaded: ' , error description ].
+Stdio stdout nextPutAll: ffi; nextPutAll: OSPlatform current lineEnding; flush.
 Smalltalk exit: (ok ifTrue: [ 0 ] ifFalse: [ 1 ])
