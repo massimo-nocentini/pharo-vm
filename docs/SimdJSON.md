@@ -146,12 +146,12 @@ The output is NeoJSONWriter's, character for character, which `SimdJSONCompatTes
 - **NaN and infinities** are not JSON: NeoJSONWriter writes `Float nan` and `Float infinity`, `SimdJSONWriter` signals `SimdJSONWriteError` (code 2) or writes `null` with `nonFiniteAsNull: true`.
 - A value nested deeper than 1024 levels, a cycle most likely, signals `SimdJSONWriteError` (code 3), in the plugin and in the image alike, where NeoJSONWriter recurses until the stack is exhausted; a WideString character beyond U+10FFFF signals it with NeoJSON's message (code 4).
 
-The plugin writes nil, Booleans, SmallIntegers, LargeIntegers, Floats, ByteString, WideString, ByteSymbol, WideSymbol, Array, OrderedCollection and Dictionary (of exactly these classes), and leaves the objects of any other class in its output as holes (see Primitive contract), which the writer fills as NeoJSONWriter's `neoJsonOn:` would write them:
+The plugin writes nil, Booleans, SmallIntegers, LargeIntegers, Floats, ByteString, WideString, ByteSymbol, WideSymbol, Array, OrderedCollection and Dictionary (of exactly these classes), and leaves the objects of any other class in its output as holes (see Primitive contract), which the writer fills as NeoJSONWriter's `neoJsonOn:` would write them, as the class of each one chooses (a `simdJSONWrite:on:` of the classes below, sent by `writeOther:`):
 
 - an object whose class writes itself with a `neoJsonOn:` of its own (not one of NeoJSON's, when NeoJSON is in the image) gets the writer, with NeoJSONWriter's protocol;
 - any other Number (a Fraction, a ScaledDecimal) is written as its `asFloat`;
 - a dictionary (OrderedDictionary, SmallDictionary, NeoJSONObject, a subclass of Dictionary) as an object, in the order of `keysAndValuesDo:`, and any other collection (Set, Bag, Interval, ByteArray, a subclass of Array) as a list;
-- any other object with the mapping of its class, or `SimdJSONMappingNotFound` ('No mapping found for Point in SimdJSONWriter').
+- any other object, a CompiledMethod among them, with the mapping of its class, or `SimdJSONMappingNotFound` ('No mapping found for Point in SimdJSONWriter'); an object that only answers true to `isDictionary` or `isCollection`, without being of one of these classes, goes to the mapping too, and a forwarding proxy is a hole, whose target is then written as the proxy forwards it.
 
 The values a hole holds are written by the plugin again, at the indentation of the hole, so the output is the same, plain or pretty, as for their plain equivalents; a value made only of holes (a Set of Sets) is written by the image alone, at the speed of NeoJSONWriter.
 A class that the plugin writes, Array or Dictionary for one, is written by the plugin even when it has a `neoJsonOn:` of its own.
@@ -177,7 +177,7 @@ The builder of `src/ffi/sjFFI.c` writes the value as a tape instead of making ob
 
 ### Writing
 
-`SimdJSONTapeEncoder` walks the value in the image as `primitiveWrite` walks it, the same classes of exactly these classes, the depth checked at the same values, and writes a tape of it: the numbers, the bytes of the ByteStrings and of the magnitudes of the LargeIntegers, the code points of the WideStrings in the words, and, by a number, each object the library may have to name: the holes (the objects the walk does not write), the keys that are not strings, the values deeper than `maxDepth`, the NaNs and infinities and the WideStrings.
+`SimdJSONTapeEncoder` walks the value in the image as `primitiveWrite` walks it, sending each value `simdJSONTapeOn:level:`, which the classes of the plugin answer, each for exactly its own class (an instance of a subclass is what the superclass makes of it, a hole in the end), and `ProtoObject` with a hole, the depth checked at the same values, and writes a tape of it: the numbers, the bytes of the ByteStrings and of the magnitudes of the LargeIntegers, the code points of the WideStrings in the words, and, by a number, each object the library may have to name: the holes (the objects the walk does not write), the keys that are not strings, the values deeper than `maxDepth`, the NaNs and infinities and the WideStrings.
 `sj_ffi_write` writes the JSON from the tape with the appenders of `sjText.c` and `sj_print_double`, the plugin's own, with the same newlines, indentation, separators and checks in the same order, so the same text, the same error first, and the same positions of the holes.
 
 - `SimdJSONLibrary class>>write:flags:newLine:level:maxDepth:maxBytes:` answers what `primWrite:` answers, `{ status. output. holes. code. culprit }`, the holes and the culprit as objects; `SimdJSONWriter` fills the holes as with the plugin.
@@ -192,44 +192,45 @@ The builder of `src/ffi/sjFFI.c` writes the value as a tape instead of making ob
   So no slot is read with it beyond ±2^60: the read tape writes an integer beyond ±2^52 as two native `uint32`, the high one first, which the decoder reads with `uint32AtOffset:`; the write tape holds only SmallIntegers in its int64 slots, which `int64AtOffset:put:` stores correctly, and the library reads them in C.
 
 Tests: T12 of `run-c-tests.sh` reads every input with both builders and requires the same value, status, code and next index, on crafted cases, random values in the three encodings, reads in NEXT mode and the corpus, with the tape inline and copied; T13 writes the DOM of crafted cases, random values and the corpus as write tapes, in the eight combinations of PRETTY, ASCII_ONLY and BYTES, inline and copied, parses each output again and requires the same value, and checks the exact text of pretty printing at a level, the positions of holes in bytes and characters, each error with its culprit, `maxBytes`, tickets and malformed tapes (both with ASan and UBSan in the g++ lane, and in the two em++ lanes).
-`SimdJSON-FFI-Tests` runs the reader, mapping and writer tests of `SimdJSON-Tests` again with the plugin hidden (`SimdJSONFFIReaderTests`, `SimdJSONFFIMappingTests`, `SimdJSONFFIWriterTests`), and `SimdJSONFFITests` the tags, the copies, tickets, number texts, sources, WideStrings, holes, culprits, and the same values and texts as the plugin's in each mode.
+`SimdJSON-FFI-Tests` runs the reader, mapping and writer tests of `SimdJSON-Tests` again with the plugin hidden (`SimdJSONFFIReaderTests`, `SimdJSONFFIMappingTests`, `SimdJSONFFIWriterTests`), and `SimdJSONFFITests` the tags, the copies, tickets, number texts, sources, WideStrings, holes, culprits, the arguments refused, the exact classes, the entries of Dictionaries, the numbering of the objects, and the same values and texts as the plugin's in each mode.
 On a VM without the plugin, `SimdJSON-Tests` skips the tests of the plugin itself (its primitives, its budget, the Dictionaries it builds) and passes, `SimdJSON-FFI-Tests` passes, and so do the `compat` run of `run-st-tests.sh`, `SimdJSONCompatTests` (NeoJSONWriter's text on the corpus and on 2,000 edge values) and the 110 SJ* classes, reading and writing through the library.
 
-Times, on 2026-11-12, on the machine of Benchmarks (native Cog, Pharo 15 b41, NeoJSON 11e274d, pinned to one CPU), the median of 7 samples; every value and every text equal to the plugin's and NeoJSON's.
+Times, on 2026-11-12, on the machine of Benchmarks (native Cog, Pharo 15 b41, NeoJSON 11e274d, pinned to one CPU), the median of 3 runs of the median of 7 samples; every value and every text equal to the plugin's and NeoJSON's.
 NeoJSON's times move by up to 2 times between runs with the collections of the garbage that the other series leave (twitter.json writes in 14 ms in one run, 29 in another): only the order of magnitude of its ratios is worth reading.
 
 Reading, `fromString:` of each file:
 
 | file | KB | NeoJSON ms | plugin ms | FFI ms | NeoJSON / FFI | FFI / plugin |
 |---|---:|---:|---:|---:|---:|---:|
-| twitter.json | 617 | 52.1 | 3.12 | 6.17 | 8.5 | 2.0 |
-| citm_catalog.json | 1687 | 131.4 | 4.87 | 10.83 | 12.1 | 2.2 |
-| canada.json | 2198 | 487.0 | 6.54 | 11.84 | 41.1 | 1.8 |
-| mesh.json | 707 | 128.4 | 2.59 | 4.59 | 28.0 | 1.8 |
-| numbers.json | 147 | 28.3 | 0.43 | 0.80 | 35.2 | 1.9 |
-| github_events.json | 64 | 4.51 | 0.19 | 0.54 | 8.3 | 2.9 |
-| gsoc-2018.json | 3250 | 242.0 | 5.82 | 16.25 | 14.9 | 2.8 |
-| marine_ik.json | 2914 | 422.5 | 16.00 | 30.98 | 13.6 | 1.9 |
-| update-center.json | 521 | 52.0 | 2.67 | 6.88 | 7.6 | 2.6 |
-| apache_builds.json | 124 | 8.49 | 0.39 | 1.16 | 7.3 | 3.0 |
+| twitter.json | 617 | 53.7 | 3.11 | 6.22 | 8.6 | 2.0 |
+| citm_catalog.json | 1687 | 134.3 | 4.90 | 10.75 | 12.5 | 2.2 |
+| canada.json | 2198 | 480.3 | 6.54 | 12.08 | 39.8 | 1.8 |
+| mesh.json | 707 | 126.9 | 2.59 | 4.71 | 26.9 | 1.8 |
+| numbers.json | 147 | 27.6 | 0.43 | 0.84 | 32.9 | 2.0 |
+| github_events.json | 64 | 4.51 | 0.18 | 0.54 | 8.4 | 3.0 |
+| gsoc-2018.json | 3250 | 242.7 | 6.56 | 15.54 | 15.6 | 2.4 |
+| marine_ik.json | 2914 | 423.5 | 15.94 | 31.04 | 13.6 | 1.9 |
+| update-center.json | 521 | 53.4 | 2.67 | 7.00 | 7.6 | 2.6 |
+| apache_builds.json | 124 | 8.53 | 0.38 | 1.17 | 7.3 | 3.1 |
 
 Writing, `toString:` of the value NeoJSONReader reads of each file (Fractions included, which are holes):
 
 | file | NeoJSON ms | plugin ms | FFI ms | NeoJSON / FFI | FFI / plugin |
 |---|---:|---:|---:|---:|---:|
-| twitter.json | 29.1 | 3.40 | 4.39 | 6.6 | 1.3 |
-| citm_catalog.json | 28.9 | 4.83 | 14.89 | 1.9 | 3.1 |
-| canada.json | 202.2 | 17.82 | 24.53 | 8.2 | 1.4 |
-| mesh.json | 73.0 | 5.05 | 7.27 | 10.0 | 1.4 |
-| numbers.json | 14.9 | 1.10 | 1.58 | 9.4 | 1.4 |
-| github_events.json | 1.57 | 0.25 | 0.38 | 4.2 | 1.5 |
-| gsoc-2018.json | 241.8 | 25.91 | 20.77 | 11.6 | 0.8 |
-| marine_ik.json | 224.9 | 28.39 | 32.39 | 6.9 | 1.1 |
-| update-center.json | 41.7 | 4.11 | 4.58 | 9.1 | 1.1 |
-| apache_builds.json | 2.91 | 0.40 | 0.70 | 4.2 | 1.7 |
+| twitter.json | 15.5 | 3.48 | 4.30 | 3.6 | 1.2 |
+| citm_catalog.json | 31.3 | 4.89 | 5.44 | 5.8 | 1.1 |
+| canada.json | 207.7 | 21.16 | 22.34 | 9.3 | 1.1 |
+| mesh.json | 74.1 | 5.10 | 6.56 | 11.3 | 1.3 |
+| numbers.json | 15.1 | 1.09 | 1.47 | 10.3 | 1.3 |
+| github_events.json | 1.71 | 0.25 | 0.36 | 4.8 | 1.4 |
+| gsoc-2018.json | 329.7 | 26.09 | 20.41 | 16.2 | 0.8 |
+| marine_ik.json | 228.0 | 28.28 | 29.10 | 7.8 | 1.0 |
+| update-center.json | 42.4 | 4.06 | 8.07 | 5.3 | 2.0 |
+| apache_builds.json | 3.09 | 0.40 | 0.60 | 5.2 | 1.5 |
 
 The series are `SimdJSONReader fromString:` and `SimdJSONWriter toString:` with the plugin and with the plugin hidden by `#pluginMissing`, and NeoJSON's; the script is not part of `bench/`.
-Decoding a tape costs more than the plugin's build in C, and encoding one more than the plugin's walk in C, citm_catalog.json the most (Dictionaries of small values); both cost much less than NeoJSON's work on the text.
+Decoding a tape costs more than the plugin's build in C, and encoding one more than the plugin's walk in C; both cost much less than NeoJSON's work on the text.
+The FFI writes of update-center.json take either about 4.5 or about 8 ms, by the state of the heap that the series before it leave, with the same code.
 gsoc-2018.json writes faster through the library than through the plugin in this series because its output, a WideString of 3 million characters, is allocated after the memory grew, where the plugin's allocations leave collections to the series after it.
 
 ## Semantics against NeoJSON
