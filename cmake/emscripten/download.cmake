@@ -27,7 +27,7 @@
 # directory, changed: <dir>.stamp (image/stock.stamp, image/stock-<id>.stamp)
 # records the SHA256 and the path of the zip unpacked, and stage.mjs reads
 # the build of the image from the name of that zip
-# (Pharo15.0-SNAPSHOT.build.50.sha.b85960fcc6.arch.64bit.zip is build 50).
+# (Pharo15.0-SNAPSHOT.build.117.sha.053a562682.arch.64bit.zip is build 117).
 # The pinned zip is checked against its SHA256 (any zip given as
 # WASM_IMAGE_ZIP is accepted, and so is any extra zip, whose SHA256 CI checks
 # when it downloads it), and unpacked again when it differs from that one or

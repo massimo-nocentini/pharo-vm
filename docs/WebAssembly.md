@@ -67,9 +67,9 @@ An earlier `make wasm` has the same inputs in `build-wasm/host/build/vmmaker/` a
 A site has a default image, the pinned Pharo 12 or the zip of `WASM_IMAGE_ZIP`, and may offer more images, each from a local zip, which its pages then let the user choose from (see The world page): `WASM_EXTRA_IMAGES` names them as `<id>=<zip>` words.
 The site of GitHub Actions is built so, with the zips of files.pharo.org under their own names (from which the pages read the build of each image):
 
-    make wasm WASM_IMAGE_ZIP=Pharo15.0-SNAPSHOT.build.50.sha.b85960fcc6.arch.64bit.zip WASM_IMAGE_ID=p15 \
+    make wasm WASM_IMAGE_ZIP=Pharo15.0-SNAPSHOT.build.117.sha.053a562682.arch.64bit.zip WASM_IMAGE_ID=p15 \
               WASM_EXTRA_IMAGES="p13=Pharo13.0-SNAPSHOT.build.749.sha.d7c6f761d5.arch.64bit.zip p14=Pharo14.0-SNAPSHOT.build.785.sha.74f3a1b398.arch.64bit.zip" \
-              WASM_EXTRA_SOURCES=Pharo15.0-64bit-4e572fe.sources WASM_LIBGIT2=ON
+              WASM_EXTRA_SOURCES="Pharo15.0-64bit-4e572fe.sources Pharo15.0-64bit-b85960f.sources" WASM_LIBGIT2=ON
 
 Each extra image is unpacked into `build-wasm/image/stock-<id>/`, prepared for the world as the default one is (into `build-wasm/image/web-<id>/`, once, and again only when its zip or OSWindow-Web changes), and staged under `web/image/<id>/`; the default image keeps the URLs it had, `web/image/Pharo.image.gz` and the like.
 `WASM_EXTRA_SOURCES` stages `.sources` files that no image of the site has, under `web/image/sources/`: an image saved in a browser from an image that the site served before still finds the source of its methods there.
@@ -98,7 +98,7 @@ It needs no special headers (no COOP or COEP, since nothing uses SharedArrayBuff
 - `build-wasm/downloads/` and `build-wasm/tests-run/`: the downloaded image zip and archives of the libraries, and the scratch directory of `make wasm-check`.
 - `build-wasm/config.make`, `build-wasm/config-host.make` and `build-wasm/.make-wasm`: the recorded settings, and the mark of a directory that `make wasm` builds in.
 
-The workflow `.github/workflows/build.yml` makes such a site and node VM on every push, with the images of Pharo 15 (build 50, the default), 14 (build 785) and 13.1 (build 749), which it downloads from files.pharo.org and checks against their SHA256, the `.sources` of Pharo 15 build 41 (the image of the site before), and `WASM_LIBGIT2=ON` (the command above), so they have the FFI, FreeType, cairo, libgit2 and the Notebook.
+The workflow `.github/workflows/build.yml` makes such a site and node VM on every push, with the images of Pharo 15 (build 117, the default), 14 (build 785) and 13.1 (build 749), which it downloads from files.pharo.org and checks against their SHA256, the `.sources` of Pharo 15 builds 41 and 50 (the images of the site before), and `WASM_LIBGIT2=ON` (the command above), so they have the FFI, FreeType, cairo, libgit2 and the Notebook.
 It zips them as `PharoVM-<version>-WebAssembly-bin.zip`, with `serve.mjs` and the `README.md` and `node-try.sh` of `packaging/emscripten/dist` (the README says how to use them; `node-try.sh` runs the default image), and, for a push to `pharo-12`, publishes the zip with the release of the push.
 For a push to `pharo-12` it also deploys `web/` to GitHub Pages once it has checked that every file of the manifest is there and of its size.
 
@@ -778,7 +778,8 @@ The world page prepares the stock images that it opens, and the Console offers t
 ### Pharo versions
 
 A local build runs the pinned Pharo 12 image (build 1599) by default.
-The site of GitHub Actions offers Pharo 15 (Pharo15.0-SNAPSHOT build 50, `b85960fcc6`), its default, Pharo 14 (Pharo14.0-SNAPSHOT build 785, `74f3a1b398`) and Pharo 13.1 (Pharo13.0-SNAPSHOT build 749, `d7c6f761d5`), each prepared for the world, and serves the `.sources` of Pharo 15 build 41 (`Pharo15.0-64bit-4e572fe.sources`), the image it had before, for the images that browsers saved from it.
+The site of GitHub Actions offers Pharo 15 (Pharo15.0-SNAPSHOT build 117, `053a562682`), its default, Pharo 14 (Pharo14.0-SNAPSHOT build 785, `74f3a1b398`) and Pharo 13.1 (Pharo13.0-SNAPSHOT build 749, `d7c6f761d5`), each prepared for the world, and serves the `.sources` of Pharo 15 builds 41 and 50 (`Pharo15.0-64bit-4e572fe.sources`, `Pharo15.0-64bit-b85960f.sources`), the images it had before, for the images that browsers saved from them.
+Build 50 lacked `StMethodBrowser class>>#browseImplementorsOfAll:` and `#browseSendersOfAll:`, which the senders and implementors commands of its own browser send (a DNU, natively too); build 117 has them, and so has Pharo 14.
 Lane 80 runs the world on every image of a site, and Pharo 12 and 15 images were also opened from disk on either page.
 The VM is the same; what differs is the Smalltalk of the pages (`packaging/emscripten/st`), which works with all of them; the differences below were found between Pharo 12 and 15:
 

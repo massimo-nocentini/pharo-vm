@@ -13,6 +13,10 @@
 # image, Source Sans Pro 10, which the stock images embed.  When FreeType or
 # the image's fonts change on purpose, run ft-parity.st as lane 64 does,
 # look at the ft.png it writes next to the image, and update these lines.
+#
+# The bits are those of Pharo 15 build 117 (053a562682), whose glyphs differ
+# by their anti-aliasing from those of build 50 (4e6d35e80edd..., the same
+# text and nonwhite); the native VMs 10.3.1 and 12 draw them too.
 major: 15
 backend: TFFIBackend
 loadFt2Library: true
@@ -21,5 +25,5 @@ realFont class: FreeTypeFont
 version: 2.14.3
 glyphs: true
 nonwhite: 688
-bits: 4e6d35e80edd490299fed7fc021e829f6b2dd6b5a234382ac88a83d7a1f5986c
+bits: c2295d5e129f2b072bc2e430ea5dedde14038fc177037506ef10a3cf17109342
 errors: none

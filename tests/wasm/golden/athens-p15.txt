@@ -15,6 +15,10 @@
 # cairo, Athens, Roassal or the image change on purpose, run athens-parity.st
 # as lane 65 does, with WASM_ATHENS_PNG=1 to have the PNG of each scene next
 # to the image, look at them, and update these lines.
+#
+# The scenes are those of Pharo 15 build 117 (053a562682); its mondrian
+# differs from that of build 50 (cec0f5e84b04...) only by the dotted line
+# across the middle (rows 148 to 152), as the native VMs draw it too.
 major: 15
 backend: TFFIBackend
 surface: OSWindow-Web
@@ -23,7 +27,7 @@ athens-shapes: 200x100 6c0d036b242fa5883b383edab7e9a4bf74f85f222fbd0a38abf7671ae
 athens-text: 240x60 1d4046ffe7e916623a85f7187626377ce792cf2851004a8ec7751d029d32e5fb
 gradient repeat: 100x100 98115bf0b4080a3613ab2c53b990b488cd36224c8f560ddcde809c216b34423b
 roassal: 300x200 fde786c296a5f4ef9ccb31258dff7aa05a1b52144a36b90f4e63127403b66c34
-mondrian: 500x300 cec0f5e84b041e77100c6fa8ea2d0b1f691f81ff5cef0e0b597723fc068ddd59
+mondrian: 500x300 f6f447893926f870d212e4e2e0e6d5218085021d7f2270ab3d980cf45c0425c9
 athens-png: 146
 asForm reused: true
 errors: none

@@ -426,15 +426,17 @@ jobs:
       # The version the port needs (docs/WebAssembly.md)
       EMSDK_VERSION: 6.0.10
       # The images of the site (docs/WebAssembly.md, Pharo versions): 15 is the default
-      PHARO15_URL: https://files.pharo.org/image/150/Pharo15.0-SNAPSHOT.build.50.sha.b85960fcc6.arch.64bit.zip
-      PHARO15_SHA256: 27164cb9c16685c108df4d2b11106fd6d26a62f37b3e39bb7bfabd176336f036
+      PHARO15_URL: https://files.pharo.org/image/150/Pharo15.0-SNAPSHOT.build.117.sha.053a562682.arch.64bit.zip
+      PHARO15_SHA256: fda94ce83896bd3db02c19f4af322fda8ad2446c945489ead92f317373d9452b
       PHARO14_URL: https://files.pharo.org/image/140/Pharo14.0-SNAPSHOT.build.785.sha.74f3a1b398.arch.64bit.zip
       PHARO14_SHA256: 5396878ea912f87ce99fdbb7137e01a8122745b690a2ee6949338c0aa438b0ea
       PHARO13_URL: https://files.pharo.org/image/130/Pharo13.0-SNAPSHOT.build.749.sha.d7c6f761d5.arch.64bit.zip
       PHARO13_SHA256: 31991e50d6ddbb19170d35fabc6d1fb0a8e95ea311b69b079109426e3fec76ae
-      # Pharo 15 build 41, the image of the site before: only its .sources is staged, for the images saved on it
+      # Pharo 15 builds 41 and 50, the images of the site before: only their .sources are staged, for the images saved on them
       PHARO15B41_URL: https://files.pharo.org/image/150/Pharo15.0-SNAPSHOT.build.41.sha.4e572fed79.arch.64bit.zip
       PHARO15B41_SHA256: 8ce97d8d8a1b466a4a591d52a8f9f5822e2cff03669eacf91713b8f29db46727
+      PHARO15B50_URL: https://files.pharo.org/image/150/Pharo15.0-SNAPSHOT.build.50.sha.b85960fcc6.arch.64bit.zip
+      PHARO15B50_SHA256: 27164cb9c16685c108df4d2b11106fd6d26a62f37b3e39bb7bfabd176336f036
       # The native tree of build-wasm/host, which generates the sources;
       # the toolchain file of emcmake makes the wasm tree use emcc and em++
       CC: clang
@@ -468,15 +470,19 @@ jobs:
       - name: Download the Pharo images
         run: |
           mkdir -p "$RUNNER_TEMP/images" "$RUNNER_TEMP/legacy"
-          for v in 15 14 13 15B41; do
+          for v in 15 14 13 15B41 15B50; do
             eval "url=\$PHARO${v}_URL sha=\$PHARO${v}_SHA256"
             f="$RUNNER_TEMP/images/$(basename "$url")"
             curl -fsSL -o "$f" "$url"
             echo "$sha  $f" | sha256sum -c -
             echo "PHARO${v}_ZIP=$f" >> "$GITHUB_ENV"
           done
-          unzip -j -o "$RUNNER_TEMP/images/$(basename "$PHARO15B41_URL")" '*.sources' -d "$RUNNER_TEMP/legacy"
-          echo "PHARO_LEGACY_SOURCES=$(ls "$RUNNER_TEMP"/legacy/*.sources)" >> "$GITHUB_ENV"
+          for v in 15B41 15B50; do
+            eval "url=\$PHARO${v}_URL"
+            unzip -j -o "$RUNNER_TEMP/images/$(basename "$url")" '*.sources' -d "$RUNNER_TEMP/legacy"
+          done
+          # (one line of GITHUB_ENV: the files separated by blanks)
+          echo "PHARO_LEGACY_SOURCES=$(echo "$RUNNER_TEMP"/legacy/*.sources)" >> "$GITHUB_ENV"
 
       # make wasm records its settings but does not remember them: give
       # wasm-check the same ones, or it builds the defaults again.  The node

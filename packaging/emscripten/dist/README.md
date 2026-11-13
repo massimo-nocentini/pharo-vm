@@ -4,13 +4,14 @@ The Pharo VM built for WebAssembly, from branch `pharo-12` at commit
 `@PHAROVM_COMMIT@` of pharo-vm, with three images from files.pharo.org,
 each prepared for the world page:
 
-- Pharo 15 (the default): Pharo15.0-SNAPSHOT, build 50 (`b85960fcc6`);
+- Pharo 15 (the default): Pharo15.0-SNAPSHOT, build 117 (`053a562682`);
 - Pharo 14: Pharo14.0-SNAPSHOT, build 785 (`74f3a1b398`);
 - Pharo 13.1: Pharo13.0-SNAPSHOT, build 749 (`d7c6f761d5`, the stable
   Pharo 13).
 
-The site also serves the `.sources` of Pharo 15 build 41 (`4e572fed79`),
-its image before, for the images saved in a browser from that one.  The
+The site also serves the `.sources` of Pharo 15 builds 41 (`4e572fed79`)
+and 50 (`b85960fcc6`), its images before, for the images saved in a
+browser from them.  The
 VMs have the FFI (libffi), FreeType, cairo and libgit2 built in.
 `docs/WebAssembly.md` in the repository says how it is made and how it
 works.

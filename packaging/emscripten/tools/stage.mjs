@@ -312,7 +312,7 @@ const labelOf = (pharo, id) => {
 };
 // The build of the stock image of dir, from the name of the zip that
 // download.cmake unpacked there, which <dir>.stamp records ("<sha256>
-// <zip>"): 50 for Pharo15.0-SNAPSHOT.build.50.sha.b85960fcc6.arch.64bit.zip,
+// <zip>"): 117 for Pharo15.0-SNAPSHOT.build.117.sha.053a562682.arch.64bit.zip,
 // else null
 const pharoBuildOf = (dir) => {
   const stamp = resolve(dir) + '.stamp';
