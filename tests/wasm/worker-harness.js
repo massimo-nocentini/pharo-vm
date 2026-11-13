@@ -651,8 +651,9 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       await waitFor('hello', () => { B.alive(); return B.ev.length; }, 60000);
       B.post({ type: 'ack', chars: B.evBytes });
       let acked = B.evBytes;
-      // 80 displays of 50000 characters: 4 MB of events
-      B.post(request(1, '1 to: 80 do: [ :i | Notebook show: (Notebook text: (String new: 50000 withAll: $x)) ]. 1'));
+      // 200 displays of 50000 characters: 10 MB of events, far more than
+      // a few slices write, so the cell cannot end before the pause
+      B.post(request(1, '1 to: 200 do: [ :i | Notebook show: (Notebook text: (String new: 50000 withAll: $x)) ]. 1'));
       const settle = async () => {      // until the events stop growing
         let n = -1;
         for (let k = 0; k < 100 && n !== B.evBytes; k++) { n = B.evBytes; await sleep(300); }
@@ -664,9 +665,10 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       assert(!early.some(e => e.ev === 'done'), 'stalled before the end');
       // (the worker pauses the VM only between slices, and how many events
       // of 50 KB a slice writes depends on the speed of the machine: it
-      // stalled at 1.05 to 3.2 MB in 14 runs, so no bound above but the end)
+      // stalled at 1.05 to 3.2 MB in 14 runs, and once not before the end of
+      // 4 MB, so no bound above but the end, which is far beyond)
       assert(stalled >= (1 << 20), 'stalled above 1 MiB unacked (' + stalled + ' bytes)');
-      assert(early.filter(e => e.ev === 'display').length < 80, 'stalled before the last display');
+      assert(early.filter(e => e.ev === 'display').length < 200, 'stalled before the last display');
       // 600 KiB still unacked: still paused
       B.post({ type: 'ack', chars: stalled - 600 * 1024 });
       acked += stalled - 600 * 1024;
@@ -681,7 +683,7 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
         const done = await doneOf(B, 1, 120000);
         assert(done.status === 'ok', 'done ' + JSON.stringify(done));
         const shown = events(B).filter(e => e.ev === 'display');
-        assert(shown.length === 80 && shown.every(e => e.rid === 1 && e.data === 'x'.repeat(50000)),
+        assert(shown.length === 200 && shown.every(e => e.rid === 1 && e.data === 'x'.repeat(50000)),
                shown.length + ' displays of 50000 x');
         // an event of 300 KB, and an attachment of 360000 bytes, which the
         // worker posts in more than one message (it coalesces up to 64 KB)
@@ -705,7 +707,8 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
         assert(messages >= 2, 'the attachment came in ' + messages + ' message(s)');
         console.log(`#   the attachment of 360000 bytes in ${messages} messages`);
       } finally { clearInterval(timer); }
-    } finally { await B.close(); current = S; }
+      current = S;                      // a failure shows the output of B
+    } finally { await B.close(); }
   });
 
   await check('W-NB4 the notebook worker stores nothing: save, upload, prepare and a snapshot are ignored, resetStorage is refused', async () => {
