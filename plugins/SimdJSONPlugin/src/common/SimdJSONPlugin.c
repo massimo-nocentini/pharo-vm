@@ -628,10 +628,11 @@ fillResult(sqInt result, const sj_outcome *out, sqInt start)
 		associationClass: assocClassOrNil wideStringClass: wideClass
 		hashSeed: seed dictLayout: layout
 	<primitive: 'primitiveRead' module: 'SimdJSONPlugin' error: ec>
-	Read the JSON value at source[start..stop] (a ByteArray of UTF-8, a
-	ByteString or ByteSymbol of Latin-1, a WideString of code points) and
-	answer { status. value. nextIndex. fixups. keys. code }.  A JSON error, a
-	refused budget and a value over maxUnits are statuses, not failures.
+	Read the JSON value at source[start..stop] (exactly a ByteArray of UTF-8,
+	any other byte object of Latin-1, a ByteString for one, any 32-bit word
+	object of code points, a WideString for one) and answer { status. value.
+	nextIndex. fixups. keys. code }.  A JSON error, a refused budget and a
+	value over maxUnits are statuses, not failures.
 	The primitive fails only on bad arguments, PrimErrNoMemory during the
 	build (the VM retries it after GCs, and the engine's parse cache makes
 	those calls cost one parse) or PrimErrNoCMemory.  Every argument is read

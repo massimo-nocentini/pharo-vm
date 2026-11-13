@@ -136,7 +136,7 @@ When a read at the top level fails (`nextAs:`, `nextListAs:`, `parseMap`...), th
 | `prettyPrint:`, `asciiOnly:`, `newLine:`, `writeNil:` | as NeoJSONWriter: a newline and a tab per level, `"key" : value`, `[ ]` and `{ }` for the empty ones; `\uXXXX` above 126 (a surrogate pair above U+FFFF); the line end (`OSPlatform current lineEnding`); `writeNil:` is for the object mappings |
 | `toBytes:`, `bytesFor:`, `stringFor:` | the JSON of a value as UTF-8 bytes or as a String, without a stream |
 | `nonFiniteAsNull:` | true writes NaN and the infinities as `null`; by default they signal `SimdJSONWriteError` |
-| `SimdJSONWriter maxOutputBytes:` | the most bytes one call of the plugin writes, nil (the default) for no cap; above it, writing signals `SimdJSONResourceError` (`#tooLarge`) |
+| `SimdJSONWriter maxOutputBytes:` | the most bytes of UTF-8 that one write writes, holes and all: the whole of `toString:` or `toBytes:`, of one `nextPut:` or `writeMapStreamingDo:` on a stream (each element of `nextPutAll:`, without its line end), the output of every call of the primitive, the values inside its holes at any depth and the text the writer writes itself; nil (the default), or a negative number as the primitive's -1, for no cap; above it, writing signals `SimdJSONResourceError` (`#tooLarge`) before the bytes that would pass it, so a stream gets at most that many; a handler outside the write that writes again on the same writer makes a write of its own, with the whole cap, and one that goes back into the write (`resume:`, `resumeUnchecked:`, `resignalAs:`, a debugger's Proceed) gives it back what it had left; the image counts the UTF-8 of each output of the primitive, which makes a capped write of text mostly beyond ASCII take up to 1.6 times as long |
 
 The output is NeoJSONWriter's, character for character, which `SimdJSONCompatTests` checks on the corpus and on edge values, plain, pretty and `asciiOnly`:
 
@@ -173,7 +173,9 @@ The builder of `src/ffi/sjFFI.c` writes the value as a tape instead of making ob
 
 - `SimdJSONLibrary class>>read:from:to:flags:maxUnits:` answers what `primRead:` answers: the same status, value, next index, fixups of the number texts (which `finish:` converts with NeoJSON's rules, as the plugin's) and code, and fails with the same codes on the same bad arguments; but it has no budget (no status 1), with `flagSymbolKeys` its keys are Symbols already (no Array of keys), and with `flagDict` the decoder makes the Dictionaries in the image (`Dictionary new: n`, then `at:put:`).
 - One callout reads into a scratch buffer of 64 KB, which holds the answer, and the tape when it fits; a larger tape, and the words, are copied by a second callout, `sj_ffi_take`, into a `ByteArray` and a `WordArray` of their size.
-- The FFI passes the String or the ByteArray in place, as UTF-8, Latin-1 or UTF-32, after pinning it, as it does any byte object; the package adds `WideString>>tfPointerAddress`, which ByteString has and WideString lacks, and copies a Symbol into a String first.
+- The FFI passes exactly a ByteArray, a ByteString or a WideString in place, as UTF-8, Latin-1 or UTF-32, after pinning it, as it does any byte object; the package adds `WideString>>tfPointerAddress`, which ByteString has and WideString lacks.
+  Any other source that `primitiveRead` reads (see Primitive contract) is copied first, by its format (`simdJSONPassableCopy`, which ProtoObject answers, so that a class rooted there is read too): its bytes into a ByteString, its 32-bit words into a WideString; it is never passed by its own `tfPointerAddress`, which for an ExternalAddress or an Integer is the address it holds.
+  The numbers are SmallIntegers, as the primitives want them: each answers `isSimdJSONSmallInteger` itself, so that a proxy of one is refused as the primitives refuse it.
 
 ### Writing
 
@@ -282,8 +284,8 @@ The module `SimdJSONPlugin` has five primitives; the package `SimdJSON` calls th
 
 | argument | |
 |---|---|
-| `source` | a ByteArray (UTF-8, units are bytes), a ByteString or ByteSymbol (Latin-1 characters), or a WideString (code points); anything else, a CompiledMethod included, fails with `PrimErrBadArgument` |
-| `start`, `stop` | the first unit and the last one, 1-based, with `1 <= start <= stop + 1` and `stop <= source size`, else `PrimErrBadIndex` |
+| `source` | exactly a ByteArray (UTF-8, units are bytes); any other byte object, a ByteString, a ByteSymbol, a subclass of ByteArray or a LargeInteger (Latin-1, a character a byte); any 32-bit word object, a WideString, a WideSymbol, a WordArray or a BoxedFloat64 (UTF-32, units are words); anything else, a CompiledMethod included (the VM gives no pointer to its bytecodes), fails with `PrimErrBadArgument`; `SimdJSONReader` gives it only Strings and ByteArrays |
+| `start`, `stop` | the first unit and the last one, 1-based, with `1 <= start <= stop + 1` and `stop <=` the units of source (its `basicSize`), else `PrimErrBadIndex` |
 | `flags` | the sum of 1 `NEXT` (scan for the end of the value and parse only it; else the whole rest is parsed first, and the value alone when that fails), 2 `EXACT` (numbers with an exponent, and integers beyond 64 bits, as their text), 4 `DICT` (build Dictionaries, Associations and Arrays), 8 `SYMBOL_KEYS` (the keys of the tree are indexes in the Array of slot 5); `DICT` and `SYMBOL_KEYS` together fail with `PrimErrBadArgument`; `SimdJSONReader flagNext`, `flagExact`, `flagDict` and `flagSymbolKeys` name them |
 | `budget` | the bytes the objects may take, checked before anything is allocated; -1 for no check |
 | `maxUnits` | the most units given to simdjson: a whole rest above it gives way to the value alone, and a value above it answers status 3 before any parse; -1 for no limit |
@@ -292,6 +294,9 @@ The module `SimdJSONPlugin` has five primitives; the package `SimdJSON` calls th
 | `wideClass` | `WideString` |
 | `seed` | with `DICT`, `ByteString hash`, the seed of `String>>hash` |
 | `layout` | with `DICT`, the 0-based slots of Dictionary `tally` and `array` and of Association `key` and `value`, 4 bits each from the lowest (`SimdJSONReader dictLayout`) |
+
+The numbers are SmallIntegers, else `PrimErrBadArgument`.
+The checks run in this order: the source, the numbers, the indexes, then the flags and the class arguments.
 
 It answers `{ status. value. nextIndex. fixups. keys. code }`:
 
@@ -323,7 +328,7 @@ The primitive fails only with `PrimErrBadNumArgs`, `PrimErrBadArgument` or `Prim
 | `aByteString` | the line end of `PRETTY` |
 | `level` | the indentation level of `value`: the writer calls the primitive for the plain values inside the objects it writes, at their level |
 | `depth` | the deepest level written (`SimdJSONWriter maxDepth`, 1024) |
-| `maxBytes` | the largest output, -1 for none |
+| `maxBytes` | the largest output, in bytes of UTF-8 whatever the class of the output, holes left out; -1 for none (`SimdJSONWriter` passes what the write has left of `maxOutputBytes`) |
 | `classes` | `{ ByteSymbol. WideString. WideSymbol. Dictionary. Association. OrderedCollection }`, the classes the VM's proxy does not name |
 | `layout` | `SimdJSONReader dictLayout`, then the 0-based slots of OrderedCollection `array`, `firstIndex` and `lastIndex` in bits 16 to 27 (`SimdJSONWriter writeLayout`) |
 
@@ -741,6 +746,7 @@ This is not legal advice.
 - The writer writes the plain data of a value in one primitive call, into memory before the stream: the web VM does not return to its page meanwhile.
 - Pharo 15 only: the packages are written for Pharo 15.
 - Without the plugin, `SimdJSON-FFI` reads in 2 to 3 times the plugin's time and writes in 1 to 3 times its time.
+- The line end (`newLine:`) and the text of a `floatPrinter` must be ASCII, as JSON wants them: they are written a byte a character, not encoded (the plugin copies the line end into its UTF-8, the writer writes the `floatPrinter` text as it is), and `maxOutputBytes` counts them so.
 - Only Dictionaries and Arrays are built in C; OrderedDictionary, NeoJSONObject, SmallDictionary and OrderedCollection go through the tree.
 - A value is parsed whole: a stream other than a ReadStream on a String or a ByteArray is read to its end first, and the web VM does not return to its page during a primitive call.
 - macOS, Windows and Linux aarch64 are untested until CI runs the step that loads the plugin.
