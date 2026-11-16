@@ -150,14 +150,15 @@ if(EMSCRIPTEN_ROOT_PATH)
 else()
     get_filename_component(PHARO_WASM_EMSCRIPTEN_ROOT "${CMAKE_C_COMPILER}" DIRECTORY)
 endif()
-if(FEATURE_PLUGIN_SIMDJSON)     # the plugin links libc++ and libc++abi into pharo.wasm and pharo-web.wasm
+# (the C++ plugins link libc++ and libc++abi into pharo.wasm and pharo-web.wasm)
+if(FEATURE_PLUGIN_SIMDJSON OR FEATURE_PLUGIN_SIMDUTF)
     pharo_wasm_notice_section(PHARO_WASM_NOTICES_TEXT
         "The runtime of Emscripten ${EMSCRIPTEN_VERSION}, https://emscripten.org/"
         "Its JavaScript support code is in pharo.js and pharo-web.js, and its C"
         "library, from musl (https://musl.libc.org/), the compiler runtime"
         "compiler-rt of LLVM (https://compiler-rt.llvm.org/), and the C++ library"
         "libc++ and its ABI library libc++abi of LLVM (https://libcxx.llvm.org/),"
-        "which the SimdJSONPlugin uses, are in pharo.wasm and pharo-web.wasm.")
+        "which the C++ plugins use, are in pharo.wasm and pharo-web.wasm.")
 else()
     pharo_wasm_notice_section(PHARO_WASM_NOTICES_TEXT
         "The runtime of Emscripten ${EMSCRIPTEN_VERSION}, https://emscripten.org/"
@@ -172,7 +173,7 @@ pharo_wasm_notice_file(PHARO_WASM_NOTICES_TEXT "musl: COPYRIGHT"
     "${PHARO_WASM_EMSCRIPTEN_ROOT}/system/lib/libc/musl/COPYRIGHT")
 pharo_wasm_notice_file(PHARO_WASM_NOTICES_TEXT "compiler-rt: LICENSE.TXT"
     "${PHARO_WASM_EMSCRIPTEN_ROOT}/system/lib/compiler-rt/LICENSE.TXT")
-if(FEATURE_PLUGIN_SIMDJSON)
+if(FEATURE_PLUGIN_SIMDJSON OR FEATURE_PLUGIN_SIMDUTF)
     pharo_wasm_notice_file(PHARO_WASM_NOTICES_TEXT "libc++: LICENSE.TXT"
         "${PHARO_WASM_EMSCRIPTEN_ROOT}/system/lib/libcxx/LICENSE.TXT")
     pharo_wasm_notice_file(PHARO_WASM_NOTICES_TEXT "libc++abi: LICENSE.TXT"

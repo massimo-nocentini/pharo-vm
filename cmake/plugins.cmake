@@ -147,6 +147,63 @@ if(FEATURE_PLUGIN_SIMDJSON)
     endif()
 endif()
 
+# SimdUTFPlugin: transcoding between UTF-8, UTF-16LE/BE, Latin-1 and UTF-32,
+# validation and base64 with simdutf 9.4.0 (C++17), the plugin of the package
+# SimdUTF (the submodule plugins/SimdUTFPlugin/simdutf.st); docs/SimdUTF.md.
+# ON on every 64-bit target, OFF on 32-bit ones (Linux armv7l,
+# cmake/vmmaker.cmake), where turning it on is refused: the status word that
+# its primitives answer needs the 61-bit SmallIntegers of a 64-bit VM.
+# simdutf has never run upstream on Windows arm64 (MinGW clang) nor on macOS
+# x86_64: the CI steps of those jobs are its first test there
+if(SIZEOF_VOID_P EQUAL 8)
+    set(pharo_simdutf_default ON)
+else()
+    set(pharo_simdutf_default OFF)
+endif()
+option(FEATURE_PLUGIN_SIMDUTF "Build the SimdUTFPlugin (simdutf transcoding and base64, C++17)" ${pharo_simdutf_default})
+if(FEATURE_PLUGIN_SIMDUTF AND NOT SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "FEATURE_PLUGIN_SIMDUTF needs a 64-bit VM (void* is ${SIZEOF_VOID_P} bytes)")
+endif()
+if(FEATURE_PLUGIN_SIMDUTF)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/simdutf.cmake)
+    set(su_dir ${CMAKE_CURRENT_SOURCE_DIR}/plugins/SimdUTFPlugin)
+    add_vm_plugin(SimdUTFPlugin FALSE FALSE)            # globs src/common/*.c; a builtin STATIC lib on Emscripten
+    target_sources(SimdUTFPlugin PRIVATE ${su_dir}/src/cxx/suEngine.cpp)
+    target_link_libraries(SimdUTFPlugin PRIVATE pharo_simdutf)
+    # (no version definition: the engine answers SIMDUTF_VERSION of simdutf.h)
+    target_compile_options(SimdUTFPlugin PRIVATE -O3 -g0)
+    foreach(option IN LISTS PHARO_SIMDUTF_CXX_OPTIONS)
+        target_compile_options(SimdUTFPlugin PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${option}>)
+    endforeach()
+    # (C keeps the default visibility: the VM looks up the entry points)
+    set_target_properties(SimdUTFPlugin PROPERTIES
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
+        CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+
+    # libSimdUTFFFI: the same engine for the FFI of the image (the package
+    # SimdUTF-FFI) on a VM without the plugin: not a plugin, it has no VM
+    # header, and only its su_ffi_* functions are exported (suFFI.h).
+    # Natively only: the web VMs have the plugin built in
+    if(NOT EMSCRIPTEN)
+        option(FEATURE_SIMDUTF_FFI "Build libSimdUTFFFI, simdutf for the FFI of the package SimdUTF-FFI" ON)
+    endif()
+    if(FEATURE_SIMDUTF_FFI AND NOT EMSCRIPTEN)
+        addIndependentLibraryWithRPATH(SimdUTFFFI
+            ${su_dir}/src/ffi/suFFI.c
+            ${su_dir}/src/cxx/suEngine.cpp)
+        add_dependencies(${VM_EXECUTABLE_NAME} SimdUTFFFI)
+        target_include_directories(SimdUTFFFI PRIVATE ${su_dir}/include/common ${su_dir}/include/ffi)
+        target_link_libraries(SimdUTFFFI PRIVATE pharo_simdutf)
+        target_compile_options(SimdUTFFFI PRIVATE -O3 -g0)
+        foreach(option IN LISTS PHARO_SIMDUTF_CXX_OPTIONS)
+            target_compile_options(SimdUTFFFI PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${option}>)
+        endforeach()
+        set_target_properties(SimdUTFFFI PROPERTIES
+            CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
+            C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+    endif()
+endif()
+
 # UnixOSProcessPlugin (it needs fork(), which Emscripten has not)
 if(NOT WIN AND NOT EMSCRIPTEN)
     add_vm_plugin(UnixOSProcessPlugin FALSE FALSE)

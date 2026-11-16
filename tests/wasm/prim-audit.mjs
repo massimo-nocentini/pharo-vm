@@ -28,7 +28,8 @@
 //   - no function is wrapped by -sEMULATE_FUNCTION_POINTER_CASTS;
 //   - the builtin modules are the in-tree plugins linked into the VM (with
 //     UUIDPlugin when the CMake cache of the build turns FEATURE_PLUGIN_UUID
-//     on, and SimdJSONPlugin when it turns FEATURE_PLUGIN_SIMDJSON on; never
+//     on, SimdJSONPlugin when it turns FEATURE_PLUGIN_SIMDJSON on, and
+//     SimdUTFPlugin when it turns FEATURE_PLUGIN_SIMDUTF on; never
 //     SurfacePlugin, which cmake/plugins.cmake leaves out of the Emscripten
 //     VMs) plus one for each src/emscripten/plugins/*.c, and every row with an
 //     accessor depth in their sources is in the tables;
@@ -404,6 +405,8 @@ function audit(js, srcdir, prims) {
         expected.add('UUIDPlugin');
     if (/^FEATURE_PLUGIN_SIMDJSON:BOOL=(ON|TRUE|YES|Y|1)$/mi.test(cacheText))
         expected.add('SimdJSONPlugin');
+    if (/^FEATURE_PLUGIN_SIMDUTF:BOOL=(ON|TRUE|YES|Y|1)$/mi.test(cacheText))
+        expected.add('SimdUTFPlugin');
     const ffi = /^FEATURE_FFI:BOOL=(ON|TRUE|YES|Y|1)$/mi.test(cacheText);
     if (existsSync(pluginDir))
         for (const file of readdirSync(pluginDir).filter((f) => f.endsWith('.c')))

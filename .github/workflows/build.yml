@@ -129,6 +129,45 @@ jobs:
             test "$(printf '%s\n' "$glibcxx" GLIBCXX_3.4.21 | sort -V | tail -n 1)" = GLIBCXX_3.4.21
           done
 
+      # The SimdUTFPlugin and libSimdUTFFFI are C++ (cmake/simdutf.cmake): they
+      # must load (the library through the FFI), run a kernel of simdutf, refuse
+      # a bogus SIMDUTF_FORCE_IMPLEMENTATION, honour fallback where the build has
+      # more than one kernel (x86_64), and need no libstdc++ newer than
+      # GLIBCXX_3.4.21 (simdutf needs none at all).  The licence files of
+      # simdutf and the PyTorch notices of simdutf and simdjson must be in the
+      # zip, next to the plugins.  shell: bash runs the step with pipefail, so
+      # that a VM that dies after printing (in the callouts of libSimdUTFFFI)
+      # fails the step, not only tee
+      - name: Load the SimdUTFPlugin and libSimdUTFFFI of the zip
+        shell: bash
+        run: |
+          probe() { "$RUNNER_TEMP/vm/pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/SimdUTFPlugin/tests/ci-load.st; }
+          probe | tee "$RUNNER_TEMP/simdutf.txt"
+          grep -q '^SimdUTFPlugin native ' "$RUNNER_TEMP/simdutf.txt"
+          grep -q '^SimdUTFFFI 1 ' "$RUNNER_TEMP/simdutf.txt"
+          SIMDUTF_FORCE_IMPLEMENTATION=bogus probe | tee "$RUNNER_TEMP/simdutf-bogus.txt"
+          grep -q '^SimdUTFPlugin native .* forced refused bogus ok' "$RUNNER_TEMP/simdutf-bogus.txt"
+          grep -q '^SimdUTFFFI 1 .* forced refused bogus$' "$RUNNER_TEMP/simdutf-bogus.txt"
+          SIMDUTF_FORCE_IMPLEMENTATION=fallback probe | tee "$RUNNER_TEMP/simdutf-fallback.txt"
+          if [ "$(uname -m)" = x86_64 ]; then
+            grep -q '^SimdUTFPlugin native fallback .* forced fallback ok' "$RUNNER_TEMP/simdutf-fallback.txt"
+            grep -q '^SimdUTFFFI 1 fallback forced fallback$' "$RUNNER_TEMP/simdutf-fallback.txt"
+          else
+            grep -q '^SimdUTFPlugin native arm64 .* forced refused fallback ok' "$RUNNER_TEMP/simdutf-fallback.txt"
+            grep -q '^SimdUTFFFI 1 arm64 forced refused fallback$' "$RUNNER_TEMP/simdutf-fallback.txt"
+          fi
+          # (grep finds no GLIBCXX at all in them today, which must not fail
+          # the step under pipefail)
+          for lib in libSimdUTFPlugin.so libSimdUTFFFI.so; do
+            test -f "$RUNNER_TEMP/vm/lib/$lib"
+            glibcxx=$(objdump -T "$RUNNER_TEMP/vm/lib/$lib" | { grep -o 'GLIBCXX_[0-9.]*' || true; } | sort -uV | tail -n 1)
+            echo "$lib: ${glibcxx:-no GLIBCXX}"
+            test -z "$glibcxx" || test "$(printf '%s\n' "$glibcxx" GLIBCXX_3.4.21 | sort -V | tail -n 1)" = GLIBCXX_3.4.21
+          done
+          for f in LICENSE.simdutf LICENSE.simdutf-MIT LICENSE.simdutf-isadetection LICENSE.simdjson-isadetection; do
+            test -f "$RUNNER_TEMP/vm/lib/$f" || { echo "missing $f"; exit 1; }
+          done
+
       - uses: actions/upload-artifact@v7
         with:
           path: build/build/packages/PharoVM-*-Linux-${{ matrix.arch }}-bin.zip
@@ -209,6 +248,30 @@ jobs:
         run: |
           "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/SimdJSONPlugin/tests/ci-load.st | tee "$RUNNER_TEMP/simdjson.txt"
           grep -q '^SimdJSONPlugin native ' "$RUNNER_TEMP/simdjson.txt"
+
+      # As on Linux, without the checks of libSimdUTFFFI and of libstdc++
+      # (as the SimdJSON step above): simdutf has never run on
+      # macOS x86_64 upstream, and its guard of SIMDUTF_FORCE_IMPLEMENTATION
+      # matters on every build with more than one kernel.  The licence files
+      # go to Contents/Resources (cmake/simdutf.cmake).  shell: bash: with
+      # pipefail, a VM that dies after printing fails the step
+      - name: Load the SimdUTFPlugin of the zip
+        shell: bash
+        run: |
+          probe() { "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/SimdUTFPlugin/tests/ci-load.st; }
+          probe | tee "$RUNNER_TEMP/simdutf.txt"
+          grep -q '^SimdUTFPlugin native ' "$RUNNER_TEMP/simdutf.txt"
+          SIMDUTF_FORCE_IMPLEMENTATION=bogus probe | tee "$RUNNER_TEMP/simdutf-bogus.txt"
+          grep -q '^SimdUTFPlugin native .* forced refused bogus ok' "$RUNNER_TEMP/simdutf-bogus.txt"
+          SIMDUTF_FORCE_IMPLEMENTATION=fallback probe | tee "$RUNNER_TEMP/simdutf-fallback.txt"
+          if [ "$(uname -m)" = x86_64 ]; then
+            grep -q '^SimdUTFPlugin native fallback .* forced fallback ok' "$RUNNER_TEMP/simdutf-fallback.txt"
+          else
+            grep -q '^SimdUTFPlugin native arm64 .* forced refused fallback ok' "$RUNNER_TEMP/simdutf-fallback.txt"
+          fi
+          for f in LICENSE.simdutf LICENSE.simdutf-MIT LICENSE.simdutf-isadetection LICENSE.simdjson-isadetection; do
+            test -f "$RUNNER_TEMP/vm/Pharo.app/Contents/Resources/$f" || { echo "missing $f"; exit 1; }
+          done
 
       - uses: actions/upload-artifact@v7
         with:
@@ -412,6 +475,40 @@ jobs:
           $out
           if (-not ($out -match '^SimdJSONPlugin native ')) { exit 1 }
 
+      # The same for the SimdUTFPlugin, with SIMDUTF_FORCE_IMPLEMENTATION unset,
+      # bogus (refused) and fallback (honoured on x64; arm64 has no other
+      # kernel).  simdutf has never run on Windows arm64 upstream.  The
+      # licence files are next to the plugins
+      - name: Load the SimdUTFPlugin of the zip
+        shell: pwsh
+        run: |
+          $vm = "$env:RUNNER_TEMP\vm"
+          $env:PATH = "$vm;$env:SystemRoot\System32;$env:SystemRoot"
+          function Probe {
+            $out = & "$vm\PharoConsole.exe" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/SimdUTFPlugin/tests/ci-load.st
+            if ($LASTEXITCODE -ne 0) { $out; exit $LASTEXITCODE }
+            $out
+          }
+          $out = Probe
+          $out
+          if (-not ($out -match '^SimdUTFPlugin native ')) { exit 1 }
+          $env:SIMDUTF_FORCE_IMPLEMENTATION = 'bogus'
+          $out = Probe
+          $out
+          if (-not ($out -match '^SimdUTFPlugin native .* forced refused bogus ok')) { exit 1 }
+          $env:SIMDUTF_FORCE_IMPLEMENTATION = 'fallback'
+          $out = Probe
+          $out
+          if ('${{ matrix.machine }}' -eq '8664') {
+            if (-not ($out -match '^SimdUTFPlugin native fallback .* forced fallback ok')) { exit 1 }
+          } else {
+            if (-not ($out -match '^SimdUTFPlugin native arm64 .* forced refused fallback ok')) { exit 1 }
+          }
+          Remove-Item Env:SIMDUTF_FORCE_IMPLEMENTATION
+          foreach ($f in 'LICENSE.simdutf', 'LICENSE.simdutf-MIT', 'LICENSE.simdutf-isadetection', 'LICENSE.simdjson-isadetection') {
+            if (-not (Test-Path "$vm\$f")) { "missing $f"; exit 1 }
+          }
+
       - uses: actions/upload-artifact@v7
         with:
           path: build/build/packages/PharoVM-*-Windows-${{ matrix.arch }}-bin.zip
@@ -442,8 +539,9 @@ jobs:
       CC: clang
       CXX: clang++
     steps:
-      # (with the submodule plugins/SimdJSONPlugin/simdjson.st, the
-      # Smalltalk code that lane 68 of wasm-check loads)
+      # (with the submodules plugins/SimdJSONPlugin/simdjson.st and
+      # plugins/SimdUTFPlugin/simdutf.st, the Smalltalk code that lanes 68
+      # and 69 of wasm-check load)
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
