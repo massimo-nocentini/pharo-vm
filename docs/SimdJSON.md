@@ -735,6 +735,7 @@ In `primitiveInfo`'s statistics `gateHits` counts the gate's openings, and `enum
 ## Licences
 
 - simdjson is under the Apache License 2.0 or the MIT licence, at the user's choice: both texts are installed as `LICENSE.simdjson` and `LICENSE.simdjson-MIT`, next to the plugin on Linux and Windows (`build/vm`, the `lib` directory of the Linux zip) and in `Pharo.app/Contents/Resources` on macOS, and go into the `THIRD-PARTY-NOTICES.txt` of the WebAssembly VMs, with those of libc++ and libc++abi (Apache License 2.0 with LLVM exceptions), which the plugin links there.
+- simdjson's detection of the instruction sets (`src/internal/isadetection.h`) comes from PyTorch, under its BSD 3-Clause licence, whose notice is installed next to the other two as `LICENSE.simdjson-isadetection`, copied out of `singleheader/simdjson.cpp` at configure time by `cmake/thirdPartyNotice.cmake` (and listed in the simdjson section of `THIRD-PARTY-NOTICES.txt`).
 - The doubles of the writer go through simdjson's port of Dragonbox (Junekey Jeon), which simdjson's sources carry under the Boost Software License 1.0.
 - The mapper, the mapping classes and the number parser of the package `SimdJSON` are ports of NeoJSON, under its MIT licence (Copyright (C) 2012 Sven Van Caekenberghe), whose notice the class comment of `ManifestSimdJSON` carries.
 - The benchmark corpus is not part of this repository: `fetch-corpus.sh` downloads it, and its files keep the terms of their sources.

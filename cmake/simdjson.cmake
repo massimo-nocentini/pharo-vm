@@ -65,6 +65,13 @@ file(STRINGS "${simdjson_SOURCE_DIR}/singleheader/simdjson.h" pharo_simdjson_ver
 if(NOT pharo_simdjson_version MATCHES "\"${PHARO_SIMDJSON_VERSION}\"")
     message(FATAL_ERROR "SimdJSONPlugin: ${simdjson_SOURCE_DIR} is not simdjson ${PHARO_SIMDJSON_VERSION} (${pharo_simdjson_version})")
 endif()
+# The BSD-3-Clause notice of PyTorch (src/internal/isadetection.h), taken from
+# the amalgamation that is compiled, so that a tree with only singleheader/
+# still configures
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/thirdPartyNotice.cmake)
+pharo_third_party_notice(simdjson "${simdjson_SOURCE_DIR}/singleheader/simdjson.cpp"
+    LICENSE.simdjson-isadetection PHARO_SIMDJSON_NOTICE
+    START "/* From\nhttps://github.com/endorno/pytorch")
 
 set(PHARO_SIMDJSON_CXX_OPTIONS -O3 -g0 -fno-exceptions)
 if(EMSCRIPTEN)
@@ -88,7 +95,8 @@ set_target_properties(pharo_simdjson PROPERTIES
     CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 if(NOT EMSCRIPTEN)
     set_target_properties(pharo_simdjson PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    # Apache-2.0 or MIT, at the user's choice: both texts go with the plugin.
+    # Apache-2.0 or MIT, at the user's choice: both texts go with the plugin,
+    # and the BSD-3-Clause notice of PyTorch.
     # Linux and Windows package build/vm/ whole (lib/ of the Linux zip); the
     # plugins of macOS are in Contents/MacOS/Plugins, which holds only code,
     # so the texts go to Contents/Resources of the bundle (cmake/sign.cmake)
@@ -99,4 +107,5 @@ if(NOT EMSCRIPTEN)
     endif()
     configure_file(${simdjson_SOURCE_DIR}/LICENSE     ${PHARO_SIMDJSON_LICENSE_DIR}/LICENSE.simdjson     COPYONLY)
     configure_file(${simdjson_SOURCE_DIR}/LICENSE-MIT ${PHARO_SIMDJSON_LICENSE_DIR}/LICENSE.simdjson-MIT COPYONLY)
+    configure_file(${PHARO_SIMDJSON_NOTICE}         ${PHARO_SIMDJSON_LICENSE_DIR}/LICENSE.simdjson-isadetection COPYONLY)
 endif()
