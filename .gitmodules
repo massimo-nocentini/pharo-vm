@@ -1,3 +1,6 @@
 [submodule "plugins/SimdJSONPlugin/simdjson.st"]
 	path = plugins/SimdJSONPlugin/simdjson.st
 	url = https://github.com/massimo-nocentini/simdjson.st.git
+[submodule "plugins/SimdUTFPlugin/simdutf.st"]
+	path = plugins/SimdUTFPlugin/simdutf.st
+	url = https://github.com/massimo-nocentini/simdutf.st.git
