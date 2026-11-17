@@ -283,6 +283,9 @@ echo '"C"' >"$src/smalltalksrc/VMMaker/C.class.st"
 wmake "$W/host/.generated"
 calls "build host vmmaker_vm" "build host vmmaker" "refresh" "build host generate-sources"
 step="a .st file changes"
+# (a second later: the clock of file times is coarse, and an edit within the
+# same tick as the stamp of the step before would look older than it)
+sleep 1
 echo '"A, edited"' >"$src/smalltalksrc/VMMaker/A.class.st"
 wmake "$W/host/.generated"
 calls "build host vmmaker_vm" "build host vmmaker" "refresh" "build host generate-sources"
@@ -296,6 +299,7 @@ step="nothing changed in the configuration"
 wmake "$W/cmake/.configured"
 calls
 step="the initial cache changes"
+sleep 1
 echo 'set(GENERATE_SOURCES OFF CACHE BOOL "" FORCE)' >>"$src/cmake/Emscripten.cache.cmake"
 wmake "$W/cmake/.configured"
 calls "emcmake" "configure cmake"
@@ -633,6 +637,7 @@ wbuild
 calls "prepare"
 grep -q OSWebC "$package" || fail "$step: no OSWebC in $package"
 step="webimage.cmake, the new class changes"
+sleep 1
 echo '"OSWebC, edited"' >>"$st/OSWindow-Web/OSWebC.class.st"
 wbuild
 calls "prepare"
