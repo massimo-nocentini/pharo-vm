@@ -23,7 +23,9 @@
 #     .sources that does not exist, and a default proxy of git that stage.mjs
 #     would refuse: not http:// or https://, with a user name or a
 #     #fragment, and, as stage.mjs --check-git-proxy says, with a port or a
-#     host that is none);
+#     host that is none); a change of WASM_DEPS_DIR also sets it in the CMake
+#     cache of the host tree (host/.deps-dir), without building the VMMaker
+#     image or generating the sources again;
 #   - WASM_SDL2, which is gone, is refused when it asks for SDL2, and
 #     WASM_SDL2=OFF changes nothing; cmake is given -U WASM_SDL2, which drops
 #     it from the cache of a tree configured with it;
@@ -373,7 +375,9 @@ calls
 step="a WASM_DEPS_DIR"
 mkdir -p "$T/archives"
 wmake "$W/cmake/.configured" "WASM_DEPS_DIR=$T/archives"
-calls "emcmake" "configure cmake"
+# (the host's cache gets it too, for the simdjson of its SimdJSONPlugin:
+# host/.deps-dir of GNUmakefile)
+calls "configure host" "emcmake" "configure cmake"
 grep -qx "WASM_DEPS_DIR = $T/archives" "$W/config.make" || { cat "$W/config.make"; fail "$step: config.make does not record it"; }
 step="nothing changed with a WASM_DEPS_DIR"
 wmake "$W/cmake/.configured" "WASM_DEPS_DIR=$T/archives"
@@ -387,7 +391,8 @@ given() {
 }
 step="the default proxy of git, by default"
 wmake "$W/cmake/.configured"
-calls "emcmake" "configure cmake"
+# (without the WASM_DEPS_DIR of the step before: the host's cache drops it)
+calls "configure host" "emcmake" "configure cmake"
 recorded WASM_GIT_PROXY https://cors.isomorphic-git.org/
 recorded WASM_EXTRA_IMAGES ""
 given WASM_GIT_PROXY=https://cors.isomorphic-git.org/
