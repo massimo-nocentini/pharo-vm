@@ -4,3 +4,6 @@
 [submodule "plugins/SimdUTFPlugin/simdutf.st"]
 	path = plugins/SimdUTFPlugin/simdutf.st
 	url = https://github.com/massimo-nocentini/simdutf.st.git
+[submodule "plugins/TimSortPlugin/timsort.st"]
+	path = plugins/TimSortPlugin/timsort.st
+	url = https://github.com/massimo-nocentini/timsort.st.git
