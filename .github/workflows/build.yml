@@ -168,6 +168,24 @@ jobs:
             test -f "$RUNNER_TEMP/vm/lib/$f" || { echo "missing $f"; exit 1; }
           done
 
+      # The TimSortPlugin and libTimSortFFI are C (cmake/timsort.cmake): they
+      # must load (the library through the FFI), sort numbers, strings, a
+      # Float64Array and keys, and run a sort by a sortBlock on the stack of
+      # the resumable sort (the hand-written switch of x86_64 or aarch64), each
+      # comparison answered by the image, through the plugin and through the
+      # library (tests/ci-load.st).  The PSF notice of timsort.c must be in the
+      # zip, next to the plugins.  shell: bash runs the step with pipefail, so
+      # that a VM that dies after printing fails the step, not only tee
+      - name: Load the TimSortPlugin and libTimSortFFI of the zip
+        shell: bash
+        run: |
+          "$RUNNER_TEMP/vm/pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/TimSortPlugin/tests/ci-load.st | tee "$RUNNER_TEMP/timsort.txt"
+          grep -q '^TimSortPlugin native timsort\.c [0-9a-f]* coroutines yes [0-9]* ok' "$RUNNER_TEMP/timsort.txt"
+          grep -q '^TimSortFFI 1 [0-9a-f]* asm-[a-z0-9_-]* coroutines yes [0-9]* ok' "$RUNNER_TEMP/timsort.txt"
+          for f in libTimSortPlugin.so libTimSortFFI.so LICENSE.timsort; do
+            test -f "$RUNNER_TEMP/vm/lib/$f" || { echo "missing $f"; exit 1; }
+          done
+
       - uses: actions/upload-artifact@v7
         with:
           path: build/build/packages/PharoVM-*-Linux-${{ matrix.arch }}-bin.zip
@@ -272,6 +290,18 @@ jobs:
           for f in LICENSE.simdutf LICENSE.simdutf-MIT LICENSE.simdutf-isadetection LICENSE.simdjson-isadetection; do
             test -f "$RUNNER_TEMP/vm/Pharo.app/Contents/Resources/$f" || { echo "missing $f"; exit 1; }
           done
+
+      # As on Linux, the library included (FFIMacLibraryFinder finds it in
+      # Contents/MacOS/Plugins): the resumable sort's switch for Mach-O
+      # (x86_64 and arm64) has never run before this step.  The notice goes to
+      # Contents/Resources (cmake/timsort.cmake)
+      - name: Load the TimSortPlugin and libTimSortFFI of the zip
+        shell: bash
+        run: |
+          "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/TimSortPlugin/tests/ci-load.st | tee "$RUNNER_TEMP/timsort.txt"
+          grep -q '^TimSortPlugin native timsort\.c [0-9a-f]* coroutines yes [0-9]* ok' "$RUNNER_TEMP/timsort.txt"
+          grep -q '^TimSortFFI 1 [0-9a-f]* asm-[a-z0-9_-]* coroutines yes [0-9]* ok' "$RUNNER_TEMP/timsort.txt"
+          test -f "$RUNNER_TEMP/vm/Pharo.app/Contents/Resources/LICENSE.timsort" || { echo "missing LICENSE.timsort"; exit 1; }
 
       - uses: actions/upload-artifact@v7
         with:
@@ -509,6 +539,21 @@ jobs:
             if (-not (Test-Path "$vm\$f")) { "missing $f"; exit 1 }
           }
 
+      # The same for the TimSortPlugin and libTimSortFFI (TimSortFFI.dll, or
+      # libTimSortFFI.dll as MinGW names it): there the resumable sort runs on
+      # Fibers, on x64 and on arm64, and has never run before this step
+      - name: Load the TimSortPlugin and libTimSortFFI of the zip
+        shell: pwsh
+        run: |
+          $vm = "$env:RUNNER_TEMP\vm"
+          $env:PATH = "$vm;$env:SystemRoot\System32;$env:SystemRoot"
+          $out = & "$vm\PharoConsole.exe" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/TimSortPlugin/tests/ci-load.st
+          if ($LASTEXITCODE -ne 0) { $out; exit $LASTEXITCODE }
+          $out
+          if (-not ($out -match '^TimSortPlugin native timsort\.c [0-9a-f]* coroutines yes [0-9]* ok')) { exit 1 }
+          if (-not ($out -match '^TimSortFFI 1 [0-9a-f]* fibers coroutines yes [0-9]* ok')) { exit 1 }
+          if (-not (Test-Path "$vm\LICENSE.timsort")) { "missing LICENSE.timsort"; exit 1 }
+
       - uses: actions/upload-artifact@v7
         with:
           path: build/build/packages/PharoVM-*-Windows-${{ matrix.arch }}-bin.zip
@@ -539,9 +584,9 @@ jobs:
       CC: clang
       CXX: clang++
     steps:
-      # (with the submodules plugins/SimdJSONPlugin/simdjson.st and
-      # plugins/SimdUTFPlugin/simdutf.st, the Smalltalk code that lanes 68
-      # and 69 of wasm-check load)
+      # (with the submodules plugins/SimdJSONPlugin/simdjson.st,
+      # plugins/SimdUTFPlugin/simdutf.st and plugins/TimSortPlugin/timsort.st,
+      # the Smalltalk code that lanes 68, 69 and 71 of wasm-check load)
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0

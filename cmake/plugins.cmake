@@ -204,6 +204,65 @@ if(FEATURE_PLUGIN_SIMDUTF)
     endif()
 endif()
 
+# TimSortPlugin: stable sorts of Arrays of numbers or strings, of numeric
+# buffers and of permutations by keys with timsort.c (C, the sort of
+# CPython's lists), and the resumable sort by any sortBlock, whose
+# comparisons the image answers, on a C stack of its own; the plugin of the
+# package TimSort (the submodule plugins/TimSortPlugin/timsort.st);
+# docs/TimSort.md.  ON on every 64-bit target, OFF on 32-bit ones, where
+# turning it on is refused: the requests of the resumable sort are 61-bit
+# SmallIntegers.  The resumable sort (src/coro) is compiled natively only:
+# WebAssembly cannot switch C stacks, and its primitives report it
+# unsupported there.  No HOST_PLUGIN_FLAGS entry in the GNUmakefile: the host
+# tree of make wasm builds no plugin (only the VMMaker VM and image and the
+# generated sources), but it configures this one, and so fetches the archive
+# of timsort.c (WASM_DEPS_DIR, else GitHub) at its configure
+if(SIZEOF_VOID_P EQUAL 8)
+    set(pharo_timsort_default ON)
+else()
+    set(pharo_timsort_default OFF)
+endif()
+option(FEATURE_PLUGIN_TIMSORT "Build the TimSortPlugin (timsort.c stable sorts, C)" ${pharo_timsort_default})
+if(FEATURE_PLUGIN_TIMSORT AND NOT SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "FEATURE_PLUGIN_TIMSORT needs a 64-bit VM (void* is ${SIZEOF_VOID_P} bytes)")
+endif()
+if(FEATURE_PLUGIN_TIMSORT)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/timsort.cmake)
+    set(ts_dir ${CMAKE_CURRENT_SOURCE_DIR}/plugins/TimSortPlugin)
+    # the engine (the one file that includes timsort.h) and, natively, the
+    # resumable sort: every .c of src/coro (CONFIGURE_DEPENDS: a new one
+    # configures again), each compiling only for its own targets
+    set(ts_sources ${ts_dir}/src/engine/tsEngine.c)
+    if(NOT EMSCRIPTEN)
+        file(GLOB ts_coro_sources CONFIGURE_DEPENDS ${ts_dir}/src/coro/*.c)
+        list(APPEND ts_sources ${ts_coro_sources})
+    endif()
+    add_vm_plugin(TimSortPlugin FALSE FALSE)            # globs src/common/*.c; a builtin STATIC lib on Emscripten
+    target_sources(TimSortPlugin PRIVATE ${ts_sources})
+    target_link_libraries(TimSortPlugin PRIVATE pharo_timsort)
+    # primitiveInfo answers 'timsort.c <this>' (the glue has no timsort.h)
+    target_compile_definitions(TimSortPlugin PRIVATE TS_TIMSORT_VERSION="${PHARO_TIMSORT_VERSION}")
+    target_compile_options(TimSortPlugin PRIVATE -O3 -g0)
+    # (C keeps the default visibility: the VM looks up the entry points)
+
+    # libTimSortFFI: the same engine and resumable sort for the FFI of the
+    # image (the package TimSort-FFI) on a VM without the plugin: not a
+    # plugin, it has no VM header, and only its ts_ffi_* functions are
+    # exported (tsFFI.h).  Natively only: the web VMs have the plugin built in
+    if(NOT EMSCRIPTEN)
+        option(FEATURE_TIMSORT_FFI "Build libTimSortFFI, timsort.c for the FFI of the package TimSort-FFI" ON)
+    endif()
+    if(FEATURE_TIMSORT_FFI AND NOT EMSCRIPTEN)
+        addIndependentLibraryWithRPATH(TimSortFFI ${ts_dir}/src/ffi/tsFFI.c ${ts_sources})
+        add_dependencies(${VM_EXECUTABLE_NAME} TimSortFFI)
+        target_include_directories(TimSortFFI PRIVATE ${ts_dir}/include/common ${ts_dir}/include/ffi)
+        target_link_libraries(TimSortFFI PRIVATE pharo_timsort)
+        target_compile_definitions(TimSortFFI PRIVATE TS_TIMSORT_VERSION="${PHARO_TIMSORT_VERSION}")
+        target_compile_options(TimSortFFI PRIVATE -O3 -g0)
+        set_target_properties(TimSortFFI PROPERTIES C_VISIBILITY_PRESET hidden)
+    endif()
+endif()
+
 # UnixOSProcessPlugin (it needs fork(), which Emscripten has not)
 if(NOT WIN AND NOT EMSCRIPTEN)
     add_vm_plugin(UnixOSProcessPlugin FALSE FALSE)
