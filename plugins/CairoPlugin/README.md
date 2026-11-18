@@ -9,9 +9,18 @@ The CairoPlugin lets Athens (Athens-Cairo, Pharo 12 to 15) draw through cairo wi
 The pixels and the cairo state are the same as with the FFI.
 
 **How it reaches cairo:**
-- **Natively** the plugin includes no cairo header and links no cairo. When the image binds it, the plugin loads the libcairo that the image's FFI uses, by the same path and through the VM's module loader, so there is one cairo in the process.
+- **Natively** the plugin links no cairo. When the image binds it, the plugin loads the libcairo that the image's FFI uses, by the same path and through the VM's module loader, so there is one cairo in the process.
 - A probe of `cairo_create` makes the bind fail if the plugin and the FFI would reach different cairos.
 - **On WebAssembly** it is a builtin plugin, `CairoPlugin (i)`, linked to the `pharo_cairo` of the FFI's registry.
+
+**Which cairo:** every VM ships cairo **1.18.6**, pinned in `cmake/cairo-stack/pins.txt` with FreeType 2.15.0 and the libraries around them ([docs/CairoStack.md](../../docs/CairoStack.md)):
+- **Linux and macOS:** built from the release archives;
+- **Windows:** MSYS2's packages, pinned by URL and SHA256;
+- **WebAssembly:** linked statically.
+
+The bind accepts any cairo from 1.16.0 on, for other bundles and system cairos. On Linux the stack needs glibc 2.38 (Ubuntu 24.04+, Debian 13+, Fedora 39+, RHEL 10).
+
+With the stack, the plugin is compiled with the stack's `cairo.h`, and a compile-time check proves that its 57 function-pointer types are cairo's own. With `-DPHARO_CAIRO_STACK=prebuilt` (the old bundles, for one more release) it declares its own prototypes and includes no cairo header.
 
 **Build option:** `FEATURE_PLUGIN_CAIRO` (`cmake/plugins.cmake`).
 - It is ON on 64-bit targets that build the SimdUTFPlugin (`FEATURE_PLUGIN_SIMDUTF`).
@@ -38,20 +47,30 @@ Metacello new
 	baseline: 'VMPluginsPrimitives';
 	repository: 'github://massimo-nocentini/vm-plugins-primitives.st:master/src';
 	load: #( 'Cairo' ).	"binds the plugin and installs #basic #shape #text"
-CairoPlugin info.		"#(1 'CairoPlugin 1.0' 'native' 11704 'loader' nil #())"
+CairoPlugin info.		"#(1 'CairoPlugin 1.0' 'native' 11806 'loader' nil #())"
 CairoPlugin uninstall.		"Athens as it was"
 CairoPlugin install: #( #basic ).
 ```
 
-**Speed** (`bench/run-bench.sh`, see docs/CairoPlugin.md; FFI time / plugin time, every group installed, the geometric mean over the scenes, the same pixels and cairo calls in every mode):
-- on Cog (Linux x86-64, Pharo 12 and 15), 1.55x for whole scenes on 1000x1000 surfaces: 1.3 to 1.6x for many small shapes, 3.4 to 3.9x for `drawString:`, 1.05 to 1.1x for a Roassal graph and 1.0x for one long polyline (rasterizing dominates); single calls 1.8 to 3.9x faster (`newPath` 124 to 46 ns);
-- on the WebAssembly VMs, 2.8 to 2.9x for whole scenes, 1.8 to 3.8x for many small shapes, 1.4 to 1.9x for Roassal, 8.5 to 11x for `drawString:`, and single calls 5 to 16x faster;
-- a whole Roassal morph frame gains what its drawing gains, 4 to 6% on Cog and 1.4x on WebAssembly; the display of the surface in the Morph (`asForm`), which stays on the FFI, is only about 2 ms of a 120 ms frame (3 of 305 ms on WebAssembly).
+**Speed** (`bench/run-bench.sh`, see docs/CairoPlugin.md). The figures are FFI time / plugin time with every group installed, the geometric mean over the scenes, with the same pixels and cairo calls in every mode, on cairo 1.18.6:
+- **On Cog** (Linux x86-64, Pharo 12 and 15), 1.56 to 1.58x for whole scenes on 1000x1000 surfaces:
+  - 1.3 to 1.6x for many small shapes;
+  - 3.5 to 4.1x for `drawString:`;
+  - 1.06 to 1.1x for a Roassal graph, and 1.05x for one long polyline, where rasterizing dominates;
+  - single calls 1.8 to 4.2x faster (`newPath` from 121 to 44 ns).
+- **On the WebAssembly VMs**, 2.9 to 3.0x for whole scenes:
+  - 2.2 to 3.9x for many small shapes;
+  - 1.4 to 1.9x for Roassal;
+  - 8.6 to 11x for `drawString:`;
+  - single calls 5 to 16x faster.
+- **A whole Roassal morph frame** gains what its drawing gains: 6% on Cog and 1.4x on WebAssembly. The display of the surface in the Morph (`asForm`) stays on the FFI, but it is only about 2 ms of a 117 ms frame (3 of 305 ms on WebAssembly).
 
 **Tests:**
-- `tests/run-c-tests.sh`: the C lanes.
+- `tests/run-c-tests.sh`: the C lanes. These include the prototype check against the stack's headers, with a compile that must fail; the symbols of the VM's libcairo and of the CI zips; the `stack` lane (`scripts/cairo-stack/check.sh`); and the glue under ASan and UBSan, built as the tree ships it.
 - `tests/run-st-tests.sh`: the Smalltalk suites, on a VM with or without the plugin.
-- `tests/ci-load.st`: the probe of the CI jobs, on the VMMaker image. It draws a scene by the FFI and through the primitives, and compares the pixels.
+- `tests/ci-load.st`: the probe of the CI jobs, on the VMMaker image. It draws a scene by the FFI and through the primitives, and compares the pixels. It also draws toy text through the FFI (the `CairoToy ok family … ink <n>` line). The jobs require the pinned cairo version.
 - Lane 74 of `make wasm-check` (`tests/wasm/lanes/74-cairo.sh`): the same on the WebAssembly VMs.
 
-**Licences:** the plugin and the packages are under the MIT licence. cairo (LGPL-2.1 or MPL-1.1) is not part of the plugin: natively it is the library that the VM bundle already ships, loaded at run time, and on WebAssembly the `pharo_cairo` that the VM already links for the FFI.
+**Licences:** the plugin and the packages are under the MIT licence. cairo (LGPL-2.1 or MPL-1.1) is not part of the plugin. The plugin uses only what cairo.h declares (prototypes, enums, structure layouts), and links no cairo:
+- natively, it binds at run time to the libcairo that the VM's bundle ships, with cairo's notices and the LGPL source offer (docs/CairoStack.md);
+- on WebAssembly, it uses the `pharo_cairo` that the VM already links for the FFI.

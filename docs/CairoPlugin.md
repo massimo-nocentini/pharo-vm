@@ -31,11 +31,15 @@ The Smalltalk side is the package `VM-Plugins-Primitives-Cairo` of [massimo-noce
 
 `cmake/plugins.cmake` builds the plugin when `FEATURE_PLUGIN_CAIRO` is on. It is on by default on 64-bit targets that build the SimdUTFPlugin (`FEATURE_PLUGIN_SIMDUTF`). It is off on 32-bit targets, where turning it on is refused. It is a dependent option (`cmake_dependent_option`): without `FEATURE_PLUGIN_SIMDUTF`, or on Emscripten without cairo (`WASM_CAIRO`), it is off, and the configure says why; the prerequisites are evaluated again at every configure, so turning `FEATURE_PLUGIN_SIMDUTF` or `WASM_CAIRO` off in an existing tree turns the plugin off, and turning them on again turns it back on (an explicit `-DFEATURE_PLUGIN_CAIRO=OFF` stays off).
 
-- **Native VMs:** a shared library, `libCairoPlugin.so`, `.dylib` or `CairoPlugin.dll`, next to the other plugins. It has **no build dependency on cairo**: it includes no cairo header and links no cairo library. It declares its own prototypes and structures (`cpCairo.h`), and finds cairo at run time (see [How it reaches cairo](#how-it-reaches-cairo)). It links the SimdUTF engine, `pharo_su_engine` (`suEngine.cpp` and simdutf), privately: it is linked as C++, and exports only the module functions, the 69 primitives and their 69 accessor depths (142 symbols, no `su_`, `simdutf` or `cp_` symbol).
-- **WebAssembly VMs:** the plugin is built in, `CairoPlugin (i)`, and only in a build with cairo (`WASM_CAIRO`, see `docs/WebAssembly.md`). It is compiled with cairo.h (`-DCP_HAVE_CAIRO_H -DCP_CAIRO_TYPES -DCP_STATIC_CAIRO`), so the compiler checks its 57 prototypes against cairo 1.18.4, and linked to the `pharo_cairo` of the FFI's registry. The SimdUTFPlugin, libSimdUTFFFI and the CairoPlugin share one copy of the engine, the static library `pharo_su_engine`. The plugin adds 62,248 bytes to `pharo-web.wasm` (10,581 with `gzip -9`).
+- **Native VMs:** a shared library, `libCairoPlugin.so`, `.dylib` or `CairoPlugin.dll`, next to the other plugins. It **links no cairo library** and finds cairo at run time (see [How it reaches cairo](#how-it-reaches-cairo)). How it is compiled depends on the cairo the VM bundles (`docs/CairoStack.md`):
+  - **With the cairo stack** (the default on Linux, macOS and MinGW: the stack built from `cmake/cairo-stack/pins.txt`, or the prefix of `PHARO_CAIRO_STACK_DIR`), it is compiled with the stack's `cairo.h`: `-DCP_HAVE_CAIRO_H -DCP_CAIRO_TYPES -DCP_CHECK_PROTOTYPES`, the stack's three include directories, and on MinGW `CAIRO_WIN32_STATIC_BUILD`. It then uses cairo's own types, and a compile-time check (`_Static_assert` with `__builtin_types_compatible_p`) proves that the type of each of its 57 function pointers is the type of cairo's function: a mismatch stops the build. The check is unevaluated, so the object still references no cairo symbol. The target depends on `pharo_cairo_stack_bundle`, which provides the headers.
+  - **Without it** (`-DPHARO_CAIRO_STACK=prebuilt`, which bundles the old files.pharo.org libraries for one more release; `BUILD_BUNDLE=OFF`; `FEATURE_LIB_CAIRO=OFF`; FreeBSD, OpenBSD, MSVC), it includes no cairo header. It declares its own prototypes and structures (`cpCairo.h`), which the `protocheck` and `targets` lanes of the C tests check against cairo's headers.
+
+  It links the SimdUTF engine, `pharo_su_engine` (`suEngine.cpp` and simdutf), privately. It is linked as C++, and exports only the module functions, the 69 primitives and their 69 accessor depths: 142 symbols, with no `su_`, `simdutf` or `cp_` symbol.
+- **WebAssembly VMs:** the plugin is built in, `CairoPlugin (i)`, and only in a build with cairo (`WASM_CAIRO`, see `docs/WebAssembly.md`). It is compiled with cairo.h (`-DCP_HAVE_CAIRO_H -DCP_CAIRO_TYPES -DCP_STATIC_CAIRO`), so the compiler checks its 57 prototypes against cairo 1.18.6, and it is linked to the `pharo_cairo` of the FFI's registry. The SimdUTFPlugin, libSimdUTFFFI and the CairoPlugin share one copy of the engine, the static library `pharo_su_engine`. The plugin adds 62,248 bytes to `pharo-web.wasm` (10,581 with `gzip -9`).
 - **Turning it off:** `-DFEATURE_PLUGIN_CAIRO=OFF`.
 
-No CI package is needed: the native build needs no cairo header.
+No system cairo package is needed. The native build takes cairo's headers from the stack, which the configure builds or reuses (`cmake/cairoStack.cmake`; the tools it needs are listed in `docs/CairoStack.md`). A prebuilt build needs no cairo header at all.
 
 ## How it reaches cairo
 
@@ -44,7 +48,21 @@ The plugin is unbound when the VM starts, and every drawing primitive then fails
 - **Natively** `primitiveBind` receives the path of the libcairo that the image's FFI loads, `CairoLibrary uniqueInstance libraryName`. It loads it with the VM's own module loader, `ioLoadModuleOfLength`, the code and the module cache of the FFI's `primitiveLoadSymbolFromModule`, and looks up each function in that module. So the plugin and the FFI use **the same libcairo**, in the same process. The plugin never calls `dlopen` or `dlclose` and never links cairo.
 - **The probe:** the image also passes the address of `cairo_create` that its FFI resolves. The bind fails with `#'inappropriate operation'` when it differs from the plugin's, and with `#'not found'` when it is nil or NULL (the FFI cannot reach cairo either). Nothing is bound then.
 - **On WebAssembly** the table is filled statically with cairo's functions (`'static'`): the library path is checked but not loaded, and the probe is the registry's `cairo_create`, the same function.
-- **Versions:** the bind requires cairo 1.16.0 or later (`cairo_version()` ≥ 11600), else it fails with `#'unsupported operation'`. The zips of `.github/workflows/build.yml` ship the files.pharo.org bundles on Linux (x86_64 1.17.4, aarch64 1.16.0) and macOS (arm64, x86_64 1.18.4); on Windows (x86_64 and arm64, both MSYS2 builds: UCRT64 and CLANGARM64) they ship the `libcairo-2.dll` of MSYS2's `cairo` package at build time (`cmake/importMinGWDependencies.cmake`; the files.pharo.org Windows bundles, x86_64 1.17.4 and ARM64 1.16.0, are used only by non-MinGW builds); the WebAssembly VMs link 1.18.4. The `symbols` lane checks that the VM's libcairo and the downloaded files.pharo.org bundles (Linux x86_64 and aarch64, macOS arm64 and x86_64, and Windows x86_64, which no CI zip ships) export the 57 functions. The MSYS2 DLLs of the Windows zips are checked only by the CI step of each job (`plugins/CairoPlugin/tests/ci-load.st`, which binds the plugin to the zip's cairo and requires every function, the optional ones too, and the same pixels).
+- **Versions:** every VM ships **one cairo, 1.18.6**, pinned in `cmake/cairo-stack/pins.txt` (see `docs/CairoStack.md`):
+  - **Linux and macOS:** it is built from its release archive;
+  - **Windows x86_64 and ARM64:** it is the pinned MSYS2 package (1.18.6 with MSYS2's patches);
+  - **WebAssembly:** it is linked statically.
+
+  The bind accepts any cairo from 1.16.0 on (`cairo_version()` ≥ 11600), else it fails with `#'unsupported operation'`. That lower bound is for the image's FFI loading another cairo: a `PHARO_CAIRO_STACK=prebuilt` bundle (Linux aarch64 1.16.0), or a system cairo.
+
+  How the version is checked:
+  - The CI jobs require exactly the pinned version: `ci-load.st` must print `CairoPlugin native 1 cairo <the pin> ok` (see [CI and WebAssembly](#ci-and-webassembly)).
+  - The `symbols` lane checks that the 57 functions are exported by:
+    - the VM's libcairo;
+    - with `--zips`, the libcairo of each CI zip (Linux, macOS and Windows);
+    - with `--deps`, the old files.pharo.org bundles of prebuilt mode.
+  - The `stack` lane runs `scripts/cairo-stack/check.sh` on the tree's bundle (see [Tests](#tests)).
+  - In each CI job, `ci-load.st` binds the plugin to the zip's cairo and requires every function (the optional ones too) and the same pixels.
 - **Missing functions:** a missing required function makes the bind fail with `#'not found'`; `primitiveInfo` names it. The two optional ones, `cairo_ft_scaled_font_lock_face` and `cairo_ft_scaled_font_unlock_face` (cairo's FreeType backend, which every bundled cairo has), may be missing: the bind succeeds, lists them, and the installer leaves out `#text` and the `lock`/`unlock` patches.
 - A bind replaces the previous one as a whole. `primitiveUnbind` and the module's shutdown clear it. The table holds addresses inside libcairo, which must never be unloaded while bound (no code of Pharo does).
 
@@ -90,7 +108,7 @@ Loading the package on a VM with the plugin binds it and installs every group. O
 
 | Message | What |
 |---|---|
-| `CairoPlugin info` | `{ 1. 'CairoPlugin 1.0'. 'native' or 'emscripten'. the cairo version (e.g. 11704) or nil when unbound. 'loader' or 'static'. a missing function or nil. the missing optional functions }`, or nil when the VM has no CairoPlugin |
+| `CairoPlugin info` | `{ 1. 'CairoPlugin 1.0'. 'native' or 'emscripten'. the cairo version (e.g. 11806) or nil when unbound. 'loader' or 'static'. a missing function or nil. the missing optional functions }`, or nil when the VM has no CairoPlugin |
 | `CairoPlugin isAvailable`, `isBound`, `cairoVersion` | whether the VM has the plugin; whether it is bound in this session; the bound version |
 | `CairoPlugin bind` | binds to `CairoLibrary uniqueInstance libraryName` with the probe and the layout table; answers the cairo version or signals `CairoPluginError` (`code`: `#'no plugin'`, `#runner`, `#layout`, or the primitive's failure code) |
 | `CairoPlugin unbind` | unbinds: every patch then falls back (for the tests) |
@@ -260,7 +278,7 @@ The tests check these criteria, natively on Pharo 12 to 15 and on the WebAssembl
 | Id | Criterion |
 |---|---|
 | C1 pixels | Every scene of `CairoPluginScenes` (the benchmark's, each shape with each kind of paint, dashes nil, empty and given, Integer, Float and mixed rectangles, arcs, curves, nested clips, transformations, paint modes, gradients, text in Latin-1, empty, ByteSymbols, WideStrings and WideSymbols in many scripts, 2000-character strings, invalid characters, random WideStrings, the kerning path, Roassal with bordered labels, a fill outside `drawDuring:`) draws the same bytes in the modes `#ffi` (uninstalled), `#basic`, `#all` and `#fallback` (installed, unbound) |
-| C2 state | After each shape and text primitive, the cairo state (the matrix bit for bit, the source, the line width, join and cap, the dashes, the current point, the fill rule, the operator, the font matrix, the scaled font) is the state after stock Athens |
+| C2 state | After each shape and text primitive, the cairo state is the state after stock Athens: the matrix bit for bit, the source, the line width, join and cap, the dashes, the current point, the fill rule, the operator, the font matrix, and the scaled font. The scaled font is compared by content: its font face, its font matrix and CTM bit for bit, its options' hash and its status. Comparing addresses no longer works, because since cairo 1.18.6 (commit 46d1e26c) a fresh context may get a new, equal toy scaled font instead of the cached one, in every mode |
 | C3 answers | Every patched method answers what the stock one answers (the same objects, equal Points of Floats, the same advance) |
 | C4 calls | The calls of each cairo function in `#basic` and `#all` (the plugin's counters plus the FFI callouts left) equal the callouts of `#ffi`, and no patched method fell back; in `#basic` each patched method, sent once (scenes or not), makes one call of the primitive its row names and the cairo calls of its row, and leaves what its `ffi…` copy leaves |
 | C5 failures | Every primitive fails with its code on each kind of invalid input, with no cairo call |
@@ -269,6 +287,19 @@ The tests check these criteria, natively on Pharo 12 to 15 and on the WebAssembl
 | C8 sessions | Saved installed and started again: bound and installed; started on a VM without the plugin in another directory: uninstalled, still wanted, Athens draws, and **exactly one libcairo** is loaded; back on the plugin VM: installed again |
 | C9 same cairo | A probe of another function fails the bind with `#'inappropriate operation'`; a nil or NULL probe or a library that does not load with `#'not found'` (and no symbol is looked up in a NULL module); a path of 256 bytes with `#'bad argument'`; a bad table with `#'bad index'` |
 | C10 runner, optional functions | Another runner makes `verify` uninstall and `install` refuse; missing optional functions are listed, and `#text` and lock/unlock are not installed |
+
+## What changes with cairo 1.18.6
+
+This release moves every VM to cairo 1.18.6, FreeType 2.15.0, libpng 1.6.59 and, on Linux, fontconfig 2.18.4 (`docs/CairoStack.md`). The guarantees above compare the modes on one cairo, so they hold unchanged. What Athens users can notice, measured on Linux x86_64 against the previous bundle (cairo 1.17.4, FreeType 2.12.1, pixman 0.40.0), on Pharo 12 and 15 with the same results:
+
+- **Linux needs glibc 2.38 for cairo and FreeType** (Ubuntu 24.04+, Debian 13+, Fedora 39+, RHEL 10). The stack is built on the CI's Ubuntu 24.04 runners. The VM itself still starts on glibc 2.34 to 2.37, but there Athens cannot load cairo, and the plugin stays unbound.
+- **Athens text and Morphic text:** identical at 12 and 20 pt, in Source Code Pro 10, in a StringMorph and in a SystemWindow. Text at 9 pt differs in 47 edge pixels. At about 4 px, FreeType 2.15.0 places the diacritics of accented capitals one row differently.
+- **Geometry:** fractional and transformed rectangles differ only in antialiased edge pixels, by at most 14/255, from cairo 1.18.6's `cairo_rectangle`. Roassal graphs are identical (1 pixel in one scene).
+- **Huge coordinates:** a rectangle from x = −2^40 to 2^40 now fills its band, where 1.17.4 drew only a few columns.
+- **Toy text** (`cairo_select_font_face`, `cairo_show_text`; not Athens' `drawString:`, which uses its own FreeType faces) now follows the system's fontconfig configuration on Linux: the distribution's aliases and rendering settings, e.g. subpixel antialiasing on Ubuntu. The old bundle could not read `/etc/fonts`, printed `Fontconfig error: Cannot load default config file`, and used fontconfig's built-in configuration. Under the same configuration, the new libraries draw toy text identically. The previous Linux aarch64 cairo had no fontconfig and always drew toy text with cairo's built-in "twin" font; it should now use the system's fonts (the CI's toy line shows which). The first toy text of a user builds fontconfig's cache (version 12) in `~/.cache/fontconfig`: 16 to 21 ms here.
+- **Colour emoji** (COLRv1, CBDT) are drawn natively where a colour font is installed. This was not measured: the test host has none.
+- **Toy-font scaled fonts are no longer cached across contexts** (upstream commit 46d1e26c): toy text in short-lived contexts that alternate sizes is slower on 1.18.6. Athens' text is not affected (see [Smalltalk](#smalltalk)).
+- **Windows** ships MSYS2's cairo 1.18.6 package with its patches, pinned. Toy text draws with DWrite, as with the previous MSYS2 builds.
 
 ## Limits
 
@@ -284,17 +315,18 @@ The tests check these criteria, natively on Pharo 12 to 15 and on the WebAssembl
 
 ### C
 
-`sh plugins/CairoPlugin/tests/run-c-tests.sh --vm-build <native tree> --deps <deps> [--emsdk <emsdk> --wasm-build <wasm tree>]` runs its lanes (the header of the script describes them):
+`sh plugins/CairoPlugin/tests/run-c-tests.sh --vm-build <native tree> --deps <deps> [--zips <dir>] [--own-types] [--emsdk <emsdk> --wasm-build <wasm tree>]` runs its lanes; the header of the script describes them. The script reads the tree's cairo stack from `PHARO_CAIRO_STACK_PREFIX` in `--vm-build`'s `CMakeCache.txt`; the prefix counts as empty when `FEATURE_LIB_CAIRO` is off. The versions of the cairo and FreeType archives in `--deps` come from `cmake/cairo-stack/pins.txt`, never from a literal.
 
 | Lane | What | Checks |
 |---|---|---|
 | R | the static rules: allocation only through the helpers, cairo.h only in `cpCairo.h`, every cairo call through `CP_CALL`, the 69 primitives of `primitives.txt` everywhere, no printing, `isBytes` only in `cp_bytes`, no `storePointerUnchecked`, no loader call before a module check | 9 rules |
 | bind | `cpCairo.c` with a dlsym loader on the bundled libcairo: every function bound, matrices, drawing read back, text, missing functions | 213 |
-| protocheck | the static table against cairo 1.18.4's headers, and the own types of the native builds field by field and function by function | 2 units |
-| targets | the headers and the binding for every shipped ABI (Linux and Windows x86_64 and aarch64, macOS arm64 and x86_64, wasm64) | 7 ABIs |
-| symbols | the 57 functions in the VM's libcairo and in every platform's bundle; the 142 exports of `libCairoPlugin.so` | 6 libraries |
+| protocheck | four compiles against the stack's headers, cairo 1.18.6 (the prefix of the tree, with its own `cairo-features.h`; without a stack, the pinned archives of `--deps`):<br>(1) the Emscripten mode;<br>(2) the own types of prebuilt builds, field by field and function by function (`protocheck-own.c`);<br>(3) the native mode with the prototype check (`-DCP_CHECK_PROTOTYPES`);<br>(4) the same with `-include tests/protocheck-wrong.h`, which gives `cairo_set_dash` a wrong parameter type and must fail with exactly the error `cp_fn_set_dash differs from cairo.h`, which shows that the check bites | 4 compiles |
+| targets | the headers and the binding with the own types, for every shipped ABI (Linux and Windows x86_64 and aarch64, macOS arm64 and x86_64, wasm64) | 7 ABIs |
+| symbols | the 57 functions in:<br>- the VM's libcairo;<br>- with `--zips <dir>`, the libcairo of every CI zip there (`PharoVM-*-bin.zip`; llvm-nm or llvm-readobj);<br>- with `--deps`, the old files.pharo.org bundles of prebuilt mode.<br>`libCairoPlugin.so` must export exactly 142 symbols, have no undefined `cairo_` or `FT_` symbol, and need neither libcairo nor libfreetype | 6 libraries (the VM's and the 5 old bundles), plus one per zip |
+| stack | `scripts/cairo-stack/check.sh --bundle` on the tree's `build/vm`: the stack's names, links, dependencies, RPATH, exports, version, toy text and notices (`docs/CairoStack.md`). It also prints the highest `GLIBC_` version the stack needs, and the toy-text probe's lines. It is skipped on a tree without the stack, and fails there if named with `--only` | 46 assertions on Linux x86_64 |
 | wasm-syntax | the builtin glue with emcc, and its trampoline table | 69 |
-| glue-admin, glue-basic, glue-shape, glue-text | the glue against a fake VM (Athens-shaped objects, ExternalAddresses as bytes, forwarders at every level), as a shared and as a builtin plugin, under ASan, UBSan and LSan: answers, failure codes with no cairo call, the state and the pixels against the same calls made directly | 1921 (1996 builtin), 7587, 1574, 1096 |
+| glue-admin, glue-basic, glue-shape, glue-text | the glue against a fake VM (Athens-shaped objects, ExternalAddresses as bytes, forwarders at every level), under ASan, UBSan and LSan: answers, failure codes with no cairo call, and the state and the pixels against the same calls made directly.<br>In a tree with the stack, each lane builds the plugin 3 times: as the tree ships it (the shipped mode, cairo.h and the prototype check) as a shared and as a builtin plugin, plus once with the own types as a shared plugin (what prebuilt mode ships).<br>Without the stack, or with `--own-types`: the own types, shared and builtin | 1921 (1996 builtin), 7587, 1574, 1096, in each build |
 | glue-wasm64 | the four glue tests built with emcc for wasm64 and run in node, on the static cairo of a wasm tree | 1944, 7587, 1574, 1096 |
 
 `CP_TEST_FONT=<path>` gives the glue tests another font.
@@ -305,15 +337,39 @@ The tests check these criteria, natively on Pharo 12 to 15 and on the WebAssembl
 
 The 51 tests are in `CairoPluginParityTest` (C1, C3), `CairoPluginStateTest` (C2), `CairoPluginCallCountTest` (C4), `CairoPluginPrimitiveTest` (C5, C9), `CairoPluginFallbackTest` (C6), `CairoPluginInstallerTest` (C7, C10) and `CairoPluginSessionTest` (C8). Measured on Linux x86-64:
 
-- **With the plugin**, on Pharo 12, 13, 14 and 15: 48 pass, none skipped, and 3 are not applicable (the tests of a VM without the plugin); the session steps pass, and with `CP_VM0` (Pharo 12 and 15) exactly one libcairo is loaded on either VM.
-- **Without it** (`CP_EXPECT_PLUGIN=no`), on Pharo 12 and 15: 23 pass and 28 skip with their reasons.
-- **On the WebAssembly node VM**, on Pharo 12 and 15: 48 pass, none skipped, 3 not applicable.
+- **With the plugin**, on cairo 1.18.6 with Pharo 12, 13, 14 and 15: 48 pass, none skipped, and 3 are not applicable (the tests of a VM without the plugin). The session steps pass, and with `CP_VM0` (a VM built with `-DFEATURE_PLUGIN_CAIRO=OFF`) exactly one libcairo is loaded on either VM. A copy of `build/vm` without the plugin file is not such a VM: the build tree's RUNPATH still finds the plugin in the original directory.
+- **The same tests on other cairos:** on the 1.17.4 bundle of `PHARO_CAIRO_STACK=prebuilt` (Pharo 12 and 15), and on a VM of the previous release (Pharo 15), 48 pass and 3 are not applicable.
+- **Repeated:** `CairoPluginStateTest` and `CairoPluginParityTest` ran 20 rounds in one image without a flap (Pharo 12 to 15 on 1.18.6, and Pharo 15 on 1.17.4).
+- **Without the plugin** (`CP_EXPECT_PLUGIN=no`), on Pharo 12 and 15: 23 pass and 28 skip with their reasons.
+- **On the WebAssembly node VM** (cairo 1.18.6), on Pharo 12 and 15: 48 pass, none skipped, 3 not applicable.
+
+C2 compares the scaled font by content because of a change in cairo 1.18.6 (commit 46d1e26c). Toy-font scaled fonts no longer come back from cairo's font cache, so 300 fresh canvases get about 260 different scaled-font addresses on 1.18.6, against 1 on 1.17.4. They all have the same content, and the content key separates different fonts. The two tests that compared addresses failed on 1.18.6 even with the FFI alone. Athens' own FreeType fonts are not affected, so the parity test's `getScaledFont` handles stay stable.
 
 ### CI and WebAssembly
 
-**CI:** each native job of `build.yml` (Linux x86_64 and aarch64, macOS, Windows) runs `plugins/CairoPlugin/tests/ci-load.st` on the VMMaker image with the VM of its zip, greps `CairoPlugin native 1 cairo <x.y.z> ok`, and checks that the plugin file is in the zip (on Linux also that it needs no GLIBCXX newer than 3.4.21). The probe needs no package: it draws once with stock Athens (and prints `CairoPlugin FAILED cairo not loadable` when cairo cannot draw), binds the plugin and checks `info` and, natively, that one libcairo is loaded; then it draws a 64×64 scene (rectangles filled and stroked, dashes, a Bézier path, a transformation, the ByteString 'Café' and the WideString 'xλé') by the FFI, by the one-for-one primitives and by the shape and text primitives, through probe subclasses that it compiles, and requires the same SHA-256 of the pixels and a call of every primitive expected. The Linux jobs install `libx11-6` and `libxext6`, which the bundled libcairo needs.
+**CI:** each native job of `build.yml` (Linux x86_64 and aarch64, macOS, Windows) runs `plugins/CairoPlugin/tests/ci-load.st` on the VMMaker image with the VM of its zip, and checks three things:
+- `CairoPlugin native 1 cairo <x.y.z> ok`, where `<x.y.z>` is the cairo of `cmake/cairo-stack/pins.txt`, so the zip must ship exactly the pinned cairo;
+- the toy line (below);
+- the plugin file is in the zip (on Linux also that it needs no GLIBCXX newer than 3.4.21).
 
-**Lane 74-cairo** of `make wasm-check` (see `docs/WebAssembly.md`) runs the same probe on the node VM (`CairoPlugin emscripten 1 cairo 1.18.4 ok`), loads the packages, checks `info`, runs the suite in the node VM (48 tests, none skipped) and `CairoPluginParityTest` and `CairoPluginPrimitiveTest` in `pharo-web` (19 tests).
+Each job also runs `scripts/cairo-stack/check.sh` on its zip (`docs/CairoStack.md`). The probe needs no package: it draws once with stock Athens (and prints `CairoPlugin FAILED cairo not loadable` when cairo cannot draw), binds the plugin and checks `info` and, natively, that one libcairo is loaded; then it draws a 64×64 scene (rectangles filled and stroked, dashes, a Bézier path, a transformation, the ByteString 'Café' and the WideString 'xλé') by the FFI, by the one-for-one primitives and by the shape and text primitives, through probe subclasses that it compiles, and requires the same SHA-256 of the pixels and a call of every primitive expected.
+
+**The toy line.** Before it binds the plugin, independently of the plugin, the probe draws toy text through the image's FFI: `cairo_select_font_face` "sans-serif" and `cairo_show_text` "Ag" at 20 px on an ARGB32 surface. This exercises the text backend that the bundle's cairo picks for toy fonts: fontconfig and FreeType on Linux, Quartz on macOS, DWrite on Windows, and cairo's built-in "twin" font where there are no fonts. It prints
+
+```
+CairoToy ok family <family> type <toy|ft|win32|quartz|user|dwrite|unknown> ink <pixels>
+```
+
+- `<family>` is the family that FreeType loaded for the type `ft` (e.g. `DejaVu Sans`), `twin` for the type `user`, and the requested `sans-serif` otherwise;
+- `<pixels>` is the number of pixels with any non-zero byte.
+
+When the status of the context is not SUCCESS, or nothing is inked, it prints `CairoToy FAILED status <n> <message>, …` instead. The probe goes on either way: the jobs grep `^CairoToy ok family .+ ink [1-9]` and fail without it.
+
+On the Linux x86_64 zip it prints `CairoToy ok family DejaVu Sans type ft ink 200`. The family and the ink depend on the host's fonts and fontconfig settings. With an empty fontconfig configuration it prints `family twin type user ink 134`. On Windows the line proves that MSYS2's cairo draws toy text.
+
+The type comes from `cairo_scaled_font_get_type` and the status from `cairo_status`, both through the FFI, so the WebAssembly registry lists both (`cmake/emscripten/ffi/symbols/cairo.txt`). There the line reads `family twin type user ink 134`.
+
+**Lane 74-cairo** of `make wasm-check` (see `docs/WebAssembly.md`) runs the same probe on the node VM (`CairoPlugin emscripten 1 cairo 1.18.6 ok`, `info` with 11806 and `'static'`), loads the packages, checks `info`, runs the suite in the node VM (48 tests, none skipped) and `CairoPluginParityTest` and `CairoPluginPrimitiveTest` in `pharo-web` (19 tests).
 
 ## Speed
 
@@ -335,11 +391,17 @@ The 51 tests are in `CairoPluginParityTest` (C1, C3), `CairoPluginStateTest` (C2
 
 ### The conditions
 
-Measured on 2026-11-18, on an Intel Xeon Gold 6238R (2.20 GHz, 112 threads) under Linux 6.8 x86_64, a machine shared with other users (load average 1.4 to 2.3 before and after every run). The images are Pharo 12 (build 1599) and Pharo 15 (build 117); the VMs are those of pharo-vm 301cfe70c with the plugin's sources:
+Measured on 2026-11-18, on an Intel Xeon Gold 6238R (2.20 GHz, 112 threads) under Linux 6.8 x86_64, a machine shared with other users. The load average was 1.2 to 2.5 before and after every run. The images are Pharo 12 (build 1599) and Pharo 15 (build 117). The VMs are built from pharo-vm 03d940501 with the changes that move every VM to cairo 1.18.6:
 
-- **native-cog**: the CoInterpreter with its JIT (Cog), the bundled libcairo 1.17.4; 7 runs per mode, the scenes at their full size (scale 1), 200,000 calls per micro-benchmark;
-- **wasm-node**: the StackInterpreter built with Emscripten (`node/pharo`, node 24.19.0), the static cairo 1.18.4; 5 runs per mode, the scenes `a` to `e` at a tenth of their size (scale 0.1), `f` to `h` at full size, 100,000 calls per micro-benchmark; Pharo 15 on the world image of the build (`image/web`), Pharo 12 on the stock image with `tests/web-surface.st`;
-- **wasm-web**: `pharo-web`, the module of the pages (`-sMEMORY64=2`), through `vm-driver.js` in node: `b-rects` and the micro-benchmarks.
+- **native-cog:** the CoInterpreter with its JIT (Cog), on the bundled stack: libcairo 1.18.6, pixman 0.44.2, FreeType 2.15.0. 7 runs per mode, the scenes at their full size (scale 1), 200,000 calls per micro-benchmark.
+- **wasm-node:** the StackInterpreter built with Emscripten (`node/pharo`, node 24.19.0), with the static cairo 1.18.6 and FreeType 2.15.0.
+  - 5 runs per mode;
+  - the scenes `a` to `e` at a tenth of their size (scale 0.1), `f` to `h` at full size;
+  - 100,000 calls per micro-benchmark;
+  - each Pharo on the world image of its build (`image/web`).
+- **wasm-web:** `pharo-web`, the module of the pages (`-sMEMORY64=2`), through `vm-driver.js` in node: `b-rects` and the micro-benchmarks.
+
+Every run passed its checks: the same pixels and cairo calls in the three modes, and no fallback.
 
 ### Summary
 
@@ -347,32 +409,34 @@ The geometric mean of the scenes' "×" (size 1000 without `h-morph-frame`, which
 
 | Pharo | VM | `#basic`, 1000 px | `#all`, 1000 px | `#basic`, 1 px | `#all`, 1 px |
 |---|---|---:|---:|---:|---:|
-| 15 | native-cog | 1.19× | 1.55× | 1.57× | 2.46× |
-| 12 | native-cog | 1.16× | 1.54× | 1.49× | 2.42× |
-| 15 | wasm-node | 1.74× | 2.83× | 2.30× | 4.84× |
-| 12 | wasm-node | 1.78× | 2.92× | 2.36× | 5.17× |
+| 15 | native-cog | 1.18× | 1.58× | 1.63× | 2.59× |
+| 12 | native-cog | 1.19× | 1.56× | 1.56× | 2.49× |
+| 15 | wasm-node | 1.78× | 2.93× | 2.39× | 5.11× |
+| 12 | wasm-node | 1.81× | 3.02× | 2.39× | 5.20× |
 
-No mode is measurably slower than the FFI in any scene (the slowest case, `a-polyline` at 1000 px, is 1.00×).
+No mode is measurably slower than the FFI in any scene. The smallest gains are 1.04×: `f-roassal-cached` and `e-text-long` in `#basic` natively, and `h-morph-frame`.
+
+**Against the previous cairo.** The same Pharo 15 runs on a VM of the previous release (cairo 1.17.4, in the same session) gave 1.19×, 1.55×, 1.58× and 2.44×: cairo 1.18.6 neither helps nor hurts the plugin. The absolute medians moved by −7% to +9% (Roassal 5 to 7% faster, `a-polyline` and `c-bezier` 4 to 6% slower).
 
 ### Scenes, native
 
-Pharo 15, native-cog, median ms (the last two columns: `#all` at 1 px, and `#all` at 1000 px on Pharo 12):
+Pharo 15, native-cog, median ms. The last two columns are `#all` at 1 px, and `#all` at 1000 px on Pharo 12:
 
 | Scene | FFI ms | `#basic` ms | `#all` ms | × `#basic` | × `#all` | × `#all`, 1 px | × `#all`, Pharo 12 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| a-polyline | 261 | 262 | 261 | 1.00 | 1.00 | 1.90 | 1.00 |
-| a2-lines | 195 | 146 | 136 | 1.34 | 1.43 | 1.65 | 1.48 |
-| b-rects | 170 | 129 | 110 | 1.32 | 1.55 | 2.38 | 1.60 |
-| c-bezier | 201 | 160 | 155 | 1.25 | 1.30 | 1.75 | 1.29 |
-| d-transforms | 225 | 154 | 142 | 1.46 | 1.58 | 2.57 | 1.56 |
-| e-text | 103 | 80.3 | 26.5 | 1.28 | 3.87 | 5.57 | 3.67 |
-| e-text-wide | 106 | 83.5 | 29.0 | 1.27 | 3.65 | 5.29 | 3.45 |
-| e-text-long | 69.5 | 66.9 | 36.6 | 1.04 | 1.90 | 2.16 | 1.88 |
-| f-roassal-first | 164 | 154 | 151 | 1.07 | 1.09 | 1.96 | 1.10 |
-| f-roassal-cached | 151 | 145 | 144 | 1.04 | 1.05 | 1.92 | 1.06 |
-| g-roassal-svg-first | 72.4 | 62.1 | 59.9 | 1.17 | 1.21 | – | 1.15 |
-| g-roassal-svg-cached | 61.8 | 55.7 | 54.2 | 1.11 | 1.14 | – | 1.15 |
-| h-morph-frame (800×600) | 125 | 120 | 119 | 1.04 | 1.05 | – | 1.06 |
+| a-polyline | 277 | 264 | 265 | 1.05 | 1.05 | 2.32 | 1.05 |
+| a2-lines | 195 | 156 | 136 | 1.25 | 1.43 | 1.96 | 1.50 |
+| b-rects | 167 | 124 | 103 | 1.35 | 1.62 | 2.64 | 1.62 |
+| c-bezier | 207 | 168 | 162 | 1.24 | 1.28 | 1.80 | 1.31 |
+| d-transforms | 226 | 153 | 144 | 1.47 | 1.57 | 2.58 | 1.64 |
+| e-text | 105 | 83.7 | 25.9 | 1.26 | 4.06 | 5.53 | 3.70 |
+| e-text-wide | 108 | 85.6 | 27.9 | 1.27 | 3.89 | 5.40 | 3.47 |
+| e-text-long | 70.6 | 68.2 | 36.1 | 1.04 | 1.96 | 2.16 | 1.92 |
+| f-roassal-first | 155 | 144 | 141 | 1.08 | 1.10 | 1.95 | 1.09 |
+| f-roassal-cached | 142 | 136 | 134 | 1.04 | 1.06 | 1.98 | 1.07 |
+| g-roassal-svg-first | 73.0 | 62.5 | 60.3 | 1.17 | 1.21 | – | 1.18 |
+| g-roassal-svg-cached | 60.7 | 55.3 | 53.2 | 1.10 | 1.14 | – | 1.14 |
+| h-morph-frame (800×600) | 117 | 112 | 110 | 1.04 | 1.06 | – | 1.06 |
 
 ### Scenes, WebAssembly
 
@@ -380,72 +444,84 @@ Pharo 15, wasm-node, median ms (the node clock has a resolution of 1 ms):
 
 | Scene | FFI ms | `#basic` ms | `#all` ms | × `#basic` | × `#all` | × `#all`, 1 px | × `#all`, Pharo 12 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| a-polyline (scale 0.1) | 53 | 32 | 31 | 1.66 | 1.71 | 4.33 | 1.62 |
-| a2-lines (0.1) | 135 | 54 | 55 | 2.50 | 2.45 | 2.77 | 3.00 |
-| b-rects (0.1) | 113 | 42 | 31 | 2.69 | 3.65 | 5.44 | 3.84 |
-| c-bezier (0.1) | 93 | 52 | 51 | 1.79 | 1.82 | 2.27 | 1.94 |
-| d-transforms (0.1) | 133 | 50 | 43 | 2.66 | 3.09 | 4.00 | 3.16 |
-| e-text (0.1) | 84 | 54 | 9 | 1.56 | 9.3 | 15.8 | 9.4 |
-| e-text-wide (0.1) | 85 | 55 | 10 | 1.55 | 8.5 | 13.2 | 8.7 |
-| e-text-long (0.1) | 46 | 44 | 9 | 1.05 | 5.1 | 8.4 | 5.2 |
-| f-roassal-first | 472 | 326 | 312 | 1.45 | 1.51 | 2.51 | 1.53 |
-| f-roassal-cached | 379 | 278 | 267 | 1.36 | 1.42 | 2.71 | 1.45 |
-| g-roassal-svg-first | 330 | 187 | 175 | 1.76 | 1.89 | – | 1.93 |
-| g-roassal-svg-cached | 238 | 141 | 130 | 1.69 | 1.83 | – | 1.85 |
-| h-morph-frame (800×600) | 305 | 225 | 216 | 1.36 | 1.41 | – | 1.44 |
+| a-polyline (scale 0.1) | 52 | 31 | 32 | 1.68 | 1.62 | 4.33 | 1.68 |
+| a2-lines (0.1) | 133 | 54 | 48 | 2.46 | 2.77 | 3.24 | 3.02 |
+| b-rects (0.1) | 113 | 42 | 31 | 2.69 | 3.65 | 5.16 | 3.90 |
+| c-bezier (0.1) | 104 | 50 | 47 | 2.08 | 2.21 | 2.83 | 2.33 |
+| d-transforms (0.1) | 132 | 49 | 43 | 2.69 | 3.07 | 4.03 | 3.19 |
+| e-text (0.1) | 85 | 54 | 8 | 1.57 | 10.62 | 15.80 | 9.44 |
+| e-text-wide (0.1) | 86 | 55 | 10 | 1.56 | 8.60 | 16 | 9.56 |
+| e-text-long (0.1) | 47 | 43 | 9 | 1.09 | 5.22 | 8.60 | 5.44 |
+| f-roassal-first | 471 | 319 | 310 | 1.48 | 1.52 | 2.44 | 1.54 |
+| f-roassal-cached | 374 | 274 | 262 | 1.36 | 1.43 | 2.77 | 1.46 |
+| g-roassal-svg-first | 331 | 187 | 176 | 1.77 | 1.88 | – | 1.86 |
+| g-roassal-svg-cached | 241 | 141 | 130 | 1.71 | 1.85 | – | 1.87 |
+| h-morph-frame (800×600) | 304 | 223 | 215 | 1.36 | 1.41 | – | 1.45 |
 
-The rows of the plugin modes under 20 ms are ±1 ms; a run of Pharo 15 at scale 1 gives the text and the polyline with every run of 49 ms or more:
+The rows of the plugin modes under 20 ms are ±1 ms. A run of Pharo 15 at scale 1 times the text and the polyline with every run of 48 ms or more:
 
 | Scene, wasm-node, scale 1 | FFI ms | `#basic` ms | `#all` ms | × `#basic` | × `#all` | × `#all`, 1 px |
 |---|---:|---:|---:|---:|---:|---:|
-| a-polyline | 493 | 325 | 325 | 1.52 | 1.52 | 4.28 |
-| e-text | 832 | 533 | 76 | 1.56 | 10.95 | 16.41 |
-| e-text-wide | 852 | 551 | 82 | 1.55 | 10.39 | 15.86 |
-| e-text-long | 467 | 435 | 79 | 1.07 | 5.91 | 8.38 |
+| a-polyline | 496 | 322 | 324 | 1.54 | 1.53 | 4.13 |
+| e-text | 827 | 527 | 74 | 1.57 | 11.18 | 16.31 |
+| e-text-wide | 842 | 541 | 79 | 1.56 | 10.66 | 16.22 |
+| e-text-long | 461 | 429 | 79 | 1.07 | 5.84 | 8.39 |
 
-In `pharo-web` (wasm-web, Pharo 15, scale 0.1), `b-rects` takes 106, 38 and 28 ms (× `#basic` 2.79, × `#all` 3.79), and at 1 px 94, 27 and 17 ms (3.48 and 5.53).
+In `pharo-web` (wasm-web, Pharo 15, scale 0.1), `b-rects` takes 104, 38 and 28 ms (× `#basic` 2.74, × `#all` 3.71), and at 1 px 95, 27 and 16 ms (3.52 and 5.94).
 
 ### Micro-benchmarks
 
-ns per call, Pharo 15 (Pharo 12 within 7% of these natively, 11% on wasm-node):
+ns per call, Pharo 15. Pharo 12 is within 8% of these natively and within 10% on wasm-node.
 
 | Call | Cog FFI | Cog `#basic` | Cog `#all` | × | wasm-node FFI | wasm-node `#all` | × | wasm-web FFI | wasm-web `#all` | × |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `newPath` | 124 | 45.5 | 45.7 | 2.7 | 1540 | 160 | 9.6 | 1440 | 160 | 9.0 |
-| `moveToX:Y:` | 196 | 62.8 | 62.7 | 3.1 | 1920 | 210 | 9.1 | 1790 | 200 | 9.0 |
-| `primRectangleX:y:width:height:` | 284 | 158 | 158 | 1.8 | 2390 | 450 | 5.3 | 2210 | 400 | 5.5 |
-| `primSetSourceR:g:b:a:` | 196 | 78.2 | 77.6 | 2.5 | 2150 | 260 | 8.3 | 2020 | 230 | 8.8 |
-| `setPathMatrix` | 307 | 78.7 | 78.7 | 3.9 | 3700 | 230 | 16.1 | 3420 | 210 | 16.3 |
-| `fill` of an empty path | 132 | 53.5 | 53.8 | 2.5 | 1550 | 170 | 9.1 | 1450 | 150 | 9.7 |
-| `setPaint:` + `drawShape:` of a rectangle | 2074 | 1125 | 799 | 1.8 / 2.6 | 19400 | 3000 | 6.5 | 18500 | 2600 | 7.1 |
-| `drawString: 'node 123'` | 14683 | 11767 | 1976 | 1.25 / 7.4 | 129600 | 4200 | 30.9 | 122400 | 3400 | 36.0 |
+| `newPath` | 121 | 43.8 | 43.8 | 2.8 | 1550 | 160 | 9.7 | 1430 | 150 | 9.5 |
+| `moveToX:Y:` | 187 | 62.5 | 62.6 | 3.0 | 1900 | 210 | 9.0 | 1770 | 200 | 8.9 |
+| `primRectangleX:y:width:height:` | 272 | 148 | 147 | 1.8 | 2340 | 470 | 5.0 | 2190 | 400 | 5.5 |
+| `primSetSourceR:g:b:a:` | 193 | 75.0 | 74.9 | 2.6 | 2160 | 270 | 8.0 | 2020 | 230 | 8.8 |
+| `setPathMatrix` | 315 | 75.1 | 75.0 | 4.2 | 3730 | 230 | 16.2 | 3450 | 220 | 15.7 |
+| `fill` of an empty path | 128 | 49.0 | 48.7 | 2.6 | 1560 | 170 | 9.2 | 1430 | 150 | 9.5 |
+| `setPaint:` + `drawShape:` of a rectangle | 1933 | 1018 | 671 | 1.9 / 2.9 | 19600 | 3000 | 6.5 | 18200 | 2600 | 7.0 |
+| `drawString: 'node 123'` | 14805 | 11839 | 1844 | 1.25 / 8.0 | 130500 | 4100 | 31.8 | 121000 | 3700 | 32.7 |
 
-(× is FFI / `#all`; for the last two rows natively, FFI / `#basic` and FFI / `#all`. On WebAssembly `#basic` gives 5400 and 4700 ns for `setPaint:` + `drawShape:`, 90200 and 83500 ns for `drawString:`.)
+× is FFI / `#all`. For the last two rows natively it is FFI / `#basic` and FFI / `#all`. On WebAssembly `#basic` gives 5200 and 4700 ns for `setPaint:` + `drawShape:`, and 90000 and 82800 ns for `drawString:`.
 
 Each control is timed in a loop, whose cost is included; the net of the loop (the first row) is in parentheses:
 
 | Control | Cog | wasm-node | wasm-web |
 |---|---:|---:|---:|
-| an empty Smalltalk loop, per iteration | 3.5 | 100 | 80 |
-| the Smalltalk side of a void FFI callout (`newPath` with the C call skipped) | 12.6 (9.1) | 270 (170) | 230 (150) |
-| an FFI callout of an empty C function (`cairo_version()`) | 100 (96.5) | 1360 (1260) | 1270 (1190) |
-| a named primitive that clears the plugin's counters (`CairoPlugin primResetCounters`: two `memset`s of about 1 KB) | 31.1 (27.6) | 120 (20) | 110 (30) |
-| a named primitive that does nothing (the FilePlugin's `primitiveDirectoryDelimitor`; a later run of the micro-benchmarks, Pharo 15) | 29.5 (26.9) | 120 (30) | – |
-
-The benchmark now times the second of these primitives (`ctl-empty-prim-FilePlugin-delimitor`) instead of the first, and `summarize.py` gives every control net of the loop.
+| an empty Smalltalk loop, per iteration | 2.7 | 100 | 80 |
+| the Smalltalk side of a void FFI callout (`newPath` with the C call skipped) | 13.3 (10.6) | 270 (170) | 230 (150) |
+| an FFI callout of an empty C function (`cairo_version()`) | 98.3 (95.6) | 1320 (1220) | 1220 (1140) |
+| a named primitive that does nothing (the FilePlugin's `primitiveDirectoryDelimitor`) | 28.7 (26.0) | 120 (20) | 110 (30) |
 
 ### What the numbers say
 
-- **A callout costs about 95 ns on Cog and 1.2 to 1.3 µs on the WebAssembly VMs; the call of a named primitive about 25 ns and 20 to 30 ns** (net of the loop; the WebAssembly figures are at the resolution of the node clock). Each one-for-one primitive saves that difference, so the gain is largest where the crossings are a large share of the work: many small shapes (`a2-lines`, `b-rects`, `c-bezier`, `d-transforms`) gain 1.3 to 1.6× natively with every group at 1000 px (1.6 to 2.6× at 1 px, where nothing is rasterized), 1.8 to 3.8× on WebAssembly.
-- **Text:** the text group's single primitive per `drawString:` gives 3.4 to 3.9× natively (5.0 to 5.6× at 1 px) and 8.5 to 11× on WebAssembly; WideStrings gain as much as ByteStrings. On `e-text-long`, `#basic` gains nothing (1.04×): Athens' `CairoUTF8Converter`, in Smalltalk, dominates; `#all`, which encodes with simdutf, gains 1.9× natively and 5.9× on WebAssembly.
-- **Roassal** gains little natively (1.05 to 1.10× for the graph, 1.14 to 1.21× on SVG), since rasterizing dominates, and 1.4 to 1.9× on WebAssembly. A whole morph frame (`h-morph-frame`) gains 4 to 6% natively and 1.4× on WebAssembly, what its Roassal drawing gains (`f-roassal-cached`: 1.04 to 1.06× and 1.42×): the display path (`asForm` and the SurfacePlugin's callbacks), which stays on the FFI, takes about 2 ms of the 120 ms of a native frame and 3 ms of the 305 ms of a WebAssembly one, so the drawing bounds the frame (natively its rasterizing), and moving the display path to the plugin could win at most about 2%.
-- **`a-polyline` at 1000 px shows no gain natively** (1.00×), although building its path of 100,000 segments takes about 13 ms less (the 1 px row: 27.7 to 14.6 ms; a separate measure gives 22.5 to 26.4 ms by the FFI against 10.5 to 12.3 ms in `#basic`): stroking that path takes 235 to 266 ms and varies by more than the saving.
+- **A callout costs about 90 to 95 ns on Cog and 1.1 to 1.2 µs on the WebAssembly VMs; the call of a named primitive about 26 ns and 20 to 30 ns** (net of the loop; the WebAssembly figures are at the resolution of the node clock).
+  - Each one-for-one primitive saves that difference, so the gain is largest where the crossings are a large share of the work.
+  - Many small shapes (`a2-lines`, `b-rects`, `c-bezier`, `d-transforms`) gain 1.3 to 1.6× natively with every group at 1000 px, and 1.7 to 3.0× at 1 px, where nothing is rasterized. On WebAssembly they gain 2.2 to 3.9×.
+- **Text:**
+  - The text group's single primitive per `drawString:` gives 3.5 to 4.1× natively (4.9 to 5.5× at 1 px) and 8.6 to 11× on WebAssembly. WideStrings gain as much as ByteStrings.
+  - On `e-text-long`, `#basic` gains nothing (1.04×): Athens' `CairoUTF8Converter`, in Smalltalk, dominates. `#all`, which encodes with simdutf, gains 1.9× natively and 5.2 to 5.8× on WebAssembly.
+- **Roassal** gains little natively, since rasterizing dominates: 1.06 to 1.10× for the graph, 1.14 to 1.21× on SVG. On WebAssembly it gains 1.4 to 1.9×.
+- **A whole morph frame** (`h-morph-frame`) gains 6% natively and 1.4× on WebAssembly. That is what its Roassal drawing gains (`f-roassal-cached`: 1.06 to 1.07× and 1.43 to 1.46×).
+  - The display path (`asForm` and the SurfacePlugin's callbacks) stays on the FFI. It takes about 2 ms of a native frame of about 117 ms, and 3 ms of a WebAssembly frame of about 305 ms.
+  - So the drawing bounds the frame (natively, its rasterizing), and moving the display path to the plugin could win at most about 2%.
+- **`a-polyline` at 1000 px gains little natively** (1.05×). Building its path of 100,000 segments takes about 13 to 18 ms less (the 1 px rows: 26.6 to 32.3 ms by the FFI, 13.4 to 14.0 ms in `#basic`), but stroking that path takes about 250 ms, and that varies by about as much as the saving.
 
 ### Noise
 
-- **Within a run**, the spread of the FFI runs (max − min) is mostly 1 to 3% of the median. The scenes heavy in garbage collection and finalization are noisier: `a2-lines` up to 24% (Pharo 12 natively at 1 px; 23% at 1000 px; 22% on WebAssembly at 1 px), with one spike of 106% at 1 px in a first pass; `c-bezier` up to 12% natively, and on WebAssembly 15% at 1000 px and 27% at 1 px (runs of 75 ms, at the node clock's resolution of 1 ms); `a-polyline` on WebAssembly at 1 px 12%; `f-roassal-first` at 1 px up to 18%.
-- **Between two passes** of the same runs (native Pharo 12 and 15, wasm-node Pharo 15; `summarize.py --previous`): of 189 medians, the median moved 1.1%, 90% moved less than 4.7%, and the largest move was 25.5% (`a2-lines` at 1 px on Pharo 12, `#all`). Take the ratios as ±5 to 10%; `a2-lines` and the rows at 1 px are the least stable.
-- **The pixels** are compared by a fingerprint, the first 12 hex digits of the SHA-256 of the CRC-32s of the surface's 64 KiB chunks (a full SHA-256 takes 3.5 s per surface on Cog in Smalltalk, minutes on WebAssembly); the tests of `VM-Plugins-Primitives-Cairo-Tests` compare the bytes themselves.
+- **Within a run**, the spread of the FFI runs (max − min) is mostly 1 to 4% of the median. The scenes heavy in garbage collection and finalization are noisier:
+  - `a2-lines`: 15 to 28% at 1 px natively, and one spike of 97% at 1000 px on Pharo 12, which left the median unchanged against the previous pass (+8%);
+  - `c-bezier`: up to 17% natively on Pharo 12, and 12 to 14% on WebAssembly on Pharo 15;
+  - `f-roassal-first` at 1 px: 9 to 15% natively;
+  - `a-polyline` at 1 px on Pharo 12: 13%.
+- **Between two passes:** these runs on cairo 1.18.6 were compared with the same runs on the previous cairo, 1.17.4 natively and 1.18.4 on WebAssembly (`summarize.py --previous`, 306 medians). The median moved 1.9%, 90% moved less than 9.5%, and the largest move was 29.7% (`f-roassal-first` at 1 px on Pharo 12, `#all`).
+  - Natively on Pharo 12, every mode of the short scenes was 5 to 12% slower in this pass, and the ratios moved less.
+  - On WebAssembly, `c-bezier`'s FFI runs were 10 to 14% slower and its plugin runs 4 to 9% faster.
+
+  Take the ratios as ±5 to 10%. `a2-lines` and the rows at 1 px are the least stable.
+- **The pixels** are compared by a fingerprint: the first 12 hex digits of the SHA-256 of the CRC-32s of the surface's 64 KiB chunks. A full SHA-256 takes 3.5 s per surface on Cog in Smalltalk, and minutes on WebAssembly. The tests of `VM-Plugins-Primitives-Cairo-Tests` compare the bytes themselves.
 
 ### Running it
 
@@ -461,7 +537,17 @@ python3 plugins/CairoPlugin/bench/summarize.py -o REPORT.md [--previous <an earl
 
 ## Licences
 
-The plugin and the packages are under the MIT licence of this repository and of vm-plugins-primitives.st. cairo, under the GNU LGPL 2.1 or the MPL 1.1, is not part of the plugin: natively the plugin declares the prototypes of cairo's public functions itself and loads at run time the libcairo that the VM's bundle already ships, and on WebAssembly it is linked with the `pharo_cairo` that the VM already links for the FFI, whose notices are in `THIRD-PARTY-NOTICES.txt`. simdutf is the SimdUTFPlugin's (see `docs/SimdUTF.md`).
+The plugin and the packages are under the MIT licence of this repository and of vm-plugins-primitives.st. simdutf is the SimdUTFPlugin's (see `docs/SimdUTF.md`).
+
+cairo is under the GNU LGPL 2.1 or the MPL 1.1, and the VM's notices elect the LGPL 2.1. It is not part of the plugin.
+
+- **What the plugin takes from cairo.** It takes only what cairo.h declares: the prototypes (as function-pointer types), the enum values, a few macros, and the layouts of the structures it passes (`cairo_matrix_t`, `cairo_glyph_t`, the extents). That is the material that section 5 of the LGPL 2.1 lets "a work that uses the Library" take from the Library's header: numerical parameters, data structure layouts and small macros. The plugin contains no code of cairo, and **links no cairo**.
+- **Native VMs:**
+  - With the cairo stack, the plugin is compiled with the stack's cairo.h, and the prototype check emits no reference to cairo.
+  - In prebuilt mode it declares those prototypes and structures itself (`cpCairo.h`).
+  - Either way it binds at run time, through the VM's module loader, to the libcairo that the image's FFI loads. That is a separate, replaceable shared library of the VM's bundle.
+- **The bundle.** It carries cairo's licence (`LICENSE.cairo`), `THIRD-PARTY-NOTICES.cairo-stack.txt` with the licence elections and the LGPL source offer, and `CAIRO-STACK.txt`. Every GitHub release attaches `cairo-stack-sources.tar` with the sources of the stack (see `docs/CairoStack.md`, "Licences and sources").
+- **On WebAssembly** the plugin is linked with the `pharo_cairo` that the VM already links for the FFI. Its notices are in `THIRD-PARTY-NOTICES.txt`, which names each pinned archive by its SHA256 and offers the sources on request (see `docs/WebAssembly.md`).
 
 ## Pushing
 
