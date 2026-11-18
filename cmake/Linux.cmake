@@ -39,17 +39,26 @@ set(VM_FRONTEND_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/unix/unixMain.c)
 
 
+# cairo and FreeType: the cairo stack (cmake/cairoStack.cmake), set up here,
+# before cmake/plugins.cmake, whose CairoPlugin compiles with its headers
+include(cmake/cairoStack.cmake)
+
 macro(add_third_party_dependencies_per_platform)
 	if(${FEATURE_LIB_GIT2})
         include(cmake/importLibGit2.cmake)
     endif()
 
-    if(${FEATURE_LIB_FREETYPE2})
-        include(cmake/importFreetype2.cmake)
-    endif()
+    if(PHARO_CAIRO_STACK_ACTIVE)
+        # the pinned stack instead of importFreetype2.cmake and importCairo.cmake
+        pharo_cairo_stack_attach()
+    else()
+        if(${FEATURE_LIB_FREETYPE2})
+            include(cmake/importFreetype2.cmake)
+        endif()
 
-    if(${FEATURE_LIB_CAIRO})
-        include(cmake/importCairo.cmake)
+        if(${FEATURE_LIB_CAIRO})
+            include(cmake/importCairo.cmake)
+        endif()
     endif()
 
     if(${FEATURE_LIB_SDL2})

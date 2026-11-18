@@ -31,6 +31,14 @@ option(FEATURE_JIT_SIMD			"Use SIMD support in JIT compilation when available"		
 option(FEATURE_LIB_SDL2			"Build SDL2 support"												ON)
 option(FEATURE_LIB_CAIRO		"Build Cairo support"												ON)
 option(FEATURE_LIB_FREETYPE2	"Build freetype2 support"											ON)
+# The cairo and FreeType of the bundle (cmake/cairoStack.cmake, docs/CairoStack.md):
+# source builds the stack pinned in cmake/cairo-stack/pins.txt (Linux, macOS;
+# MSYS2's pinned packages on MinGW); prebuilt bundles the old prebuilt
+# libraries (known CVEs, deprecated); PHARO_CAIRO_STACK_DIR bundles a stack
+# that scripts/cairo-stack/build.sh already built
+set(PHARO_CAIRO_STACK "source" CACHE STRING "cairo and FreeType of the bundle: source (the pinned stack) or prebuilt (deprecated)")
+set_property(CACHE PHARO_CAIRO_STACK PROPERTY STRINGS source prebuilt)
+set(PHARO_CAIRO_STACK_DIR "" CACHE PATH "An installed cairo stack prefix (scripts/cairo-stack/build.sh --prefix) to bundle instead of building one")
 option(FEATURE_LIB_GIT2			"Build LibGit2 support"												ON)
 option(FEATURE_LIB_PTHREADW32	"Windows only, link to win32 version of pthread"					OFF)
 option(FEATURE_LIB_ARCHIVE      "Build with LibArchive support"										ON)

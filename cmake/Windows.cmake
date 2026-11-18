@@ -67,11 +67,22 @@ configure_file("${Win32ResourcesFolder}/${VM_EXECUTABLE_NAME}.exe.manifest.in" "
 configure_file("${Win32ResourcesFolder}/${VM_EXECUTABLE_CONSOLE_NAME}.rc.in" "${Win32ConsoleResource}" @ONLY IMMEDIATE)
 configure_file("${Win32ResourcesFolder}/${VM_EXECUTABLE_CONSOLE_NAME}.exe.manifest.in" "${Win32ConsoleManifest}" @ONLY IMMEDIATE)
 
+# MinGW (MSYS2): cairo and FreeType are the cairo stack (cmake/cairoStack.cmake),
+# MSYS2's packages pinned in cmake/cairo-stack/pins.txt, set up here, before
+# cmake/plugins.cmake, whose CairoPlugin compiles with their headers.  MSVC and
+# Cygwin keep their prebuilt libraries.
+if(MINGW AND NOT CYGWIN)
+    include(cmake/cairoStack.cmake)
+endif()
+
 macro(add_third_party_dependencies_per_platform)
 
-    # MSYS2 (MinGW-w64 with its own CMake): the DLLs of its packages
+    # MSYS2 (MinGW-w64 with its own CMake): the DLLs of its packages, but for
+    # cairo and FreeType those of the cairo stack (importMinGWDependencies.cmake
+    # skips them then)
     if (BUILD_BUNDLE AND MINGW AND NOT CYGWIN)
         include(cmake/importMinGWDependencies.cmake)
+        pharo_cairo_stack_attach()
     else()
         if (BUILD_BUNDLE AND CYGWIN)
             add_third_party_dependency("gcc-runtime-3.4")
@@ -181,6 +192,12 @@ macro(configure_installables INSTALL_COMPONENT)
 	            message(WARNING \"Not bundled, found in more than one directory: \${_conflicts_FILENAMES}\")
 	        endif()
 	    " COMPONENT ${INSTALL_COMPONENT})
+	    # The cairo stack's DLLs once more, from its prefix, after the copies
+	    # above: a DLL of the same name from another MSYS2 package of this
+	    # machine must not replace a pinned one (cmake/cairoStack.cmake)
+	    if(PHARO_CAIRO_STACK_ACTIVE)
+	        pharo_cairo_stack_install_mingw(${INSTALL_COMPONENT})
+	    endif()
 	endif()
 
 	install(

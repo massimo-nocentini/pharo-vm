@@ -15,6 +15,14 @@ The current implementation has the following core features:
 
 For more details about the whole Pharo VM project, refer to our [wiki](../../wiki).
 
+# Building: the tools of the cairo stack
+
+The native VMs (Linux, macOS, Windows with MSYS2) bundle cairo and FreeType from the pinned cairo stack ([docs/CairoStack.md](docs/CairoStack.md)), which the build makes by default (`-DPHARO_CAIRO_STACK=source`).
+On Linux and macOS it needs, besides CMake and clang, meson >= 1.11, ninja and pkg-config (`python3 -m venv ~/.venvs/cairo-stack && ~/.venvs/cairo-stack/bin/pip install --require-hashes -r scripts/cairo-stack/requirements.txt`, then put `~/.venvs/cairo-stack/bin` on `PATH`), and on Linux gperf (`apt install gperf`); Windows needs only curl, zstd and tar of the MSYS2 shell.
+A Linux stack needs the glibc of the machine that built it (2.38 for the CI's Ubuntu 24.04).
+`-DPHARO_CAIRO_STACK_DIR=<prefix>` reuses a stack built by `scripts/cairo-stack/build.sh`, and `-DPHARO_CAIRO_STACK=prebuilt` (deprecated: libraries with known CVEs) bundles the old prebuilt libraries instead.
+Every configure of a default tree (`BUILD_BUNDLE` on) needs these tools, even one that only generates the VM's sources; such a configure can pass `-DFEATURE_LIB_CAIRO=OFF -DFEATURE_LIB_FREETYPE2=OFF` instead.
+
 # Table of Contents
 
 - Building the Virtual Machine

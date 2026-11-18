@@ -1,0 +1,132 @@
+Third-party notices of the cairo stack of this Pharo VM
+
+The Pharo VM (https://github.com/pharo-project/pharo-vm) is distributed under
+the MIT License; see the file LICENSE of its repository.  The Pharo image that
+it runs is distributed by https://pharo.org/ under its own licence.
+
+Next to this file the VM carries @CONTENTS@, which the image
+loads to draw (Athens) and to read fonts, and the libraries that they need.
+@ORIGIN@
+
+    CAIRO-STACK.txt           every library or package: its version, the
+                              archive it comes from with its SHA256, how
+                              that archive was authenticated, and how it
+                              was built
+    LICENSE.<name>            the full text of each library's licence files
+
+The libraries and their versions:
+@LIBRARY_VERSIONS@
+
+The licence files next to this file:
+@LICENSE_FILES@
+
+
+Licence elections
+-----------------
+
+cairo is available under the GNU Lesser General Public License version 2.1
+(LGPL-2.1) or under the Mozilla Public License version 1.1 (MPL-1.1); this
+distribution uses cairo under the LGPL-2.1.  LICENSE.cairo holds both texts.
+
+FreeType is available under the FreeType License (FTL) or under the GNU
+General Public License version 2 (GPLv2); this distribution uses FreeType
+under the FTL.  LICENSE.freetype holds both texts.  As the FTL asks:
+
+    Portions of this software are copyright (C) 2026 The FreeType Project
+    (www.freetype.org).  All rights reserved.
+
+The other libraries are under permissive licences (MIT, libpng, zlib and
+similar; see their LICENSE.<name>).
+
+
+FreeType's MIT notices
+----------------------
+
+Parts of FreeType are under the MIT/X licence: the BDF driver (src/bdf), the
+PCF driver (src/pcf) and the hash functions of src/base/fthash.c, which
+every build of FreeType compiles.  Their notices:
+
+BDF driver (src/bdf/README):
+
+  Copyright (C) 2001-2002 by Francesco Zappa Nardelli
+
+  Permission is hereby granted, free of charge, to any person obtaining
+  a copy of this software and associated documentation files (the
+  "Software"), to deal in the Software without restriction, including
+  without limitation the rights to use, copy, modify, merge, publish,
+  distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to
+  the following conditions:
+
+  The above copyright notice and this permission notice shall be
+  included in all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+  TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+  SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+BDF driver, bdflib.c and bdf.h (src/bdf/README), and src/base/fthash.c:
+
+  Copyright 2000 Computing Research Labs, New Mexico State University
+  Copyright 2001-2002, 2011 Francesco Zappa Nardelli
+  (fthash.c: Copyright 2000 Computing Research Labs, New Mexico State
+  University; Copyright 2001-2015 Francesco Zappa Nardelli)
+
+  Permission is hereby granted, free of charge, to any person obtaining a
+  copy of this software and associated documentation files (the "Software"),
+  to deal in the Software without restriction, including without limitation
+  the rights to use, copy, modify, merge, publish, distribute, sublicense,
+  and/or sell copies of the Software, and to permit persons to whom the
+  Software is furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+  THE COMPUTING RESEARCH LAB OR NEW MEXICO STATE UNIVERSITY BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT
+  OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR
+  THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+PCF driver (src/pcf/README):
+
+  Copyright (C) 2000 by Francesco Zappa Nardelli
+
+  Permission is hereby granted, free of charge, to any person obtaining
+  a copy of this software and associated documentation files (the
+  "Software"), to deal in the Software without restriction, including
+  without limitation the rights to use, copy, modify, merge, publish,
+  distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to
+  the following conditions:
+
+  The above copyright notice and this permission notice shall be
+  included in all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+  TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+  SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+Source code (LGPL-2.1)
+----------------------
+
+cairo is a separate shared library, which the VM does not link: the image
+loads it by name, so it can be replaced with another build of cairo of the
+same interface.  The complete corresponding source code of cairo and of every
+other library listed above is that of the pinned archive or package that
+CAIRO-STACK.txt names, which its SHA256 identifies, built as
+scripts/cairo-stack/ and cmake/cairoStack.cmake of the VM's repository say.
+Every GitHub release of the VM attaches it as cairo-stack-sources.tar (the
+pinned archives, cmake/cairo-stack/ and scripts/cairo-stack/).@SOURCES@
+They are also available on request from whoever distributed this build.

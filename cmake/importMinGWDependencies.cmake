@@ -5,8 +5,8 @@
 # step add their transitive dependencies (see configure_installables).
 #
 #   FEATURE_LIB_GIT2      mingw-w64-<env>-libgit2-winhttp  libgit2-1.9.dll -> also libgit2.dll
-#   FEATURE_LIB_FREETYPE2 mingw-w64-<env>-freetype         libfreetype-6.dll
-#   FEATURE_LIB_CAIRO     mingw-w64-<env>-cairo            libcairo-2.dll
+#   FEATURE_LIB_FREETYPE2 mingw-w64-<env>-freetype         libfreetype-6.dll  (prebuilt only)
+#   FEATURE_LIB_CAIRO     mingw-w64-<env>-cairo            libcairo-2.dll     (prebuilt only)
 #   FEATURE_LIB_SDL2      mingw-w64-<env>-SDL2 (+ sdl3)    SDL2.dll (SDL3.dll)
 #
 # where <env> is ucrt-x86_64 or clang-aarch64: the names of the DLLs are the
@@ -44,11 +44,17 @@ if(FEATURE_LIB_GIT2)
   # Pharo 12-15 look for libgit2-1-6.dll, libgit2-1-5.dll, libgit2-1-4-4.dll or libgit2.dll
   add_mingw_dll(PHARO_MINGW_GIT2_DLL TRUE NAMES libgit2-1.9.dll libgit2-1.8.dll libgit2.dll COPY_AS libgit2.dll)
 endif()
-if(FEATURE_LIB_FREETYPE2)
-  add_mingw_dll(PHARO_MINGW_FREETYPE_DLL TRUE NAMES libfreetype-6.dll)
-endif()
-if(FEATURE_LIB_CAIRO)
-  add_mingw_dll(PHARO_MINGW_CAIRO_DLL TRUE NAMES libcairo-2.dll)
+# cairo and FreeType: with the cairo stack (PHARO_CAIRO_STACK=source, the
+# default), MSYS2's packages pinned in cmake/cairo-stack/pins.txt, which
+# cmake/cairoStack.cmake bundles with their whole DLL closure; only
+# PHARO_CAIRO_STACK=prebuilt takes those of this machine's MSYS2, as before
+if(NOT PHARO_CAIRO_STACK_ACTIVE)
+  if(FEATURE_LIB_FREETYPE2)
+    add_mingw_dll(PHARO_MINGW_FREETYPE_DLL TRUE NAMES libfreetype-6.dll)
+  endif()
+  if(FEATURE_LIB_CAIRO)
+    add_mingw_dll(PHARO_MINGW_CAIRO_DLL TRUE NAMES libcairo-2.dll)
+  endif()
 endif()
 if(FEATURE_LIB_SDL2)
   add_mingw_dll(PHARO_MINGW_SDL2_DLL TRUE NAMES SDL2.dll)
