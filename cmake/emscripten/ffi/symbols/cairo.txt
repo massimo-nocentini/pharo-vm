@@ -133,6 +133,23 @@ cairo_text_path
 cairo_translate
 cairo_user_to_device
 cairo_version_string
+#
+# The test getters of the CairoPlugin suites (VM-Plugins-Primitives-Cairo-Tests,
+# docs/CairoPlugin.md): the cairo state after a plugin primitive, read through
+# test-only FFI methods declared with the exact C types (so that
+# src/emscripten/ffiAdapt.c adapts nothing), compared with the state after the
+# same Athens call through the FFI.  No image binds them otherwise.
+cairo_get_antialias
+cairo_get_dash
+cairo_get_dash_count
+cairo_get_font_matrix
+cairo_get_line_cap
+cairo_get_line_join
+cairo_get_line_width
+cairo_get_matrix
+cairo_has_current_point
+cairo_pattern_get_rgba
+cairo_version
 # unavailable unless WASM_CAIRO_PDF: the PDF surface (AthensCairoPDFSurface) needs cairo's zlib configuration
 cairo_pdf_surface_create
 # unavailable: the Quartz surface of macOS (AthensQuartzSurface)

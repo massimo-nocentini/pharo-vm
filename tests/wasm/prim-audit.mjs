@@ -30,8 +30,11 @@
 //     UUIDPlugin when the CMake cache of the build turns FEATURE_PLUGIN_UUID
 //     on, SimdJSONPlugin when it turns FEATURE_PLUGIN_SIMDJSON on,
 //     SimdUTFPlugin when it turns FEATURE_PLUGIN_SIMDUTF on,
-//     TimSortPlugin when it turns FEATURE_PLUGIN_TIMSORT on, and
-//     UtilsPlugin when it turns FEATURE_PLUGIN_UTILS on; never
+//     TimSortPlugin when it turns FEATURE_PLUGIN_TIMSORT on,
+//     UtilsPlugin when it turns FEATURE_PLUGIN_UTILS on, and CairoPlugin
+//     when it turns FEATURE_PLUGIN_CAIRO on and its PHARO_CAIRO_PLUGIN_BUILT
+//     is not OFF (a build without pharo_cairo, WASM_CAIRO=OFF, leaves the
+//     plugin out whatever the cached option says); never
 //     SurfacePlugin, which cmake/plugins.cmake leaves out of the Emscripten
 //     VMs) plus one for each src/emscripten/plugins/*.c, and every row with an
 //     accessor depth in their sources is in the tables;
@@ -413,6 +416,9 @@ function audit(js, srcdir, prims) {
         expected.add('TimSortPlugin');
     if (/^FEATURE_PLUGIN_UTILS:BOOL=(ON|TRUE|YES|Y|1)$/mi.test(cacheText))
         expected.add('UtilsPlugin');
+    if (/^FEATURE_PLUGIN_CAIRO:BOOL=(ON|TRUE|YES|Y|1)$/mi.test(cacheText)
+        && !/^PHARO_CAIRO_PLUGIN_BUILT:INTERNAL=(OFF|FALSE|NO|N|0)$/mi.test(cacheText))
+        expected.add('CairoPlugin');
     const ffi = /^FEATURE_FFI:BOOL=(ON|TRUE|YES|Y|1)$/mi.test(cacheText);
     if (existsSync(pluginDir))
         for (const file of readdirSync(pluginDir).filter((f) => f.endsWith('.c')))

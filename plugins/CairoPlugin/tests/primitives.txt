@@ -1,0 +1,77 @@
+# The primitives of the CairoPlugin: the single source of their names, accessor
+# depths, installer groups, files and argument counts (docs/CairoPlugin.md).
+# One line per primitive, in table order (CP_P_<Name> of CairoPlugin.c, the
+# exports table, the names answered by primitiveFunctionNames):
+#   name depth group file nargs
+# The R lane of tests/run-c-tests.sh checks that the exports rows, the
+# *AccessorDepth variables, the CP_PRIMITIVES list, the declarations and the
+# definitions are exactly these.
+primitiveInfo 0 admin src/common/CairoPlugin.c 0
+primitiveBind 1 admin src/common/CairoPlugin.c 3
+primitiveUnbind 0 admin src/common/CairoPlugin.c 0
+primitiveCounters 0 admin src/common/CairoPlugin.c 0
+primitiveFunctionNames 0 admin src/common/CairoPlugin.c 0
+primitiveResetCounters 0 admin src/common/CairoPlugin.c 0
+primitiveNewPath 1 basic src/prims/basic.c 0
+primitiveFill 1 basic src/prims/basic.c 0
+primitiveFillPreserve 1 basic src/prims/basic.c 0
+primitiveStroke 1 basic src/prims/basic.c 0
+primitivePaint 1 basic src/prims/basic.c 0
+primitiveSave 1 basic src/prims/basic.c 0
+primitiveRestore 1 basic src/prims/basic.c 0
+primitiveClip 1 basic src/prims/basic.c 0
+primitiveResetClip 1 basic src/prims/basic.c 0
+primitiveSetPathMatrix 2 basic src/prims/basic.c 0
+primitiveSetMatrix 1 basic src/prims/basic.c 1
+primitiveSetSourceRGBA 1 basic src/prims/basic.c 4
+primitiveSetSource 1 basic src/prims/basic.c 1
+primitiveResetDash 1 basic src/prims/basic.c 1
+primitiveSetDash 1 basic src/prims/basic.c 3
+primitiveRectangle 1 basic src/prims/basic.c 4
+primitiveSetLineWidth 1 basic src/prims/basic.c 1
+primitiveSetLineJoin 1 basic src/prims/basic.c 1
+primitiveSetLineCap 1 basic src/prims/basic.c 1
+primitiveAppendPath 1 basic src/prims/basic.c 1
+primitiveGetCurrentPoint 1 basic src/prims/basic.c 0
+primitiveSetAntialias 1 basic src/prims/basic.c 1
+primitiveSetFillRule 1 basic src/prims/basic.c 1
+primitiveSetScaledFont 1 basic src/prims/basic.c 1
+primitiveShowGlyphs 1 basic src/prims/basic.c 2
+primitiveGetScaledFont 1 basic src/prims/basic.c 1
+primitiveSetFontSize 1 basic src/prims/basic.c 1
+primitiveBuilderMoveTo 2 basic src/prims/basic.c 2
+primitiveBuilderLineTo 2 basic src/prims/basic.c 2
+primitiveBuilderCurveTo 2 basic src/prims/basic.c 6
+primitiveBuilderClosePath 2 basic src/prims/basic.c 0
+primitiveBuilderNewPath 2 basic src/prims/basic.c 0
+primitiveBuilderCopyPath 2 basic src/prims/basic.c 1
+primitiveBuilderArc 2 basic src/prims/basic.c 5
+primitiveBuilderArcNegative 2 basic src/prims/basic.c 5
+primitivePathDestroy 0 basic src/prims/basic.c 1
+primitiveMatrixInit 1 basic src/prims/basic.c 6
+primitiveMatrixInitIdentity 1 basic src/prims/basic.c 0
+primitiveMatrixTranslate 1 basic src/prims/basic.c 2
+primitiveMatrixScale 1 basic src/prims/basic.c 2
+primitiveMatrixRotate 1 basic src/prims/basic.c 1
+primitiveMatrixMultiply 1 basic src/prims/basic.c 1
+primitiveMatrixInvert 1 basic src/prims/basic.c 0
+primitiveMatrixTransformPoint 1 basic src/prims/basic.c 2
+primitiveMatrixInitTranslate 1 basic src/prims/basic.c 2
+primitiveMatrixInitScale 1 basic src/prims/basic.c 2
+primitiveMatrixInitRotate 1 basic src/prims/basic.c 1
+primitiveGetOperator 2 basic src/prims/basic.c 0
+primitiveSetOperator 2 basic src/prims/basic.c 1
+primitiveSurfaceFlush 1 basic src/prims/basic.c 0
+primitiveScaledFontLockFace 1 basic src/prims/basic.c 0
+primitiveScaledFontUnlockFace 1 basic src/prims/basic.c 0
+primitiveScaledFontGlyphExtents 1 basic src/prims/basic.c 3
+primitiveScaledFontTextExtents 1 basic src/prims/basic.c 2
+primitiveScaledFontExtents 1 basic src/prims/basic.c 1
+primitiveTextToGlyphs 1 basic src/prims/basic.c 7
+primitiveGlyphFree 0 basic src/prims/basic.c 1
+primitiveTextPath 1 basic src/prims/basic.c 1
+primitiveFillRectangleColor 2 shape src/prims/shape.c 2
+primitiveStrokeRectangle 2 shape src/prims/shape.c 3
+primitiveFillPathColor 2 shape src/prims/shape.c 2
+primitiveStrokePath 2 shape src/prims/shape.c 3
+primitiveShowString 3 text src/prims/text.c 5

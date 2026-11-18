@@ -167,18 +167,30 @@ endif()
 if(FEATURE_PLUGIN_SIMDUTF)
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/simdutf.cmake)
     set(su_dir ${CMAKE_CURRENT_SOURCE_DIR}/plugins/SimdUTFPlugin)
-    add_vm_plugin(SimdUTFPlugin FALSE FALSE)            # globs src/common/*.c; a builtin STATIC lib on Emscripten
-    target_sources(SimdUTFPlugin PRIVATE ${su_dir}/src/cxx/suEngine.cpp)
-    target_link_libraries(SimdUTFPlugin PRIVATE pharo_simdutf)
+    # pharo_su_engine: the engine (suEngine.cpp, the only file that includes
+    # simdutf.h) as a static library of its own, which the SimdUTFPlugin,
+    # libSimdUTFFFI and the CairoPlugin (the UTF-8 of its text primitive)
+    # link: on Emscripten, whose plugins are static libraries of one module,
+    # there is then one copy of it; natively each shared library gets a
+    # private copy, hidden (no su_ nor simdutf symbol is exported)
+    add_library(pharo_su_engine STATIC ${su_dir}/src/cxx/suEngine.cpp)
+    target_include_directories(pharo_su_engine PUBLIC ${su_dir}/include/common)
+    target_link_libraries(pharo_su_engine PUBLIC pharo_simdutf)
     # (no version definition: the engine answers SIMDUTF_VERSION of simdutf.h)
-    target_compile_options(SimdUTFPlugin PRIVATE -O3 -g0)
-    foreach(option IN LISTS PHARO_SIMDUTF_CXX_OPTIONS)
-        target_compile_options(SimdUTFPlugin PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${option}>)
-    endforeach()
-    # (C keeps the default visibility: the VM looks up the entry points)
-    set_target_properties(SimdUTFPlugin PROPERTIES
+    target_compile_options(pharo_su_engine PRIVATE ${PHARO_SIMDUTF_CXX_OPTIONS})
+    set_target_properties(pharo_su_engine PROPERTIES
+        ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/deps
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
         CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+    if(NOT EMSCRIPTEN)
+        set_target_properties(pharo_su_engine PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+
+    add_vm_plugin(SimdUTFPlugin FALSE FALSE)            # globs src/common/*.c; a builtin STATIC lib on Emscripten
+    target_link_libraries(SimdUTFPlugin PRIVATE pharo_su_engine)
+    target_compile_options(SimdUTFPlugin PRIVATE -O3 -g0)
+    # (C keeps the default visibility: the VM looks up the entry points; the
+    # engine is C++, so the plugin is linked as C++)
 
     # libSimdUTFFFI: the same engine for the FFI of the image (the package
     # SimdUTF-FFI) on a VM without the plugin: not a plugin, it has no VM
@@ -188,19 +200,12 @@ if(FEATURE_PLUGIN_SIMDUTF)
         option(FEATURE_SIMDUTF_FFI "Build libSimdUTFFFI, simdutf for the FFI of the package SimdUTF-FFI" ON)
     endif()
     if(FEATURE_SIMDUTF_FFI AND NOT EMSCRIPTEN)
-        addIndependentLibraryWithRPATH(SimdUTFFFI
-            ${su_dir}/src/ffi/suFFI.c
-            ${su_dir}/src/cxx/suEngine.cpp)
+        addIndependentLibraryWithRPATH(SimdUTFFFI ${su_dir}/src/ffi/suFFI.c)
         add_dependencies(${VM_EXECUTABLE_NAME} SimdUTFFFI)
         target_include_directories(SimdUTFFFI PRIVATE ${su_dir}/include/common ${su_dir}/include/ffi)
-        target_link_libraries(SimdUTFFFI PRIVATE pharo_simdutf)
+        target_link_libraries(SimdUTFFFI PRIVATE pharo_su_engine)
         target_compile_options(SimdUTFFFI PRIVATE -O3 -g0)
-        foreach(option IN LISTS PHARO_SIMDUTF_CXX_OPTIONS)
-            target_compile_options(SimdUTFFFI PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${option}>)
-        endforeach()
-        set_target_properties(SimdUTFFFI PROPERTIES
-            CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
-            C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+        set_target_properties(SimdUTFFFI PROPERTIES C_VISIBILITY_PRESET hidden)
     endif()
 endif()
 
@@ -279,6 +284,58 @@ if(FEATURE_PLUGIN_UTILS)
     target_compile_options(UtilsPlugin PRIVATE -O2 -ffp-contract=off)
     if(UNIX AND NOT EMSCRIPTEN)
         target_link_libraries(UtilsPlugin PRIVATE m)    # fma
+    endif()
+endif()
+
+# CairoPlugin: Athens drawing through cairo without the FFI's callout, for the
+# package VM-Plugins-Primitives-Cairo of the submodule
+# plugins/UtilsPlugin/vm-plugins-primitives.st (docs/CairoPlugin.md).
+# Natively it has no build dependency on cairo: it resolves cairo at run time
+# through the VM's module loader, with the path the image's FFI uses, and
+# declares its own prototypes (include/common/cpCairo.h).  Emscripten: a
+# builtin plugin linked to pharo_cairo (cmake/emscripten/deps/cairo.cmake),
+# compiled with cairo.h, so only with PHARO_WASM_HAS_CAIRO.  Its text
+# primitive encodes UTF-8 with the SimdUTF engine (pharo_su_engine, above),
+# so it needs FEATURE_PLUGIN_SIMDUTF, and is linked as C++.  A dependent
+# option: ON by default, and available only on 64-bit targets with
+# FEATURE_PLUGIN_SIMDUTF and, on Emscripten, PHARO_WASM_HAS_CAIRO; the
+# prerequisites are evaluated again at every configure, so turning
+# FEATURE_PLUGIN_SIMDUTF or WASM_CAIRO off turns the plugin off in an
+# existing tree, and turning them on again turns it back on (an explicit
+# -DFEATURE_PLUGIN_CAIRO=OFF stays off).  Turning it on is refused on 32-bit
+# targets.  No HOST_PLUGIN_FLAGS entry in the GNUmakefile: the host tree of
+# make wasm configures it harmlessly (no dependency to fetch)
+if(NOT SIZEOF_VOID_P EQUAL 8 AND FEATURE_PLUGIN_CAIRO)
+    message(FATAL_ERROR "FEATURE_PLUGIN_CAIRO needs a 64-bit VM (void* is ${SIZEOF_VOID_P} bytes)")
+endif()
+include(CMakeDependentOption)
+# (CMake < 3.22 splits each condition on spaces and evaluates it with if():
+# enough for these three)
+cmake_dependent_option(FEATURE_PLUGIN_CAIRO "Build the CairoPlugin (Athens drawing through cairo, C)" ON
+    "SIZEOF_VOID_P EQUAL 8;FEATURE_PLUGIN_SIMDUTF;NOT EMSCRIPTEN OR PHARO_WASM_HAS_CAIRO" OFF)
+if(NOT FEATURE_PLUGIN_CAIRO AND SIZEOF_VOID_P EQUAL 8)
+    if(NOT FEATURE_PLUGIN_SIMDUTF)
+        message(STATUS "FEATURE_PLUGIN_CAIRO: OFF (its text primitive needs the SimdUTF engine, FEATURE_PLUGIN_SIMDUTF=OFF)")
+    elseif(EMSCRIPTEN AND NOT PHARO_WASM_HAS_CAIRO)
+        message(STATUS "FEATURE_PLUGIN_CAIRO: OFF (the Emscripten build has no pharo_cairo, WASM_CAIRO=OFF)")
+    endif()
+endif()
+# what this configure built, for tests/wasm/prim-audit.mjs and wasm-smoke.sh
+# (the cache entry FEATURE_PLUGIN_CAIRO may be ON while the plugin is not)
+set(PHARO_CAIRO_PLUGIN_BUILT ${FEATURE_PLUGIN_CAIRO} CACHE INTERNAL "Whether the CairoPlugin is built")
+if(FEATURE_PLUGIN_CAIRO)
+    set(cp_dir ${CMAKE_CURRENT_SOURCE_DIR}/plugins/CairoPlugin)
+    add_vm_plugin(CairoPlugin FALSE FALSE)          # globs src/common/*.c; a builtin STATIC lib on Emscripten
+    target_sources(CairoPlugin PRIVATE ${cp_dir}/src/binding/cpCairo.c)
+    target_link_libraries(CairoPlugin PRIVATE pharo_su_engine)
+    target_compile_options(CairoPlugin PRIVATE -O2)
+    # (C keeps the default visibility: the VM looks up the entry points; the
+    # binding layer's globals are CP_HIDDEN, the engine is hidden)
+    if(EMSCRIPTEN)
+        target_link_libraries(CairoPlugin PRIVATE pharo_cairo)
+        target_compile_definitions(CairoPlugin PRIVATE CP_HAVE_CAIRO_H CP_CAIRO_TYPES CP_STATIC_CAIRO)
+        target_compile_options(CairoPlugin PRIVATE
+            -Werror=incompatible-function-pointer-types -Werror=incompatible-pointer-types)
     endif()
 endif()
 
