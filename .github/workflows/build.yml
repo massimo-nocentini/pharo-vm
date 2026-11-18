@@ -12,9 +12,11 @@
 #
 # where <version> is the version of the VM without the count of commits
 # since its tag (v12.0.5-beta-4266c4ec4 for v12.0.5-beta+28.4266c4ec4).
-# On a push to pharo-12, when the seven jobs succeed, the zips are also
-# published as the GitHub release PharoVM-<version>, tagged at the commit
-# built; other branches keep them as artifacts of their run.
+# On a push to pharo-12, when the seven jobs and the cairo-stack job
+# succeed, the zips are also published as the GitHub release
+# PharoVM-<version>, tagged at the commit built, with cairo-stack-sources.tar
+# (the sources of the cairo stack, below); other branches keep them as
+# artifacts of their run.
 #
 # The WebAssembly zip is what `make wasm` stages (docs/WebAssembly.md): the
 # site web/ and the node VM node/, built with libgit2 and the images of the
@@ -33,7 +35,25 @@
 #
 # Linux and macOS bundle the prebuilt libraries of files.pharo.org
 # (PHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES), Windows the DLLs of the
-# MSYS2 packages (cmake/importMinGWDependencies.cmake).
+# MSYS2 packages (cmake/importMinGWDependencies.cmake), except cairo and
+# FreeType and the libraries they need, the cairo stack (docs/CairoStack.md,
+# cmake/cairo-stack/pins.txt):
+#
+#   - Linux and macOS build it on the runner from the pinned archives
+#     (scripts/cairo-stack/build.sh: meson, ninja and pkgconf from PyPI by
+#     hash, gperf from apt on Linux), cached by the pins, the scripts and the
+#     toolchain, but not on the runs that publish a release.  Built on
+#     Ubuntu 24.04, the Linux stack needs glibc 2.38 (the VM itself 2.34);
+#   - Windows bundles MSYS2's packages of cairo, FreeType and their DLL
+#     closure, pinned there by URL and SHA256 (fetch-msys2.sh), not the
+#     runner's: x86_64 through the ExternalProject of cmake/cairoStack.cmake,
+#     as a developer's build does, arm64 through PHARO_CAIRO_STACK_DIR.
+#
+# scripts/cairo-stack/check.sh then checks the stack of each native zip, and
+# the step of the CairoPlugin draws toy text through it.  The cairo-stack job
+# checks the pins (scripts/cairo-stack/check-pins.sh) and gathers the sources
+# of the stack; .github/workflows/cairo-stack-watch.yml compares the pins
+# with the latest upstream releases every week.
 #
 # <version> comes from `git describe` (cmake/versionExtraction.cmake), so
 # every job checks out the whole history and fetches the release tags of
@@ -79,20 +99,69 @@ jobs:
           git fetch --no-tags --force https://github.com/pharo-project/pharo-vm.git '+refs/tags/v*:refs/tags/v*'
           git describe --tags --match 'v[0-9]*'
 
-      # (libx11-6 and libxext6: the libcairo of the zip needs them, and the
-      # step of the CairoPlugin is the first to load it)
+      # gperf (fontconfig) and python3-venv (meson, ninja and pkgconf) build
+      # the cairo stack.  The cairo of the zip has no X11: no libx11-6 or
+      # libxext6
       - name: Install the dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang cmake make unzip uuid-dev libssl-dev libx11-6 libxext6
+          sudo apt-get install -y --no-install-recommends clang cmake make unzip uuid-dev libssl-dev gperf python3-venv
 
+      # The cache key of the cairo stack holds the toolchain that builds it:
+      # the compilers, glibc, cmake, gperf and python (meson, ninja and
+      # pkgconf are pinned by scripts/cairo-stack/requirements.txt, so in the
+      # hash of the files)
+      - name: Fingerprint the toolchain of the cairo stack
+        id: toolchain
+        shell: bash
+        run: |
+          {
+            uname -m
+            "$CC" --version | sed -n 1p
+            "$CXX" --version | sed -n 1p
+            ldd --version | sed -n 1p
+            cmake --version | sed -n 1p
+            gperf --version | sed -n 1p
+            python3 --version
+          } | tee "$RUNNER_TEMP/toolchain.txt"
+          echo "fp=$(sha256sum "$RUNNER_TEMP/toolchain.txt" | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      # Not on the runs that publish a release, whose stack is built from the
+      # pinned archives by the current toolchain.  The configure checks the
+      # manifest of a restored stack against pins.txt anyway
+      - name: Restore the cairo stack
+        id: cache
+        if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/pharo-12') }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cairo-stack
+          key: cairo-stack-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('cmake/cairo-stack/**', 'scripts/cairo-stack/**') }}-${{ steps.toolchain.outputs.fp }}
+
+      # meson, ninja and pkgconf from PyPI, each file by its hash (the meson
+      # of Ubuntu 24.04 is too old for fontconfig); build.sh checks the
+      # SHA256 of every archive before it extracts it, and ends with check.sh
+      # on the prefix: no GLIBC_ symbol newer than the runner's 2.39
+      - name: Build the cairo stack
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/mesonenv"
+          "$RUNNER_TEMP/mesonenv/bin/pip" install --quiet --require-hashes --only-binary :all: -r scripts/cairo-stack/requirements.txt
+          PATH="$RUNNER_TEMP/mesonenv/bin:$PATH" sh scripts/cairo-stack/build.sh --platform linux \
+            --prefix "$RUNNER_TEMP/cairo-stack" --work "$RUNNER_TEMP/cairo-stack-work" \
+            --downloads "$RUNNER_TEMP/cairo-stack-dl" --glibc-max 2.39
+
+      # With the cairo stack of the steps above, whose manifest CMake checks
+      # (pins, platform, architecture)
       - name: Configure
+        shell: bash
         run: |
           cmake -S . -B build \
             -DFLAVOUR=CoInterpreter \
             -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE \
             -DICEBERG_DEFAULT_REMOTE=httpsUrl \
-            -DBUILD_WITH_GRAPHVIZ=OFF
+            -DBUILD_WITH_GRAPHVIZ=OFF \
+            -DPHARO_CAIRO_STACK_DIR="$RUNNER_TEMP/cairo-stack" | tee "$RUNNER_TEMP/configure.txt"
+          grep -q 'PHARO_CAIRO_STACK_DIR, manifest checked' "$RUNNER_TEMP/configure.txt"
 
       - name: Check that CMake uses clang and clang++
         run: sh scripts/check-clang.sh build
@@ -116,6 +185,24 @@ jobs:
           "$RUNNER_TEMP/vm/pharo" --version
           "$RUNNER_TEMP/vm/pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences eval '3 + 4' | tee "$RUNNER_TEMP/eval.txt"
           grep -qx 7 "$RUNNER_TEMP/eval.txt"
+
+      # scripts/cairo-stack/check.sh (docs/CairoStack.md): the libraries, the
+      # symlinks and the notices of the stack in the zip; their NEEDED, by an
+      # allow-list (the stack and glibc: no X11, libz.so.1 or libexpat.so.1);
+      # DT_RPATH $ORIGIN; the exports the images bind; the version of the
+      # pin; toy text with ink (probe.c, fontconfig on the runner's
+      # /etc/fonts); and the newest GLIBC_ version the stack needs, at most
+      # the runner's 2.39 (decision U1: 2.38 today).  The job summary has it
+      # next to the VM's own
+      - name: Check the cairo stack of the zip
+        shell: bash
+        run: |
+          sh scripts/cairo-stack/check.sh --bundle "$RUNNER_TEMP/vm" --platform linux --glibc-max 2.39 | tee "$RUNNER_TEMP/cairo-stack-check.txt"
+          stack=$(sed -n 's/^glibc-max //p' "$RUNNER_TEMP/cairo-stack-check.txt")
+          vm=$(objdump -T "$RUNNER_TEMP/vm/lib/pharo" "$RUNNER_TEMP/vm/lib/libPharoVMCore.so" | { grep -o 'GLIBC_[0-9.]*' || true; } | sed 's/^GLIBC_//' | sort -uV | tail -n 1)
+          test -n "$stack" && test -n "$vm"
+          echo "glibc: the VM needs $vm, the cairo stack $stack"
+          echo "Linux ${{ matrix.arch }}: the VM needs glibc $vm, the cairo stack (cairo, FreeType, fontconfig...) glibc $stack" >> "$GITHUB_STEP_SUMMARY"
 
       # The plugin and libSimdJSONFFI are C++: they must load (the library
       # through the FFI), and need no libstdc++ newer than the GLIBCXX_3.4.21
@@ -204,16 +291,22 @@ jobs:
       # scene of rectangles, paths, a transform and text with the pixels of
       # the FFI, through its one-for-one primitives and through its shape and
       # text primitives (tests/ci-load.st, on the VMMaker image, whose
-      # Athens-Cairo draws headless).  It is the first step that calls cairo,
-      # and prints 'CairoPlugin FAILED cairo not loadable' when the libcairo
-      # of the zip does not load.  Like the SimdUTFPlugin, it needs no
+      # Athens-Cairo draws headless).  It prints 'CairoPlugin FAILED cairo not
+      # loadable' when the libcairo of the zip does not load, and must report
+      # exactly the cairo of cmake/cairo-stack/pins.txt.  Its CairoToy line is
+      # toy text (cairo_select_font_face and cairo_show_text through the
+      # image's FFI) with ink: fontconfig and the system's fonts here, Quartz
+      # on macOS, DWrite on Windows.  Like the SimdUTFPlugin, it needs no
       # libstdc++ newer than GLIBCXX_3.4.21.  shell: bash runs the step with
       # pipefail, so that a VM that dies after printing fails the step
       - name: Load the CairoPlugin of the zip
         shell: bash
         run: |
+          cairo=$(awk '$1 == "cairo" { print $2; exit }' cmake/cairo-stack/pins.txt | sed 's/\./\\./g')
+          test -n "$cairo"
           "$RUNNER_TEMP/vm/pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/CairoPlugin/tests/ci-load.st | tee "$RUNNER_TEMP/cairo.txt"
-          grep -q '^CairoPlugin native 1 cairo [0-9]*\.[0-9]*\.[0-9]* ok' "$RUNNER_TEMP/cairo.txt"
+          grep -q "^CairoPlugin native 1 cairo $cairo ok" "$RUNNER_TEMP/cairo.txt"
+          grep -Eq '^CairoToy ok family .+ ink [1-9][0-9]*( |$)' "$RUNNER_TEMP/cairo.txt"
           lib="$RUNNER_TEMP/vm/lib/libCairoPlugin.so"
           test -f "$lib" || { echo "missing libCairoPlugin.so"; exit 1; }
           glibcxx=$(objdump -T "$lib" | { grep -o 'GLIBCXX_[0-9.]*' || true; } | sort -uV | tail -n 1)
@@ -255,9 +348,49 @@ jobs:
       - name: Check the architecture of the runner
         run: test "$(uname -m)" = "${{ matrix.arch }}"
 
+      # As on Linux: the cache key of the cairo stack holds Xcode, its SDK,
+      # the compiler, cmake and python
+      - name: Fingerprint the toolchain of the cairo stack
+        id: toolchain
+        shell: bash
+        run: |
+          {
+            uname -m
+            xcodebuild -version | tr '\n' ' '; echo
+            xcrun --show-sdk-version
+            clang --version | sed -n 1p
+            cmake --version | sed -n 1p
+            python3 --version
+          } | tee "$RUNNER_TEMP/toolchain.txt"
+          echo "fp=$(shasum -a 256 "$RUNNER_TEMP/toolchain.txt" | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the cairo stack
+        id: cache
+        if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/pharo-12') }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cairo-stack
+          key: cairo-stack-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('cmake/cairo-stack/**', 'scripts/cairo-stack/**') }}-${{ steps.toolchain.outputs.fp }}
+
+      # As on Linux, with pkgconf from PyPI too (no Homebrew: build.sh also
+      # keeps /opt/homebrew and /usr/local out of the CMake searches), for
+      # the one architecture of the runner, from macOS 11.0 on (the VM's
+      # CMAKE_OSX_DEPLOYMENT_TARGET), with Quartz and without fontconfig
+      - name: Build the cairo stack
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/mesonenv"
+          "$RUNNER_TEMP/mesonenv/bin/pip" install --quiet --require-hashes --only-binary :all: -r scripts/cairo-stack/requirements.txt
+          PATH="$RUNNER_TEMP/mesonenv/bin:$PATH" MACOSX_DEPLOYMENT_TARGET=11.0 sh scripts/cairo-stack/build.sh --platform darwin \
+            --arch ${{ matrix.arch }} --prefix "$RUNNER_TEMP/cairo-stack" --work "$RUNNER_TEMP/cairo-stack-work" \
+            --downloads "$RUNNER_TEMP/cairo-stack-dl"
+
       # On arm64 the VM uses the libffi of the system, as upstream does
-      # (FindFFI does not look into the SDK by itself)
+      # (FindFFI does not look into the SDK by itself).  The cairo stack is
+      # the one of the steps above, whose manifest CMake checks (pins,
+      # platform, architecture, deployment target)
       - name: Configure
+        shell: bash
         run: |
           extra=()
           if [ "${{ matrix.arch }}" = arm64 ]; then
@@ -271,7 +404,9 @@ jobs:
             -DBUILD_WITH_GRAPHVIZ=OFF \
             -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
             -DCMAKE_OSX_SYSROOT=macosx \
-            "${extra[@]}"
+            -DPHARO_CAIRO_STACK_DIR="$RUNNER_TEMP/cairo-stack" \
+            "${extra[@]}" | tee "$RUNNER_TEMP/configure.txt"
+          grep -q 'PHARO_CAIRO_STACK_DIR, manifest checked' "$RUNNER_TEMP/configure.txt"
 
       - name: Check that CMake uses clang and clang++
         run: sh scripts/check-clang.sh build
@@ -295,6 +430,17 @@ jobs:
           "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Pharo" --headless --version
           "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences eval '3 + 4' | tee "$RUNNER_TEMP/eval.txt"
           grep -qx 7 "$RUNNER_TEMP/eval.txt"
+
+      # As on Linux, for Contents/MacOS/Plugins (the notices in
+      # Contents/Resources): install names @rpath/, LC_RPATH @loader_path,
+      # the dependencies by an allow-list (the stack, /usr/lib and /System:
+      # nothing of Homebrew, no libz of the system), minos at most 11.0, one
+      # architecture, the signatures, libfreetype.dylib and libcairo.dylib
+      # symlinks, cairo_quartz_surface_create, toy text through Quartz
+      - name: Check the cairo stack of the zip
+        shell: bash
+        run: |
+          sh scripts/cairo-stack/check.sh --bundle "$RUNNER_TEMP/vm/Pharo.app" --platform darwin --arch ${{ matrix.arch }} --minos 11.0 | tee "$RUNNER_TEMP/cairo-stack-check.txt"
 
       - name: Load the SimdJSONPlugin of the zip
         run: |
@@ -343,14 +489,27 @@ jobs:
           "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/UtilsPlugin/tests/ci-load.st | tee "$RUNNER_TEMP/utils.txt"
           grep -q '^UtilsPlugin native 1 ok' "$RUNNER_TEMP/utils.txt"
 
-      # As on Linux: the CairoPlugin bound to the libcairo of the zip (1.18.4
-      # on macOS), in Contents/MacOS/Plugins with the other plugins
+      # As on Linux: the CairoPlugin bound to the libcairo of the zip (the
+      # pinned cairo), in Contents/MacOS/Plugins with the other plugins, and
+      # toy text (Quartz).  Then once more with DYLD_PRINT_LIBRARIES (on
+      # stderr): the image loads libfreetype.dylib and libcairo.dylib, cairo
+      # @rpath/libfreetype.6.dylib, and dyld must map one FreeType and one
+      # cairo (the symlinks of the zip), so that cairo and the image share
+      # FreeType
       - name: Load the CairoPlugin of the zip
         shell: bash
         run: |
+          cairo=$(awk '$1 == "cairo" { print $2; exit }' cmake/cairo-stack/pins.txt | sed 's/\./\\./g')
+          test -n "$cairo"
           "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/CairoPlugin/tests/ci-load.st | tee "$RUNNER_TEMP/cairo.txt"
-          grep -q '^CairoPlugin native 1 cairo [0-9]*\.[0-9]*\.[0-9]* ok' "$RUNNER_TEMP/cairo.txt"
+          grep -q "^CairoPlugin native 1 cairo $cairo ok" "$RUNNER_TEMP/cairo.txt"
+          grep -Eq '^CairoToy ok family .+ ink [1-9][0-9]*( |$)' "$RUNNER_TEMP/cairo.txt"
           test -f "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Plugins/libCairoPlugin.dylib" || { echo "missing libCairoPlugin.dylib"; exit 1; }
+          DYLD_PRINT_LIBRARIES=1 "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/CairoPlugin/tests/ci-load.st > "$RUNNER_TEMP/cairo-dyld.txt" 2> "$RUNNER_TEMP/dyld.txt"
+          grep -q "^CairoPlugin native 1 cairo $cairo ok" "$RUNNER_TEMP/cairo-dyld.txt"
+          grep -e '/libfreetype' -e '/libcairo' "$RUNNER_TEMP/dyld.txt" || true
+          test "$(grep -c '/libfreetype' "$RUNNER_TEMP/dyld.txt")" -eq 1
+          test "$(grep -c '/libcairo' "$RUNNER_TEMP/dyld.txt")" -eq 1
 
       - uses: actions/upload-artifact@v7
         with:
@@ -387,13 +546,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang cmake make unzip uuid-dev libssl-dev
 
+      # Without cairo and FreeType, which this job does not bundle, as the
+      # host tree of make wasm: their cairo stack would need its tools
+      # (meson, ninja, pkgconf, gperf) to configure, and the sources do not
+      # depend on them
       - name: Configure
         run: |
           cmake -S . -B build \
             -DFLAVOUR=CoInterpreter \
             -DPHARO_DEPENDENCIES_PREFER_DOWNLOAD_BINARIES=TRUE \
             -DICEBERG_DEFAULT_REMOTE=httpsUrl \
-            -DBUILD_WITH_GRAPHVIZ=OFF
+            -DBUILD_WITH_GRAPHVIZ=OFF \
+            -DFEATURE_LIB_CAIRO=OFF \
+            -DFEATURE_LIB_FREETYPE2=OFF
 
       - name: Check that CMake uses clang and clang++
         run: sh scripts/check-clang.sh build
@@ -450,8 +615,11 @@ jobs:
       # libgit2-winhttp does HTTPS with the certificates of Windows.
       # :p is the package prefix of the msystem (mingw-w64-ucrt-x86_64-,
       # mingw-w64-clang-aarch64-); CLANGARM64 has the C++ runtime libc++
-      # (with libunwind) and the objdump of LLVM, not GNU binutils.
-      - uses: msys2/setup-msys2@v2
+      # (with libunwind) and the objdump of LLVM, not GNU binutils.  No cairo
+      # or freetype: the zip has MSYS2's packages pinned in
+      # cmake/cairo-stack/pins.txt (scripts/cairo-stack/fetch-msys2.sh, which
+      # needs the curl, zstd and tar of MSYS2's base)
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
           msystem: ${{ matrix.msystem }}
           update: true
@@ -462,8 +630,6 @@ jobs:
             ninja:p
             libffi:p
             libgit2-winhttp:p
-            freetype:p
-            cairo:p
             SDL2:p
             sdl3:p
 
@@ -480,15 +646,50 @@ jobs:
           name: generated-sources
           path: build
 
+      # The cairo stack of arm64: MSYS2's pinned packages, each checked
+      # against its SHA256 before anything is extracted, cached as on Linux
+      # by the pins and the scripts (the packages are binaries: the toolchain
+      # of the runner does not change them).  x86_64 has neither step: its
+      # Build runs the same script through the ExternalProject of
+      # cmake/cairoStack.cmake, the path of a developer's build
+      - name: Restore the cairo stack
+        id: cache
+        if: ${{ matrix.arch == 'arm64' && !(github.event_name == 'push' && github.ref == 'refs/heads/pharo-12') }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cairo-stack
+          key: cairo-stack-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('cmake/cairo-stack/**', 'scripts/cairo-stack/**') }}-msys2
+
+      - name: Fetch the cairo stack
+        if: matrix.arch == 'arm64' && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          t=$(cygpath -u "$RUNNER_TEMP")
+          sh scripts/cairo-stack/fetch-msys2.sh --arch ${{ matrix.arch }} --prefix "$t/cairo-stack" \
+            --work "$t/cairo-stack-work" --downloads "$t/cairo-stack-dl"
+
+      # CMake checks the manifest of the arm64 stack (pins, platform,
+      # architecture); on x86_64 it writes build/cairo-stack/build-stack.sh,
+      # which the Build runs
       - name: Configure
         run: |
+          t=$(cygpath -u "$RUNNER_TEMP")
+          stack=()
+          if [ "${{ matrix.arch }}" = arm64 ]; then
+            stack=(-DPHARO_CAIRO_STACK_DIR="$(cygpath -m "$RUNNER_TEMP")/cairo-stack")
+          fi
           cmake -S . -B build -G Ninja \
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
             -DFLAVOUR=CoInterpreter \
             -DGENERATE_SOURCES=${{ matrix.generate }} \
             -DICEBERG_DEFAULT_REMOTE=httpsUrl \
-            -DBUILD_WITH_GRAPHVIZ=OFF
+            -DBUILD_WITH_GRAPHVIZ=OFF \
+            "${stack[@]}" | tee "$t/configure.txt"
+          if [ "${{ matrix.arch }}" = arm64 ]; then
+            grep -q 'PHARO_CAIRO_STACK_DIR, manifest checked' "$t/configure.txt"
+          else
+            grep -q 'cairo stack: built from' "$t/configure.txt"
+          fi
 
       - name: Check that CMake uses clang and clang++
         run: sh scripts/check-clang.sh build
@@ -542,6 +743,17 @@ jobs:
             if ($m -ne $want) { "{0}: machine 0x{1:X4}" -f $_.Name, $m; $bad++ }
           }
           exit $bad
+
+      # As on Linux, for the DLLs next to the exe: every DLL of the pinned
+      # closure is there, with the SHA256 of its pinned package (not a DLL of
+      # the same name of another MSYS2 package of the runner), and their
+      # imports are the closure, the C/C++ runtime and Windows (an
+      # allow-list: no liblzo2, no cairo-gobject or script interpreter); the
+      # exports the images bind; the machine; the notices
+      - name: Check the cairo stack of the zip
+        run: |
+          t=$(cygpath -u "$RUNNER_TEMP")
+          sh scripts/cairo-stack/check.sh --bundle "$t/vm" --platform mingw --arch ${{ matrix.arch }} | tee "$t/cairo-stack-check.txt"
 
       # With the same PATH: the C++ runtime DLLs of the plugin must be in the zip
       - name: Load the SimdJSONPlugin of the zip
@@ -615,16 +827,23 @@ jobs:
 
       # As on Linux, with the same PATH: the CairoPlugin (CairoPlugin.dll, or
       # libCairoPlugin.dll as MinGW names it) bound to the libcairo of the
-      # zip, with the C++ runtime DLLs of the zip for the engine of its text
+      # zip (MSYS2's build of the pinned cairo), with the C++ runtime DLLs of
+      # the zip for the engine of its text.  The toy text goes through DWrite,
+      # and through cairo's TLS callback, which plain 1.18.6 built by MinGW
+      # does not link (MSYS2 patches it)
       - name: Load the CairoPlugin of the zip
         shell: pwsh
         run: |
           $vm = "$env:RUNNER_TEMP\vm"
           $env:PATH = "$vm;$env:SystemRoot\System32;$env:SystemRoot"
+          $pin = Select-String -Path cmake/cairo-stack/pins.txt -Pattern '^cairo\s+(\S+)' | Select-Object -First 1
+          if (-not $pin) { "no cairo line in cmake/cairo-stack/pins.txt"; exit 1 }
+          $cairo = [regex]::Escape($pin.Matches[0].Groups[1].Value)
           $out = & "$vm\PharoConsole.exe" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/CairoPlugin/tests/ci-load.st
           if ($LASTEXITCODE -ne 0) { $out; exit $LASTEXITCODE }
           $out
-          if (-not ($out -match '^CairoPlugin native 1 cairo [0-9]*\.[0-9]*\.[0-9]* ok')) { exit 1 }
+          if (-not ($out -match "^CairoPlugin native 1 cairo $cairo ok")) { exit 1 }
+          if (-not ($out -match '^CairoToy ok family .+ ink [1-9][0-9]*( |$)')) { exit 1 }
           if (-not ((Test-Path "$vm\CairoPlugin.dll") -or (Test-Path "$vm\libCairoPlugin.dll"))) { "missing CairoPlugin.dll"; exit 1 }
 
       - uses: actions/upload-artifact@v7
@@ -761,6 +980,78 @@ jobs:
           archive: false
           if-no-files-found: error
 
+  # The pins of the cairo stack (scripts/cairo-stack/check-pins.sh): well
+  # formed, one version per library on every VM (the wasm pins of
+  # cmake/emscripten/deps included), and every URL still answers (MSYS2
+  # removes superseded packages after a while).  Then the sources of the
+  # stack, which the release attaches next to the zips (decision U10, the
+  # source offer of THIRD-PARTY-NOTICES.cairo-stack.txt), each file checked
+  # against pins.txt: the pinned archives, MSYS2's source packages of the
+  # Windows closure (but those of the C/C++ runtime, under the GCC and LLVM
+  # runtime exceptions: about 350 MB), and cmake/cairo-stack and
+  # scripts/cairo-stack
+  cairo-stack:
+    name: Cairo stack pins and sources
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check the pins
+        run: sh scripts/cairo-stack/check-pins.sh
+
+      # The files are checked against pins.txt each time they are used, so a
+      # cached copy is as good as a download, and outlives the package's
+      # removal from MSYS2's repository while the cache lives
+      - name: Restore the downloads of the cairo stack
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cairo-stack-dl
+          key: cairo-stack-sources-${{ hashFiles('cmake/cairo-stack/pins.txt') }}
+
+      - name: Gather the sources of the cairo stack
+        run: |
+          command -v zstd > /dev/null || { sudo apt-get update && sudo apt-get install -y --no-install-recommends zstd; }
+          pins=cmake/cairo-stack/pins.txt
+          dl="$RUNNER_TEMP/cairo-stack-dl"
+          out="$RUNNER_TEMP/cairo-stack-sources"
+          mkdir -p "$dl/archives" "$out/archives" "$out/msys2"
+          awk '!/^#/ && NF >= 7 && $1 != "mirror" && $1 != "native-ahead" && $1 !~ /^msys2/ { print $1, $3, $4, $5 }' "$pins" > "$RUNNER_TEMP/archives.txt"
+          test -s "$RUNNER_TEMP/archives.txt"
+          while read -r name sha file url; do
+            if [ ! -f "$dl/archives/$file" ]; then
+              mirror=$(awk -v n="$name" '$1 == "mirror" && $2 == n { print $3; exit }' "$pins")
+              curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "$dl/archives/$file" "$url" ||
+                { test -n "$mirror" && curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "$dl/archives/$file" "$mirror"; }
+            fi
+            echo "$sha  $dl/archives/$file" | sha256sum -c -
+            cp "$dl/archives/$file" "$out/archives/"
+          done < "$RUNNER_TEMP/archives.txt"
+          for env in ucrt64 clangarm64; do
+            sh scripts/cairo-stack/fetch-msys2.sh --env "$env" --prefix "$RUNNER_TEMP/msys2-$env" \
+              --work "$RUNNER_TEMP/msys2-$env-work" --downloads "$dl/msys2" \
+              --sources "$dl/msys2-sources" --no-runtime-sources
+          done
+          # (the cache is keyed by pins.txt: only pinned files are there)
+          cp "$dl/msys2-sources"/* "$out/msys2/"
+          mkdir -p "$out/cmake" "$out/scripts"
+          cp -R cmake/cairo-stack "$out/cmake/"
+          cp -R scripts/cairo-stack "$out/scripts/"
+          (cd "$out" && find . -type f | LC_ALL=C sort | xargs sha256sum) > "$RUNNER_TEMP/SHA256SUMS"
+          mv "$RUNNER_TEMP/SHA256SUMS" "$out/"
+          tar -cf "$RUNNER_TEMP/cairo-stack-sources.tar" -C "$RUNNER_TEMP" cairo-stack-sources
+          ls -l "$out/archives" "$out/msys2" "$RUNNER_TEMP/cairo-stack-sources.tar"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cairo-stack-sources
+          path: ${{ runner.temp }}/cairo-stack-sources.tar
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
   # The site of the WebAssembly zip, deployed to GitHub Pages directly from
   # the workflow (Settings > Pages > Build and deployment > Source must be
   # set to GitHub Actions).
@@ -810,7 +1101,7 @@ jobs:
   release:
     name: Release
     if: github.event_name == 'push' && github.ref == 'refs/heads/pharo-12'
-    needs: [linux, macos, windows, wasm]
+    needs: [linux, macos, windows, wasm, cairo-stack]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -822,6 +1113,13 @@ jobs:
           pattern: PharoVM-*
           path: artifacts
           skip-decompress: true
+
+      # The sources of the cairo stack (the cairo-stack job), attached to the
+      # release next to the zips
+      - uses: actions/download-artifact@v8
+        with:
+          name: cairo-stack-sources
+          path: sources
 
       - name: Publish the zips as a release
         env:
@@ -837,10 +1135,12 @@ jobs:
           tags=$(ls zips | sed -E 's/-(Linux-[^-]+|Darwin-[^-]+|Windows-[^-]+|WebAssembly)-bin\.zip$//' | sort -u)
           test "$(echo "$tags" | wc -l)" -eq 1
           tag=$tags
+          ls -l sources
+          test -f sources/cairo-stack-sources.tar
           if gh release view "$tag" > /dev/null 2>&1; then
-            gh release upload "$tag" zips/* --clobber
+            gh release upload "$tag" zips/* sources/cairo-stack-sources.tar --clobber
           else
-            gh release create "$tag" zips/* \
+            gh release create "$tag" zips/* sources/cairo-stack-sources.tar \
               --target "$GITHUB_SHA" \
               --title "$tag" \
               --notes "The Pharo VM built from $GITHUB_SHA ($GITHUB_REF_NAME) by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
