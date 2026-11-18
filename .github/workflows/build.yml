@@ -79,10 +79,12 @@ jobs:
           git fetch --no-tags --force https://github.com/pharo-project/pharo-vm.git '+refs/tags/v*:refs/tags/v*'
           git describe --tags --match 'v[0-9]*'
 
+      # (libx11-6 and libxext6: the libcairo of the zip needs them, and the
+      # step of the CairoPlugin is the first to load it)
       - name: Install the dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang cmake make unzip uuid-dev libssl-dev
+          sudo apt-get install -y --no-install-recommends clang cmake make unzip uuid-dev libssl-dev libx11-6 libxext6
 
       - name: Configure
         run: |
@@ -195,6 +197,28 @@ jobs:
           "$RUNNER_TEMP/vm/pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/UtilsPlugin/tests/ci-load.st | tee "$RUNNER_TEMP/utils.txt"
           grep -q '^UtilsPlugin native 1 ok' "$RUNNER_TEMP/utils.txt"
           test -f "$RUNNER_TEMP/vm/lib/libUtilsPlugin.so" || { echo "missing libUtilsPlugin.so"; exit 1; }
+
+      # The CairoPlugin (C, and the C++ engine of the SimdUTFPlugin for its
+      # text, cmake/plugins.cmake): bound to the libcairo of the zip that the
+      # image's FFI loads (one library, the same instance), it must draw a
+      # scene of rectangles, paths, a transform and text with the pixels of
+      # the FFI, through its one-for-one primitives and through its shape and
+      # text primitives (tests/ci-load.st, on the VMMaker image, whose
+      # Athens-Cairo draws headless).  It is the first step that calls cairo,
+      # and prints 'CairoPlugin FAILED cairo not loadable' when the libcairo
+      # of the zip does not load.  Like the SimdUTFPlugin, it needs no
+      # libstdc++ newer than GLIBCXX_3.4.21.  shell: bash runs the step with
+      # pipefail, so that a VM that dies after printing fails the step
+      - name: Load the CairoPlugin of the zip
+        shell: bash
+        run: |
+          "$RUNNER_TEMP/vm/pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/CairoPlugin/tests/ci-load.st | tee "$RUNNER_TEMP/cairo.txt"
+          grep -q '^CairoPlugin native 1 cairo [0-9]*\.[0-9]*\.[0-9]* ok' "$RUNNER_TEMP/cairo.txt"
+          lib="$RUNNER_TEMP/vm/lib/libCairoPlugin.so"
+          test -f "$lib" || { echo "missing libCairoPlugin.so"; exit 1; }
+          glibcxx=$(objdump -T "$lib" | { grep -o 'GLIBCXX_[0-9.]*' || true; } | sort -uV | tail -n 1)
+          echo "libCairoPlugin.so: ${glibcxx:-no GLIBCXX}"
+          test -z "$glibcxx" || test "$(printf '%s\n' "$glibcxx" GLIBCXX_3.4.21 | sort -V | tail -n 1)" = GLIBCXX_3.4.21
 
       - uses: actions/upload-artifact@v7
         with:
@@ -318,6 +342,15 @@ jobs:
         run: |
           "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/UtilsPlugin/tests/ci-load.st | tee "$RUNNER_TEMP/utils.txt"
           grep -q '^UtilsPlugin native 1 ok' "$RUNNER_TEMP/utils.txt"
+
+      # As on Linux: the CairoPlugin bound to the libcairo of the zip (1.18.4
+      # on macOS), in Contents/MacOS/Plugins with the other plugins
+      - name: Load the CairoPlugin of the zip
+        shell: bash
+        run: |
+          "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/CairoPlugin/tests/ci-load.st | tee "$RUNNER_TEMP/cairo.txt"
+          grep -q '^CairoPlugin native 1 cairo [0-9]*\.[0-9]*\.[0-9]* ok' "$RUNNER_TEMP/cairo.txt"
+          test -f "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Plugins/libCairoPlugin.dylib" || { echo "missing libCairoPlugin.dylib"; exit 1; }
 
       - uses: actions/upload-artifact@v7
         with:
@@ -580,6 +613,20 @@ jobs:
           $out
           if (-not ($out -match '^UtilsPlugin native 1 ok')) { exit 1 }
 
+      # As on Linux, with the same PATH: the CairoPlugin (CairoPlugin.dll, or
+      # libCairoPlugin.dll as MinGW names it) bound to the libcairo of the
+      # zip, with the C++ runtime DLLs of the zip for the engine of its text
+      - name: Load the CairoPlugin of the zip
+        shell: pwsh
+        run: |
+          $vm = "$env:RUNNER_TEMP\vm"
+          $env:PATH = "$vm;$env:SystemRoot\System32;$env:SystemRoot"
+          $out = & "$vm\PharoConsole.exe" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/CairoPlugin/tests/ci-load.st
+          if ($LASTEXITCODE -ne 0) { $out; exit $LASTEXITCODE }
+          $out
+          if (-not ($out -match '^CairoPlugin native 1 cairo [0-9]*\.[0-9]*\.[0-9]* ok')) { exit 1 }
+          if (-not ((Test-Path "$vm\CairoPlugin.dll") -or (Test-Path "$vm\libCairoPlugin.dll"))) { "missing CairoPlugin.dll"; exit 1 }
+
       - uses: actions/upload-artifact@v7
         with:
           path: build/build/packages/PharoVM-*-Windows-${{ matrix.arch }}-bin.zip
@@ -613,7 +660,8 @@ jobs:
       # (with the submodules plugins/SimdJSONPlugin/simdjson.st,
       # plugins/SimdUTFPlugin/simdutf.st, plugins/TimSortPlugin/timsort.st and
       # plugins/UtilsPlugin/vm-plugins-primitives.st, the Smalltalk code that
-      # lanes 68, 69, 71 and 73 of wasm-check load)
+      # lanes 68, 69, 71, 73 and 74 of wasm-check load; 74 the packages of
+      # the CairoPlugin, from vm-plugins-primitives.st too)
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
