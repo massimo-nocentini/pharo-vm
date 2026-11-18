@@ -3,7 +3,9 @@
  * against cairo.h and cairo-ft.h: the lane protocheck of
  * tests/run-c-tests.sh compiles it with the host clang (-fsyntax-only
  * -Werror=incompatible-function-pointer-types
- * -Werror=incompatible-pointer-types) against the cairo 1.18.4 headers, and
+ * -Werror=incompatible-pointer-types) against the cairo headers of the stack
+ * (cmake/cairo-stack/pins.txt: the prefix of the VM tree, or the pinned
+ * archives), and
  * the lane targets, with -DCP_PROTOCHECK_NO_FT, for every shipped ABI
  * (clang --target=T -ffreestanding: cairo.h includes no system header).
  *

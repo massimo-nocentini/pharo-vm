@@ -5,8 +5,20 @@ compiles its own primitive methods (cpCi...) into probe subclasses of the Athens
 whose overrides of the Athens methods call the plugin's primitives and, unlike the package's
 patches, never fall back to the FFI: a primitive that fails stops the probe.
 
-1. Draws once with stock Athens (the first time a CI job calls cairo: the bundled Linux libcairo
-   needs the system's libX11 and libXext), else 'CairoPlugin FAILED cairo not loadable: <error>'.
+1. Draws once with stock Athens (the first time a CI job calls cairo), else 'CairoPlugin FAILED
+   cairo not loadable: <error>'.
+   Then, independent of the plugin, toy text through the image's FFI (class CPCiToy): on an
+   ARGB32 surface, cairo_select_font_face 'sans-serif' and cairo_show_text 'Ag' at 20 px; the
+   status of the context must be SUCCESS and some pixels inked.  This exercises the text
+   backend the bundle's cairo picks for toy fonts (fontconfig and FreeType on Linux, Quartz on
+   macOS, DWrite on Windows, cairo's built-in twin without fonts).  Prints
+
+	CairoToy ok family <family> type <font type> ink <pixels>
+
+   (the family FreeType loaded, e.g. 'DejaVu Sans', for the type ft; 'twin' for the type user;
+   else the requested 'sans-serif'), or 'CairoToy FAILED ...', and goes on either way: the CI
+   jobs grep the line (on the web VMs the type is 'unknown' if the registry lacks
+   cairo_scaled_font_get_type).
 2. primitiveInfo: nil without the plugin ('CairoPlugin did not load'); else protocol 1,
    'CairoPlugin 1.0', unbound.
 3. Computes the layout table of docs/CairoPlugin.md by name (the 29 slot indices and constants,
@@ -32,7 +44,7 @@ OSWindow-Web lets a surface be made without the SurfacePlugin."
 
 | lineEnd fail say probeClasses category header override overrides info platform protocol idx
   layout missingIvar lib probe bound version versionString names primNames counters scene font
-  wide draw passes shaFfi used cairoModules |
+  wide draw passes shaFfi used cairoModules toy |
 lineEnd := OSPlatform current lineEnding.
 fail := [ :message |
 	Stdio stdout
@@ -48,6 +60,104 @@ say := [ :message | Stdio stdout nextPutAll: message; nextPutAll: lineEnd; flush
 	canvas setPaint: Color red; drawShape: (0 @ 0 extent: 2 @ 2) ] ]
 		on: Error
 		do: [ :error | fail value: 'cairo not loadable: ' , error description ].
+
+"1b. toy text through the image's FFI, independent of the plugin"
+toy := (Object << #CPCiToy) package: 'CairoPlugin-CI'; install.
+toy class compile: 'ffiLibrary
+	^ CairoLibrary' classified: 'cairo-plugin-ci'.
+#( 'toyImageSurfaceCreate: format width: w height: h
+	^ self ffiCall: #(void * cairo_image_surface_create (int format, int w, int h))'
+   'toyCreate: surface
+	^ self ffiCall: #(void * cairo_create (void * surface))'
+   'toySelectFontFace: cr family: family slant: slant weight: weight
+	^ self ffiCall: #(void cairo_select_font_face (void * cr, char * family, int slant, int weight))'
+   'toySetFontSize: cr size: size
+	^ self ffiCall: #(void cairo_set_font_size (void * cr, double size))'
+   'toyMoveTo: cr x: x y: y
+	^ self ffiCall: #(void cairo_move_to (void * cr, double x, double y))'
+   'toySetSourceRGBA: cr r: r g: g b: b a: a
+	^ self ffiCall: #(void cairo_set_source_rgba (void * cr, double r, double g, double b, double a))'
+   'toyShowText: cr text: text
+	^ self ffiCall: #(void cairo_show_text (void * cr, char * text))'
+   'toyStatus: cr
+	^ self ffiCall: #(int cairo_status (void * cr))'
+   'toyGetScaledFont: cr
+	^ self ffiCall: #(void * cairo_get_scaled_font (void * cr))'
+   'toyScaledFontStatus: sf
+	^ self ffiCall: #(int cairo_scaled_font_status (void * sf))'
+   'toyScaledFontGetType: sf
+	^ self ffiCall: #(int cairo_scaled_font_get_type (void * sf))'
+   'toyLockFace: sf
+	^ self ffiCall: #(void * cairo_ft_scaled_font_lock_face (void * sf))'
+   'toyUnlockFace: sf
+	^ self ffiCall: #(void cairo_ft_scaled_font_unlock_face (void * sf))'
+   'toySurfaceFlush: surface
+	^ self ffiCall: #(void cairo_surface_flush (void * surface))'
+   'toySurfaceStatus: surface
+	^ self ffiCall: #(int cairo_surface_status (void * surface))'
+   'toyGetData: surface
+	^ self ffiCall: #(void * cairo_image_surface_get_data (void * surface))'
+   'toyGetStride: surface
+	^ self ffiCall: #(int cairo_image_surface_get_stride (void * surface))'
+   'toyDestroy: cr
+	^ self ffiCall: #(void cairo_destroy (void * cr))'
+   'toySurfaceDestroy: surface
+	^ self ffiCall: #(void cairo_surface_destroy (void * surface))'
+   'toyStatusString: st
+	^ self ffiCall: #(char * cairo_status_to_string (int st))' ) do: [ :source |
+	toy class compile: source classified: 'cairo-plugin-ci' ].
+[ | lib has surface cr status sf type typeName family face familyPtr stride bytes ink |
+	lib := CairoLibrary uniqueInstance libraryName.
+	"(the Emscripten VMs' FFI registry has only the functions the images bind:
+	cmake/emscripten/ffi/symbols/cairo.txt)"
+	has := [ :name | [ (ExternalAddress loadSymbol: name module: lib) notNil ] on: Error do: [ :e | false ] ].
+	surface := toy toyImageSurfaceCreate: 0 "ARGB32" width: 64 height: 32.
+	cr := toy toyCreate: surface.
+	toy toySelectFontFace: cr family: 'sans-serif' slant: 0 weight: 0.
+	toy toySetFontSize: cr size: 20.
+	toy toyMoveTo: cr x: 4 y: 24.
+	toy toySetSourceRGBA: cr r: 0 g: 0 b: 0 a: 1.
+	toy toyShowText: cr text: 'Ag'.
+	toy toySurfaceFlush: surface.
+	sf := toy toyGetScaledFont: cr.
+	"(cairo_get_scaled_font of a context in error answers an object with its status)"
+	status := (has value: 'cairo_status')
+		ifTrue: [ toy toyStatus: cr ]
+		ifFalse: [ toy toyScaledFontStatus: sf ].
+	status = 0 ifFalse: [ status := status max: (toy toySurfaceStatus: surface) ].
+	family := 'sans-serif'.
+	type := (has value: 'cairo_scaled_font_get_type') ifTrue: [ toy toyScaledFontGetType: sf ] ifFalse: [ nil ].
+	(status = 0 and: [ (type isNil or: [ type = 1 ]) and: [ has value: 'cairo_ft_scaled_font_lock_face' ] ]) ifTrue: [
+		"FreeType: the family of the face fontconfig chose (FT_FaceRec's family_name,
+		after five FT_Long)"
+		face := toy toyLockFace: sf.
+		face isNull ifFalse: [
+			type := 1.
+			familyPtr := face pointerAt: ((5 * (FFIExternalType sizeOf: #long)) alignedTo: Smalltalk wordSize) + 1.
+			familyPtr isNull ifFalse: [
+				family := (familyPtr respondsTo: #utf8StringFromCString)
+					ifTrue: [ familyPtr utf8StringFromCString ]
+					ifFalse: [ familyPtr readStringUTF8 ] ].
+			toy toyUnlockFace: sf ] ].
+	typeName := type
+		ifNil: [ 'unknown' ]
+		ifNotNil: [ #( 'toy' 'ft' 'win32' 'quartz' 'user' 'dwrite' ) at: type + 1 ifAbsent: [ type printString ] ].
+	type = 4 ifTrue: [ family := 'twin' ].	"the user font of a toy face: cairo's built-in twin"
+	stride := toy toyGetStride: surface.
+	bytes := ByteArray new: stride * 32.
+	status = 0 ifTrue: [ LibC memCopy: (toy toyGetData: surface) to: bytes size: bytes size ].
+	ink := 0.
+	1 to: bytes size by: 4 do: [ :i |
+		((bytes at: i) + (bytes at: i + 1) + (bytes at: i + 2) + (bytes at: i + 3)) > 0 ifTrue: [ ink := ink + 1 ] ].
+	toy toyDestroy: cr.
+	toy toySurfaceDestroy: surface.
+	(status = 0 and: [ ink > 0 ])
+		ifTrue: [ say value: 'CairoToy ok family ' , family , ' type ' , typeName , ' ink ' , ink printString ]
+		ifFalse: [
+			say value: 'CairoToy FAILED status ' , status printString , ' ' , (toy toyStatusString: status) ,
+				', family ' , family , ' type ' , typeName , ' ink ' , ink printString ] ]
+	on: Error
+	do: [ :error | say value: 'CairoToy FAILED ' , error description ].
 
 "2. the plugin"
 category := 'cairo-plugin-ci'.

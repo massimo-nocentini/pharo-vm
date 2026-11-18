@@ -290,9 +290,15 @@ endif()
 # CairoPlugin: Athens drawing through cairo without the FFI's callout, for the
 # package VM-Plugins-Primitives-Cairo of the submodule
 # plugins/UtilsPlugin/vm-plugins-primitives.st (docs/CairoPlugin.md).
-# Natively it has no build dependency on cairo: it resolves cairo at run time
-# through the VM's module loader, with the path the image's FFI uses, and
-# declares its own prototypes (include/common/cpCairo.h).  Emscripten: a
+# Natively it never links cairo: it resolves cairo at run time through the
+# VM's module loader, with the path the image's FFI uses.  With the cairo
+# stack (cmake/cairoStack.cmake, source mode or PHARO_CAIRO_STACK_DIR) it is
+# compiled with the stack's cairo.h, cairo's types and a compile-time check
+# of its prototypes against cairo.h (CP_CHECK_PROTOTYPES), so it depends on
+# the stack's headers (pharo_cairo_stack_bundle builds them first); without
+# it (PHARO_CAIRO_STACK=prebuilt, BUILD_BUNDLE=OFF, FEATURE_LIB_CAIRO=OFF,
+# FreeBSD, OpenBSD, MSVC) it declares its own types and prototypes
+# (include/common/cpCairo.h), as before.  Emscripten: a
 # builtin plugin linked to pharo_cairo (cmake/emscripten/deps/cairo.cmake),
 # compiled with cairo.h, so only with PHARO_WASM_HAS_CAIRO.  Its text
 # primitive encodes UTF-8 with the SimdUTF engine (pharo_su_engine, above),
@@ -336,6 +342,23 @@ if(FEATURE_PLUGIN_CAIRO)
         target_compile_definitions(CairoPlugin PRIVATE CP_HAVE_CAIRO_H CP_CAIRO_TYPES CP_STATIC_CAIRO)
         target_compile_options(CairoPlugin PRIVATE
             -Werror=incompatible-function-pointer-types -Werror=incompatible-pointer-types)
+    elseif(PHARO_CAIRO_STACK_INCLUDE_DIRS AND FEATURE_LIB_CAIRO)
+        # (PHARO_CAIRO_STACK_INCLUDE_DIRS is empty without the stack; a
+        # FreeType-only stack, FEATURE_LIB_CAIRO=OFF, has no cairo.h)
+        target_include_directories(CairoPlugin PRIVATE ${PHARO_CAIRO_STACK_INCLUDE_DIRS})
+        target_compile_definitions(CairoPlugin PRIVATE CP_HAVE_CAIRO_H CP_CAIRO_TYPES CP_CHECK_PROTOTYPES)
+        if(MINGW)
+            # cairo_public without __declspec(dllimport): nothing is linked
+            target_compile_definitions(CairoPlugin PRIVATE CAIRO_WIN32_STATIC_BUILD)
+        endif()
+        # (the static assertions of CP_CHECK_PROTOTYPES are the check; these
+        # make any other pointer mismatch an error too; gcc has no
+        # -Wincompatible-function-pointer-types)
+        target_compile_options(CairoPlugin PRIVATE -Werror=incompatible-pointer-types)
+        if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+            target_compile_options(CairoPlugin PRIVATE -Werror=incompatible-function-pointer-types)
+        endif()
+        add_dependencies(CairoPlugin pharo_cairo_stack_bundle)
     endif()
 endif()
 

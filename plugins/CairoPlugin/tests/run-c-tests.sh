@@ -7,36 +7,51 @@
 #
 #   R            static rules (below)
 #   bind         tests/bindtest.c + src/binding/cpCairo.c (own types, as the
-#                native builds): a dlsym loader on a bundled libcairo.so.2
+#                prebuilt builds): a dlsym loader on a bundled libcairo.so.2
 #                (--libcairo, default <--vm-build>/build/vm/libcairo.so.2):
 #                every function bound, matrices, drawing read back, text
-#   protocheck   two translation units, host clang -fsyntax-only
-#                -Werror=incompatible-function-pointer-types
-#                -Werror=incompatible-pointer-types, against the cairo
-#                1.18.4 headers of --deps (cairo-1.18.4.tar.xz, with the
-#                repository's cmake/emscripten/deps/cairo/cairo-features.h,
-#                and the FreeType headers of freetype-2.14.3.tar.xz):
-#                (1) cpCairo.c with -DCP_HAVE_CAIRO_H -DCP_CAIRO_TYPES
+#   protocheck   host clang -fsyntax-only -Werror=incompatible-function-pointer-types
+#                -Werror=incompatible-pointer-types against the cairo and
+#                FreeType headers of the cairo stack: those of the prefix of
+#                --vm-build (PHARO_CAIRO_STACK_PREFIX of its CMakeCache.txt:
+#                <prefix>/include, include/cairo, include/freetype2, with the
+#                platform's own cairo-features.h) when it has one, else those
+#                of the archives cairo-<v>.tar.xz and freetype-<v>.tar.xz of
+#                --deps, <v> from cmake/cairo-stack/pins.txt (with the
+#                repository's cmake/emscripten/deps/cairo/cairo-features.h):
+#                (1) cpCairo.c -DCP_HAVE_CAIRO_H -DCP_CAIRO_TYPES
 #                -DCP_STATIC_CAIRO (the Emscripten mode); (2)
-#                tests/protocheck-own.c (the own types of the native builds,
-#                field by field and function by function)
+#                tests/protocheck-own.c (the own types of the prebuilt
+#                builds, field by field and function by function); (3)
+#                cpCairo.c -DCP_HAVE_CAIRO_H -DCP_CAIRO_TYPES
+#                -DCP_CHECK_PROTOTYPES (the native mode with the stack: the
+#                prototype check); (4) the same with -include
+#                tests/protocheck-wrong.h (cairo_set_dash with a double
+#                num_dashes), which must fail with exactly one error,
+#                "cp_fn_set_dash differs from cairo.h": the check bites
 #   targets      clang --target=T -ffreestanding -fsyntax-only of cpCairo.h,
-#                cpCairo.c and protocheck-own.c -DCP_PROTOCHECK_NO_FT, for
-#                every shipped ABI (x86_64/aarch64 Linux, arm64/x86_64 macOS,
-#                x86_64/aarch64 MinGW, wasm64 Emscripten): the struct layouts
-#                and prototypes where no CI runs here; needs the cairo headers
-#                of --deps
-#   symbols      every CP_REQ/CP_OPT/CP_PROBE function is exported by the
-#                libcairo of --vm-build (nm -D) and by the other platforms'
-#                bundles found in --deps (*_third-party_cairo-*.zip: Linux
-#                .so with llvm-nm -D, macOS .dylib with llvm-nm, Windows .dll
-#                with llvm-readobj --coff-exports: the files.pharo.org
-#                bundles; the MinGW zips of build.yml ship MSYS2's
-#                libcairo-2.dll instead, which only their CI step,
-#                tests/ci-load.st, checks); libCairoPlugin.so of
+#                cpCairo.c and protocheck-own.c -DCP_PROTOCHECK_NO_FT (own
+#                types), for every shipped ABI (x86_64/aarch64 Linux,
+#                arm64/x86_64 macOS, x86_64/aarch64 MinGW, wasm64
+#                Emscripten): the struct layouts and prototypes where no CI
+#                runs here; the cairo headers of the archives of --deps (as
+#                protocheck), else of the stack of --vm-build
+#   symbols      every CP_REQ/CP_OPT/CP_PROBE function (57) is exported by
+#                the libcairo of --vm-build (nm -D); with --zips DIR, by the
+#                libcairo of every CI zip there
+#                (PharoVM-*-{Linux,Darwin,Windows}-*-bin.zip: .so with
+#                llvm-nm -D, .dylib with llvm-nm, .dll with llvm-readobj
+#                --coff-exports); with --deps, by the old files.pharo.org
+#                bundles there (*_third-party_cairo-*.zip, what
+#                PHARO_CAIRO_STACK=prebuilt bundles); libCairoPlugin.so of
 #                --vm-build exports exactly the module functions, the
 #                primitives of tests/primitives.txt and their *AccessorDepth
-#                variables (no su_, no simdutf, no cp_ symbol)
+#                variables (142; no su_, no simdutf, no cp_ symbol), and
+#                neither needs libcairo nor has an undefined cairo_ symbol
+#   stack        scripts/cairo-stack/check.sh --bundle <--vm-build>/build/vm
+#                --platform linux|darwin: the cairo stack the tree bundles
+#                (names, links, dependencies, RPATH, exports, version, toy
+#                text, notices); only for a tree with the stack
 #   wasm-syntax  emcc -fsyntax-only -Wall -Wextra -Werror of CairoPlugin.c
 #                (with src/prims) and cpCairo.c with the flags of the
 #                CairoPlugin target of --wasm-build (-DSQUEAK_BUILTIN_PLUGIN
@@ -49,8 +64,16 @@
 #                --vm-build (deps/libpharo_su_engine.a, libpharo_simdutf.a):
 #                first CairoPlugin.c -fsyntax-only -Wall -Wextra -Werror as a
 #                shared library's glue and as a builtin plugin's, then the test
-#                with clang -O1 ASan and UBSan in both modes, on the bundled
-#                libcairo (--libcairo); also genPrimitiveTable.cmake
+#                with clang -O1 ASan and UBSan, on the bundled libcairo
+#                (--libcairo); also genPrimitiveTable.cmake.  The plugin is
+#                compiled as the tree ships it: with the cairo stack
+#                (PHARO_CAIRO_STACK_PREFIX), in the shipped mode
+#                (-DCP_HAVE_CAIRO_H -DCP_CAIRO_TYPES -DCP_CHECK_PROTOTYPES and
+#                the stack's include directories) as a shared and as a
+#                builtin plugin, plus one run with the own types as a shared
+#                plugin (what PHARO_CAIRO_STACK=prebuilt ships); without the
+#                stack, or with --own-types, with the own types as a shared
+#                and as a builtin plugin
 #   glue-basic   tests/glue-basic.c (WP-B), the same way
 #   glue-shape   tests/glue-shape.c (WP-C), the same way
 #   glue-text    tests/glue-text.c (WP-C), the same way
@@ -97,8 +120,14 @@
 #   --libcairo PATH   the libcairo of the bind and glue lanes (default:
 #                     <vm-build>/build/vm/libcairo.so.2; its directory goes
 #                     to LD_LIBRARY_PATH)
-#   --deps DIR        the archives (cairo-1.18.4.tar.xz,
-#                     freetype-2.14.3.tar.xz, *_third-party_cairo-*.zip)
+#   --deps DIR        the archives: cairo-<v>.tar.xz and freetype-<v>.tar.xz
+#                     at the versions of cmake/cairo-stack/pins.txt, and
+#                     the old bundles *_third-party_cairo-*.zip
+#   --zips DIR        the zips of the CI jobs (PharoVM-*-bin.zip), for the
+#                     lane symbols
+#   --own-types       the glue lanes compile the plugin with its own types
+#                     only, as PHARO_CAIRO_STACK=prebuilt builds it, even in
+#                     a tree with the cairo stack
 #   --emsdk DIR       the Emscripten SDK (default: $EMSDK)
 #   --node PATH       node for glue-wasm64 (default: the newest of the SDK)
 #   --wasm-build DIR  a built Emscripten tree (WASM_BUILDDIR, with cmake/)
@@ -128,9 +157,11 @@ font_args() {
 
 SRCDIR=$(cd "$(dirname "$0")/.." && pwd)
 REPO=$(cd "$SRCDIR/../.." && pwd)
-vmbuild= gen= libcairo= deps= emsdk=${EMSDK:-} node= wasmbuild= build= only=
+vmbuild= gen= libcairo= deps= zips= owntypes= emsdk=${EMSDK:-} node= wasmbuild= build= only=
 while test $# -gt 0; do
     case $1 in
+    --own-types) owntypes=1; shift; continue ;;
+    --zips) zips=$2; shift ;;
     --vm-build) vmbuild=$2; shift ;;
     --gen) gen=$2; shift ;;
     --libcairo) libcairo=$2; shift ;;
@@ -145,7 +176,7 @@ while test $# -gt 0; do
     shift
 done
 
-all_lanes="bind protocheck targets symbols wasm-syntax glue-admin glue-basic glue-shape glue-text glue-wasm64"
+all_lanes="bind protocheck targets symbols stack wasm-syntax glue-admin glue-basic glue-shape glue-text glue-wasm64"
 for name in $(echo "$only" | tr ',' ' '); do
     case " R $all_lanes " in
     *" $name "*) ;;
@@ -160,6 +191,31 @@ absdir() { (cd "$1" && pwd); }
 test -n "$vmbuild" && vmbuild=$(absdir "$vmbuild")
 test -n "$deps" && deps=$(absdir "$deps")
 test -n "$wasmbuild" && wasmbuild=$(absdir "$wasmbuild")
+test -n "$zips" && zips=$(absdir "$zips")
+
+# The cairo stack of --vm-build (cmake/cairoStack.cmake): its prefix, empty
+# for a tree without it (PHARO_CAIRO_STACK=prebuilt, BUILD_BUNDLE=OFF) or
+# without cairo in it (FEATURE_LIB_CAIRO=OFF: FreeType only), where the
+# plugin has its own types (cmake/plugins.cmake)
+stackprefix= stackinc=
+if test -n "$vmbuild" && test -f "$vmbuild/CMakeCache.txt"; then
+    stackprefix=$(sed -n 's/^PHARO_CAIRO_STACK_PREFIX:INTERNAL=//p' "$vmbuild/CMakeCache.txt")
+    if grep -Eiq '^FEATURE_LIB_CAIRO:BOOL=(OFF|FALSE|NO|N|0)$' "$vmbuild/CMakeCache.txt"; then
+        stackprefix=
+    fi
+    if test -n "$stackprefix" && ! test -f "$stackprefix/include/cairo/cairo.h"; then
+        echo "run-c-tests: the cairo stack of --vm-build, $stackprefix, has no include/cairo/cairo.h (build the tree first)" >&2
+        exit 2
+    fi
+fi
+test -n "$stackprefix" && stackinc="-I$stackprefix/include -I$stackprefix/include/cairo -I$stackprefix/include/freetype2"
+# the pinned versions (cmake/cairo-stack/pins.txt), for the archives of --deps
+pins=$REPO/cmake/cairo-stack/pins.txt
+pin_cairo= pin_freetype=
+if test -f "$pins"; then
+    pin_cairo=$(awk '$1 == "cairo" { print $2 }' "$pins")
+    pin_freetype=$(awk '$1 == "freetype" { print $2 }' "$pins")
+fi
 if test -z "$libcairo" && test -n "$vmbuild" && test -e "$vmbuild/build/vm/libcairo.so.2"; then
     libcairo=$vmbuild/build/vm/libcairo.so.2
 fi
@@ -372,9 +428,12 @@ for lane in $all_lanes; do
         bind|glue-admin|glue-basic|glue-shape|glue-text)
             test -n "$vmbuild" || { echo "== $lane skipped: no --vm-build"; continue; } ;;
         protocheck|targets)
-            test -n "$deps" || { echo "== $lane skipped: no --deps"; continue; } ;;
+            { test -n "$deps" || test -n "$stackprefix"; } \
+                || { echo "== $lane skipped: no --deps and no cairo stack in --vm-build"; continue; } ;;
         symbols)
             test -n "$vmbuild" || { echo "== $lane skipped: no --vm-build"; continue; } ;;
+        stack)
+            test -n "$stackprefix" || { echo "== $lane skipped: no cairo stack in --vm-build"; continue; } ;;
         wasm-syntax|glue-wasm64)
             { test -n "$em" && test -n "$wasmbuild"; } || { echo "== $lane skipped: no --emsdk and --wasm-build"; continue; } ;;
         esac
@@ -398,22 +457,41 @@ asan="-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-fra
 strict="-Wall -Wextra -Wno-ignored-qualifiers -Werror"
 incs="-I$SRCDIR/include/common -I$SRCDIR/tests -I$SRCDIR/src/common -I$REPO/plugins/SimdUTFPlugin/include/common"
 
-# the cairo 1.18.4 and FreeType headers of --deps, extracted once
+# headers [stack|archives]: sets cairoinc, ftinc and hfrom, the cairo and
+# FreeType headers: those of the stack of --vm-build (its own
+# cairo-features.h), else those of the pinned archives of --deps (extracted
+# once, with the repository's Emscripten cairo-features.h); "archives"
+# prefers the archives
 headers() {
-    hdir=$build/headers
+    if test -n "$stackprefix" && { test "${1:-stack}" = stack || test -z "$deps"; }; then
+        cairoinc="-I$stackprefix/include -I$stackprefix/include/cairo"
+        ftinc="-I$stackprefix/include/freetype2"
+        hfrom="the stack $stackprefix"
+        return 0
+    fi
+    if test -z "$deps"; then
+        echo "-- no --deps and no cairo stack in --vm-build"
+        return 1
+    fi
+    if test -z "$pin_cairo" || test -z "$pin_freetype"; then
+        echo "-- no cairo or freetype version in $pins"
+        return 1
+    fi
+    hdir=$build/headers-$pin_cairo-$pin_freetype
     if ! test -f "$hdir/.done"; then
         rm -rf "$hdir"
         mkdir -p "$hdir"
-        if ! test -f "$deps/cairo-1.18.4.tar.xz" || ! test -f "$deps/freetype-2.14.3.tar.xz"; then
-            echo "-- no cairo-1.18.4.tar.xz or freetype-2.14.3.tar.xz in --deps $deps"
+        if ! test -f "$deps/cairo-$pin_cairo.tar.xz" || ! test -f "$deps/freetype-$pin_freetype.tar.xz"; then
+            echo "-- no cairo-$pin_cairo.tar.xz or freetype-$pin_freetype.tar.xz in --deps $deps"
             return 1
         fi
-        tar -xJf "$deps/cairo-1.18.4.tar.xz" -C "$hdir" --wildcards 'cairo-1.18.4/src/*.h' || return 1
-        tar -xJf "$deps/freetype-2.14.3.tar.xz" -C "$hdir" --wildcards 'freetype-2.14.3/include/*' || return 1
+        tar -xJf "$deps/cairo-$pin_cairo.tar.xz" -C "$hdir" --wildcards "cairo-$pin_cairo/src/*.h" || return 1
+        tar -xJf "$deps/freetype-$pin_freetype.tar.xz" -C "$hdir" --wildcards "freetype-$pin_freetype/include/*" || return 1
         touch "$hdir/.done"
     fi
-    cairoinc="-I$hdir/cairo-1.18.4/src -I$REPO/cmake/emscripten/deps/cairo"
-    ftinc="-I$hdir/freetype-2.14.3/include"
+    cairoinc="-I$hdir/cairo-$pin_cairo/src -I$REPO/cmake/emscripten/deps/cairo"
+    ftinc="-I$hdir/freetype-$pin_freetype/include"
+    hfrom="cairo-$pin_cairo.tar.xz and freetype-$pin_freetype.tar.xz"
 }
 
 lane_ok() { echo "== $1: ok"; }
@@ -442,7 +520,8 @@ lane_bind() {
 
 lane_protocheck() {
     echo "== protocheck"
-    headers || { lane_failed protocheck "headers"; return; }
+    headers stack || { lane_failed protocheck "headers"; return; }
+    echo "-- the headers of $hfrom"
     ok=1
     pflags="-std=gnu11 -fsyntax-only -Wall -Wextra -Werror -Werror=incompatible-function-pointer-types -Werror=incompatible-pointer-types"
     if $cc $pflags -DCP_HAVE_CAIRO_H -DCP_CAIRO_TYPES -DCP_STATIC_CAIRO $incs $cairoinc $ftinc "$binding"; then
@@ -457,12 +536,32 @@ lane_protocheck() {
         echo "-- protocheck-own.c: FAILED"
         ok=0
     fi
+    native="-DCP_HAVE_CAIRO_H -DCP_CAIRO_TYPES -DCP_CHECK_PROTOTYPES"
+    if $cc $pflags $native $incs $cairoinc $ftinc "$binding"; then
+        echo "-- cpCairo.c, cairo types and the prototype check (the native mode with the stack): ok"
+    else
+        echo "-- cpCairo.c, cairo types and the prototype check: FAILED"
+        ok=0
+    fi
+    # the check bites: one swapped parameter type, one error, the check's
+    out=$build/protocheck-wrong.txt
+    if $cc $pflags $native $incs $cairoinc $ftinc -include "$SRCDIR/tests/protocheck-wrong.h" "$binding" > "$out" 2>&1; then
+        echo "-- cpCairo.c with tests/protocheck-wrong.h compiles: FAILED (the prototype check does not bite)"
+        ok=0
+    elif test "$(grep -c 'error:' "$out")" = 1 && grep -q 'error: .*cp_fn_set_dash differs from cairo\.h' "$out"; then
+        echo "-- cpCairo.c with tests/protocheck-wrong.h fails as it must: $(grep -o 'cp_fn_set_dash differs from cairo\.h' "$out" | head -n 1)"
+    else
+        cat "$out"
+        echo "-- cpCairo.c with tests/protocheck-wrong.h: FAILED (not exactly the one error of the check)"
+        ok=0
+    fi
     test $ok = 1 && lane_ok protocheck || lane_failed protocheck
 }
 
 lane_targets() {
     echo "== targets"
-    headers || { lane_failed targets "headers"; return; }
+    headers archives || { lane_failed targets "headers"; return; }
+    echo "-- the headers of $hfrom"
     ok=1
     for t in x86_64-linux-gnu aarch64-linux-gnu arm64-apple-macos x86_64-apple-macos \
              x86_64-w64-mingw32 aarch64-w64-mingw32 wasm64-unknown-emscripten; do
@@ -514,6 +613,36 @@ lane_symbols() {
     fi
     dir=$build/symbols
     mkdir -p "$dir"
+    if test -n "$zips"; then
+        nzip=0
+        for zip in "$zips"/PharoVM-*-bin.zip; do
+            test -f "$zip" || continue
+            nzip=$((nzip + 1))
+            z=$(basename "$zip" .zip)
+            rm -rf "$dir/zips/$z"
+            mkdir -p "$dir/zips/$z"
+            unzip -q -o "$zip" -d "$dir/zips/$z" || { echo "-- $z: cannot unzip"; ok=0; continue; }
+            # the real file of each (Linux: libcairo.so.2 is a link to it)
+            libs=$(find "$dir/zips/$z" -type f \( -name 'libcairo.so.*' -o -name 'libcairo.*.dylib' -o -name 'libcairo-2.dll' \))
+            if test -z "$libs"; then
+                echo "-- $z: no libcairo"
+                ok=0
+                continue
+            fi
+            for lib in $libs; do
+                case $lib in
+                *.dll) exports=$(llvm-readobj$llvmbin --coff-exports "$lib" | sed -n 's/^ *Name: //p') ;;
+                *.dylib) exports=$(llvm-nm$llvmbin -gU "$lib" | awk '{ print $3 }' | sed 's/^_//') ;;
+                *) exports=$(llvm-nm$llvmbin -D --defined-only "$lib" | awk '{ print $3 }' | sed 's/@.*//') ;;
+                esac
+                check_exports "$z/${lib#$dir/zips/$z/}" "$exports" || ok=0
+            done
+        done
+        if test $nzip = 0; then
+            echo "-- no PharoVM-*-bin.zip in --zips $zips"
+            ok=0
+        fi
+    fi
     if test -n "$deps"; then
         for zip in "$deps"/*_third-party_cairo-*.zip; do
             test -f "$zip" || continue
@@ -548,11 +677,41 @@ lane_symbols() {
             echo "-- libCairoPlugin.so exports engine or binding symbols"
             ok=0
         fi
+        # it binds cairo at run time only, whatever the headers it was
+        # compiled with (the stack's, natively with the stack)
+        undefined=$(nm -D --undefined-only "$plugin" | awk '{ print $NF }' | sed 's/@.*//' | grep -E '^(cairo_|FT_)' || true)
+        needed=$(readelf -d "$plugin" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' | grep -E 'cairo|freetype' || true)
+        if test -n "$undefined" || test -n "$needed"; then
+            echo "-- libCairoPlugin.so refers to cairo or FreeType:" $undefined $needed
+            ok=0
+        else
+            echo "-- libCairoPlugin.so has no undefined cairo_ or FT_ symbol and needs no libcairo or libfreetype"
+        fi
     else
         echo "-- no $plugin"
         ok=0
     fi
     test $ok = 1 && lane_ok symbols || lane_failed symbols
+}
+
+lane_stack() {
+    echo "== stack"
+    if test -z "$stackprefix"; then
+        lane_failed stack "no cairo stack in --vm-build (PHARO_CAIRO_STACK_PREFIX)"
+        return
+    fi
+    case $(uname -s) in
+    Darwin) splatform=darwin bundle=$(ls -d "$vmbuild"/build/vm/*.app 2>/dev/null | head -n 1) ;;
+    *) splatform=linux bundle=$vmbuild/build/vm ;;
+    esac
+    if sh "$REPO/scripts/cairo-stack/check.sh" --bundle "$bundle" --platform $splatform > "$build/stack.txt" 2>&1; then
+        echo "-- check.sh --bundle $bundle: $(grep -c '^ok' "$build/stack.txt") ok, $(grep '^check.sh:' "$build/stack.txt" | tail -n 1)"
+        grep -E '^(glibc-max |[[:space:]]*probe toy )' "$build/stack.txt" | sed 's/^[[:space:]]*/-- /'
+        lane_ok stack
+    else
+        grep -E 'FAIL' "$build/stack.txt" | head -20
+        lane_failed stack
+    fi
 }
 
 # The flags of the CairoPlugin target of --wasm-build (flags.make)
@@ -617,7 +776,17 @@ vm_headers() {
     done
 }
 
-# lane_glue NAME OWNER: tests/NAME.c against the fake VM, shared and builtin
+# type_defs shipped|own: the flags of the plugin's type mode: the native
+# mode with the cairo stack (cpCairo.h mode 1), or the own types (mode 3)
+type_defs() {
+    case $1 in
+    shipped) echo "-DCP_HAVE_CAIRO_H -DCP_CAIRO_TYPES -DCP_CHECK_PROTOTYPES -Werror=incompatible-function-pointer-types -Werror=incompatible-pointer-types $stackinc" ;;
+    own) ;;
+    esac
+}
+
+# lane_glue NAME OWNER: tests/NAME.c against the fake VM, shared and builtin,
+# in the type modes of the tree (type_defs)
 lane_glue() {
     name=$1 owner=$2
     echo "== $name"
@@ -635,13 +804,26 @@ lane_glue() {
     dir=$build/$name
     mkdir -p "$dir"
     ok=1
-    for mode in "" -DSQUEAK_BUILTIN_PLUGIN; do
-        if $cc -std=gnu11 -fsyntax-only $strict $vmdefs $mode $incs $vminc "$glue"; then
-            echo "-- CairoPlugin.c -fsyntax-only -Wall -Wextra -Werror ${mode:-(shared library)}: ok"
-        else
-            echo "-- CairoPlugin.c -fsyntax-only -Wall -Wextra -Werror ${mode:-(shared library)}: FAILED"
-            ok=0
-        fi
+    # the type modes: "shipped" (the stack's cairo.h, cairo's types and the
+    # prototype check, as the tree builds the plugin) and "own" (its own
+    # types, as PHARO_CAIRO_STACK=prebuilt builds it)
+    if test -n "$stackprefix" && test -z "$owntypes"; then
+        typemodes="shipped own"
+        runs="shipped:shared shipped:builtin own:shared"
+    else
+        typemodes=own
+        runs="own:shared own:builtin"
+    fi
+    for typemode in $typemodes; do
+        typedefs=$(type_defs $typemode)
+        for mode in "" -DSQUEAK_BUILTIN_PLUGIN; do
+            if $cc -std=gnu11 -fsyntax-only $strict $vmdefs $mode $typedefs $incs $vminc "$glue"; then
+                echo "-- CairoPlugin.c -fsyntax-only -Wall -Wextra -Werror ${mode:-(shared library)}, $typemode types: ok"
+            else
+                echo "-- CairoPlugin.c -fsyntax-only -Wall -Wextra -Werror ${mode:-(shared library)}, $typemode types: FAILED"
+                ok=0
+            fi
+        done
     done
     if test "$name" = glue-admin; then
         if cmake -DSOURCE="$glue" -DTABLE=CairoPlugin_exports -DOUTPUT="$dir/CairoPlugin_primitives.c" \
@@ -654,11 +836,12 @@ lane_glue() {
             ok=0
         fi
     fi
-    flags="-std=gnu11 -O1 -g $asan $vmdefs $incs $vminc -DCP_PRIMITIVES_TXT=\"$prims_txt\" $GLUE_FLAGS"
-    for mode in shared builtin; do
+    for run in $runs; do
+        typemode=${run%%:*} mode=${run#*:}
+        flags="-std=gnu11 -O1 -g $asan $vmdefs $(type_defs $typemode) $incs $vminc -DCP_PRIMITIVES_TXT=\"$prims_txt\" $GLUE_FLAGS"
         modedefs= link=-rdynamic
         test $mode = builtin && modedefs=-DSQUEAK_BUILTIN_PLUGIN link=
-        out=$dir/$mode
+        out=$dir/$typemode-$mode
         mkdir -p "$out"
         if ! { $cc $flags $modedefs -c "$test_c" -o "$out/test.o" &&
                $cc $flags $modedefs -c "$SRCDIR/tests/fakevm.c" -o "$out/fakevm.o" &&
@@ -666,11 +849,11 @@ lane_glue() {
                $cxx $asan $link -o "$out/$name" "$out/test.o" "$out/fakevm.o" "$out/cpCairo.o" $engine -ldl -lm; } \
                 > "$out/build.log" 2>&1; then
             cat "$out/build.log"
-            echo "-- $name ($mode): FAILED (build)"
+            echo "-- $name ($mode, $typemode types): FAILED (build)"
             ok=0
             continue
         fi
-        echo "-- $name as a $mode plugin:"
+        echo "-- $name as a $mode plugin, $typemode types:"
         if ! LD_LIBRARY_PATH=$(dirname "$libcairo") "$out/$name" --libcairo "$libcairo" $(font_args "$name"); then
             ok=0
         fi
@@ -735,6 +918,7 @@ for lane in $lanes; do
     protocheck) lane_protocheck ;;
     targets) lane_targets ;;
     symbols) lane_symbols ;;
+    stack) lane_stack ;;
     wasm-syntax)
         if test -z "$em" || ! test -x "$em/emcc"; then lane_failed wasm-syntax "no emcc (--emsdk)"; else lane_wasm_syntax; fi ;;
     glue-admin) lane_glue glue-admin WP-A ;;

@@ -2,25 +2,39 @@
  * the 57 functions it uses, the function table filled at bind time, and the
  * binding API (src/binding/cpCairo.c).  docs/CairoPlugin.md is the contract.
  *
- * Natively no cairo header exists at build time (the VM bundle ships only the
- * shared library), so this file declares its own types and prototypes, with
- * the struct tags of cairo.h (pointer-compatible) and the layouts of its
- * value structs, and the plugin resolves every function at bind time through
- * the VM's module loader, with the library path the image's FFI uses.  Under
- * Emscripten the plugin is a builtin plugin linked with pharo_cairo: there it
- * is compiled with cairo.h and the table is filled statically
- * (cp_cairo_bind_static), so that the compiler checks every prototype below
- * against cairo 1.18.4.
+ * The plugin never links cairo natively: it resolves every function at bind
+ * time through the VM's module loader, with the library path the image's FFI
+ * uses, so that both call the same cairo.  Three build modes:
  *
- * Two independent switches:
- *   CP_HAVE_CAIRO_H  include cairo.h (and cairo-ft.h, unless
- *                    CP_PROTOCHECK_NO_FT): Emscripten, and the protocheck and
- *                    targets lanes of tests/run-c-tests.sh
- *   CP_CAIRO_TYPES   the cp_ types are typedefs of cairo's (needs
- *                    CP_HAVE_CAIRO_H): Emscripten; without it the own types
- *                    below, which tests/protocheck-own.c checks against
- *                    cairo.h field by field and function by function
- * and CP_STATIC_CAIRO (Emscripten): cp_cairo_bind_static exists.
+ *   1. source-stack native (CP_HAVE_CAIRO_H CP_CAIRO_TYPES
+ *      CP_CHECK_PROTOTYPES): the VM bundles the cairo stack
+ *      (cmake/cairoStack.cmake, cmake/cairo-stack/pins.txt), whose headers
+ *      the plugin is compiled with: the cp_ types are cairo's, and
+ *      src/binding/cpCairo.c checks at compile time that every cp_fn_ type
+ *      below is the type of the cairo function (an unevaluated GNU C check:
+ *      no reference to cairo is emitted); the binding is at run time, as
+ *      in mode 3;
+ *   2. Emscripten (CP_HAVE_CAIRO_H CP_CAIRO_TYPES CP_STATIC_CAIRO): a
+ *      builtin plugin linked with pharo_cairo; the table is filled
+ *      statically (cp_cairo_bind_static), which type-checks every
+ *      assignment against cairo.h;
+ *   3. own types (no switch): no cairo header at build time
+ *      (PHARO_CAIRO_STACK=prebuilt, whose bundles ship only the shared
+ *      libraries, or a build without the stack): the declarations below,
+ *      with the struct tags of cairo.h (pointer-compatible) and the layouts
+ *      of its value structs; tests/protocheck-own.c checks them against
+ *      cairo.h field by field and function by function.
+ *
+ * The switches:
+ *   CP_HAVE_CAIRO_H      include cairo.h (and cairo-ft.h, unless
+ *                        CP_PROTOCHECK_NO_FT): modes 1 and 2, and the
+ *                        protocheck and targets lanes of tests/run-c-tests.sh
+ *   CP_CAIRO_TYPES       the cp_ types are typedefs of cairo's (needs
+ *                        CP_HAVE_CAIRO_H): modes 1 and 2
+ *   CP_CHECK_PROTOTYPES  the compile-time prototype check of cpCairo.c (needs
+ *                        CP_CAIRO_TYPES and GNU C: __typeof__,
+ *                        __builtin_types_compatible_p): mode 1
+ *   CP_STATIC_CAIRO      cp_cairo_bind_static exists: mode 2
  *
  * Names never clash with cairo.h: types cp_*_t, constants CP_*, table fields
  * named after the cairo function without its cairo_ prefix.
@@ -36,6 +50,12 @@
 
 #if defined(CP_CAIRO_TYPES) && !defined(CP_HAVE_CAIRO_H)
 # error "CP_CAIRO_TYPES needs CP_HAVE_CAIRO_H"
+#endif
+#if defined(CP_CHECK_PROTOTYPES) && !defined(CP_CAIRO_TYPES)
+# error "CP_CHECK_PROTOTYPES needs CP_CAIRO_TYPES"
+#endif
+#if defined(CP_CHECK_PROTOTYPES) && !defined(__GNUC__)
+# error "CP_CHECK_PROTOTYPES needs GNU C (__typeof__, __builtin_types_compatible_p)"
 #endif
 
 #ifdef CP_HAVE_CAIRO_H
@@ -110,10 +130,10 @@ typedef void *cp_ft_face_t;				/* FT_Face */
 #endif /* CP_CAIRO_TYPES */
 
 #define CP_STATUS_SUCCESS 0
-/* the oldest cairo the plugin binds: the files.pharo.org bundles of Linux
-   aarch64 and (non-MinGW builds only) Windows ARM64 are 1.16.0
-   (CAIRO_VERSION_ENCODE(1, 16, 0)); the MinGW zips of build.yml ship the
-   libcairo-2.dll of MSYS2's cairo package instead */
+/* the oldest cairo the bind accepts (CAIRO_VERSION_ENCODE(1, 16, 0)).  The
+   VM bundles 1.18.6 (cmake/cairo-stack/pins.txt), but the image's FFI may
+   load another: a PHARO_CAIRO_STACK=prebuilt bundle (Linux aarch64 1.16.0),
+   or a system cairo */
 #define CP_CAIRO_VERSION_MIN 11600
 
 /* The layouts the primitives rely on, in both modes (LP64 and LLP64: the

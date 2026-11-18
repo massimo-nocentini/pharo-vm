@@ -488,7 +488,9 @@ testBind(void)
 	a = bindGood(0);
 	CHECK(a.returned && a.protocolErrors == 0 && fake_is_int(a.value), "bind 29: code %lld %s", (long long)a.code, fake_last_error());
 #ifdef CP_STATIC_CAIRO
-	CHECK(fake_int_value(a.value) == 11804, "static bind: cairo %lld", (long long)fake_int_value(a.value));
+	/* (the cairo linked in is the one of the cairo.h compiled with) */
+	CHECK(fake_int_value(a.value) == CAIRO_VERSION, "static bind: cairo %lld, cairo.h %d",
+		(long long)fake_int_value(a.value), CAIRO_VERSION);
 #else
 	CHECK(fake_int_value(a.value) >= CP_CAIRO_VERSION_MIN, "bind: cairo %lld", (long long)fake_int_value(a.value));
 	CHECK(fake_loader_module_calls() == 1 && fake_loader_symbol_calls() == CP_FN_COUNT,

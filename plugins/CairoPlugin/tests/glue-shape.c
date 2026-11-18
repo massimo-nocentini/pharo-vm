@@ -731,8 +731,8 @@ testFillRect(void)
 	drawCase("alpha 0", FILL_RECT, 1, identity(), 0, rect(fake_int(0), fake_int(0), fake_int(40), fake_int(32)),
 		newColor(500, 500, 500, 0), NULL);
 	expectDrawn = 1;
-	/* beyond cairo's fixed point: 1.17.4 fills the band, 1.18.4 nothing;
-	   the same as stock either way */
+	/* beyond cairo's fixed point: 1.17.4 and 1.18.6 fill the band, 1.18.4
+	   nothing; the same as stock either way */
 	expectDrawn = -1;
 	drawCase("huge integers", FILL_RECT, 0, identity(), 0,
 		rect(fake_int(-((sqInt)1 << 40)), fake_int(1), fake_int(((sqInt)1 << 40) + 7), fake_int(9)), red, NULL);

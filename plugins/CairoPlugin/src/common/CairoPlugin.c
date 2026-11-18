@@ -848,7 +848,7 @@ cp_layout_value_ok(int i, sqInt value)
 /*	CairoPlugin class>>primInfo
 	<primitive: 'primitiveInfo' module: 'CairoPlugin' error: ec>
 	Answer { protocol. 'CairoPlugin 1.0'. 'native' or 'emscripten'. the cairo
-	version (cairo_version(), e.g. 11704) or nil when unbound. 'loader' or
+	version (cairo_version(), e.g. 11806) or nil when unbound. 'loader' or
 	'static'. the missing required function of the last bind (a String) or
 	nil. an Array of the names of the optional functions the binding lacks
 	(empty when all present or unbound) }. */
@@ -948,7 +948,8 @@ cp_string_class_ok(sqInt cls, int words)
 	probe, a library that does not load, a required function missing:
 	primitiveInfo names it), #'inappropriate operation' (the probe is not the
 	bound cairo_create: another libcairo), #'unsupported operation' (cairo
-	older than 1.16.0). */
+	older than 1.16.0, CP_CAIRO_VERSION_MIN: the VM bundles 1.18.6, 11806,
+	but the image's FFI may load an older one). */
 EXPORT(sqInt)
 primitiveBind(void)
 {
