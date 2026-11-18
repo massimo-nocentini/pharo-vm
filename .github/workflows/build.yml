@@ -186,6 +186,16 @@ jobs:
             test -f "$RUNNER_TEMP/vm/lib/$f" || { echo "missing $f"; exit 1; }
           done
 
+      # The UtilsPlugin (C, cmake/plugins.cmake): fma, strtok_r, de Casteljau
+      # and Knuth's generator must answer their known values, Knuth's own
+      # check of his rng-double.c included (tests/ci-load.st)
+      - name: Load the UtilsPlugin of the zip
+        shell: bash
+        run: |
+          "$RUNNER_TEMP/vm/pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/UtilsPlugin/tests/ci-load.st | tee "$RUNNER_TEMP/utils.txt"
+          grep -q '^UtilsPlugin native 1 ok' "$RUNNER_TEMP/utils.txt"
+          test -f "$RUNNER_TEMP/vm/lib/libUtilsPlugin.so" || { echo "missing libUtilsPlugin.so"; exit 1; }
+
       - uses: actions/upload-artifact@v7
         with:
           path: build/build/packages/PharoVM-*-Linux-${{ matrix.arch }}-bin.zip
@@ -302,6 +312,12 @@ jobs:
           grep -q '^TimSortPlugin native timsort\.c [0-9a-f]* coroutines yes [0-9]* ok' "$RUNNER_TEMP/timsort.txt"
           grep -q '^TimSortFFI 1 [0-9a-f]* asm-[a-z0-9_-]* coroutines yes [0-9]* ok' "$RUNNER_TEMP/timsort.txt"
           test -f "$RUNNER_TEMP/vm/Pharo.app/Contents/Resources/LICENSE.timsort" || { echo "missing LICENSE.timsort"; exit 1; }
+
+      - name: Load the UtilsPlugin of the zip
+        shell: bash
+        run: |
+          "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/UtilsPlugin/tests/ci-load.st | tee "$RUNNER_TEMP/utils.txt"
+          grep -q '^UtilsPlugin native 1 ok' "$RUNNER_TEMP/utils.txt"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -554,6 +570,16 @@ jobs:
           if (-not ($out -match '^TimSortFFI 1 [0-9a-f]* fibers coroutines yes [0-9]* ok')) { exit 1 }
           if (-not (Test-Path "$vm\LICENSE.timsort")) { "missing LICENSE.timsort"; exit 1 }
 
+      - name: Load the UtilsPlugin of the zip
+        shell: pwsh
+        run: |
+          $vm = "$env:RUNNER_TEMP\vm"
+          $env:PATH = "$vm;$env:SystemRoot\System32;$env:SystemRoot"
+          $out = & "$vm\PharoConsole.exe" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/UtilsPlugin/tests/ci-load.st
+          if ($LASTEXITCODE -ne 0) { $out; exit $LASTEXITCODE }
+          $out
+          if (-not ($out -match '^UtilsPlugin native 1 ok')) { exit 1 }
+
       - uses: actions/upload-artifact@v7
         with:
           path: build/build/packages/PharoVM-*-Windows-${{ matrix.arch }}-bin.zip
@@ -585,8 +611,9 @@ jobs:
       CXX: clang++
     steps:
       # (with the submodules plugins/SimdJSONPlugin/simdjson.st,
-      # plugins/SimdUTFPlugin/simdutf.st and plugins/TimSortPlugin/timsort.st,
-      # the Smalltalk code that lanes 68, 69 and 71 of wasm-check load)
+      # plugins/SimdUTFPlugin/simdutf.st, plugins/TimSortPlugin/timsort.st and
+      # plugins/UtilsPlugin/vm-plugins-primitives.st, the Smalltalk code that
+      # lanes 68, 69, 71 and 73 of wasm-check load)
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0

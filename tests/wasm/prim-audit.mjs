@@ -29,8 +29,9 @@
 //   - the builtin modules are the in-tree plugins linked into the VM (with
 //     UUIDPlugin when the CMake cache of the build turns FEATURE_PLUGIN_UUID
 //     on, SimdJSONPlugin when it turns FEATURE_PLUGIN_SIMDJSON on,
-//     SimdUTFPlugin when it turns FEATURE_PLUGIN_SIMDUTF on, and
-//     TimSortPlugin when it turns FEATURE_PLUGIN_TIMSORT on; never
+//     SimdUTFPlugin when it turns FEATURE_PLUGIN_SIMDUTF on,
+//     TimSortPlugin when it turns FEATURE_PLUGIN_TIMSORT on, and
+//     UtilsPlugin when it turns FEATURE_PLUGIN_UTILS on; never
 //     SurfacePlugin, which cmake/plugins.cmake leaves out of the Emscripten
 //     VMs) plus one for each src/emscripten/plugins/*.c, and every row with an
 //     accessor depth in their sources is in the tables;
@@ -410,6 +411,8 @@ function audit(js, srcdir, prims) {
         expected.add('SimdUTFPlugin');
     if (/^FEATURE_PLUGIN_TIMSORT:BOOL=(ON|TRUE|YES|Y|1)$/mi.test(cacheText))
         expected.add('TimSortPlugin');
+    if (/^FEATURE_PLUGIN_UTILS:BOOL=(ON|TRUE|YES|Y|1)$/mi.test(cacheText))
+        expected.add('UtilsPlugin');
     const ffi = /^FEATURE_FFI:BOOL=(ON|TRUE|YES|Y|1)$/mi.test(cacheText);
     if (existsSync(pluginDir))
         for (const file of readdirSync(pluginDir).filter((f) => f.endsWith('.c')))

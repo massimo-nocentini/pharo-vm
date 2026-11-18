@@ -319,7 +319,8 @@ on the host: written by Pharo' s4
     # turns FEATURE_PLUGIN_UUID on, SimdJSONPlugin when it turns
     # FEATURE_PLUGIN_SIMDJSON on, SimdUTFPlugin when it turns
     # FEATURE_PLUGIN_SIMDUTF on, TimSortPlugin when it turns
-    # FEATURE_PLUGIN_TIMSORT on (never SurfacePlugin, which
+    # FEATURE_PLUGIN_TIMSORT on, UtilsPlugin when it turns
+    # FEATURE_PLUGIN_UTILS on (never SurfacePlugin, which
     # cmake/plugins.cmake leaves out of the Emscripten VMs), and one for each
     # src/emscripten/plugins/*.c (WebHostPlugin, then WebDisplayPlugin)
     modules=13
@@ -333,6 +334,9 @@ on the host: written by Pharo' s4
 	modules=$((modules + 1))
     fi
     if grep -Eiq '^FEATURE_PLUGIN_TIMSORT:BOOL=(ON|TRUE|YES|Y|1)$' "$WASM_DIR/cmake/CMakeCache.txt" 2>/dev/null; then
+	modules=$((modules + 1))
+    fi
+    if grep -Eiq '^FEATURE_PLUGIN_UTILS:BOOL=(ON|TRUE|YES|Y|1)$' "$WASM_DIR/cmake/CMakeCache.txt" 2>/dev/null; then
 	modules=$((modules + 1))
     fi
     for f in "$SRCDIR"/src/emscripten/plugins/*.c; do
