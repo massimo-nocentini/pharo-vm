@@ -18,7 +18,7 @@ Files, in `plugins/SimdUTFPlugin`:
 
 The plugin is on by default on every 64-bit target: `FEATURE_PLUGIN_SIMDUTF=ON`.
 It is off on 32-bit targets (Linux armv7l, `cmake/vmmaker.cmake`), where `-DFEATURE_PLUGIN_SIMDUTF=ON` stops the configuration: the status word that the primitives answer needs the SmallIntegers of a 64-bit VM (see Answers: the status word).
-`-DFEATURE_PLUGIN_SIMDUTF=OFF` leaves it out, along with the download of simdutf.
+`-DFEATURE_PLUGIN_SIMDUTF=OFF` leaves it out, along with the download of simdutf, and turns the CairoPlugin off too (`docs/CairoPlugin.md`: its text primitive encodes UTF-8 with this plugin's engine); turning it on again turns the CairoPlugin back on.
 
     cmake -S . -B build -DFLAVOUR=CoInterpreter            # the plugin is in
     cmake -S . -B build -DFEATURE_PLUGIN_SIMDUTF=OFF       # it is not
@@ -47,7 +47,7 @@ Platforms:
   simdutf itself has never run upstream on Windows arm64 with MinGW clang, nor on macOS x86_64.
   Each native job of `.github/workflows/build.yml` loads the plugin of its zip with `plugins/SimdUTFPlugin/tests/ci-load.st`, three times (`SIMDUTF_FORCE_IMPLEMENTATION` unset, `bogus`, which must be refused, and `fallback`, which must be honoured on x86_64 and refused on arm64), and checks that the licence files are in the zip; the Linux job also calls `libSimdUTFFFI` and requires its answer in each of the three runs (`refused bogus`, and `fallback` honoured on x86_64, refused on aarch64), so the first CI run tells.
   The Linux and macOS steps run under `shell: bash`, whose `pipefail` makes a VM that dies after printing fail the step.
-  Build with `-DFEATURE_PLUGIN_SIMDUTF=OFF` if the build breaks there.
+  Build with `-DFEATURE_PLUGIN_SIMDUTF=OFF` if the build breaks there (the CairoPlugin goes with it).
 
 `FEATURE_SIMDUTF_FFI` (natively, `ON` by default with the plugin) also builds `libSimdUTFFFI` (`libSimdUTFFFI.so`, `.dylib`, or `SimdUTFFFI.dll` on Windows) from `src/ffi/suFFI.c`, `suEngine.cpp` and `pharo_simdutf`, next to the plugins, so that it is in the zips.
 It has hidden visibility and exports only its eleven `su_ffi_*` functions.
