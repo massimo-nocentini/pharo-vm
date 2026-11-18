@@ -43,9 +43,9 @@
 # names: the notices give all three files (THIRD-PARTY-NOTICES.txt,
 # cmake/emscripten/stage.cmake).
 
-set(WASM_CAIRO_VERSION "1.18.4")
+set(WASM_CAIRO_VERSION "1.18.6")
 # The FreeType the configuration was made for
-set(WASM_CAIRO_FREETYPE_VERSION "2.14.3")
+set(WASM_CAIRO_FREETYPE_VERSION "2.15.0")
 
 if(NOT TARGET pharo_freetype)
     message(FATAL_ERROR "cmake/emscripten/deps/cairo.cmake: no pharo_freetype, which cairo needs (cmake/emscripten/deps/freetype.cmake)")
@@ -56,7 +56,7 @@ include(${CMAKE_CURRENT_LIST_DIR}/pixman.cmake)
 pharo_wasm_dep_fetch(cairo
     VERSION ${WASM_CAIRO_VERSION}
     URL "https://www.cairographics.org/releases/cairo-${WASM_CAIRO_VERSION}.tar.xz"
-    SHA256 445ed8208a6e4823de1226a74ca319d3600e83f6369f99b14265006599c32ccb
+    SHA256 1c767308174337a74694da0f3ec069c271452163a1ef4540964c50c301f157d4
     FILE cairo-${WASM_CAIRO_VERSION}.tar.xz
     LICENSES COPYING COPYING-LGPL-2.1 COPYING-MPL-1.1)
 set(source "${cairo_SOURCE_DIR}")

@@ -1,4 +1,4 @@
-# The sources of cairo 1.18.4 for the Emscripten VM, relative to the
+# The sources of cairo 1.18.6 for the Emscripten VM, relative to the
 # archive's src/ directory: those of libcairo in its meson build with the
 # image, recording, SVG and FreeType backends and PNG, but no zlib
 # (cmake/emscripten/deps/cairo/README says how it ran), which

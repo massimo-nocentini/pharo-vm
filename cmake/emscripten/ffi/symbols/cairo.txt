@@ -138,7 +138,12 @@ cairo_version_string
 # docs/CairoPlugin.md): the cairo state after a plugin primitive, read through
 # test-only FFI methods declared with the exact C types (so that
 # src/emscripten/ffiAdapt.c adapts nothing), compared with the state after the
-# same Athens call through the FFI.  No image binds them otherwise.
+# same Athens call through the FFI.  No image binds them otherwise.  The
+# scaled font is compared by its content (font face, matrices and options;
+# cairo_scaled_font_get_font_matrix is above): cairo 1.18.6 can give two
+# contexts of the same toy font two scaled fonts (upstream commit 46d1e26c),
+# so its address is no key.
+cairo_font_options_hash
 cairo_get_antialias
 cairo_get_dash
 cairo_get_dash_count
@@ -149,7 +154,15 @@ cairo_get_line_width
 cairo_get_matrix
 cairo_has_current_point
 cairo_pattern_get_rgba
+cairo_scaled_font_get_ctm
+cairo_scaled_font_get_font_face
+cairo_scaled_font_get_font_options
 cairo_version
+#
+# The toy-text line of plugins/CairoPlugin/tests/ci-load.st (CairoToy): the
+# status of the context and the type of its scaled font (twin: user).
+cairo_scaled_font_get_type
+cairo_status
 # unavailable unless WASM_CAIRO_PDF: the PDF surface (AthensCairoPDFSurface) needs cairo's zlib configuration
 cairo_pdf_surface_create
 # unavailable: the Quartz surface of macOS (AthensQuartzSurface)

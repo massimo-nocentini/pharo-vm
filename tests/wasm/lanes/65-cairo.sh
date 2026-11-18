@@ -12,7 +12,7 @@
 #             tests/wasm/golden/athens-p<major>.txt, must be a line of what it
 #             prints: TFFIBackend, the extension of OSWindow-Web that copies
 #             the pixels of a surface into a Form (the web VMs have no
-#             SurfacePlugin), cairo 1.18.4, and the SHA256 of the bits of
+#             SurfacePlugin), cairo 1.18.6, and the SHA256 of the bits of
 #             each scene.  The golden files are the reference; with
 #             HOST_PHARO, the same script on the same image, natively, is
 #             compared with them as an advice only (a note, never a failure):

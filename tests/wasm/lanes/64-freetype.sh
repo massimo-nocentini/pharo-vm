@@ -10,12 +10,13 @@
 #   parity    every line of the golden file of the image's version,
 #             tests/wasm/golden/ft-p<major>.txt, must be a line of what it
 #             prints: TFFIBackend, a FreeTypeFont of Source Sans Pro 10,
-#             FreeType 2.14.3, glyphs for U+03BB and U+2192, 688 pixels
+#             FreeType 2.15.0, glyphs for U+03BB and U+2192, 688 pixels
 #             that are not white, and the SHA256 of the bits of the Form.
 #             The golden files are the reference; with HOST_PHARO, the same
 #             script on the stock image, natively, is compared with them as
-#             an advice only (a note, never a failure): the VM of another
-#             platform ships another FreeType (cmake/importFreetype2.cmake);
+#             an advice only (a note, never a failure): a native VM may
+#             ship another FreeType (cmake/cairo-stack/pins.txt, or the
+#             prebuilt libraries of cmake/importFreetype2.cmake);
 #   hidden    the negative control, on the same image: with FreeType hidden
 #             from the VM (PHARO_WASM_FFI_HIDE=freetype), the image must
 #             fall back by itself (it has no startUp: hook for it) to a font

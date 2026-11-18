@@ -18,12 +18,19 @@
 # TrueType outlines, through the autofitter and the rasterisers.
 #
 # The archive is the release of savannah.gnu.org (signed by Werner
-# Lemberg).  The sources are those of the archive of the tag VER-2-14-3,
-# which Emscripten's port of FreeType takes; the release adds the files of
-# autotools, the reference and those of dlg (for FT_DEBUG_LOGGING, which is
-# off).  The native VMs bundle other versions of FreeType
-# (cmake/importFreetype2.cmake): the glyphs of the embedded fonts are the
-# same.
+# Lemberg, whose key is cmake/cairo-stack/keys/freetype.asc), the one that
+# the native VMs build too (cmake/cairo-stack/pins.txt, which
+# scripts/cairo-stack/check-pins.sh compares with this file).  Emscripten's
+# own port of FreeType is not used: it is older (VER-2-14-3 in emsdk 6.0.10).
+#
+# FreeType is available under the FreeType License (FTL) or the GPL 2; the
+# VM takes it under the FTL, docs/FTL.TXT, which asks for a credit line in
+# the documentation.  Besides, src/base/fthash.c, which ftbase.c includes,
+# carries an MIT notice of its own (it comes from the BDF driver, which is
+# not built here, nor is the PCF one).  Both go into THIRD-PARTY-NOTICES.txt
+# (cmake/emscripten/stage.cmake) after FTL.TXT, from
+# ${CMAKE_CURRENT_BINARY_DIR}/freetype/freetype-NOTICE.txt, which this file
+# writes (with cmake/thirdPartyNotice.cmake's MIT check).
 #
 # The options are those of the archive's include/freetype/config/
 # ftoption.h, but for the ones below, which this file comments out in a
@@ -62,7 +69,7 @@
 #
 #     cmake -DFTOPTION_H=<ftoption.h> -DOUTPUT=<copy> -P freetype.cmake
 
-set(WASM_FREETYPE_VERSION "2.14.3")
+set(WASM_FREETYPE_VERSION "2.15.0")
 set(WASM_FREETYPE_OPTIONS_OFF
     FT_CONFIG_OPTION_USE_ZLIB
     FT_CONFIG_OPTION_USE_LZW
@@ -115,11 +122,54 @@ endif()
 pharo_wasm_dep_fetch(freetype
     VERSION ${WASM_FREETYPE_VERSION}
     URL "https://download.savannah.gnu.org/releases/freetype/freetype-${WASM_FREETYPE_VERSION}.tar.xz"
-    SHA256 36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f
+    SHA256 93cd47eb719c325107f2d3cf087d06299e944c3b48a40b55537302304dea1dd5
     FILE freetype-${WASM_FREETYPE_VERSION}.tar.xz
     LICENSES docs/FTL.TXT)
 set(source "${freetype_SOURCE_DIR}")
 set(dir "${CMAKE_CURRENT_BINARY_DIR}/freetype")
+
+# The licence election, the FTL's credit line and the MIT notice of
+# src/base/fthash.c, added to the notice that pharo_wasm_dep_fetch recorded
+include(${CMAKE_CURRENT_LIST_DIR}/../../thirdPartyNotice.cmake)
+pharo_third_party_notice_text(fthash freetype "${source}/src/base/fthash.c"
+    MIT START "Copyright" END "*/")
+# (the year of the release: the last of the copyright of freetype.h,
+# "Copyright (C) 1996-2026 by")
+file(STRINGS "${source}/include/freetype/freetype.h" year REGEX "Copyright \\(C\\) [0-9]+-[0-9]+ by" LIMIT_COUNT 1)
+if(NOT year MATCHES "Copyright \\(C\\) [0-9]+-([0-9]+) by")
+    message(FATAL_ERROR "${source}/include/freetype/freetype.h has no 'Copyright (C) <year>-<year> by': "
+        "it is not FreeType ${WASM_FREETYPE_VERSION}")
+endif()
+set(year "${CMAKE_MATCH_1}")
+file(CONFIGURE OUTPUT "${dir}/freetype-NOTICE.txt" @ONLY CONTENT
+"FreeType is available under the FreeType License (FTL, docs/FTL.TXT above)
+or the GNU General Public License version 2; this build uses it under the
+FTL, whose credit line is:
+
+    Portions of this software are copyright (C) @year@ The FreeType
+    Project (https://freetype.org).  All rights reserved.
+
+src/base/fthash.c, compiled into every FreeType through src/base/ftbase.c,
+is under the MIT licence of its notice:
+
+/*
+ * @fthash@
+")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${source}/src/base/fthash.c")
+get_property(notices GLOBAL PROPERTY PHARO_WASM_NOTICES)
+set(found OFF)
+set(items "")
+foreach(item IN LISTS notices)
+    if(item MATCHES "^freetype\\|")
+        string(APPEND item "|${dir}/freetype-NOTICE.txt")
+        set(found ON)
+    endif()
+    list(APPEND items "${item}")
+endforeach()
+if(NOT found)
+    message(FATAL_ERROR "cmake/emscripten/deps/freetype.cmake: pharo_wasm_dep_fetch recorded no notice of freetype")
+endif()
+set_property(GLOBAL PROPERTY PHARO_WASM_NOTICES "${items}")
 
 # The sources: base/, then the modules of ftmodule.h
 set(PHARO_WASM_FREETYPE_SOURCES "")

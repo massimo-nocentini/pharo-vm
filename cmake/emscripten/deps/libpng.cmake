@@ -19,14 +19,14 @@
 # LoongArch and RISC-V are left out, as libpng's CMake leaves them out for
 # other processors: pngpriv.h turns them off on WebAssembly.
 
-set(WASM_LIBPNG_VERSION "1.6.58")
+set(WASM_LIBPNG_VERSION "1.6.59")
 
 include(${CMAKE_CURRENT_LIST_DIR}/zlib.cmake)
 
 pharo_wasm_dep_fetch(libpng
     VERSION ${WASM_LIBPNG_VERSION}
     URL "https://download.sourceforge.net/libpng/libpng-${WASM_LIBPNG_VERSION}.tar.gz"
-    SHA256 8c9b05b675ca7301a458df2c2e46f26e1d41ff36b8863f8c33530bc58c2e6225
+    SHA256 86a3e4b501f7f50e392c4e456ea158893e9a595b1c63eb88c7bb9f6cf8772dad
     FILE libpng-${WASM_LIBPNG_VERSION}.tar.gz
     LICENSES LICENSE)
 set(source "${libpng_SOURCE_DIR}")
