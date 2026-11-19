@@ -10,17 +10,19 @@
 #   PharoVM-<version>-Windows-arm64-bin.zip    windows-11-arm, MSYS2 CLANGARM64
 #   PharoVM-<version>-WebAssembly-bin.zip      ubuntu-24.04, Emscripten
 #
+# and the batteries image, PharoBatteries-<version>-Pharo15.zip (below),
 # where <version> is the version of the VM without the count of commits
 # since its tag (v12.0.5-beta-4266c4ec4 for v12.0.5-beta+28.4266c4ec4).
-# On a push to pharo-12, when the seven jobs and the cairo-stack job
-# succeed, the zips are also published as the GitHub release
-# PharoVM-<version>, tagged at the commit built, with cairo-stack-sources.tar
-# (the sources of the cairo stack, below); other branches keep them as
-# artifacts of their run.
+# On a push to pharo-12, when the seven jobs, the batteries job and the
+# cairo-stack job succeed, the zips are also published as the GitHub
+# release PharoVM-<version>, tagged at the commit built, with the batteries
+# image and cairo-stack-sources.tar (the sources of the cairo stack, below);
+# other branches keep them as artifacts of their run.
 #
 # The WebAssembly zip is what `make wasm` stages (docs/WebAssembly.md): the
 # site web/ and the node VM node/, built with libgit2 and the images of the
-# site, Pharo 15 (the default), 14 and 13.1, each prepared for the world,
+# site, Pharo 15 (the default), 14, 13.1 and the batteries image (Pharo 15
+# with the projects below), each prepared for the world,
 # and the .sources of the Pharo 15 build that the site had before (for the
 # images saved in a browser from it), with serve.mjs and
 # packaging/emscripten/dist (README.md, which names the commit, and
@@ -72,6 +74,16 @@
 # of the stack; .github/workflows/cairo-stack-watch.yml compares the pins
 # with the latest upstream releases every week.
 #
+# The batteries image (docs/Batteries.md) is the stock Pharo 15 image of
+# the site with the Smalltalk projects of this VM's plugins and libraries
+# (vm-plugins-primitives.st, simdjson.st, simdutf.st, timsort.st,
+# libpangocairo.st, libpoppler.st, from their master branches) and the
+# forks of Roassal and RTree, loaded by packaging/batteries/build.sh.  Its
+# job needs no other one: it runs the VM of files.pharo.org, not one of
+# this workflow, and so starts with the generate job; the WebAssembly job,
+# which offers it on the site, waits for it (a few minutes), not for the
+# native jobs.
+#
 # <version> comes from `git describe` (cmake/versionExtraction.cmake), so
 # every job checks out the whole history and fetches the release tags of
 # pharo-project/pharo-vm, which a fork may not have.
@@ -86,6 +98,12 @@ on:
 
 permissions:
   contents: read
+
+# The stock Pharo 15 image: the default image of the site (the wasm job)
+# and the base of the batteries image (the batteries job)
+env:
+  PHARO15_URL: https://files.pharo.org/image/150/Pharo15.0-SNAPSHOT.build.117.sha.053a562682.arch.64bit.zip
+  PHARO15_SHA256: fda94ce83896bd3db02c19f4af322fda8ad2446c945489ead92f317373d9452b
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -1059,16 +1077,74 @@ jobs:
           archive: false
           if-no-files-found: error
 
+  # The batteries image (docs/Batteries.md): the Pharo 15 image of the site
+  # with the projects of packaging/batteries/load.st, from GitHub, saved,
+  # started again for packaging/batteries/smoke.st (its basic checks: the
+  # tests that need no plugin or library) and zipped.  It runs the headless
+  # VM v12.0.6-beta of files.pharo.org (Pharo 15 needs 10.3.9 or later to
+  # make UUIDs; cmake/vmmaker.cmake's 10.3.1 is older), pinned by URL and
+  # SHA256, rather than one of the zips of this workflow: the job then needs
+  # no other one, starts with the generate job, and the WebAssembly job,
+  # which waits for it, does not wait for the native jobs (an hour).  The
+  # plugins and the libraries the projects bind are tested against the zips
+  # by the native jobs.  The projects come from their master branches
+  # (Roassal from Pharo15): the job passes once those hold the code that
+  # load.st expects (docs/Batteries.md)
+  batteries:
+    name: Batteries image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      VM_URL: https://files.pharo.org/vm/pharo-spur64-headless/Linux-x86_64/PharoVM-v12.0.6-beta%2B0.bebdbac-Linux-x86_64-bin.zip
+      VM_SHA256: 69c93bb7db7d955f3f96a867d0bd7b8edea69f55451856eb897c3823b7b854ac
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch the release tags
+        run: |
+          git fetch --no-tags --force https://github.com/pharo-project/pharo-vm.git '+refs/tags/v*:refs/tags/v*'
+          git describe --tags --match 'v[0-9]*'
+
+      - name: Download the VM and the Pharo 15 image
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/vm.zip" "$VM_URL"
+          echo "$VM_SHA256  $RUNNER_TEMP/vm.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/vm.zip" -d "$RUNNER_TEMP/vm"
+          "$RUNNER_TEMP/vm/pharo" --version
+          curl -fsSL -o "$RUNNER_TEMP/$(basename "$PHARO15_URL")" "$PHARO15_URL"
+          echo "$PHARO15_SHA256  $RUNNER_TEMP/$(basename "$PHARO15_URL")" | sha256sum -c -
+
+      # <version> as cmake/versionExtraction.cmake makes it (the last
+      # release tag and the short commit), without the count of commits, as
+      # the names of the VM zips have it
+      - name: Build the batteries image
+        run: |
+          version="$(git describe --abbrev=0 --tags --always --match 'v[0-9]*')-$(git rev-parse --short HEAD)"
+          echo "version $version"
+          sh packaging/batteries/build.sh "$RUNNER_TEMP/vm" "$RUNNER_TEMP/$(basename "$PHARO15_URL")" \
+            "dist/PharoBatteries-$version-Pharo15.zip"
+          ls -l dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          path: dist/PharoBatteries-*-Pharo15.zip
+          archive: false
+          if-no-files-found: error
+
   wasm:
     name: WebAssembly
+    # (the batteries image, an extra image of the site)
+    needs: batteries
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
       # The version the port needs (docs/WebAssembly.md)
       EMSDK_VERSION: 6.0.10
-      # The images of the site (docs/WebAssembly.md, Pharo versions): 15 is the default
-      PHARO15_URL: https://files.pharo.org/image/150/Pharo15.0-SNAPSHOT.build.117.sha.053a562682.arch.64bit.zip
-      PHARO15_SHA256: fda94ce83896bd3db02c19f4af322fda8ad2446c945489ead92f317373d9452b
+      # The images of the site (docs/WebAssembly.md, Pharo versions): 15
+      # (PHARO15_URL and PHARO15_SHA256, of the workflow) is the default
       PHARO14_URL: https://files.pharo.org/image/140/Pharo14.0-SNAPSHOT.build.785.sha.74f3a1b398.arch.64bit.zip
       PHARO14_SHA256: 5396878ea912f87ce99fdbb7137e01a8122745b690a2ee6949338c0aa438b0ea
       PHARO13_URL: https://files.pharo.org/image/130/Pharo13.0-SNAPSHOT.build.749.sha.d7c6f761d5.arch.64bit.zip
@@ -1128,6 +1204,24 @@ jobs:
           # (one line of GITHUB_ENV: the files separated by blanks)
           echo "PHARO_LEGACY_SOURCES=$(echo "$RUNNER_TEMP"/legacy/*.sources)" >> "$GITHUB_ENV"
 
+      # The batteries image of the batteries job, a zip uploaded as is
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: PharoBatteries-*-Pharo15.zip
+          path: ${{ runner.temp }}/batteries
+          skip-decompress: true
+
+      # (one artifact is saved in the directory itself, under its name or
+      # another: take the one file, under the name of the artifact)
+      - name: Find the batteries image
+        run: |
+          zip=$(find "$RUNNER_TEMP/batteries" -type f)
+          test -n "$zip"
+          test "$(echo "$zip" | wc -l)" -eq 1
+          mv "$zip" "$RUNNER_TEMP/images/PharoBatteries-Pharo15.zip"
+          unzip -l "$RUNNER_TEMP/images/PharoBatteries-Pharo15.zip"
+          echo "PHARO_BATTERIES_ZIP=$RUNNER_TEMP/images/PharoBatteries-Pharo15.zip" >> "$GITHUB_ENV"
+
       # make wasm records its settings but does not remember them: give
       # wasm-check the same ones, or it builds the defaults again.  The node
       # VM (wasm64, a 64-bit table) needs node 24.15 or later: the node of
@@ -1139,7 +1233,7 @@ jobs:
           export PATH="$(dirname "$EMSDK_NODE"):$PATH"
           node --version
           make wasm WASM_IMAGE_ZIP="$PHARO15_ZIP" WASM_IMAGE_ID=p15 \
-            WASM_EXTRA_IMAGES="p13=$PHARO13_ZIP p14=$PHARO14_ZIP" \
+            WASM_EXTRA_IMAGES="p13=$PHARO13_ZIP p14=$PHARO14_ZIP batteries=$PHARO_BATTERIES_ZIP" \
             WASM_EXTRA_SOURCES="$PHARO_LEGACY_SOURCES" WASM_LIBGIT2=ON
 
       - name: Check that CMake uses clang and clang++
@@ -1150,7 +1244,7 @@ jobs:
           source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
           export PATH="$(dirname "$EMSDK_NODE"):$PATH"
           make wasm-check WASM_IMAGE_ZIP="$PHARO15_ZIP" WASM_IMAGE_ID=p15 \
-            WASM_EXTRA_IMAGES="p13=$PHARO13_ZIP p14=$PHARO14_ZIP" \
+            WASM_EXTRA_IMAGES="p13=$PHARO13_ZIP p14=$PHARO14_ZIP batteries=$PHARO_BATTERIES_ZIP" \
             WASM_EXTRA_SOURCES="$PHARO_LEGACY_SOURCES" WASM_LIBGIT2=ON
 
       # The logs of the lanes (and the stderr of the VMs of the failed cases,
@@ -1294,7 +1388,9 @@ jobs:
           node -e 'const fs=require("fs"),m=JSON.parse(fs.readFileSync("site/manifest.json"));
             const all=[...m.files,...(m.images||[]).flatMap(i=>i.files),...(m.extraSources||[])];
             for(const f of all){const s=fs.statSync("site/"+f.url).size; if(s!==f.gzSize) throw new Error("bad "+f.url);}
-            if(!m.images||m.images.length!==3) throw new Error("expected 3 images");'
+            if(!m.images||m.images.length!==4) throw new Error("expected 4 images");
+            const b=m.images.find(i=>i.id==="batteries");
+            if(!b||b.default||b.label!=="Pharo 15 (batteries)") throw new Error("no batteries image, or not as expected");'
           du -sh site
 
       - uses: actions/upload-pages-artifact@v5
@@ -1308,7 +1404,7 @@ jobs:
   release:
     name: Release
     if: github.event_name == 'push' && github.ref == 'refs/heads/pharo-12'
-    needs: [linux, macos, windows, wasm, cairo-stack]
+    needs: [linux, macos, windows, wasm, batteries, cairo-stack]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -1328,6 +1424,14 @@ jobs:
           name: cairo-stack-sources
           path: sources
 
+      # The batteries image (the batteries job), attached too, under the
+      # version of the zips
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: PharoBatteries-*-Pharo15.zip
+          path: batteries
+          skip-decompress: true
+
       - name: Publish the zips as a release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1344,10 +1448,18 @@ jobs:
           tag=$tags
           ls -l sources
           test -f sources/cairo-stack-sources.tar
+          # (one artifact is saved in batteries itself, under its name or
+          # another)
+          image=$(find batteries -type f)
+          test -n "$image"
+          test "$(echo "$image" | wc -l)" -eq 1
+          mkdir extra
+          mv "$image" "extra/PharoBatteries-${tag#PharoVM-}-Pharo15.zip"
+          ls -l extra
           if gh release view "$tag" > /dev/null 2>&1; then
-            gh release upload "$tag" zips/* sources/cairo-stack-sources.tar --clobber
+            gh release upload "$tag" zips/* extra/* sources/cairo-stack-sources.tar --clobber
           else
-            gh release create "$tag" zips/* sources/cairo-stack-sources.tar \
+            gh release create "$tag" zips/* extra/* sources/cairo-stack-sources.tar \
               --target "$GITHUB_SHA" \
               --title "$tag" \
               --notes "The Pharo VM built from $GITHUB_SHA ($GITHUB_REF_NAME) by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

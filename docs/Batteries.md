@@ -68,7 +68,7 @@ Its last line is `Batteries smoke <mode> classes <n> tests <run> passed <p> skip
 
 The `batteries` job of `.github/workflows/build.yml` builds it on ubuntu-24.04 with the VM v12.0.6-beta of files.pharo.org (pinned by URL and SHA256) and the Pharo 15 zip of the WebAssembly job (the same URL and SHA256), runs the basic smoke, and uploads `PharoBatteries-<version>-Pharo15.zip` as an artifact, `<version>` being the one of the VM zips (`v12.0.6-beta-735842692`).
 It needs no other job, so it runs while the generate job and the native jobs do; the WebAssembly job, which stages it, waits for it (a few minutes), and the release of a push to `pharo-12` attaches it.
-The libraries of the projects are checked against the VM zips by the native jobs (the bindings' own `ci/run.sh`, and `BATTERIES_SMOKE=native` here by hand), not by this job.
+The plugins and the libraries that the projects use are checked on the VM zips by the native jobs (their `ci-load.st` steps, and `tests/cairo-stack/ci-text.st` for Pango and Poppler), not by this job; `BATTERIES_SMOKE=native` runs the projects' own tests on such a VM, by hand.
 
 It loads every project from `master` (Roassal from `Pharo15`) on GitHub: the job passes only when those branches hold the code above (for libpangocairo.st and libpoppler.st, their `stack` branches published as `master`).
 
