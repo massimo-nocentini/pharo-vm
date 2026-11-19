@@ -85,14 +85,12 @@ if(FEATURE_PLUGIN_SSL)
     elseif(WIN)
         target_link_libraries(SqueakSSL PRIVATE crypt32 secur32)
     else()
+        # The system's OpenSSL (libssl-dev): the plugin NEEDs the libssl.so.3
+        # and libcrypto.so.3 of the user's distribution, with its CA store and
+        # crypto policy.  The bundle ships no OpenSSL for it (it used to ship
+        # an OpenSSL 1.0.2q, EOL since 2019, that nothing linked)
         find_package(OpenSSL REQUIRED)
         target_link_libraries(SqueakSSL PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-        # The VM builds on an ubuntu with openssl 1.0, thus the ssl plugin links to it.
-        # Ship ssl 1.0 with the VM, so the ssl plugin loads
-        # (files.pharo.org has no openssl 1.0.2q for Linux on ARM)
-        if(BUILD_BUNDLE AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|armv7l")
-            add_third_party_dependency("openssl-1.0.2q")
-        endif()
     endif()
 endif()
 
