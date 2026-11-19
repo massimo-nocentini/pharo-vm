@@ -62,14 +62,33 @@ libpng 1.6.59 86a3e4b501f7f50e392c4e456ea158893e9a595b1c63eb88c7bb9f6cf8772dad l
 # signed-by E30674707856409FF1948010BE6C3AAC63AD8E3F https://download.savannah.gnu.org/releases/freetype/freetype-2.15.0.tar.xz.sig (Werner Lemberg; gpgv good, 2026-11-18; MSYS2's source package mingw-w64-freetype-2.15.0-1 holds the same archive)
 freetype 2.15.0 93cd47eb719c325107f2d3cf087d06299e944c3b48a40b55537302304dea1dd5 freetype-2.15.0.tar.xz https://download.savannah.gnu.org/releases/freetype/freetype-2.15.0.tar.xz linux,darwin LICENSE.TXT docs/FTL.TXT docs/GPLv2.TXT src/bdf/README src/pcf/README src/base/fthash.c
 # signed-by 3176EF7DB2367F1FCA4F306B1F9B0E909AF37285 https://github.com/libexpat/libexpat/releases/download/R_2_10_0/expat-2.10.0.tar.xz.asc (Sebastian Pipping, signing subkey CB8DE70A90CFBF6C3BF5CC5696262ACFFBD3AEC6; gpgv good, 2026-11-18)
-expat 2.10.0 c624ba2998fc65df1163a49641ff3f9ab73138b11641d92c86bee0fb01b1bc7f expat-2.10.0.tar.xz https://github.com/libexpat/libexpat/releases/download/R_2_10_0/expat-2.10.0.tar.xz linux COPYING
+expat 2.10.0 c624ba2998fc65df1163a49641ff3f9ab73138b11641d92c86bee0fb01b1bc7f expat-2.10.0.tar.xz https://github.com/libexpat/libexpat/releases/download/R_2_10_0/expat-2.10.0.tar.xz linux,darwin COPYING
 # unsigned: fontconfig publishes a checksum only.  The hash equals that of
 # https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.18.4/fontconfig-2.18.4.tar.xz.sha256sum (same origin; 2026-11-18).
-fontconfig 2.18.4 95013637eff5f81d4871dd16cd098c273264c16d0f9f0b27cc43b81b2794bee3 fontconfig-2.18.4.tar.xz https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.18.4/fontconfig-2.18.4.tar.xz linux COPYING
+fontconfig 2.18.4 95013637eff5f81d4871dd16cd098c273264c16d0f9f0b27cc43b81b2794bee3 fontconfig-2.18.4.tar.xz https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.18.4/fontconfig-2.18.4.tar.xz linux,darwin COPYING
 # signed-by 3BB639E56F861FA2E86505690FDD682D974CA72A https://www.cairographics.org/releases/pixman-0.46.4.tar.gz.sha512.asc (Matt Turner, signing subkey 16238A7D92448B02B7B10344B6B1CEAE5103DB07; the signed SHA512 matches; gpgv good, 2026-11-19)
 pixman 0.46.4 d09c44ebc3bd5bee7021c79f922fe8fb2fb57f7320f55e97ff9914d2346a591c pixman-0.46.4.tar.gz https://www.cairographics.org/releases/pixman-0.46.4.tar.gz linux,darwin COPYING
 # signed-by 53EF3DC3B63E2899271BD26322E8091EEA11BBB7 https://www.cairographics.org/releases/cairo-1.18.6.tar.xz.sha256sum.asc (Emmanuele Bassi; the signed SHA256 matches; gpgv good, 2026-11-18; byte-identical to the signed tag 1.18.6, and MSYS2's source package mingw-w64-cairo-1.18.6-2 holds the same archive)
 cairo 1.18.6 1c767308174337a74694da0f3ec069c271452163a1ef4540964c50c301f157d4 cairo-1.18.6.tar.xz https://www.cairographics.org/releases/cairo-1.18.6.tar.xz linux,darwin COPYING COPYING-LGPL-2.1 COPYING-MPL-1.1
+# unsigned: libffi publishes no signature.  Cross-checked 2026-11-19: MSYS2's PKGBUILD mingw-w64-libffi 3.8.1-1 pins the same SHA256.
+libffi 3.8.1 81e879c094cc5ec3186c48510c6385ac6b3e866192e8bc71a35245703757ee40 libffi-3.8.1.tar.gz https://github.com/libffi/libffi/releases/download/v3.8.1/libffi-3.8.1.tar.gz linux,darwin LICENSE
+# signed-by A95536204A3BB489715231282A98E77EB6F24CA8 https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.bz2.sig (Nicholas Wilson, signing subkey BACF71F10404D5761C09D392021DE40BFB63B406; gpgv good, 2026-11-19)
+pcre2 10.49 53c156e1ba416a20da8e65395daa132da0d80e76910424caca3fcdae7831d384 pcre2-10.49.tar.bz2 https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.bz2 linux,darwin LICENCE.md
+# unsigned: a GitHub tag archive.  Its SHA256 is the source_hash of subprojects/proxy-libintl.wrap in glib-2.90.1.tar.xz (and of wrapdb proxy-libintl_0.5-1).
+proxy-libintl 0.5 f7a1cbd7579baaf575c66f9d99fb6295e9b0684a28b095967cfda17857595303 proxy-libintl-0.5.tar.gz https://github.com/frida/proxy-libintl/archive/refs/tags/0.5.tar.gz darwin COPYING
+mirror proxy-libintl https://github.com/mesonbuild/wrapdb/releases/download/proxy-libintl_0.5-1/proxy-libintl-0.5.tar.gz
+# unsigned: GNOME publishes a checksum only; equal to https://download.gnome.org/sources/glib/2.90/glib-2.90.1.sha256sum and to MSYS2's PKGBUILD mingw-w64-glib2 2.90.1-1.
+glib 2.90.1 93c941aa17d5eb1d53fe838365f29a8b4e539c222a256d974ec8f30fc413e396 glib-2.90.1.tar.xz https://download.gnome.org/sources/glib/2.90/glib-2.90.1.tar.xz linux,darwin COPYING
+# unsigned: equal to MSYS2's PKGBUILD mingw-w64-fribidi 1.0.18-1.
+fribidi 1.0.18 1de5e8073d035388b71d0b2d452b1da1f8caeea8a7702997b401fe1b6250727f fribidi-1.0.18.tar.xz https://github.com/fribidi/fribidi/releases/download/v1.0.18/fribidi-1.0.18.tar.xz linux,darwin COPYING
+# unsigned: equal to MSYS2's PKGBUILD mingw-w64-harfbuzz 15.1.0-1 (the package pinned below for Windows).
+harfbuzz 15.1.0 0fc7c565443a5f4be7da65ac5ee5bd737d9b158dc908708b7689a0a5796b0c8d harfbuzz-15.1.0.tar.xz https://github.com/harfbuzz/harfbuzz/releases/download/15.1.0/harfbuzz-15.1.0.tar.xz linux,darwin COPYING
+# unsigned: equal to https://download.gnome.org/sources/pango/1.58/pango-1.58.2.sha256sum and MSYS2's PKGBUILD mingw-w64-pango 1.58.2-1.
+pango 1.58.2 342385b6ca3b7c73455d7c80a13b7dbe4489e00bc3bd4c5bd6ed4dce421e374a pango-1.58.2.tar.xz https://download.gnome.org/sources/pango/1.58/pango-1.58.2.tar.xz linux,darwin COPYING
+# signed-by 0338C8D8D9FDA62CF9C421BD7EC2DBB6F4DBF434 https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.2.1/libjpeg-turbo-3.2.1.tar.gz.sig (The libjpeg-turbo Project; gpgv good, 2026-11-19)
+libjpeg-turbo 3.2.1 c27ad72a68da151177929aa969ae773a2da5ac2af9ce946079314fdac8cece7f libjpeg-turbo-3.2.1.tar.gz https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.2.1/libjpeg-turbo-3.2.1.tar.gz linux,darwin LICENSE.md README.ijg
+# signed-by CA262C6C83DE4D2FB28A332A3A6A4DB839EAA6D7 https://poppler.freedesktop.org/poppler-26.11.0.tar.xz.sig (Albert Astals Cid; gpgv good, 2026-11-19; MSYS2 is at 26.10.0, no second source for 26.11.0)
+poppler 26.11.0 41c32680160addf5a8dd7a830e4869c01e9f6bee1abb91e44fabd1ba9d7828fb poppler-26.11.0.tar.xz https://poppler.freedesktop.org/poppler-26.11.0.tar.xz linux,darwin,mingw COPYING COPYING3
 
 # ---------------------------------------------------------------- Windows: MSYS2 (decision U2)
 # cairo 1.18.6-2 is upstream's archive (the SHA256 above) with MSYS2's two
