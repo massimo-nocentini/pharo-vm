@@ -1,5 +1,9 @@
 # Change log
 
+## Unreleased
+
+* Pango 1.58.2 with PangoCairo (GLib 2.90.1, FriBidi 1.0.18, HarfBuzz 15.1.0) and Poppler 26.11.0 with poppler-glib in the cairo stack of the native VMs, for the image's uFFI bindings libpangocairo.st and libpoppler.st: options `FEATURE_LIB_PANGO` and `FEATURE_LIB_POPPLER` (both on; Poppler is GPL, distributed under GPL-3.0, and `-DFEATURE_LIB_POPPLER=OFF` builds a VM without it), checked by `scripts/cairo-stack/check.sh` and `tests/cairo-stack/ci-text.st` (docs/PangoPoppler.md, docs/CairoStack.md)
+
 ## v12.0.6-beta
 
 * Just cleaning Bock into Block by @Ducasse in https://github.com/pharo-project/pharo-vm/pull/1119

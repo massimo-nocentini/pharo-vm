@@ -4,7 +4,7 @@ The VM can be cross-built to WebAssembly with Emscripten.
 The build runs from the root of this repository, out of tree, by default in `build-wasm/`.
 It builds the StackVM, the interpreter (a JIT needs executable memory), for 64-bit images, with the FFI on libffi but no threads, and runs the stock Pharo 12 image by default.
 Pharo 13, 14 and 15 images run too: a site is built with one (`WASM_IMAGE_ZIP`), may offer several, which its pages let the user choose from (`WASM_EXTRA_IMAGES`), and the pages open any of them from disk; the Smalltalk of the pages works with all of them (see Pharo versions).
-The site that GitHub Actions builds offers Pharo 15 (the default), 14 and 13.1.
+The site that GitHub Actions builds offers Pharo 15 (the default), 14, 13.1 and the batteries image, Pharo 15 with the projects of this VM's plugins and libraries ([Batteries.md](Batteries.md)).
 Two VMs are linked from the same objects:
 
 - a command-line VM for node, with access to the host file system, environment and exit status;
@@ -69,9 +69,10 @@ A site has a default image, the pinned Pharo 12 or the zip of `WASM_IMAGE_ZIP`, 
 The site of GitHub Actions is built so, with the zips of files.pharo.org under their own names (from which the pages read the build of each image):
 
     make wasm WASM_IMAGE_ZIP=Pharo15.0-SNAPSHOT.build.117.sha.053a562682.arch.64bit.zip WASM_IMAGE_ID=p15 \
-              WASM_EXTRA_IMAGES="p13=Pharo13.0-SNAPSHOT.build.749.sha.d7c6f761d5.arch.64bit.zip p14=Pharo14.0-SNAPSHOT.build.785.sha.74f3a1b398.arch.64bit.zip" \
+              WASM_EXTRA_IMAGES="p13=Pharo13.0-SNAPSHOT.build.749.sha.d7c6f761d5.arch.64bit.zip p14=Pharo14.0-SNAPSHOT.build.785.sha.74f3a1b398.arch.64bit.zip batteries=PharoBatteries-Pharo15.zip" \
               WASM_EXTRA_SOURCES="Pharo15.0-64bit-4e572fe.sources Pharo15.0-64bit-b85960f.sources" WASM_LIBGIT2=ON
 
+where `PharoBatteries-Pharo15.zip` is the zip of the batteries job of the same run ([Batteries.md](Batteries.md); `packaging/batteries/build.sh` makes it locally), which the pages list as "Pharo 15 (batteries)".
 Each extra image is unpacked into `build-wasm/image/stock-<id>/`, prepared for the world as the default one is (into `build-wasm/image/web-<id>/`, once, and again only when its zip or OSWindow-Web changes), and staged under `web/image/<id>/`; the default image keeps the URLs it had, `web/image/Pharo.image.gz` and the like.
 `WASM_EXTRA_SOURCES` stages `.sources` files that no image of the site has, under `web/image/sources/`: an image saved in a browser from an image that the site served before still finds the source of its methods there.
 `WASM_GIT_PROXY` is the site's default CORS proxy of git, `https://cors.isomorphic-git.org/` unless it is given (see libgit2).
@@ -731,7 +732,8 @@ The files of `web/`, from `packaging/emscripten/web`:
 - `vm-worker.js`, the worker of every VM, with `vm-driver.js` (the slices, the stdio devices and `/dev/nbevents`), `vm-storage.js` (the saved images in IndexedDB, which the pages read too) and `catalog.js` (the images of the site, from the manifest, for the worker and the pages); `open-image.js`, which reads the images of the user's own; `images.js`, the Images dialog, and `git-proxy.js`, the git proxy of Settings and its dialog, which the Console and the world page share; `pharo-logo.png`.
 - `pharo-web.js` and `pharo-web.wasm`, the VM; `manifest.json`; `THIRD-PARTY-NOTICES.txt`; `image/`, the images, their `.changes` and `.sources`, gzipped; `st/`, `web-repl.st`, `web-notebook.st`, `web-libgit.st`, `web-bootstrap.st` and `OSWindow-Web.st`.
 
-`manifest.json` (`packaging/emscripten/tools/stage.mjs` says every key) lists the files of the default image in `files`, and the catalog of the site's images in `images`, also when there is one: for each its `id`, `label` ("Pharo 13.1"), `pharo` ("13.1", from the name of its `.sources`), `pharoBuild` (from the name of its zip), `world` and `webPackage`, and its `files`; the default one has `default: true`, and `imageId` is its id.
+`manifest.json` (`packaging/emscripten/tools/stage.mjs` says every key) lists the files of the default image in `files`, and the catalog of the site's images in `images`, also when there is one: for each its `id`, `label` ("Pharo 13.1"; an extra image whose label an image before it has, the default one first, gets its id after it, "Pharo 15 (batteries)"), `pharo` ("13.1", from the name of its `.sources`), `pharoBuild` (from the name of its zip), `world` and `webPackage`, and its `files`; the default one has `default: true`, and `imageId` is its id.
+The images are sorted by release, the default one first among those of its release, then by id.
 `extraSources` lists the `WASM_EXTRA_SOURCES`, and `gitProxyDefault` is the site's default git proxy (`""` for none).
 `catalog.js` is its only reader in the pages and the worker, and makes a catalog of one image of the manifest of an older build.
 
@@ -787,7 +789,7 @@ The world page prepares the stock images that it opens, and the Console offers t
 ### Pharo versions
 
 A local build runs the pinned Pharo 12 image (build 1599) by default.
-The site of GitHub Actions offers Pharo 15 (Pharo15.0-SNAPSHOT build 117, `053a562682`), its default, Pharo 14 (Pharo14.0-SNAPSHOT build 785, `74f3a1b398`) and Pharo 13.1 (Pharo13.0-SNAPSHOT build 749, `d7c6f761d5`), each prepared for the world, and serves the `.sources` of Pharo 15 builds 41 and 50 (`Pharo15.0-64bit-4e572fe.sources`, `Pharo15.0-64bit-b85960f.sources`), the images it had before, for the images that browsers saved from them.
+The site of GitHub Actions offers Pharo 15 (Pharo15.0-SNAPSHOT build 117, `053a562682`), its default, Pharo 14 (Pharo14.0-SNAPSHOT build 785, `74f3a1b398`), Pharo 13.1 (Pharo13.0-SNAPSHOT build 749, `d7c6f761d5`) and the batteries image (build 117 with more projects, `batteries`, [Batteries.md](Batteries.md)), each prepared for the world, and serves the `.sources` of Pharo 15 builds 41 and 50 (`Pharo15.0-64bit-4e572fe.sources`, `Pharo15.0-64bit-b85960f.sources`), the images it had before, for the images that browsers saved from them.
 Build 50 lacked `StMethodBrowser class>>#browseImplementorsOfAll:` and `#browseSendersOfAll:`, which the senders and implementors commands of its own browser send (a DNU, natively too); build 117 has them, and so has Pharo 14.
 Lane 80 runs the world on every image of a site, and Pharo 12 and 15 images were also opened from disk on either page.
 The VM is the same; what differs is the Smalltalk of the pages (`packaging/emscripten/st`), which works with all of them; the differences below were found between Pharo 12 and 15:

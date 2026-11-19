@@ -1,0 +1,23 @@
+# The functions of Poppler's glib wrapper (libpoppler-glib.so.8,
+# libpoppler-glib.8.dylib, libpoppler-glib-8.dll) that the images bind through
+# uFFI: PopplerLibrary of the package LibPoppler (libpangocairo.st,
+# libpoppler.st; docs/PangoPoppler.md).  A name per line, '#' starting a
+# comment.  scripts/cairo-stack/check.sh asserts that the native stack's
+# library exports every name; a binding that calls another function adds it
+# here first.  The Emscripten VM has no Poppler yet:
+# cmake/emscripten/ffiLibraries.cmake does not read this list, the input of
+# that round.
+#
+poppler_get_version
+poppler_document_new_from_bytes
+poppler_document_get_n_pages
+poppler_document_get_page
+poppler_document_get_page_by_label
+poppler_document_get_title
+poppler_document_get_author
+poppler_page_get_size
+poppler_page_get_index
+poppler_page_get_label
+poppler_page_get_text
+poppler_page_render
+poppler_page_render_for_printing

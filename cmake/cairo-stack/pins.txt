@@ -9,8 +9,13 @@
 #
 #   <name> <version> <sha256> <file> <url> <platforms> <licence files...>
 #       A source archive, built in the file's order.  <platforms> is "all" or
-#       a comma list of linux, darwin.  The licence files are paths inside the
+#       a comma list of linux, darwin, mingw.  mingw marks an archive that
+#       build.sh --platform mingw builds on Windows on top of the MSYS2 prefix
+#       (only poppler: MSYS2's own poppler needs curl, nss and more); linux
+#       and darwin build it natively.  The licence files are paths inside the
 #       archive's top directory; the bundle's LICENSE.<name> concatenates them.
+#       Which archives a feature needs (pango, poppler; the rest is core) is a
+#       fixed map in build.sh and cmake/cairoStack.cmake, not a field here.
 #       The comment line before it says how the archive was authenticated:
 #       "# signed-by <primary key fingerprint> <signature url> ..." (the key is
 #       keys/<name>.asc) or "# unsigned: <how the hash was cross-checked>".
@@ -24,15 +29,23 @@
 #       date: check-latest.sh (the weekly watch) reports it "accepted" instead of
 #       BEHIND, and BEHIND again for any other newer release or after the date,
 #       so every exception is reviewed (decision U4, docs/CairoStack.md).
+#   msys2-root <feature> <dll>...
+#       Windows: the DLLs whose import closure a feature needs (core: cairo,
+#       FreeType, libffi-8.dll, which the VM's FFI uses; pango; poppler: what
+#       the from-source libpoppler and libpoppler-glib import).  Written by
+#       hand; "fetch-msys2.sh --closure" walks from them.
 #   msys2 <env> <kind> <package> <version> <sha256> <url> <source sha256> <source url>
 #       Windows (decision U2): a binary package of MSYS2's <env> (ucrt64 for
 #       x86_64, clangarm64 for ARM64) and its source package.  <kind> is root
 #       (cairo, freetype), lib, or runtime (the C/C++ runtime of the toolchain,
 #       which the VM's install step bundles from the compiler it was built
 #       with).  Written by "fetch-msys2.sh --closure --env <env> --sources <dir>".
-#   msys2-dll <env> <dll> <package>
-#       A DLL of the closure of libcairo-2.dll and libfreetype-6.dll: what the
-#       Windows bundle holds, and the import allow-list of check.sh.
+#   msys2-dll <env> <dll> <package> <features>
+#       A DLL of the closure of the msys2-root lines: what the Windows bundle
+#       holds, and the import allow-list of check.sh.  <features> is the comma
+#       list of the features whose roots reach it (core, pango, poppler; a
+#       line without it is core): fetch-msys2.sh --features <list> fetches the
+#       packages owning a DLL of core or of an enabled feature.
 #   msys2-mirror <base url>
 #       A second location of every msys2 file: <base url>/<file name>.
 #
@@ -49,14 +62,33 @@ libpng 1.6.59 86a3e4b501f7f50e392c4e456ea158893e9a595b1c63eb88c7bb9f6cf8772dad l
 # signed-by E30674707856409FF1948010BE6C3AAC63AD8E3F https://download.savannah.gnu.org/releases/freetype/freetype-2.15.0.tar.xz.sig (Werner Lemberg; gpgv good, 2026-11-18; MSYS2's source package mingw-w64-freetype-2.15.0-1 holds the same archive)
 freetype 2.15.0 93cd47eb719c325107f2d3cf087d06299e944c3b48a40b55537302304dea1dd5 freetype-2.15.0.tar.xz https://download.savannah.gnu.org/releases/freetype/freetype-2.15.0.tar.xz linux,darwin LICENSE.TXT docs/FTL.TXT docs/GPLv2.TXT src/bdf/README src/pcf/README src/base/fthash.c
 # signed-by 3176EF7DB2367F1FCA4F306B1F9B0E909AF37285 https://github.com/libexpat/libexpat/releases/download/R_2_10_0/expat-2.10.0.tar.xz.asc (Sebastian Pipping, signing subkey CB8DE70A90CFBF6C3BF5CC5696262ACFFBD3AEC6; gpgv good, 2026-11-18)
-expat 2.10.0 c624ba2998fc65df1163a49641ff3f9ab73138b11641d92c86bee0fb01b1bc7f expat-2.10.0.tar.xz https://github.com/libexpat/libexpat/releases/download/R_2_10_0/expat-2.10.0.tar.xz linux COPYING
+expat 2.10.0 c624ba2998fc65df1163a49641ff3f9ab73138b11641d92c86bee0fb01b1bc7f expat-2.10.0.tar.xz https://github.com/libexpat/libexpat/releases/download/R_2_10_0/expat-2.10.0.tar.xz linux,darwin COPYING
 # unsigned: fontconfig publishes a checksum only.  The hash equals that of
 # https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.18.4/fontconfig-2.18.4.tar.xz.sha256sum (same origin; 2026-11-18).
-fontconfig 2.18.4 95013637eff5f81d4871dd16cd098c273264c16d0f9f0b27cc43b81b2794bee3 fontconfig-2.18.4.tar.xz https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.18.4/fontconfig-2.18.4.tar.xz linux COPYING
+fontconfig 2.18.4 95013637eff5f81d4871dd16cd098c273264c16d0f9f0b27cc43b81b2794bee3 fontconfig-2.18.4.tar.xz https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.18.4/fontconfig-2.18.4.tar.xz linux,darwin COPYING
 # signed-by 3BB639E56F861FA2E86505690FDD682D974CA72A https://www.cairographics.org/releases/pixman-0.46.4.tar.gz.sha512.asc (Matt Turner, signing subkey 16238A7D92448B02B7B10344B6B1CEAE5103DB07; the signed SHA512 matches; gpgv good, 2026-11-19)
 pixman 0.46.4 d09c44ebc3bd5bee7021c79f922fe8fb2fb57f7320f55e97ff9914d2346a591c pixman-0.46.4.tar.gz https://www.cairographics.org/releases/pixman-0.46.4.tar.gz linux,darwin COPYING
 # signed-by 53EF3DC3B63E2899271BD26322E8091EEA11BBB7 https://www.cairographics.org/releases/cairo-1.18.6.tar.xz.sha256sum.asc (Emmanuele Bassi; the signed SHA256 matches; gpgv good, 2026-11-18; byte-identical to the signed tag 1.18.6, and MSYS2's source package mingw-w64-cairo-1.18.6-2 holds the same archive)
 cairo 1.18.6 1c767308174337a74694da0f3ec069c271452163a1ef4540964c50c301f157d4 cairo-1.18.6.tar.xz https://www.cairographics.org/releases/cairo-1.18.6.tar.xz linux,darwin COPYING COPYING-LGPL-2.1 COPYING-MPL-1.1
+# unsigned: libffi publishes no signature.  Cross-checked 2026-11-19: MSYS2's PKGBUILD mingw-w64-libffi 3.8.1-1 pins the same SHA256.
+libffi 3.8.1 81e879c094cc5ec3186c48510c6385ac6b3e866192e8bc71a35245703757ee40 libffi-3.8.1.tar.gz https://github.com/libffi/libffi/releases/download/v3.8.1/libffi-3.8.1.tar.gz linux,darwin LICENSE
+# signed-by A95536204A3BB489715231282A98E77EB6F24CA8 https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.bz2.sig (Nicholas Wilson, signing subkey BACF71F10404D5761C09D392021DE40BFB63B406; gpgv good, 2026-11-19)
+pcre2 10.49 53c156e1ba416a20da8e65395daa132da0d80e76910424caca3fcdae7831d384 pcre2-10.49.tar.bz2 https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.bz2 linux,darwin LICENCE.md
+# unsigned: a GitHub tag archive.  Its SHA256 is the source_hash of subprojects/proxy-libintl.wrap in glib-2.90.1.tar.xz (and of wrapdb proxy-libintl_0.5-1).
+proxy-libintl 0.5 f7a1cbd7579baaf575c66f9d99fb6295e9b0684a28b095967cfda17857595303 proxy-libintl-0.5.tar.gz https://github.com/frida/proxy-libintl/archive/refs/tags/0.5.tar.gz darwin COPYING
+mirror proxy-libintl https://github.com/mesonbuild/wrapdb/releases/download/proxy-libintl_0.5-1/proxy-libintl-0.5.tar.gz
+# unsigned: GNOME publishes a checksum only; equal to https://download.gnome.org/sources/glib/2.90/glib-2.90.1.sha256sum and to MSYS2's PKGBUILD mingw-w64-glib2 2.90.1-1.
+glib 2.90.1 93c941aa17d5eb1d53fe838365f29a8b4e539c222a256d974ec8f30fc413e396 glib-2.90.1.tar.xz https://download.gnome.org/sources/glib/2.90/glib-2.90.1.tar.xz linux,darwin COPYING
+# unsigned: equal to MSYS2's PKGBUILD mingw-w64-fribidi 1.0.18-1.
+fribidi 1.0.18 1de5e8073d035388b71d0b2d452b1da1f8caeea8a7702997b401fe1b6250727f fribidi-1.0.18.tar.xz https://github.com/fribidi/fribidi/releases/download/v1.0.18/fribidi-1.0.18.tar.xz linux,darwin COPYING
+# unsigned: equal to MSYS2's PKGBUILD mingw-w64-harfbuzz 15.1.0-1 (the package pinned below for Windows).
+harfbuzz 15.1.0 0fc7c565443a5f4be7da65ac5ee5bd737d9b158dc908708b7689a0a5796b0c8d harfbuzz-15.1.0.tar.xz https://github.com/harfbuzz/harfbuzz/releases/download/15.1.0/harfbuzz-15.1.0.tar.xz linux,darwin COPYING
+# unsigned: equal to https://download.gnome.org/sources/pango/1.58/pango-1.58.2.sha256sum and MSYS2's PKGBUILD mingw-w64-pango 1.58.2-1.
+pango 1.58.2 342385b6ca3b7c73455d7c80a13b7dbe4489e00bc3bd4c5bd6ed4dce421e374a pango-1.58.2.tar.xz https://download.gnome.org/sources/pango/1.58/pango-1.58.2.tar.xz linux,darwin COPYING
+# signed-by 0338C8D8D9FDA62CF9C421BD7EC2DBB6F4DBF434 https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.2.1/libjpeg-turbo-3.2.1.tar.gz.sig (The libjpeg-turbo Project; gpgv good, 2026-11-19)
+libjpeg-turbo 3.2.1 c27ad72a68da151177929aa969ae773a2da5ac2af9ce946079314fdac8cece7f libjpeg-turbo-3.2.1.tar.gz https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.2.1/libjpeg-turbo-3.2.1.tar.gz linux,darwin LICENSE.md README.ijg
+# signed-by CA262C6C83DE4D2FB28A332A3A6A4DB839EAA6D7 https://poppler.freedesktop.org/poppler-26.11.0.tar.xz.sig (Albert Astals Cid; gpgv good, 2026-11-19; MSYS2 is at 26.10.0, no second source for 26.11.0)
+poppler 26.11.0 41c32680160addf5a8dd7a830e4869c01e9f6bee1abb91e44fabd1ba9d7828fb poppler-26.11.0.tar.xz https://poppler.freedesktop.org/poppler-26.11.0.tar.xz linux,darwin,mingw COPYING COPYING3
 
 # ---------------------------------------------------------------- Windows: MSYS2 (decision U2)
 # cairo 1.18.6-2 is upstream's archive (the SHA256 above) with MSYS2's two
@@ -64,13 +96,20 @@ cairo 1.18.6 1c767308174337a74694da0f3ec069c271452163a1ef4540964c50c301f157d4 ca
 # cairo MR !673 (the TLS callback of the toy-font path).  FreeType 2.15.0-1 is
 # the archive above with harfbuzz, brotli and bzip2 on.  The other versions are
 # MSYS2's.  No line here is checked by check-pins.sh against the wasm pins.
+# Poppler is not an MSYS2 package here: build.sh --platform mingw builds its
+# source pin (the one with platform mingw) against these packages.
 
+# msys2-root <feature> <dll>...: the roots of the closure walk (fetch-msys2.sh --closure)
+msys2-root core    libcairo-2.dll libfreetype-6.dll libffi-8.dll
+msys2-root pango   libpango-1.0-0.dll libpangocairo-1.0-0.dll libgobject-2.0-0.dll
+msys2-root poppler libcairo-2.dll libfreetype-6.dll libglib-2.0-0.dll libgobject-2.0-0.dll libgio-2.0-0.dll libjpeg-8.dll libpng16-16.dll zlib1.dll
 
-# msys2 ucrt64: the DLL closure of libcairo-2.dll and libfreetype-6.dll, computed 2026-11-18
+# msys2 ucrt64: the DLL closure of the msys2-root lines (core, pango, poppler), computed 2026-11-19
 # from https://repo.msys2.org/mingw/ucrt64/ucrt64.files by scripts/cairo-stack/fetch-msys2.sh --closure --env ucrt64.
 # msys2 <env> <kind> <package> <version> <sha256> <url> <source sha256> <source url>
 msys2 ucrt64 root mingw-w64-ucrt-x86_64-cairo 1.18.6-2 021c0a4d1df463d08d0cac170818a7cbaccaa5b09ac6edc7948e461cb5a46e85 https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-cairo-1.18.6-2-any.pkg.tar.zst ff7124c2155b1169fe102a1dcba1cd7a21f69dace3adf88f1dd8f85ef7ad1e19 https://repo.msys2.org/mingw/sources/mingw-w64-cairo-1.18.6-2.src.tar.zst
 msys2 ucrt64 root mingw-w64-ucrt-x86_64-freetype 2.15.0-1 a9a691f71d1a553099c54ca666e611abfb2b4ff08dae24f2a5af72e22a7e5feb https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-freetype-2.15.0-1-any.pkg.tar.zst 2f09c60b72bd249642d055aa5a34edf2577392e592415f3f4730dd37990b47ad https://repo.msys2.org/mingw/sources/mingw-w64-freetype-2.15.0-1.src.tar.zst
+msys2 ucrt64 lib mingw-w64-ucrt-x86_64-libffi 3.8.1-1 8eeb770c91b7e51ddbcb34a9a991e5b417066270363c3026882149638a70d03d https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libffi-3.8.1-1-any.pkg.tar.zst 81d9655986c173c3bf4a37b87a85fb85c1d67a00550221b52f86ca5789585ee8 https://repo.msys2.org/mingw/sources/mingw-w64-libffi-3.8.1-1.src.tar.zst
 msys2 ucrt64 runtime mingw-w64-ucrt-x86_64-libgcc 16.2.0-7 bc0ae31c582e0847964b4c8c4b55bb2404a9b7ddce7ebf0b176b6693b76e0c62 https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libgcc-16.2.0-7-any.pkg.tar.zst bdd1b2cd820cd67d38b42a174180bdd589b80b97af1a8b042d6c4da9176bac93 https://repo.msys2.org/mingw/sources/mingw-w64-gcc-16.2.0-7.src.tar.zst
 msys2 ucrt64 runtime mingw-w64-ucrt-x86_64-libstdc++ 16.2.0-7 4dd4b216b0e92ffa160127dd50620372609e98cb219ff1c5dcb9b3fbfe153253 https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libstdc++-16.2.0-7-any.pkg.tar.zst bdd1b2cd820cd67d38b42a174180bdd589b80b97af1a8b042d6c4da9176bac93 https://repo.msys2.org/mingw/sources/mingw-w64-gcc-16.2.0-7.src.tar.zst
 msys2 ucrt64 lib mingw-w64-ucrt-x86_64-fontconfig 2.18.3-1 d0b364f3ee37e3b6f6c136688ce8fa909bb6d8a69df7e08de1aa40870d9e1d60 https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-fontconfig-2.18.3-1-any.pkg.tar.zst 7df65dbf84397f4f71c6aa0bd39fac93f839d6b87f04a935773b69828740230d https://repo.msys2.org/mingw/sources/mingw-w64-fontconfig-2.18.3-1.src.tar.zst
@@ -87,39 +126,59 @@ msys2 ucrt64 lib mingw-w64-ucrt-x86_64-glib2 2.90.1-1 9a7826349279bcca0c935b0188
 msys2 ucrt64 lib mingw-w64-ucrt-x86_64-graphite2 1.3.15-1 34ca1f88bff10ef182a6b1c8e5622d5029f13b05748e361af13b552b422ea849 https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-graphite2-1.3.15-1-any.pkg.tar.zst eb76ce274c68ea6bad0883144c21e44a803ec94fed9dc0f6584feb0a8415a1d6 https://repo.msys2.org/mingw/sources/mingw-w64-graphite2-1.3.15-1.src.tar.zst
 msys2 ucrt64 lib mingw-w64-ucrt-x86_64-libiconv 1.19.1-1 8a45dc317a285a036bddd79e01505d67b79e44ff49fc3f6e7177a5ea98d098cf https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libiconv-1.19.1-1-any.pkg.tar.zst ed46bb1b524ad9bd9d843091bf7b18ab23e5cd21fef6de743c8c943bdc11dabe https://repo.msys2.org/mingw/sources/mingw-w64-libiconv-1.19.1-1.src.tar.zst
 msys2 ucrt64 lib mingw-w64-ucrt-x86_64-pcre2 10.49-2 44ca7a873b71f1e6ce2b7b671d60bc067249009bd6c732733caa822153ebc4f9 https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-pcre2-10.49-2-any.pkg.tar.zst a0834cd8808867aaa3d0065eefcb12a2be09735a6c398c3da9301187e8517ead https://repo.msys2.org/mingw/sources/mingw-w64-pcre2-10.49-2.src.tar.zst
-# msys2-dll <env> <dll> <package>: the DLLs of the closure (check.sh's import allow-list, the bundle's DLLs)
-msys2-dll ucrt64 libcairo-2.dll mingw-w64-ucrt-x86_64-cairo
-msys2-dll ucrt64 libfreetype-6.dll mingw-w64-ucrt-x86_64-freetype
-msys2-dll ucrt64 libgcc_s_seh-1.dll mingw-w64-ucrt-x86_64-libgcc
-msys2-dll ucrt64 libstdc++-6.dll mingw-w64-ucrt-x86_64-libstdc++
-msys2-dll ucrt64 libfontconfig-1.dll mingw-w64-ucrt-x86_64-fontconfig
-msys2-dll ucrt64 libpixman-1-0.dll mingw-w64-ucrt-x86_64-pixman
-msys2-dll ucrt64 libpng16-16.dll mingw-w64-ucrt-x86_64-libpng
-msys2-dll ucrt64 zlib1.dll mingw-w64-ucrt-x86_64-zlib
-msys2-dll ucrt64 libbrotlidec.dll mingw-w64-ucrt-x86_64-brotli
-msys2-dll ucrt64 libbz2-1.dll mingw-w64-ucrt-x86_64-bzip2
-msys2-dll ucrt64 libharfbuzz-0.dll mingw-w64-ucrt-x86_64-harfbuzz
-msys2-dll ucrt64 libwinpthread-1.dll mingw-w64-ucrt-x86_64-libwinpthread
-msys2-dll ucrt64 libintl-8.dll mingw-w64-ucrt-x86_64-gettext-runtime
-msys2-dll ucrt64 libexpat-1.dll mingw-w64-ucrt-x86_64-expat
-msys2-dll ucrt64 libbrotlicommon.dll mingw-w64-ucrt-x86_64-brotli
-msys2-dll ucrt64 libglib-2.0-0.dll mingw-w64-ucrt-x86_64-glib2
-msys2-dll ucrt64 libgraphite2.dll mingw-w64-ucrt-x86_64-graphite2
-msys2-dll ucrt64 libiconv-2.dll mingw-w64-ucrt-x86_64-libiconv
-msys2-dll ucrt64 libpcre2-8-0.dll mingw-w64-ucrt-x86_64-pcre2
-# system DLLs imported: ADVAPI32.dll api-ms-win-crt-convert-l1-1-0.dll api-ms-win-crt-environment-l1-1-0.dll api-ms-win-crt-
-#     filesystem-l1-1-0.dll api-ms-win-crt-heap-l1-1-0.dll api-ms-win-crt-locale-l1-1-0.dll api-ms-win-crt-math-l1-1-0.dll api-ms-win-crt-
-#     multibyte-l1-1-0.dll api-ms-win-crt-private-l1-1-0.dll api-ms-win-crt-process-l1-1-0.dll api-ms-win-crt-runtime-l1-1-0.dll api-ms-win-crt-
-#     stdio-l1-1-0.dll api-ms-win-crt-string-l1-1-0.dll api-ms-win-crt-time-l1-1-0.dll api-ms-win-crt-utility-l1-1-0.dll DWrite.dll GDI32.dll
-#     KERNEL32.dll MSIMG32.dll ole32.dll RPCRT4.dll SHELL32.dll USER32.dll USP10.dll WS2_32.dll
-# not pinned (reached by the dependencies, but own no DLL of the closure): cc-libs libffi libsystre libtre lzo2 mpdecimal ncurses openssl
+msys2 ucrt64 lib mingw-w64-ucrt-x86_64-pango 1.58.2-1 8d86e4a018ff139b010bf357fa1c9f9030fa32ee195c54ed7e89d8ea701851c8 https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-pango-1.58.2-1-any.pkg.tar.zst df981b2c47d9344f3a4869645a8f2392916dac3e470634778453410ec813e390 https://repo.msys2.org/mingw/sources/mingw-w64-pango-1.58.2-1.src.tar.zst
+msys2 ucrt64 lib mingw-w64-ucrt-x86_64-fribidi 1.0.18-1 4837d3626349c617aaa2db3d116f9b7ea208b11644f507a6a83eab36bb3ac920 https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-fribidi-1.0.18-1-any.pkg.tar.zst 7cd0b6290516a7d61b1508d79c18d2661170a0e3189582ded99bd9879cc159b2 https://repo.msys2.org/mingw/sources/mingw-w64-fribidi-1.0.18-1.src.tar.zst
+msys2 ucrt64 lib mingw-w64-ucrt-x86_64-libthai 0.1.30-1 c90ebbca3e7b4c34f4b3ffa501ba8d00cdaf6340cff7db3c46d79d5e01ef207c https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libthai-0.1.30-1-any.pkg.tar.zst e4f8d840fca132eb47aed311fc2c36dc59604b9ecd0aa310161b9d1e2cee4d03 https://repo.msys2.org/mingw/sources/mingw-w64-libthai-0.1.30-1.src.tar.zst
+msys2 ucrt64 lib mingw-w64-ucrt-x86_64-libdatrie 0.2.14-1 ea92777801ad325278193a362967540752ae37035016df2f6bcee2d89928a195 https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libdatrie-0.2.14-1-any.pkg.tar.zst da58ca439051a8cfb1d7f15cdd82af104e1ea1eeefdb090e608d2305a747df7d https://repo.msys2.org/mingw/sources/mingw-w64-libdatrie-0.2.14-1.src.tar.zst
+msys2 ucrt64 lib mingw-w64-ucrt-x86_64-libjpeg-turbo 3.2.1-1 8eed77c1e0d6de7f8822687f7b1dfa32cda09394806ef67b23399e63de1a92a6 https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libjpeg-turbo-3.2.1-1-any.pkg.tar.zst 51227c796b31c2095028f60fde373241bab9c5f8498393f93af1af6d132a5b16 https://repo.msys2.org/mingw/sources/mingw-w64-libjpeg-turbo-3.2.1-1.src.tar.zst
+# msys2-dll <env> <dll> <package> <features>: the DLLs of the closure (check.sh's import allow-list, the bundle's DLLs)
+msys2-dll ucrt64 libcairo-2.dll mingw-w64-ucrt-x86_64-cairo core,pango,poppler
+msys2-dll ucrt64 libfreetype-6.dll mingw-w64-ucrt-x86_64-freetype core,pango,poppler
+msys2-dll ucrt64 libffi-8.dll mingw-w64-ucrt-x86_64-libffi core,pango,poppler
+msys2-dll ucrt64 libgcc_s_seh-1.dll mingw-w64-ucrt-x86_64-libgcc core,pango,poppler
+msys2-dll ucrt64 libstdc++-6.dll mingw-w64-ucrt-x86_64-libstdc++ core,pango,poppler
+msys2-dll ucrt64 libfontconfig-1.dll mingw-w64-ucrt-x86_64-fontconfig core,pango,poppler
+msys2-dll ucrt64 libpixman-1-0.dll mingw-w64-ucrt-x86_64-pixman core,pango,poppler
+msys2-dll ucrt64 libpng16-16.dll mingw-w64-ucrt-x86_64-libpng core,pango,poppler
+msys2-dll ucrt64 zlib1.dll mingw-w64-ucrt-x86_64-zlib core,pango,poppler
+msys2-dll ucrt64 libbrotlidec.dll mingw-w64-ucrt-x86_64-brotli core,pango,poppler
+msys2-dll ucrt64 libbz2-1.dll mingw-w64-ucrt-x86_64-bzip2 core,pango,poppler
+msys2-dll ucrt64 libharfbuzz-0.dll mingw-w64-ucrt-x86_64-harfbuzz core,pango,poppler
+msys2-dll ucrt64 libwinpthread-1.dll mingw-w64-ucrt-x86_64-libwinpthread core,pango,poppler
+msys2-dll ucrt64 libintl-8.dll mingw-w64-ucrt-x86_64-gettext-runtime core,pango,poppler
+msys2-dll ucrt64 libexpat-1.dll mingw-w64-ucrt-x86_64-expat core,pango,poppler
+msys2-dll ucrt64 libbrotlicommon.dll mingw-w64-ucrt-x86_64-brotli core,pango,poppler
+msys2-dll ucrt64 libglib-2.0-0.dll mingw-w64-ucrt-x86_64-glib2 core,pango,poppler
+msys2-dll ucrt64 libgraphite2.dll mingw-w64-ucrt-x86_64-graphite2 core,pango,poppler
+msys2-dll ucrt64 libiconv-2.dll mingw-w64-ucrt-x86_64-libiconv core,pango,poppler
+msys2-dll ucrt64 libpcre2-8-0.dll mingw-w64-ucrt-x86_64-pcre2 core,pango,poppler
+msys2-dll ucrt64 libpango-1.0-0.dll mingw-w64-ucrt-x86_64-pango pango
+msys2-dll ucrt64 libpangocairo-1.0-0.dll mingw-w64-ucrt-x86_64-pango pango
+msys2-dll ucrt64 libgobject-2.0-0.dll mingw-w64-ucrt-x86_64-glib2 pango,poppler
+msys2-dll ucrt64 libfribidi-0.dll mingw-w64-ucrt-x86_64-fribidi pango
+msys2-dll ucrt64 libgio-2.0-0.dll mingw-w64-ucrt-x86_64-glib2 pango,poppler
+msys2-dll ucrt64 libthai-0.dll mingw-w64-ucrt-x86_64-libthai pango
+msys2-dll ucrt64 libpangoft2-1.0-0.dll mingw-w64-ucrt-x86_64-pango pango
+msys2-dll ucrt64 libpangowin32-1.0-0.dll mingw-w64-ucrt-x86_64-pango pango
+msys2-dll ucrt64 libgmodule-2.0-0.dll mingw-w64-ucrt-x86_64-glib2 pango,poppler
+msys2-dll ucrt64 libdatrie-1.dll mingw-w64-ucrt-x86_64-libdatrie pango
+msys2-dll ucrt64 libjpeg-8.dll mingw-w64-ucrt-x86_64-libjpeg-turbo poppler
+# system DLLs imported: ADVAPI32.dll api-ms-win-crt-conio-l1-1-0.dll api-ms-win-crt-convert-l1-1-0.dll
+#     api-ms-win-crt-environment-l1-1-0.dll api-ms-win-crt-filesystem-l1-1-0.dll api-ms-win-crt-heap-l1-1-0.dll
+#     api-ms-win-crt-locale-l1-1-0.dll api-ms-win-crt-math-l1-1-0.dll api-ms-win-crt-multibyte-l1-1-0.dll
+#     api-ms-win-crt-private-l1-1-0.dll api-ms-win-crt-process-l1-1-0.dll api-ms-win-crt-runtime-l1-1-0.dll
+#     api-ms-win-crt-stdio-l1-1-0.dll api-ms-win-crt-string-l1-1-0.dll api-ms-win-crt-time-l1-1-0.dll api-ms-win-crt-utility-l1-1-0.dll
+#     DNSAPI.dll DWrite.dll GDI32.dll IPHLPAPI.DLL KERNEL32.dll MSIMG32.dll ole32.dll RPCRT4.dll SHELL32.dll SHLWAPI.dll USER32.dll
+#     USP10.dll WS2_32.dll
+# not pinned (reached by the dependencies, but own no DLL of the closure): cc-libs libsystre libtre lzo2 mpdecimal ncurses openssl
 #     python python-packaging sqlite tcl tk tzdata wineditline xz zstd
 
-# msys2 clangarm64: the DLL closure of libcairo-2.dll and libfreetype-6.dll, computed 2026-11-18
+# msys2 clangarm64: the DLL closure of the msys2-root lines (core, pango, poppler), computed 2026-11-19
 # from https://repo.msys2.org/mingw/clangarm64/clangarm64.files by scripts/cairo-stack/fetch-msys2.sh --closure --env clangarm64.
 # msys2 <env> <kind> <package> <version> <sha256> <url> <source sha256> <source url>
 msys2 clangarm64 root mingw-w64-clang-aarch64-cairo 1.18.6-2 4f13aec1744dd5c19bb6549785811e36a1a57fea0527a41e6fc9240aeab34679 https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-cairo-1.18.6-2-any.pkg.tar.zst ff7124c2155b1169fe102a1dcba1cd7a21f69dace3adf88f1dd8f85ef7ad1e19 https://repo.msys2.org/mingw/sources/mingw-w64-cairo-1.18.6-2.src.tar.zst
 msys2 clangarm64 root mingw-w64-clang-aarch64-freetype 2.15.0-1 59dd69f6c6fd708ee8cdda14ec49ca8586719dc82ab5d20785da06d3f7884658 https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-freetype-2.15.0-1-any.pkg.tar.zst 2f09c60b72bd249642d055aa5a34edf2577392e592415f3f4730dd37990b47ad https://repo.msys2.org/mingw/sources/mingw-w64-freetype-2.15.0-1.src.tar.zst
+msys2 clangarm64 lib mingw-w64-clang-aarch64-libffi 3.8.1-1 b4fda38c76e77791f596a74d089658afb20e12ac7be9e30a7f6b9b5270352b94 https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-libffi-3.8.1-1-any.pkg.tar.zst 81d9655986c173c3bf4a37b87a85fb85c1d67a00550221b52f86ca5789585ee8 https://repo.msys2.org/mingw/sources/mingw-w64-libffi-3.8.1-1.src.tar.zst
 msys2 clangarm64 lib mingw-w64-clang-aarch64-zlib 1.4-2 ff28742649461c300f8817cc106252ad817aab9611f391c8112ba73f30dafa70 https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-zlib-1.4-2-any.pkg.tar.zst 28415621a0f6c16bc20b0ce50cd1ae3632dd9f27bdc5776ab3ec18e8d2f00dcd https://repo.msys2.org/mingw/sources/mingw-w64-zlib-1.4-2.src.tar.zst
 msys2 clangarm64 lib mingw-w64-clang-aarch64-libpng 1.6.59-2 26ff96c6f1878b7393fa6de82b1ea7a4b9d57e355b1906e60d7cbc68b4cb918b https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-libpng-1.6.59-2-any.pkg.tar.zst 7f7c029d119427fe7b36be8a79228f831062bedadee1f49c9e0919fe6d7a459a https://repo.msys2.org/mingw/sources/mingw-w64-libpng-1.6.59-2.src.tar.zst
 msys2 clangarm64 lib mingw-w64-clang-aarch64-fontconfig 2.18.3-1 f37fa96e3a7965015d0337ad44ad30187129f63cd3c06afb1bc88ad2853e44f0 https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-fontconfig-2.18.3-1-any.pkg.tar.zst 7df65dbf84397f4f71c6aa0bd39fac93f839d6b87f04a935773b69828740230d https://repo.msys2.org/mingw/sources/mingw-w64-fontconfig-2.18.3-1.src.tar.zst
@@ -134,28 +193,47 @@ msys2 clangarm64 lib mingw-w64-clang-aarch64-glib2 2.90.1-1 88fd4d41048ca7691476
 msys2 clangarm64 lib mingw-w64-clang-aarch64-graphite2 1.3.15-1 28490fe4773d50cde27bd5ce5186cb78620afdbdb9665bab01ca89fbd039aaa9 https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-graphite2-1.3.15-1-any.pkg.tar.zst eb76ce274c68ea6bad0883144c21e44a803ec94fed9dc0f6584feb0a8415a1d6 https://repo.msys2.org/mingw/sources/mingw-w64-graphite2-1.3.15-1.src.tar.zst
 msys2 clangarm64 lib mingw-w64-clang-aarch64-libiconv 1.19.1-1 71091b7681d3e94820422793a8c23b612d52b1a858615d95acbb389cd3dd7206 https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-libiconv-1.19.1-1-any.pkg.tar.zst ed46bb1b524ad9bd9d843091bf7b18ab23e5cd21fef6de743c8c943bdc11dabe https://repo.msys2.org/mingw/sources/mingw-w64-libiconv-1.19.1-1.src.tar.zst
 msys2 clangarm64 lib mingw-w64-clang-aarch64-pcre2 10.49-2 aaf8c4ade10e86f702cf3e5844363826ebb4c548bef83529b40053cbc119c6c1 https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-pcre2-10.49-2-any.pkg.tar.zst a0834cd8808867aaa3d0065eefcb12a2be09735a6c398c3da9301187e8517ead https://repo.msys2.org/mingw/sources/mingw-w64-pcre2-10.49-2.src.tar.zst
-# msys2-dll <env> <dll> <package>: the DLLs of the closure (check.sh's import allow-list, the bundle's DLLs)
-msys2-dll clangarm64 libcairo-2.dll mingw-w64-clang-aarch64-cairo
-msys2-dll clangarm64 libfreetype-6.dll mingw-w64-clang-aarch64-freetype
-msys2-dll clangarm64 zlib1.dll mingw-w64-clang-aarch64-zlib
-msys2-dll clangarm64 libpng16-16.dll mingw-w64-clang-aarch64-libpng
-msys2-dll clangarm64 libfontconfig-1.dll mingw-w64-clang-aarch64-fontconfig
-msys2-dll clangarm64 libpixman-1-0.dll mingw-w64-clang-aarch64-pixman
-msys2-dll clangarm64 libc++.dll mingw-w64-clang-aarch64-libc++
-msys2-dll clangarm64 libbz2-1.dll mingw-w64-clang-aarch64-bzip2
-msys2-dll clangarm64 libharfbuzz-0.dll mingw-w64-clang-aarch64-harfbuzz
-msys2-dll clangarm64 libbrotlidec.dll mingw-w64-clang-aarch64-brotli
-msys2-dll clangarm64 libexpat-1.dll mingw-w64-clang-aarch64-expat
-msys2-dll clangarm64 libintl-8.dll mingw-w64-clang-aarch64-gettext-runtime
-msys2-dll clangarm64 libglib-2.0-0.dll mingw-w64-clang-aarch64-glib2
-msys2-dll clangarm64 libgraphite2.dll mingw-w64-clang-aarch64-graphite2
-msys2-dll clangarm64 libbrotlicommon.dll mingw-w64-clang-aarch64-brotli
-msys2-dll clangarm64 libiconv-2.dll mingw-w64-clang-aarch64-libiconv
-msys2-dll clangarm64 libpcre2-8-0.dll mingw-w64-clang-aarch64-pcre2
-# system DLLs imported: ADVAPI32.dll api-ms-win-crt-convert-l1-1-0.dll api-ms-win-crt-environment-l1-1-0.dll api-ms-win-crt-
-#     filesystem-l1-1-0.dll api-ms-win-crt-heap-l1-1-0.dll api-ms-win-crt-locale-l1-1-0.dll api-ms-win-crt-math-l1-1-0.dll api-ms-win-crt-
-#     multibyte-l1-1-0.dll api-ms-win-crt-private-l1-1-0.dll api-ms-win-crt-process-l1-1-0.dll api-ms-win-crt-runtime-l1-1-0.dll api-ms-win-crt-
-#     stdio-l1-1-0.dll api-ms-win-crt-string-l1-1-0.dll api-ms-win-crt-time-l1-1-0.dll api-ms-win-crt-utility-l1-1-0.dll DWrite.dll GDI32.dll
-#     KERNEL32.dll MSIMG32.dll ole32.dll RPCRT4.dll SHELL32.dll USER32.dll USP10.dll WS2_32.dll
-# not pinned (reached by the dependencies, but own no DLL of the closure): libffi libsystre libtre libunwind lzo2 mpdecimal ncurses openssl
+msys2 clangarm64 lib mingw-w64-clang-aarch64-pango 1.58.2-1 89cc9cab93f5b74b3a6929af6ab18a47f5b073795e810cab722b7b8c5e07889b https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-pango-1.58.2-1-any.pkg.tar.zst df981b2c47d9344f3a4869645a8f2392916dac3e470634778453410ec813e390 https://repo.msys2.org/mingw/sources/mingw-w64-pango-1.58.2-1.src.tar.zst
+msys2 clangarm64 lib mingw-w64-clang-aarch64-fribidi 1.0.18-1 5050f91ea0874be8da8f25f547ce17182dde67460f991f0526ce7cfab841efe8 https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-fribidi-1.0.18-1-any.pkg.tar.zst 7cd0b6290516a7d61b1508d79c18d2661170a0e3189582ded99bd9879cc159b2 https://repo.msys2.org/mingw/sources/mingw-w64-fribidi-1.0.18-1.src.tar.zst
+msys2 clangarm64 lib mingw-w64-clang-aarch64-libthai 0.1.30-1 df98f31b1b1355738cf0382e1bfb5ed0aff9f900950f0576d94db438898388b2 https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-libthai-0.1.30-1-any.pkg.tar.zst e4f8d840fca132eb47aed311fc2c36dc59604b9ecd0aa310161b9d1e2cee4d03 https://repo.msys2.org/mingw/sources/mingw-w64-libthai-0.1.30-1.src.tar.zst
+msys2 clangarm64 lib mingw-w64-clang-aarch64-libdatrie 0.2.14-1 07cf5a19ea98e059fa390ad8b9a4937b0bb3d8cda381cbd47c85e14ff6529c31 https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-libdatrie-0.2.14-1-any.pkg.tar.zst da58ca439051a8cfb1d7f15cdd82af104e1ea1eeefdb090e608d2305a747df7d https://repo.msys2.org/mingw/sources/mingw-w64-libdatrie-0.2.14-1.src.tar.zst
+msys2 clangarm64 lib mingw-w64-clang-aarch64-libjpeg-turbo 3.2.1-1 c8fe0922759e127f349195769c5d16680bc9ab57dc78b3c7c3352cda5c0f4820 https://repo.msys2.org/mingw/clangarm64/mingw-w64-clang-aarch64-libjpeg-turbo-3.2.1-1-any.pkg.tar.zst 51227c796b31c2095028f60fde373241bab9c5f8498393f93af1af6d132a5b16 https://repo.msys2.org/mingw/sources/mingw-w64-libjpeg-turbo-3.2.1-1.src.tar.zst
+# msys2-dll <env> <dll> <package> <features>: the DLLs of the closure (check.sh's import allow-list, the bundle's DLLs)
+msys2-dll clangarm64 libcairo-2.dll mingw-w64-clang-aarch64-cairo core,pango,poppler
+msys2-dll clangarm64 libfreetype-6.dll mingw-w64-clang-aarch64-freetype core,pango,poppler
+msys2-dll clangarm64 libffi-8.dll mingw-w64-clang-aarch64-libffi core,pango,poppler
+msys2-dll clangarm64 zlib1.dll mingw-w64-clang-aarch64-zlib core,pango,poppler
+msys2-dll clangarm64 libpng16-16.dll mingw-w64-clang-aarch64-libpng core,pango,poppler
+msys2-dll clangarm64 libfontconfig-1.dll mingw-w64-clang-aarch64-fontconfig core,pango,poppler
+msys2-dll clangarm64 libpixman-1-0.dll mingw-w64-clang-aarch64-pixman core,pango,poppler
+msys2-dll clangarm64 libc++.dll mingw-w64-clang-aarch64-libc++ core,pango,poppler
+msys2-dll clangarm64 libbz2-1.dll mingw-w64-clang-aarch64-bzip2 core,pango,poppler
+msys2-dll clangarm64 libharfbuzz-0.dll mingw-w64-clang-aarch64-harfbuzz core,pango,poppler
+msys2-dll clangarm64 libbrotlidec.dll mingw-w64-clang-aarch64-brotli core,pango,poppler
+msys2-dll clangarm64 libexpat-1.dll mingw-w64-clang-aarch64-expat core,pango,poppler
+msys2-dll clangarm64 libintl-8.dll mingw-w64-clang-aarch64-gettext-runtime core,pango,poppler
+msys2-dll clangarm64 libglib-2.0-0.dll mingw-w64-clang-aarch64-glib2 core,pango,poppler
+msys2-dll clangarm64 libgraphite2.dll mingw-w64-clang-aarch64-graphite2 core,pango,poppler
+msys2-dll clangarm64 libbrotlicommon.dll mingw-w64-clang-aarch64-brotli core,pango,poppler
+msys2-dll clangarm64 libiconv-2.dll mingw-w64-clang-aarch64-libiconv core,pango,poppler
+msys2-dll clangarm64 libpcre2-8-0.dll mingw-w64-clang-aarch64-pcre2 core,pango,poppler
+msys2-dll clangarm64 libpango-1.0-0.dll mingw-w64-clang-aarch64-pango pango
+msys2-dll clangarm64 libpangocairo-1.0-0.dll mingw-w64-clang-aarch64-pango pango
+msys2-dll clangarm64 libgobject-2.0-0.dll mingw-w64-clang-aarch64-glib2 pango,poppler
+msys2-dll clangarm64 libgio-2.0-0.dll mingw-w64-clang-aarch64-glib2 pango,poppler
+msys2-dll clangarm64 libfribidi-0.dll mingw-w64-clang-aarch64-fribidi pango
+msys2-dll clangarm64 libthai-0.dll mingw-w64-clang-aarch64-libthai pango
+msys2-dll clangarm64 libpangoft2-1.0-0.dll mingw-w64-clang-aarch64-pango pango
+msys2-dll clangarm64 libpangowin32-1.0-0.dll mingw-w64-clang-aarch64-pango pango
+msys2-dll clangarm64 libgmodule-2.0-0.dll mingw-w64-clang-aarch64-glib2 pango,poppler
+msys2-dll clangarm64 libdatrie-1.dll mingw-w64-clang-aarch64-libdatrie pango
+msys2-dll clangarm64 libjpeg-8.dll mingw-w64-clang-aarch64-libjpeg-turbo poppler
+# system DLLs imported: ADVAPI32.dll api-ms-win-crt-conio-l1-1-0.dll api-ms-win-crt-convert-l1-1-0.dll
+#     api-ms-win-crt-environment-l1-1-0.dll api-ms-win-crt-filesystem-l1-1-0.dll api-ms-win-crt-heap-l1-1-0.dll
+#     api-ms-win-crt-locale-l1-1-0.dll api-ms-win-crt-math-l1-1-0.dll api-ms-win-crt-multibyte-l1-1-0.dll
+#     api-ms-win-crt-private-l1-1-0.dll api-ms-win-crt-process-l1-1-0.dll api-ms-win-crt-runtime-l1-1-0.dll
+#     api-ms-win-crt-stdio-l1-1-0.dll api-ms-win-crt-string-l1-1-0.dll api-ms-win-crt-time-l1-1-0.dll api-ms-win-crt-utility-l1-1-0.dll
+#     DNSAPI.dll DWrite.dll GDI32.dll IPHLPAPI.DLL KERNEL32.dll MSIMG32.dll ole32.dll RPCRT4.dll SHELL32.dll SHLWAPI.dll USER32.dll
+#     USP10.dll WS2_32.dll
+# not pinned (reached by the dependencies, but own no DLL of the closure): libsystre libtre libunwind lzo2 mpdecimal ncurses openssl
 #     python python-packaging sqlite tcl tk tzdata wineditline xz zstd

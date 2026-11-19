@@ -2,16 +2,28 @@
 # shellcheck disable=SC2015,SC2013,SC2018,SC2019  # ok/err never fail; names are ASCII
 # Checks cmake/cairo-stack/pins.txt (docs/CairoStack.md, "The pins"):
 #
-#   1. its lines are well formed (SHA256s, HTTPS URLs, platforms, the msys2
-#      section: both environments, each with cairo and freetype, a source
-#      package for every package, a package for every msys2-dll line, and
-#      MSYS2's cairo is the pinned cairo);
+#   1. its lines are well formed (SHA256s, HTTPS URLs ending with the file
+#      name, or a GitHub tag archive of the version with a mirror line;
+#      platforms, mingw only for poppler; the msys2 section: the msys2-root
+#      lines, both environments, each with cairo and freetype, a source
+#      package for every package, a package for every msys2-dll line, whose
+#      features are core, pango or poppler, and MSYS2's cairo is the pinned
+#      cairo);
+#   1b. the Windows closure keeps its promises: a msys2-root line for core
+#      (cairo, FreeType, libffi-8.dll), pango and poppler, each root a
+#      msys2-dll of both environments reached by its own feature; no MSYS2
+#      package of poppler, curl, nss, nspr, openssl, lcms2, openjpeg2,
+#      libtiff or gpgme (poppler is built from source, without them); the
+#      libffi package's only DLL is libffi-8.dll (the VM's FFI is soname 8);
+#      a warning when MSYS2's pango, glib2, fribidi, harfbuzz, libjpeg-turbo
+#      or libffi is not the version of the source pin;
 #   2. one version per library across the VMs: cairo, pixman, FreeType,
 #      libpng and zlib have the version and SHA256 of the wasm pins
 #      (WASM_<NAME>_VERSION and the SHA256 of pharo_wasm_dep_fetch in
 #      cmake/emscripten/deps/<name>.cmake), and WASM_CAIRO_FREETYPE_VERSION is
 #      the FreeType pin.  A "native-ahead <name> <until YYYY-MM-DD> <reason>"
-#      line turns a difference into a warning until that date, and fails after;
+#      line turns a difference into a warning until that date, and fails after.
+#      The GLib, Pango and Poppler pins are native only (no wasm build yet);
 #   3. every URL answers (HTTPS HEAD; the mirror when the URL does not): MSYS2
 #      removes superseded packages after a while.  --no-probe skips this.
 #
@@ -51,9 +63,20 @@ form=$(awk '
     function bad(why) { printf "ERROR pins.txt:%d: %s: %s\n", NR, why, $0 }
     function sha(s) { return s ~ /^[0-9a-f]+$/ && length(s) == 64 }
     function https(s) { return s ~ /^https:\/\/[^ ]+$/ }
+    # a GitHub tag archive (.../archive/refs/tags/[v]<version><ext>) of the
+    # file <name>-<version><ext>: its name is the tag, not the file
+    function tag_archive(url, file, name, version,   pre, ext, base) {
+        pre = name "-" version
+        if (substr(file, 1, length(pre)) != pre) return 0
+        ext = substr(file, length(pre) + 1)
+        if (ext !~ /^\.(tar\.gz|tar\.xz|tar\.bz2|zip)$/) return 0
+        if (url !~ /^https:\/\/github\.com\/[^\/]+\/[^\/]+\/archive\/refs\/tags\/[^\/]+$/) return 0
+        base = url; sub(/.*\//, "", base)
+        return base == (version ext) || base == ("v" version ext)
+    }
     /^#/ { prev = (prev ~ /^# (signed-by|unsigned)/ && $0 !~ /^# (signed-by|unsigned)/) ? prev : $0; next }
     NF == 0 { prev = ""; next }
-    $1 == "mirror" { if (NF != 3 || !https($3)) bad("mirror <name> <https url>"); next }
+    $1 == "mirror" { if (NF != 3 || !https($3)) bad("mirror <name> <https url>"); mirrored[$2] = 1; next }
     $1 == "msys2-mirror" { if (NF != 2 || !https($2)) bad("msys2-mirror <https base url>"); next }
     $1 == "native-ahead" { if (NF < 4 || $3 !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) bad("native-ahead <name> <YYYY-MM-DD> <reason>"); next }
     $1 == "accepted-behind" { if (NF < 5 || $4 !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) bad("accepted-behind <name> <version> <YYYY-MM-DD> <reason>"); next }
@@ -68,17 +91,34 @@ form=$(awk '
         if (!https($9) || $9 !~ /\.src\.tar\.zst$/) bad("source package URL")
         next
     }
-    $1 == "msys2-dll" { if (NF != 4 || $3 !~ /\.dll$/) bad("msys2-dll <env> <dll> <package>"); next }
+    $1 == "msys2-root" {
+        if (NF < 3 || ($2 != "core" && $2 != "pango" && $2 != "poppler")) bad("msys2-root core|pango|poppler <dll>...")
+        for (i = 3; i <= NF; i++) if ($i !~ /\.dll$/) bad("msys2-root: " $i " is not a DLL")
+        next
+    }
+    $1 == "msys2-dll" {
+        if ((NF != 4 && NF != 5) || $3 !~ /\.dll$/) bad("msys2-dll <env> <dll> <package> [<features>]")
+        else if (NF == 5 && $5 !~ /^(core|pango|poppler)(,(core|pango|poppler))*$/) bad("msys2-dll features (a comma list of core, pango, poppler)")
+        next
+    }
     {
         if (NF < 7) { bad("<name> <version> <sha256> <file> <url> <platforms> <licences...>"); next }
         if ($2 !~ /^[0-9]+(\.[0-9]+)+$/) bad("version")
         if (!sha($3)) bad("SHA256")
         if (!https($5)) bad("URL (https only)")
-        if (substr($5, length($5) - length($4) + 1) != $4) bad("the URL does not end with the file name")
-        if ($6 !~ /^(all|(linux|darwin)(,(linux|darwin))*)$/) bad("platforms (all, or a list of linux, darwin)")
+        if (substr($5, length($5) - length($4) + 1) != $4) {
+            if (!tag_archive($5, $4, $1, $2)) bad("the URL does not end with the file name (nor is it a GitHub tag archive of the version)")
+            else { tagged[$1] = NR; tagline[$1] = $0 }   # GitHub regenerates those: a mirror is required
+        }
+        if ($6 !~ /^(all|(linux|darwin|mingw)(,(linux|darwin|mingw))*)$/) bad("platforms (all, or a list of linux, darwin, mingw)")
+        else if ($6 ~ /mingw/ && $1 != "poppler") bad("only poppler is built from source on Windows (platform mingw)")
         if (seen[$1]++) bad("two lines for " $1)
         if (prev !~ /^# signed-by [0-9A-F]+ https:/ && prev !~ /^# unsigned: /) bad("no \"# signed-by <fingerprint> <url>\" or \"# unsigned: <how>\" comment before it")
         prev = ""
+    }
+    END {
+        for (n in tagged) if (!(n in mirrored))
+            printf "ERROR pins.txt:%d: a GitHub tag archive needs a mirror line (GitHub may regenerate it): %s\n", tagged[n], tagline[n]
     }' "$pins")
 if [ -n "$form" ]; then
     echo "$form"
@@ -108,6 +148,67 @@ for e in ucrt64 clangarm64; do
     case $v in "$cairo_pin"-*) ok "msys2 $e: cairo $v is the pinned $cairo_pin (+ MSYS2's patches)" ;; *) err "msys2 $e: cairo $v is not the pinned $cairo_pin" ;; esac
     v=$(awk -v e="$e" '$1 == "msys2" && $2 == e && $4 ~ /-freetype$/ { print $5 }' "$pins")
     case $v in "$ft_pin"-*) ok "msys2 $e: freetype $v" ;; *) warn "msys2 $e: freetype $v, not the pinned $ft_pin (MSYS2's version; recorded in CAIRO-STACK.txt)" ;; esac
+done
+
+# ---------------------------------------------------------------- 1b. the Windows closure
+# The msys2-root lines: one or more per feature; core holds cairo, FreeType and
+# libffi-8.dll (the VM's FFI, whatever the features); each root is a DLL of
+# both environments, and its features column names the root's feature.
+for f in core pango poppler; do
+    r=$(awk -v f="$f" '$1 == "msys2-root" && $2 == f { for (i = 3; i <= NF; i++) printf "%s%s", (s++ ? " " : ""), $i }' "$pins")
+    [ -n "$r" ] && ok "msys2-root $f: $r" || err "no msys2-root $f line (fetch-msys2.sh --closure walks from it)"
+done
+for d in libcairo-2.dll libfreetype-6.dll libffi-8.dll; do
+    awk -v d="$d" '$1 == "msys2-root" && $2 == "core" { for (i = 3; i <= NF; i++) if ($i == d) f = 1 } END { exit !f }' "$pins" \
+        || err "msys2-root core does not name $d"
+done
+for e in ucrt64 clangarm64; do
+    bad=$(awk -v e="$e" '
+        $1 == "msys2-root" { for (i = 3; i <= NF; i++) root[$i] = root[$i] " " $2; next }
+        $1 == "msys2-dll" && $2 == e { feat[$3] = (NF == 5 ? $5 : "core"); next }
+        END {
+            for (d in root) {
+                if (!(d in feat)) { print "the root " d " has no msys2-dll line"; continue }
+                n = split(root[d], fs, " ")
+                for (i = 1; i <= n; i++) if (("," feat[d] ",") !~ ("," fs[i] ",")) print "the root " d " of " fs[i] " is marked " feat[d]
+            }
+        }' "$pins")
+    [ -z "$bad" ] && ok "msys2 $e: every root is in the closure of its feature" || err "msys2 $e: $bad"
+done
+
+# Poppler is built from source on Windows (it needs none of these); MSYS2's
+# poppler would bring curl, nss, nspr, lcms2, openjpeg2, libtiff (and more).
+denied=$(awk '$1 == "msys2" && $4 ~ /-(poppler|curl|nss|nspr|openssl|lcms2|openjpeg2|libtiff|gpgme)$/ { printf "%s%s", (s++ ? " " : ""), $2 ":" $4 }' "$pins")
+[ -z "$denied" ] && ok "msys2: no poppler, curl, nss, nspr, openssl, lcms2, openjpeg2, libtiff or gpgme package" \
+    || err "msys2: denied packages pinned (poppler is built from source without them): $denied"
+
+# The VM's FFI on Windows is libffi-8.dll, from the pinned libffi package (D4):
+# a libffi with another soname would break the VM itself.
+for e in ucrt64 clangarm64; do
+    p=$(awk -v e="$e" '$1 == "msys2" && $2 == e && $4 ~ /-libffi$/ { print $4 }' "$pins")
+    if [ -z "$p" ]; then err "msys2 $e: no libffi package (the VM's libffi-8.dll)"; continue; fi
+    dlls=$(awk -v e="$e" -v p="$p" '$1 == "msys2-dll" && $2 == e && $4 == p { printf "%s%s", (s++ ? " " : ""), $3 }' "$pins")
+    owner=$(awk -v e="$e" '$1 == "msys2-dll" && $2 == e && $3 == "libffi-8.dll" { print $4 }' "$pins")
+    if [ "$dlls" = libffi-8.dll ] && [ "$owner" = "$p" ]; then
+        ok "msys2 $e: $p provides libffi-8.dll"
+    else
+        err "msys2 $e: $p must provide exactly libffi-8.dll, the VM's FFI (its DLLs: ${dlls:-none}; libffi-8.dll's package: ${owner:-none})"
+    fi
+done
+
+# The MSYS2 builds of what Linux and macOS build from source: a different
+# upstream version is allowed (MSYS2 moves on its own) but reported, like
+# FreeType above.
+for e in ucrt64 clangarm64; do
+    for n in pango glib2 fribidi harfbuzz libjpeg-turbo libffi; do
+        v=$(awk -v e="$e" -v n="$n" '$1 == "msys2" && $2 == e && $4 ~ ("-" n "$") { print $5; exit }' "$pins")
+        [ -n "$v" ] || continue
+        native=$n; [ "$n" = glib2 ] && native=glib
+        nv=$(awk -v n="$native" '$1 == n && NF >= 7 { print $2; exit }' "$pins")
+        [ -n "$nv" ] || continue
+        if [ "${v%-*}" = "$nv" ]; then ok "msys2 $e: $n $v (native $nv)"
+        else warn "msys2 $e $n ${v%-*} vs native $nv (MSYS2's version; recorded in CAIRO-STACK.txt)"; fi
+    done
 done
 
 # ---------------------------------------------------------------- 2. the wasm pins
@@ -141,17 +242,26 @@ for name in cairo pixman freetype libpng zlib; do
     drift "$name" version "$pv" "$wv"
     drift "$name" SHA256 "$ps" "$ws"
 done
+# The libraries of the pango and poppler features: Linux and macOS only, the
+# wasm VM has none of them yet (its libffi is the uFFI one, a separate pin).
+for name in libffi pcre2 proxy-libintl glib fribidi harfbuzz pango libjpeg-turbo poppler; do
+    v=$(awk -v n="$name" '$1 == n && NF >= 7 { print $2; exit }' "$pins")
+    [ -n "$v" ] && ok "$name $v: native only (wasm deferred)" || err "no source line for $name (the feature map of build.sh builds it)"
+done
 cfv=$(sed -n 's/^set(WASM_CAIRO_FREETYPE_VERSION "\([^"]*\)")/\1/p' "$deps/cairo.cmake" | head -n 1)
 drift freetype "WASM_CAIRO_FREETYPE_VERSION (cairo's wasm configuration)" "$ft_pin" "$cfv"
 
 # ---------------------------------------------------------------- 3. the URLs
 if [ "$probe" = yes ]; then
-    head_ok() { curl -fsIL --proto '=https' --tlsv1.2 --retry 2 --connect-timeout 20 --max-time 60 -o /dev/null "$1" 2>/dev/null; }
+    # --retry-all-errors: a release download of GitHub once failed in 6 s,
+    # an error --retry alone does not retry (only timeouts, 408, 429, 5xx)
+    head_ok() { curl -fsIL --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors --retry-delay 5 \
+        --connect-timeout 20 --max-time 60 -o /dev/null "$1" 2>/dev/null; }
     msys2_mirror=$(awk '$1 == "msys2-mirror" { print $2; exit }' "$pins")
     awk '
         /^#/ || NF == 0 { next }
         $1 == "msys2" { print "msys2", $7; print "msys2", $9; next }
-        $1 == "mirror" || $1 == "msys2-mirror" || $1 == "msys2-dll" || $1 == "native-ahead" || $1 == "accepted-behind" { next }
+        $1 == "mirror" || $1 == "msys2-mirror" || $1 == "msys2-dll" || $1 == "msys2-root" || $1 == "native-ahead" || $1 == "accepted-behind" { next }
         { print $1, $5 }' "$pins" | sort -u > "${TMPDIR:-/tmp}/check-pins.$$"
     probed=0
     while read -r name url; do

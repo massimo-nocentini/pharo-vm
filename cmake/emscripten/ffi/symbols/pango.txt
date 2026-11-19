@@ -1,0 +1,63 @@
+# The functions of Pango (libpango-1.0.so.0, libpango-1.0.0.dylib,
+# libpango-1.0-0.dll) that the images bind through uFFI: PangoLibrary of the
+# package LibPangoCairo (libpangocairo.st, libpoppler.st;
+# docs/PangoPoppler.md).  A name per line, '#' starting a comment.
+# scripts/cairo-stack/check.sh asserts that the native stack's library exports
+# every name; a binding that calls another function adds it here first.  The
+# Emscripten VM has no Pango yet: cmake/emscripten/ffiLibraries.cmake does not
+# read this list, the input of that round.
+#
+pango_version_string
+pango_layout_new
+pango_layout_get_context
+pango_layout_context_changed
+pango_layout_set_text
+pango_layout_get_text
+pango_layout_set_markup
+pango_parse_markup
+pango_layout_set_font_description
+pango_layout_set_width
+pango_layout_get_width
+pango_layout_set_height
+pango_layout_set_wrap
+pango_layout_set_ellipsize
+pango_layout_set_alignment
+pango_layout_set_justify
+pango_layout_set_indent
+pango_layout_set_spacing
+pango_layout_get_spacing
+pango_layout_set_line_spacing
+pango_layout_get_line_spacing
+pango_layout_set_single_paragraph_mode
+pango_layout_get_line_count
+pango_layout_set_attributes
+pango_layout_get_pixel_size
+pango_layout_get_size
+pango_layout_get_extents
+pango_layout_get_baseline
+pango_layout_is_ellipsized
+pango_layout_is_wrapped
+pango_font_description_from_string
+pango_font_description_new
+pango_font_description_copy
+pango_font_description_free
+pango_font_description_to_string
+pango_font_description_get_family
+pango_font_description_set_family
+pango_font_description_get_size
+pango_font_description_set_size
+pango_font_description_set_absolute_size
+pango_font_description_get_weight
+pango_font_description_set_weight
+pango_font_description_get_style
+pango_font_description_set_style
+pango_attr_list_from_string
+pango_attr_list_to_string
+pango_attr_list_ref
+pango_attr_list_unref
+pango_font_map_create_context
+pango_font_map_list_families
+pango_font_family_get_name
+pango_context_set_round_glyph_positions
+pango_context_load_font
+pango_font_describe

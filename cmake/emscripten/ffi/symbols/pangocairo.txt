@@ -1,0 +1,17 @@
+# The functions of PangoCairo (libpangocairo-1.0.so.0,
+# libpangocairo-1.0.0.dylib, libpangocairo-1.0-0.dll) that the images bind
+# through uFFI: PangoCairoLibrary of the package LibPangoCairo
+# (libpangocairo.st, libpoppler.st; docs/PangoPoppler.md).  A name per line,
+# '#' starting a comment.  scripts/cairo-stack/check.sh asserts that the
+# native stack's library exports every name; a binding that calls another
+# function adds it here first.  The Emscripten VM has no Pango yet:
+# cmake/emscripten/ffiLibraries.cmake does not read this list, the input of
+# that round.
+#
+pango_cairo_create_layout
+pango_cairo_show_layout
+pango_cairo_update_layout
+pango_cairo_update_context
+pango_cairo_font_map_get_default
+pango_cairo_context_set_font_options
+pango_cairo_context_set_resolution
