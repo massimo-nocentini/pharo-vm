@@ -3,9 +3,10 @@
 # Checks cmake/cairo-stack/pins.txt (docs/CairoStack.md, "The pins"):
 #
 #   1. its lines are well formed (SHA256s, HTTPS URLs, platforms, the msys2
-#      section: both environments, each with cairo and freetype, a source
-#      package for every package, a package for every msys2-dll line, and
-#      MSYS2's cairo is the pinned cairo);
+#      section: the msys2-root lines, both environments, each with cairo and
+#      freetype, a source package for every package, a package for every
+#      msys2-dll line, whose features are core, pango or poppler, and MSYS2's
+#      cairo is the pinned cairo);
 #   2. one version per library across the VMs: cairo, pixman, FreeType,
 #      libpng and zlib have the version and SHA256 of the wasm pins
 #      (WASM_<NAME>_VERSION and the SHA256 of pharo_wasm_dep_fetch in
@@ -68,14 +69,23 @@ form=$(awk '
         if (!https($9) || $9 !~ /\.src\.tar\.zst$/) bad("source package URL")
         next
     }
-    $1 == "msys2-dll" { if (NF != 4 || $3 !~ /\.dll$/) bad("msys2-dll <env> <dll> <package>"); next }
+    $1 == "msys2-root" {
+        if (NF < 3 || ($2 != "core" && $2 != "pango" && $2 != "poppler")) bad("msys2-root core|pango|poppler <dll>...")
+        for (i = 3; i <= NF; i++) if ($i !~ /\.dll$/) bad("msys2-root: " $i " is not a DLL")
+        next
+    }
+    $1 == "msys2-dll" {
+        if ((NF != 4 && NF != 5) || $3 !~ /\.dll$/) bad("msys2-dll <env> <dll> <package> [<features>]")
+        else if (NF == 5 && $5 !~ /^(core|pango|poppler)(,(core|pango|poppler))*$/) bad("msys2-dll features (a comma list of core, pango, poppler)")
+        next
+    }
     {
         if (NF < 7) { bad("<name> <version> <sha256> <file> <url> <platforms> <licences...>"); next }
         if ($2 !~ /^[0-9]+(\.[0-9]+)+$/) bad("version")
         if (!sha($3)) bad("SHA256")
         if (!https($5)) bad("URL (https only)")
         if (substr($5, length($5) - length($4) + 1) != $4) bad("the URL does not end with the file name")
-        if ($6 !~ /^(all|(linux|darwin)(,(linux|darwin))*)$/) bad("platforms (all, or a list of linux, darwin)")
+        if ($6 !~ /^(all|(linux|darwin|mingw)(,(linux|darwin|mingw))*)$/) bad("platforms (all, or a list of linux, darwin, mingw)")
         if (seen[$1]++) bad("two lines for " $1)
         if (prev !~ /^# signed-by [0-9A-F]+ https:/ && prev !~ /^# unsigned: /) bad("no \"# signed-by <fingerprint> <url>\" or \"# unsigned: <how>\" comment before it")
         prev = ""
@@ -151,7 +161,7 @@ if [ "$probe" = yes ]; then
     awk '
         /^#/ || NF == 0 { next }
         $1 == "msys2" { print "msys2", $7; print "msys2", $9; next }
-        $1 == "mirror" || $1 == "msys2-mirror" || $1 == "msys2-dll" || $1 == "native-ahead" || $1 == "accepted-behind" { next }
+        $1 == "mirror" || $1 == "msys2-mirror" || $1 == "msys2-dll" || $1 == "msys2-root" || $1 == "native-ahead" || $1 == "accepted-behind" { next }
         { print $1, $5 }' "$pins" | sort -u > "${TMPDIR:-/tmp}/check-pins.$$"
     probed=0
     while read -r name url; do

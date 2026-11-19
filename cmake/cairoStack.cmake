@@ -236,9 +236,15 @@ endfunction()
 # Sets, in the caller's scope:
 #   <p>_SOURCES                           the source libraries, in build order
 #   <p>_<name>_VERSION, _SHA256, _PLATFORMS (list), _LICENCES (list)
+#                                         (_PLATFORMS may hold mingw: an archive
+#                                         built on Windows over the MSYS2 prefix;
+#                                         Linux and macOS build only theirs)
 #   <p>_MSYS2_<env>_PACKAGES              the msys2 packages of <env>
 #   <p>_MSYS2_<env>_<package>_VERSION, _KIND
 #   <p>_MSYS2_<env>_DLLS                  "<dll>|<package>" per msys2-dll line
+#   <p>_MSYS2_DLL_<env>_<dll>_FEATURES    its 5th field as a list (core, pango,
+#                                         poppler); core when the line has 4
+# (msys2-root lines are fetch-msys2.sh --closure's input: skipped.)
 function(pharo_cairo_stack_read_pins pins p)
     if(NOT EXISTS "${pins}")
         message(FATAL_ERROR "cairoStack.cmake: no ${pins}")
@@ -253,7 +259,8 @@ function(pharo_cairo_stack_read_pins pins p)
         string(REGEX REPLACE "[ \t]+" ";" f "${line}")
         list(GET f 0 kind)
         list(LENGTH f n)
-        if(kind STREQUAL "mirror" OR kind STREQUAL "native-ahead" OR kind STREQUAL "accepted-behind" OR kind STREQUAL "msys2-mirror")
+        if(kind STREQUAL "mirror" OR kind STREQUAL "native-ahead" OR kind STREQUAL "accepted-behind" OR kind STREQUAL "msys2-mirror"
+                OR kind STREQUAL "msys2-root")
             continue()
         elseif(kind STREQUAL "msys2")
             list(GET f 1 env)
@@ -264,10 +271,19 @@ function(pharo_cairo_stack_read_pins pins p)
             set(${p}_MSYS2_${env}_${pkg}_VERSION "${ver}" PARENT_SCOPE)
             set(${p}_MSYS2_${env}_${pkg}_KIND "${k}" PARENT_SCOPE)
         elseif(kind STREQUAL "msys2-dll")
+            if(NOT (n EQUAL 4 OR n EQUAL 5))
+                message(FATAL_ERROR "cairoStack.cmake: ${pins}: 'msys2-dll <env> <dll> <package> [<features>]': '${line}'")
+            endif()
             list(GET f 1 env)
             list(GET f 2 dll)
             list(GET f 3 pkg)
+            set(feats "core")
+            if(n EQUAL 5)
+                list(GET f 4 feats)
+                string(REPLACE "," ";" feats "${feats}")
+            endif()
             set(${p}_MSYS2_${env}_DLLS ${${p}_MSYS2_${env}_DLLS} "${dll}|${pkg}")
+            set(${p}_MSYS2_DLL_${env}_${dll}_FEATURES "${feats}" PARENT_SCOPE)
         elseif(n GREATER_EQUAL 6)
             list(GET f 1 ver)
             list(GET f 2 sha)
