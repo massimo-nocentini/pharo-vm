@@ -192,7 +192,9 @@ done
 [ "$(wc -l < "$work/archives.txt")" -eq "$(selected | wc -l)" ] || die "not every archive was found"
 
 # 2. a fresh prefix
-if [ -d "$prefix" ] && [ -n "$(ls -A "$prefix" 2>/dev/null)" ] && [ ! -f "$prefix/.pharo-cairo-stack" ]; then
+# (a prefix that holds only empty directories counts as fresh: Ninja makes
+# the directories of an ExternalProject's byproducts before running it)
+if [ -d "$prefix" ] && [ -n "$(find "$prefix" ! -type d 2>/dev/null | head -n 1)" ] && [ ! -f "$prefix/.pharo-cairo-stack" ]; then
     die "$prefix is not empty and is not a cairo stack prefix (no .pharo-cairo-stack): not touching it"
 fi
 rm -rf "$prefix"

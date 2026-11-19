@@ -322,7 +322,9 @@ fi
 [ -n "$prefix" ] || die "no --prefix"
 for t in zstd tar; do command -v $t >/dev/null 2>&1 || die "needs $t"; done
 case $prefix in /*|[A-Za-z]:*) ;; *) prefix=$(pwd)/$prefix ;; esac
-if [ -d "$prefix" ] && [ -n "$(ls -A "$prefix" 2>/dev/null)" ] && [ ! -f "$prefix/.pharo-cairo-stack" ]; then
+# (a prefix that holds only empty directories counts as fresh: Ninja makes
+# the directories of an ExternalProject's byproducts before running it)
+if [ -d "$prefix" ] && [ -n "$(find "$prefix" ! -type d 2>/dev/null | head -n 1)" ] && [ ! -f "$prefix/.pharo-cairo-stack" ]; then
     die "$prefix is not empty and is not a cairo stack prefix (no .pharo-cairo-stack): not touching it"
 fi
 [ -n "$work" ] || work=$prefix.work
