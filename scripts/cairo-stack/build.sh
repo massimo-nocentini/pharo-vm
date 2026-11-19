@@ -386,6 +386,32 @@ if grep -l -E '/opt/homebrew|/usr/local/(lib|include)|/ucrt64|/clangarm64' "$pre
     die "a .pc file of the prefix names a foreign prefix"
 fi
 
+# ---------------------------------------------------------------- macOS install names
+# meson's install rewrites the install name (LC_ID_DYLIB) of cairo, FreeType
+# and pixman, and their references to each other, to absolute paths in
+# <prefix>/lib, which exist only on the build machine: the bundle needs
+# @rpath/<name>, found through their LC_RPATH @loader_path.  Changing load
+# commands invalidates a signature, and arm64 loads only signed code, so
+# every library is then signed ad hoc again (x86_64 ones too, which the
+# linker does not sign, so that codesign -v holds on both).
+if [ "$platform" = darwin ]; then
+    for d_f in "$prefix"/lib/*.dylib; do
+        { [ -f "$d_f" ] && [ ! -L "$d_f" ]; } || continue
+        d_id=$(otool -D "$d_f" | sed -n 2p)
+        case $d_id in
+            /*) install_name_tool -id "@rpath/${d_id##*/}" "$d_f" || die "install_name_tool -id on $d_f" ;;
+        esac
+        for d_dep in $(otool -L "$d_f" | sed -n '2,$p' | awk '{ print $1 }'); do
+            case $d_dep in
+                /usr/lib/*|/System/*|@*) ;;
+                /*) [ -e "$prefix/lib/${d_dep##*/}" ] || die "$d_f loads $d_dep, which is not in the stack"
+                    install_name_tool -change "$d_dep" "@rpath/${d_dep##*/}" "$d_f" || die "install_name_tool -change on $d_f" ;;
+            esac
+        done
+        codesign --force --sign - "$d_f" >/dev/null 2>&1 || die "codesign --sign - $d_f"
+    done
+fi
+
 # ---------------------------------------------------------------- manifest, index
 version_of() { selected | awk -v n="$1" '$1 == n { print $2 }'; }
 tool_line() { printf '%s %s\n' "$1" "$(eval "$2" 2>/dev/null | head -n 1 | tr -s ' \t' '  ')"; }
@@ -454,4 +480,7 @@ note "done: $(selected | awk '{ printf "%s%s %s", sep, $1, $2; sep = ", " }') in
 
 if [ -n "$glibc_max" ]; then
     sh "$here/check.sh" --prefix "$prefix" --platform "$platform" --glibc-max "$glibc_max" --pins "$pins"
+elif [ "$platform" = darwin ]; then
+    # the install names, signatures and minos of the stack, before CMake bundles it
+    sh "$here/check.sh" --prefix "$prefix" --platform darwin --arch "$arch" --minos "$MACOSX_DEPLOYMENT_TARGET" --pins "$pins"
 fi
