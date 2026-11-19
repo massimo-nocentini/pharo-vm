@@ -1,6 +1,6 @@
 /* upEngine.c -- the engine of the UtilsPlugin (upEngine.h): fused
- * multiply-add, the splitting of bytes, the de Casteljau scheme and Knuth's
- * generator.  No VM header: the glue (src/common/UtilsPlugin.c) and the C
+ * multiply-add, the splitting of bytes, the de Casteljau scheme, Knuth's
+ * generator and Vigna's SplitMix64.  No VM header: the glue (src/common/UtilsPlugin.c) and the C
  * tests (tests/enginetest.c) call it.
  *
  * Compile with -ffp-contract=off: every rounding of up_bezier is the one
@@ -167,4 +167,56 @@ up_knuth_selftest(void)
 	result = ran_u[0];
 	memcpy(ran_u, saved, sizeof ran_u);
 	return result;
+}
+
+
+/*** Vigna's SplitMix64 ***/
+
+/* splitmix64.c, by Sebastiano Vigna (2015), dedicated to the public domain:
+ * it is included as it is (src/vigna, SHA256 675db831...8f23a45b), and only
+ * renamed from outside, like Knuth's file: its state, the static x, and its
+ * next() (whose declaration has no prototype; it takes no argument).  Each
+ * generator of the image keeps its own state, a DoubleWordArray of 1 (the
+ * state of Pharo's Random), copied into x before next() runs and out of it
+ * after.  Last in this file: x and next are #undef'd after it. */
+#define x up_splitmix64_x
+#define next up_splitmix64_next_raw
+#if defined(__GNUC__) || defined(__clang__)
+# pragma GCC visibility push(hidden)
+#endif
+#include "../vigna/splitmix64.c"
+#if defined(__GNUC__) || defined(__clang__)
+# pragma GCC visibility pop
+#endif
+
+uint64_t
+up_splitmix64_next(uint64_t *state)
+{
+	uint64_t z;
+
+	x = *state;
+	z = next();
+	*state = x;
+	return z;
+}
+
+void
+up_splitmix64_fill(uint64_t *state, uint64_t *out, size_t n)
+{
+	size_t i;
+
+	x = *state;
+	for (i = 0; i < n; i++) {
+		out[i] = next();
+	}
+	*state = x;
+}
+
+#undef x
+#undef next
+
+double
+up_splitmix64_fraction(uint64_t output)
+{
+	return (double)(output >> 11) / 9007199254740992.0;	/* 2^53 */
 }

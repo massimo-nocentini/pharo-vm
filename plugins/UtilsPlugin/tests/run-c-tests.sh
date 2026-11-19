@@ -2,7 +2,8 @@
 # run-c-tests.sh -- the C tests of the UtilsPlugin's engine (upEngine.h),
 # without a VM: tests/enginetest.c with src/engine/upEngine.c, against
 # Knuth's rng-double.c compiled as he wrote it (knuthref, its main renamed
-# on the command line, so that the file stays unchanged).
+# on the command line, so that the file stays unchanged) and Vigna's
+# splitmix64.c with its own names (tests/vignaref.c includes it unchanged).
 #
 #   sh run-c-tests.sh [--build <dir>] [--cc <compiler>] [--only engine,engine-asan]
 #
@@ -10,7 +11,8 @@
 #   engine       -O2 -ffp-contract=off, the flags of the plugin
 #   engine-asan  the same with AddressSanitizer and UBSan (skipped when the
 #                compiler cannot link them)
-# Also checks that src/knuth/rng-double.c is Knuth's file (its SHA256).
+# Also checks that src/knuth/rng-double.c is Knuth's file and
+# src/vigna/splitmix64.c Vigna's (their SHA256).
 # Prints one line per lane and exits non-zero when one failed.
 set -eu
 
@@ -29,17 +31,27 @@ while [ $# -gt 0 ]; do
 done
 mkdir -p "$build"
 
+sha256() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | cut -d' ' -f1
+	else
+		shasum -a 256 "$1" | cut -d' ' -f1
+	fi
+}
 knuth_sha256=e8bc0a86c3da0ad50479ced63125c004583459703e88ff276452dc1a48c46fed
-if command -v sha256sum >/dev/null 2>&1; then
-	sum=$(sha256sum "$plugin/src/knuth/rng-double.c" | cut -d' ' -f1)
-else
-	sum=$(shasum -a 256 "$plugin/src/knuth/rng-double.c" | cut -d' ' -f1)
-fi
+sum=$(sha256 "$plugin/src/knuth/rng-double.c")
 if [ "$sum" != "$knuth_sha256" ]; then
 	echo "rng-double.c: FAIL, not Knuth's file (SHA256 $sum)"
 	exit 1
 fi
 echo "rng-double.c: Knuth's file"
+vigna_sha256=675db831e667d8b505aecf10e084d51943f5ef4b59beaef18624ee5d8f23a45b
+sum=$(sha256 "$plugin/src/vigna/splitmix64.c")
+if [ "$sum" != "$vigna_sha256" ]; then
+	echo "splitmix64.c: FAIL, not Vigna's file (SHA256 $sum)"
+	exit 1
+fi
+echo "splitmix64.c: Vigna's file"
 
 status=0
 lane() {
@@ -49,9 +61,10 @@ lane() {
 	mkdir -p "$out"
 	# Knuth's file, as it is: only its main renamed
 	if ! "$cc" "$@" -w -Dmain=knuth_rng_double_main -c "$plugin/src/knuth/rng-double.c" -o "$out/knuthref.o" 2>"$out/build.log" \
+	|| ! "$cc" "$@" -Wall -Wextra -c "$here/vignaref.c" -o "$out/vignaref.o" 2>>"$out/build.log" \
 	|| ! "$cc" "$@" -Wall -Wextra -I"$plugin/include/common" -c "$plugin/src/engine/upEngine.c" -o "$out/upEngine.o" 2>>"$out/build.log" \
 	|| ! "$cc" "$@" -Wall -Wextra -I"$plugin/include/common" -c "$here/enginetest.c" -o "$out/enginetest.o" 2>>"$out/build.log" \
-	|| ! "$cc" "$@" "$out/enginetest.o" "$out/upEngine.o" "$out/knuthref.o" -lm -o "$out/enginetest" 2>>"$out/build.log"; then
+	|| ! "$cc" "$@" "$out/enginetest.o" "$out/upEngine.o" "$out/knuthref.o" "$out/vignaref.o" -lm -o "$out/enginetest" 2>>"$out/build.log"; then
 		if [ "$name" = engine-asan ] && grep -q -i 'sanitizer\|asan' "$out/build.log"; then
 			echo "$name: skipped (no sanitizers)"
 			return 0

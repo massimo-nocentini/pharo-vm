@@ -6,7 +6,10 @@ primitive_info, and checks one known answer of each primitive:
 - primitive_strtok_r: the lines of 'a<lf><lf>b<lf>', #('a' '' 'b'), and its words;
 - primitive_decasteljau: the middle of the segment 0@0 10@20, 5.0@10.0;
 - primitive_randomknuth_*: the first fraction of the seed 310952, and Knuth's own check of his
-  rng-double.c: ran_u[0] is 0.36410514377569680455 after 2009 cycles of 1009 fractions.
+  rng-double.c: ran_u[0] is 0.36410514377569680455 after 2009 cycles of 1009 fractions;
+- primitive_splitmix64_*: the first output of the seed 1234567 of Vigna's splitmix64.c,
+  16r599ED017FB08FC85, and its state advanced by 16r9E3779B97F4A7C15; the first fraction of the seed
+  0; the 1000th output of 1234567 (16r8B33CC4945DD1C5F), from a fill of 1000.
 Prints
 
 	UtilsPlugin <platform> <protocol> ok
@@ -14,7 +17,7 @@ Prints
 and exits 0; else prints 'UtilsPlugin FAILED ...' or 'UtilsPlugin did not load' (which the
 jobs' grep of 'UtilsPlugin native' does not match) and exits 1."
 
-| lineEnd info fail lf lines state generator fraction bitsOf point |
+| lineEnd info fail lf lines state generator fraction bitsOf point outputs |
 lineEnd := OSPlatform current lineEnding.
 Object compile: 'upCiInfo <primitive: ''primitive_info'' module: ''UtilsPlugin''> ^ nil' classified: 'probe'.
 Float compile: 'upCiTimes: y plus: z <primitive: ''primitive_fma'' module: ''UtilsPlugin''> ^ nil' classified: 'probe'.
@@ -23,6 +26,9 @@ Object compile: 'upCiDeCasteljau: c into: p at: t <primitive: ''primitive_decast
 Object compile: 'upCiKnuthState <primitive: ''primitive_randomknuth_init'' module: ''UtilsPlugin''> ^ nil' classified: 'probe'.
 Object compile: 'upCiKnuthStart <primitive: ''primitive_randomknuth_start'' module: ''UtilsPlugin''> ^ nil' classified: 'probe'.
 Object compile: 'upCiKnuthNext: s <primitive: ''primitive_randomknuth_next'' module: ''UtilsPlugin''> ^ nil' classified: 'probe'.
+Object compile: 'upCiSplitMix64Next: s <primitive: ''primitive_splitmix64_next'' module: ''UtilsPlugin''> ^ nil' classified: 'probe'.
+Object compile: 'upCiSplitMix64NextFloat: s <primitive: ''primitive_splitmix64_nextfloat'' module: ''UtilsPlugin''> ^ nil' classified: 'probe'.
+Object compile: 'upCiSplitMix64Fill: s into: a <primitive: ''primitive_splitmix64_fill'' module: ''UtilsPlugin''> ^ nil' classified: 'probe'.
 
 fail := [ :message |
 	Stdio stdout nextPutAll: 'UtilsPlugin FAILED '; nextPutAll: message; nextPutAll: lineEnd; flush.
@@ -34,7 +40,7 @@ info := nil upCiInfo.
 info ifNil: [
 	Stdio stdout nextPutAll: 'UtilsPlugin did not load'; nextPutAll: lineEnd; flush.
 	Smalltalk exitFailure ].
-(info isArray and: [ info size = 3 and: [ info first = 1 and: [ info second = 'UtilsPlugin 1.0' ] ] ])
+(info isArray and: [ info size = 3 and: [ info first = 1 and: [ info second = 'UtilsPlugin 1.1' ] ] ])
 	ifFalse: [ fail value: 'primitive_info answers ' , info printString ].
 
 ((1.0 + (1 / (2 raisedTo: 52)) asFloat) upCiTimes: 1.0 - (1 / (2 raisedTo: 53)) asFloat plus: -1.0)
@@ -64,6 +70,21 @@ fraction = (Float fromIEEE64Bit: 16r3FC4F4EEA4AAF860)
 200800 timesRepeat: [ nil upCiKnuthNext: state ].
 (bitsOf value: state first) = 16r3FD74D7FA9349B94
 	ifFalse: [ fail value: 'Knuth''s check: ran_u[0] is not 0.36410514377569680455' ].
+
+"the state of SplitMix64: a DoubleWordArray of 1, Vigna's x"
+state := DoubleWordArray with: 1234567.
+(nil upCiSplitMix64Next: state) = 16r599ED017FB08FC85
+	ifFalse: [ fail value: 'primitive_splitmix64_next: the first output of 1234567 is not 16r599ED017FB08FC85' ].
+state first = (1234567 + 16r9E3779B97F4A7C15)
+	ifFalse: [ fail value: 'primitive_splitmix64_next: the state of 1234567 is ' , state first printString ].
+fraction := nil upCiSplitMix64NextFloat: (DoubleWordArray with: 0).
+fraction = (Float fromIEEE64Bit: 16r3FEC4415072F63B9)
+	ifFalse: [ fail value: 'primitive_splitmix64_nextfloat: the first fraction of 0 is ' , fraction printString ].
+outputs := DoubleWordArray new: 1000.
+(nil upCiSplitMix64Fill: (DoubleWordArray with: 1234567) into: outputs) == outputs
+	ifFalse: [ fail value: 'primitive_splitmix64_fill failed' ].
+(outputs first = 16r599ED017FB08FC85 and: [ outputs last = 16r8B33CC4945DD1C5F ])
+	ifFalse: [ fail value: 'primitive_splitmix64_fill: the outputs 1 and 1000 of 1234567 are ' , outputs first printString , ' and ' , outputs last printString ].
 
 Stdio stdout
 	nextPutAll: 'UtilsPlugin '; nextPutAll: info third;

@@ -271,12 +271,14 @@ endif()
 # UtilsPlugin: the fused multiply-add of Floats, the splitting of byte
 # strings (strtok_r), the points of Bezier curves (de Casteljau) and Knuth's
 # lagged Fibonacci generator of fractions (his rng-double.c, unchanged in
-# src/knuth), ported from the UtilsPlugin of the pharo-10 branch; the plugin
+# src/knuth), ported from the UtilsPlugin of the pharo-10 branch, and
+# Vigna's SplitMix64 (his splitmix64.c, unchanged in src/vigna; both files
+# are included by src/engine/upEngine.c, which renames their globals); the plugin
 # of the package VM-Plugins-Primitives (the submodule
 # plugins/UtilsPlugin/vm-plugins-primitives.st); docs/UtilsPlugin.md.  ON
 # everywhere: C99 and no dependency.  -ffp-contract=off: the engine rounds
 # as written, so that the Smalltalk twins of the image answer the same bits
-option(FEATURE_PLUGIN_UTILS "Build the UtilsPlugin (fma, strtok_r, de Casteljau, Knuth's generator)" ON)
+option(FEATURE_PLUGIN_UTILS "Build the UtilsPlugin (fma, strtok_r, de Casteljau, Knuth's generator, SplitMix64)" ON)
 if(FEATURE_PLUGIN_UTILS)
     set(up_dir ${CMAKE_CURRENT_SOURCE_DIR}/plugins/UtilsPlugin)
     add_vm_plugin(UtilsPlugin FALSE FALSE)               # globs src/common/*.c; a builtin STATIC lib on Emscripten

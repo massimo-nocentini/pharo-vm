@@ -13,6 +13,12 @@
  *   primitive_randomknuth_start KnuthRandom>>primStart
  *   primitive_randomknuth_next  KnuthRandom>>primNext:
  *
+ * and those of Vigna's SplitMix64 (new in version 1.1, protocol 1):
+ *
+ *   primitive_splitmix64_next      SplitMix64>>primNext:
+ *   primitive_splitmix64_nextfloat SplitMix64>>primNextFloat:
+ *   primitive_splitmix64_fill      SplitMix64>>primOutputsOf:into:
+ *
  * docs/UtilsPlugin.md, section "Primitive contract", is the contract.
  *
  * Natively it is the shared library libUtilsPlugin.so, whose module
@@ -61,7 +67,7 @@
 #endif
 
 #define UP_PROTOCOL 1
-#define UP_PLUGIN_VERSION "UtilsPlugin 1.0"
+#define UP_PLUGIN_VERSION "UtilsPlugin 1.1"
 
 /* static in both modes: the VM itself defines a global interpreterProxy */
 static struct VirtualMachine *interpreterProxy;
@@ -80,6 +86,9 @@ EXPORT(sqInt) primitive_info(void);
 EXPORT(sqInt) primitive_randomknuth_init(void);
 EXPORT(sqInt) primitive_randomknuth_next(void);
 EXPORT(sqInt) primitive_randomknuth_start(void);
+EXPORT(sqInt) primitive_splitmix64_fill(void);
+EXPORT(sqInt) primitive_splitmix64_next(void);
+EXPORT(sqInt) primitive_splitmix64_nextfloat(void);
 EXPORT(sqInt) primitive_strtok_r(void);
 EXPORT(sqInt) setInterpreter(struct VirtualMachine *anInterpreter);
 EXPORT(sqInt) shutdownModule(void);
@@ -575,6 +584,159 @@ primitive_randomknuth_next(void)
 }
 
 
+/*** Vigna's SplitMix64: primitive_splitmix64_* ***/
+
+/* Whether oop is a non-empty indexable object of 64-bit elements (a
+ * DoubleWordArray), of count elements (any count when count < 0), and
+ * writable: 1, or 0 (and the failure code is set).  The proxy has no test of
+ * the format: these are the bits objects that are neither bytes nor 32-bit
+ * words, with 8 bytes per element (16-bit ones have 2; empty ones, which
+ * have none, are refused) */
+static int
+checkWords64(sqInt oop, sqInt count)
+{
+	sqInt size;
+
+	if (!interpreterProxy->isWordsOrBytes(oop) || interpreterProxy->isBytes(oop)
+	 || interpreterProxy->isWords(oop)) {
+		fail(PrimErrBadArgument);
+		return 0;
+	}
+	size = interpreterProxy->stSizeOf(oop);
+	if (size < 1 || interpreterProxy->byteSizeOf(oop) != 8 * size || (count >= 0 && size != count)) {
+		fail(PrimErrBadArgument);
+		return 0;
+	}
+	if (interpreterProxy->isOopImmutable(oop)) {
+		fail(PrimErrNoModification);
+		return 0;
+	}
+	return 1;
+}
+
+static uint64_t *
+words64(sqInt oop)
+{
+	return (uint64_t *)interpreterProxy->firstIndexableField(oop);
+}
+
+/* The Integer of value: a SmallInteger, or a new LargePositiveInteger
+ * (normalized: no leading zero byte), or 0 when the allocation failed.  Not
+ * the proxy's positive64BitIntegerFor, which allocates in eden only, and
+ * aborts the VM when eden is full */
+static sqInt
+positiveInteger64(uint64_t value)
+{
+	sqInt oop;
+	unsigned char *bytes;
+	size_t count, i;
+
+	if (value <= (uint64_t)(((usqInt)-1) >> 1) && interpreterProxy->isIntegerValue((sqInt)value)) {
+		return interpreterProxy->integerObjectOf((sqInt)value);
+	}
+	count = 8;
+	while (count > 1 && (value >> (8 * (count - 1))) == 0) {
+		count--;
+	}
+	if ((oop = instantiate(interpreterProxy->classLargePositiveInteger(), (sqInt)count))) {
+		bytes = (unsigned char *)interpreterProxy->firstIndexableField(oop);
+		for (i = 0; i < count; i++) {
+			bytes[i] = (unsigned char)(value >> (8 * i));	/* the least significant first */
+		}
+	}
+	return oop;
+}
+
+/*	SplitMix64>>primNext: state
+	<primitive: 'primitive_splitmix64_next' module: 'UtilsPlugin'>
+	Answer the next output of state, an Integer in [0, 2^64) (Vigna's
+	next()), and advance it.  state is a writable DoubleWordArray of 1, the
+	64-bit state x.  Fail with #'bad argument' unless state is one, #'no
+	modification' when it is read-only. */
+EXPORT(sqInt)
+primitive_splitmix64_next(void)
+{
+	sqInt state, result;
+	uint64_t x, z;
+
+	if (interpreterProxy->methodArgumentCount() != 1) {
+		return fail(PrimErrBadNumArgs);
+	}
+	state = interpreterProxy->stackValue(0);
+	if (!checkWords64(state, 1)) {
+		return 0;
+	}
+	x = words64(state)[0];
+	z = up_splitmix64_next(&x);
+	/* the state advances only with an answer: after a failed allocation,
+	 * the VM's retry answers the same output */
+	if (!(result = positiveInteger64(z))) {
+		return 0;
+	}
+	words64(state)[0] = x;
+	return interpreterProxy->methodReturnValue(result);
+}
+
+/*	SplitMix64>>primNextFloat: state
+	<primitive: 'primitive_splitmix64_nextfloat' module: 'UtilsPlugin'>
+	Answer the fraction of the next output of state, a Float in [0, 1) (its
+	top 53 bits times 2^-53), and advance it.  Fails as
+	primitive_splitmix64_next. */
+EXPORT(sqInt)
+primitive_splitmix64_nextfloat(void)
+{
+	sqInt state, result;
+	uint64_t x;
+	double r;
+
+	if (interpreterProxy->methodArgumentCount() != 1) {
+		return fail(PrimErrBadNumArgs);
+	}
+	state = interpreterProxy->stackValue(0);
+	if (!checkWords64(state, 1)) {
+		return 0;
+	}
+	x = words64(state)[0];
+	r = up_splitmix64_fraction(up_splitmix64_next(&x));
+	/* a multiple of 2^-53: a SmallFloat64 on 64-bit VMs */
+	if (!(result = newFloat(r))) {
+		return 0;
+	}
+	words64(state)[0] = x;
+	return interpreterProxy->methodReturnValue(result);
+}
+
+/*	SplitMix64>>primOutputsOf: state into: aDoubleWordArray
+	<primitive: 'primitive_splitmix64_fill' module: 'UtilsPlugin'>
+	Store the next outputs of state in the elements of aDoubleWordArray, in
+	order, advance state as many times, and answer aDoubleWordArray.  Both
+	are writable DoubleWordArrays, state of 1 element and aDoubleWordArray
+	of at least 1, and they are two objects.  Fail with #'bad argument'
+	otherwise, #'no modification' when one is read-only. */
+EXPORT(sqInt)
+primitive_splitmix64_fill(void)
+{
+	sqInt state, array;
+	uint64_t x;
+
+	if (interpreterProxy->methodArgumentCount() != 2) {
+		return fail(PrimErrBadNumArgs);
+	}
+	state = interpreterProxy->stackValue(1);
+	array = interpreterProxy->stackValue(0);
+	if (!checkWords64(state, 1) || !checkWords64(array, -1)) {
+		return 0;
+	}
+	if (array == state) {
+		return fail(PrimErrBadArgument);
+	}
+	x = words64(state)[0];
+	up_splitmix64_fill(&x, words64(array), (size_t)interpreterProxy->stSizeOf(array));
+	words64(state)[0] = x;
+	return interpreterProxy->methodReturnValue(array);
+}
+
+
 #ifdef SQUEAK_BUILTIN_PLUGIN
 
 static char _m[] = "UtilsPlugin";
@@ -587,6 +749,9 @@ void* UtilsPlugin_exports[][3] = {
 	{(void*)_m, "primitive_randomknuth_init\000\000", (void*)primitive_randomknuth_init},
 	{(void*)_m, "primitive_randomknuth_next\000\001", (void*)primitive_randomknuth_next},
 	{(void*)_m, "primitive_randomknuth_start\000\002", (void*)primitive_randomknuth_start},
+	{(void*)_m, "primitive_splitmix64_fill\000\000", (void*)primitive_splitmix64_fill},
+	{(void*)_m, "primitive_splitmix64_next\000\000", (void*)primitive_splitmix64_next},
+	{(void*)_m, "primitive_splitmix64_nextfloat\000\000", (void*)primitive_splitmix64_nextfloat},
 	{(void*)_m, "primitive_strtok_r\000\000", (void*)primitive_strtok_r},
 	{(void*)_m, "setInterpreter", (void*)setInterpreter},
 	{(void*)_m, "shutdownModule", (void*)shutdownModule},
@@ -601,6 +766,9 @@ EXPORT(signed char) primitive_infoAccessorDepth = 0;
 EXPORT(signed char) primitive_randomknuth_initAccessorDepth = 0;
 EXPORT(signed char) primitive_randomknuth_nextAccessorDepth = 1;
 EXPORT(signed char) primitive_randomknuth_startAccessorDepth = 2;
+EXPORT(signed char) primitive_splitmix64_fillAccessorDepth = 0;
+EXPORT(signed char) primitive_splitmix64_nextAccessorDepth = 0;
+EXPORT(signed char) primitive_splitmix64_nextfloatAccessorDepth = 0;
 EXPORT(signed char) primitive_strtok_rAccessorDepth = 0;
 
 #endif /* ifdef SQUEAK_BUILTIN_PLUGIN */

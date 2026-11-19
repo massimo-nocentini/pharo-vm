@@ -275,9 +275,10 @@ jobs:
             test -f "$RUNNER_TEMP/vm/lib/$f" || { echo "missing $f"; exit 1; }
           done
 
-      # The UtilsPlugin (C, cmake/plugins.cmake): fma, strtok_r, de Casteljau
-      # and Knuth's generator must answer their known values, Knuth's own
-      # check of his rng-double.c included (tests/ci-load.st)
+      # The UtilsPlugin (C, cmake/plugins.cmake): fma, strtok_r, de Casteljau,
+      # Knuth's generator and Vigna's SplitMix64 must answer their known
+      # values, Knuth's own check of his rng-double.c included
+      # (tests/ci-load.st)
       - name: Load the UtilsPlugin of the zip
         shell: bash
         run: |

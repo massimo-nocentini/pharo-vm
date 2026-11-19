@@ -89,6 +89,26 @@ void up_knuth_cycle(double ran_u[UP_KNUTH_KK], double buffer[UP_KNUTH_QUALITY]);
  * 0.36410514377569680455 */
 double up_knuth_selftest(void);
 
+
+/*** Vigna's SplitMix64 (primitive_splitmix64_*) ***/
+
+/* next() of Sebastiano Vigna's splitmix64.c, which src/vigna/splitmix64.c
+ * holds unchanged, on the state *state instead of the file's global x: the
+ * state advances by the odd constant UP_SPLITMIX64_GAMMA (modulo 2^64), and
+ * the output is a bijective mix of it, so the 2^64 outputs of a period are
+ * the 2^64 values of 64 bits, each once */
+#define UP_SPLITMIX64_GAMMA 0x9e3779b97f4a7c15ULL
+
+/* Advance *state and answer its next output */
+uint64_t up_splitmix64_next(uint64_t *state);
+
+/* The next n outputs of *state, in out[0 .. n-1], *state advanced n times */
+void up_splitmix64_fill(uint64_t *state, uint64_t *out, size_t n);
+
+/* The fraction of an output, in [0, 1): its top 53 bits times 2^-53 (exact:
+ * every multiple of 2^-53 below 1 is a double) */
+double up_splitmix64_fraction(uint64_t output);
+
 #ifdef __cplusplus
 }
 #endif

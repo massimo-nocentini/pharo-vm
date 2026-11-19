@@ -13,9 +13,10 @@ UP_GROUPS      the groups to load, separated by spaces ('Core Tests' by default)
 
 It prints 'VMPluginsPrimitives: loaded, plugin <UtilsPlugin info, or nil>', then the groups and
 packages loaded.  It exits with status 1, before the image is saved, when the submodule is
-missing, a load fails, a method of the packages uses an undeclared variable, or one of the four
+missing, a load fails, a method of the packages uses an undeclared variable, or one of the five
 features does not answer its known value: 2.0 times: 3 plus: 1, 'a b' strtok: ' ' inclusive:
-false, the middle of a segment, and the first fraction of (KnuthRandom seed: 310952).
+false, the middle of a segment, the first fraction of (KnuthRandom seed: 310952), and the first
+output of (SplitMix64 seed: 1234567).
 Metacello makes UUIDs for the packages it loads: the VM needs its UUIDPlugin."
 
 | environment out fail lineEnd plugin repository groups load packages methods undeclared checks utils |
@@ -62,7 +63,8 @@ checks := {
 	'fma' -> [ 2.0 times: 3 plus: 1 ] -> 7.0.
 	'strtok' -> [ 'a b' strtok: ' ' inclusive: false ] -> #( 'a' 'b' ).
 	'de Casteljau' -> [ { 0 @ 0. 10 @ 20 } bezierPointAt: 0.5 ] -> (5.0 @ 10.0).
-	'Knuth' -> [ ((Smalltalk globals at: #KnuthRandom) seed: 310952) next ] -> (Float fromIEEE64Bit: 16r3FC4F4EEA4AAF860) }.
+	'Knuth' -> [ ((Smalltalk globals at: #KnuthRandom) seed: 310952) next ] -> (Float fromIEEE64Bit: 16r3FC4F4EEA4AAF860).
+	'SplitMix64' -> [ ((Smalltalk globals at: #SplitMix64) seed: 1234567) nextInteger64 ] -> 16r599ED017FB08FC85 }.
 checks do: [ :check |
 	| answer |
 	answer := [ check key value value ] on: Error do: [ :error | error description ].

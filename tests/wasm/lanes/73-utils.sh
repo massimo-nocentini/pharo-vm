@@ -7,14 +7,15 @@
 #   builtin   Smalltalk vm listBuiltinModules has 'UtilsPlugin (i)';
 #   probe     plugins/UtilsPlugin/tests/ci-load.st, the probe of the CI jobs,
 #             on the stock image: every primitive answers its known value,
-#             Knuth's own check of his rng-double.c included, and prints
+#             Knuth's own check of his rng-double.c and the outputs of
+#             Vigna's splitmix64.c included, and prints
 #             'UtilsPlugin emscripten 1 ok';
 #   load      plugins/UtilsPlugin/tests/load-utils.st loads the groups Core
 #             and Tests of BaselineOfVMPluginsPrimitives with Metacello from
 #             the submodule plugins/UtilsPlugin/vm-plugins-primitives.st, and
 #             the image is saved: the checks below run on copies of it;
 #   info      UtilsPlugin info is what primitive_info answers on the web:
-#             protocol 1, 'UtilsPlugin 1.0', 'emscripten';
+#             protocol 1, 'UtilsPlugin 1.1', 'emscripten';
 #   suite     tests/wasm/st/utils-lane.st runs the package
 #             VM-Plugins-Primitives-Tests: no failure, no error and no test
 #             skipped (the tests of the plugin skip themselves without it);
@@ -175,7 +176,7 @@ if ! test -f "$loaded/Pharo.image"; then
 fi
 
 fresh info "$loaded"
-expect info "#(1 'UtilsPlugin 1.0' 'emscripten')" $P eval "UtilsPlugin info"
+expect info "#(1 'UtilsPlugin 1.1' 'emscripten')" $P eval "UtilsPlugin info"
 
 fresh suite "$loaded"
 if run suite suite; then

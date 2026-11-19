@@ -1,13 +1,16 @@
 /* enginetest.c -- the tests of the engine of the UtilsPlugin (upEngine.h),
  * without a VM.  run-c-tests.sh builds it with ../src/engine/upEngine.c and
- * knuthref.c, Knuth's rng-double.c compiled on its own (its main renamed by
- * the command line), the reference of the generator.
+ * the references of the generators: knuthref.o, Knuth's rng-double.c
+ * compiled on its own (its main renamed by the command line), and
+ * vignaref.c, Vigna's splitmix64.c with its own names and a setter of its
+ * state.
  *
  *   enginetest [--vectors]
  *
  * prints "<n> checks, 0 failures" and exits 0 when every check passed;
- * --vectors also prints the reference values of the Smalltalk tests (the
- * first fractions of some seeds, as hexadecimal bits).
+ * --vectors prints instead the reference values of the Smalltalk tests (the
+ * first fractions of some seeds of Knuth's generator, as hexadecimal bits,
+ * and the outputs of some seeds of SplitMix64).
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -26,6 +29,10 @@ extern double *ranf_arr_ptr;
 extern void ranf_start(long seed);
 extern double ranf_arr_cycle(void);
 #define ranf_arr_next() (*ranf_arr_ptr >= 0 ? *ranf_arr_ptr++ : ranf_arr_cycle())
+
+/* vignaref.c: splitmix64.c as Vigna wrote it, with its static state */
+extern void vigna_ref_seed(uint64_t seed);
+extern uint64_t vigna_ref_next(void);
 
 static long checks, failures;
 
@@ -153,6 +160,116 @@ printVectors(void)
 		printf("\n");
 	}
 	printf("selftest %.20f\n", up_knuth_selftest());
+}
+
+
+/*** Vigna's SplitMix64 ***/
+
+/* The output of the state s, written out from Vigna's next() */
+static uint64_t
+mix(uint64_t z)
+{
+	z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+	z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+	return z ^ (z >> 31);
+}
+
+static void
+testSplitMix64(void)
+{
+	/* the first outputs of the seeds 0 and 1234567, and of 2^64 - 1 and
+	 * 2^64 - gamma (the state wraps around: its first output is that of
+	 * the state 0, mix(0) = 0); splitmix64.c compiled as it is (x = 0)
+	 * answers the first row */
+	static const struct { uint64_t seed, outputs[3], hundredth; } known[] = {
+		{ 0, { 0xe220a8397b1dcdafULL, 0x6e789e6aa1b965f4ULL, 0x06c45d188009454fULL }, 0x3505b7796bd1a506ULL },
+		{ 1234567, { 0x599ed017fb08fc85ULL, 0x2c73f08458540fa5ULL, 0x883ebce5a3f27c77ULL }, 0xf05866001d65775fULL },
+		{ 0xffffffffffffffffULL, { 0xe4d971771b652c20ULL, 0xe99ff867dbf682c9ULL, 0x382ff84cb27281e9ULL }, 0xe6d6332a04aaf1c0ULL },
+		{ 0x61c8864680b583ebULL, { 0, 0xe220a8397b1dcdafULL, 0x6e789e6aa1b965f4ULL }, 0xdc4c613d9eba2304ULL },
+	};
+	static uint64_t buffer[1000], again[1000];
+	uint64_t a, b, s, z, seed, before;
+	size_t k, n;
+	int i, round;
+
+	for (k = 0; k < sizeof known / sizeof known[0]; k++) {
+		s = known[k].seed;
+		for (i = 1; i <= 100; i++) {
+			z = up_splitmix64_next(&s);
+			if (i <= 3) {
+				check(z == known[k].outputs[i - 1], "a known output of SplitMix64", (long)(k * 1000 + i));
+			}
+		}
+		check(z == known[k].hundredth, "the hundredth output of a seed", (long)k);
+		check(s == known[k].seed + 100 * UP_SPLITMIX64_GAMMA, "the state after 100 outputs", (long)k);
+	}
+
+	/* seeds against splitmix64.c, two generators interleaved, and the
+	 * output n of the seed s is mix(s + n * gamma), modulo 2^64 */
+	for (round = 0; round < 64; round++) {
+		seed = round < 4 ? (uint64_t)round - 2 : next64();
+		a = seed;
+		b = ~seed;
+		vigna_ref_seed(seed);
+		for (i = 1; i <= 20000; i++) {
+			z = up_splitmix64_next(&a);
+			check(z == vigna_ref_next(), "SplitMix64 against splitmix64.c", (long)round * 100000 + i);
+			check(z == mix(seed + (uint64_t)i * UP_SPLITMIX64_GAMMA), "the output n is mix(seed + n gamma)", i);
+			if (i % 3 == 0) {
+				(void)up_splitmix64_next(&b);
+			}
+		}
+		check(a == seed + 20000 * UP_SPLITMIX64_GAMMA, "the state is seed + n gamma", round);
+	}
+
+	/* fill: the outputs of next, in order, and the same final state */
+	for (round = 0; round < 200; round++) {
+		seed = next64();
+		n = (size_t)(next64() % 1000);
+		a = b = seed;
+		up_splitmix64_fill(&a, buffer, n);
+		for (k = 0; k < n; k++) {
+			again[k] = up_splitmix64_next(&b);
+		}
+		check(a == b && memcmp(buffer, again, n * sizeof buffer[0]) == 0, "fill is next n times", round);
+	}
+	/* nothing to fill: the state stays */
+	a = before = 77;
+	up_splitmix64_fill(&a, buffer, 0);
+	check(a == before, "fill of 0 outputs", 0);
+
+	/* the fraction: the top 53 bits, exactly, in [0, 1) */
+	check(up_splitmix64_fraction(0) == 0 && !signbit(up_splitmix64_fraction(0)), "the fraction of 0 is +0", 0);
+	check(up_splitmix64_fraction(0xffffffffffffffffULL) == 1 - ldexp(1, -53), "the largest fraction is 1 - 2^-53", 0);
+	check(up_splitmix64_fraction(0x7ffULL) == 0, "the low 11 bits do not count", 0);
+	check(up_splitmix64_fraction(1ULL << 11) == ldexp(1, -53), "the smallest fraction is 2^-53", 0);
+	s = 0;
+	for (i = 0; i < 100000; i++) {
+		z = up_splitmix64_next(&s);
+		check(up_splitmix64_fraction(z) == ldexp((double)(z >> 11), -53) && up_splitmix64_fraction(z) < 1,
+			"a fraction is (z >> 11) 2^-53", i);
+	}
+}
+
+static void
+printSplitMix64Vectors(void)
+{
+	static const uint64_t seeds[] = { 0, 1, 1234567, 0xffffffffffffffffULL, 0x61c8864680b583ebULL };
+	size_t k;
+	uint64_t s, z;
+	int i;
+
+	for (k = 0; k < sizeof seeds / sizeof seeds[0]; k++) {
+		s = seeds[k];
+		printf("splitmix64 seed 16r%016llX:", (unsigned long long)seeds[k]);
+		for (i = 1; i <= 1000; i++) {
+			z = up_splitmix64_next(&s);
+			if (i <= 3 || i == 100 || i == 1000) {
+				printf(" %d=16r%016llX", i, (unsigned long long)z);
+			}
+		}
+		printf(" fraction1=16r%016llX\n", (unsigned long long)bits(up_splitmix64_fraction(mix(seeds[k] + UP_SPLITMIX64_GAMMA))));
+	}
 }
 
 
@@ -408,9 +525,11 @@ main(int argc, char **argv)
 {
 	if (argc > 1 && strcmp(argv[1], "--vectors") == 0) {
 		printVectors();
+		printSplitMix64Vectors();
 		return 0;
 	}
 	testKnuth();
+	testSplitMix64();
 	testSplit();
 	testBezier();
 	testFma();
