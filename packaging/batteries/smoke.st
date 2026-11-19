@@ -1,0 +1,91 @@
+"smoke.st - a quick check of an image that load.st saved (docs/Batteries.md)
+
+	[BATTERIES_SMOKE=native] pharo --headless Pharo15-batteries.image --no-default-preferences st --no-source packaging/batteries/smoke.st
+
+The image starts again (so the save of load.st left nothing running), has the classes of every project and the RTree
+of the fork, its facades answer in Smalltalk, and the tests of a few packages pass:
+
+	basic (any VM, the default): RTree-Tests, TimSort-Smalltalk-Tests, VM-Plugins-Primitives-Tests (the
+	        UtilsPlugin's Smalltalk twin, and the plugin too when the VM has it), about 15 s;
+	native (BATTERIES_SMOKE=native, on a VM of this repository, whose plugins and cairo stack the tests then
+	        use): also SimdJSON-Tests, SimdJSON-FFI-Tests, TimSort-FFI-Tests, LibGLib-Tests, LibPangoCairo-Tests and
+	        LibPoppler-Roassal-Tests, each of which must run tests, not only skip them.
+
+One line per failure and error, then
+
+	Batteries smoke <mode> classes <n> tests <run> passed <p> skipped <s> failed <f> errors <e> ok
+
+ending in FAILED instead of ok when anything went wrong; exit status 0 for ok, 1 otherwise.  Nothing is saved
+(--no-source keeps the .changes as it is)."
+
+| environment out lineEnd line problems mode classes suites run passed skipped failed errors ok |
+environment := OSEnvironment current.
+out := Stdio stdout.
+lineEnd := OSPlatform current lineEnding.
+line := [ :string | out nextPutAll: string; nextPutAll: lineEnd; flush ].
+problems := OrderedCollection new.
+mode := (environment at: 'BATTERIES_SMOKE' ifAbsent: [ '' ]) trimBoth ifEmpty: [ 'basic' ].
+(#( 'basic' 'native' ) includes: mode) ifFalse: [
+	line value: 'Batteries smoke: BATTERIES_SMOKE is ' , mode , ', not basic or native'.
+	Smalltalk exitFailure ].
+
+[
+"1. a class or two of every project, the fork's RTree and Roassal"
+classes := #( #RSCanvas #RSPangoText #RSPdfPage #RTNaryTreeCollection #RTPackedTreeCollection #RTGridCollection
+	#RTLooseQuadtreeCollection #UtilsPlugin #KnuthRandom #SplitMix64 #SimdJSONReader #NeoJSONReader #SimdUTF #TimSort
+	#TimSortSmalltalk #PangoLayout #PopplerDocument #BaselineOfRoassalMN ).
+classes do: [ :name |
+	(Smalltalk globals includesKey: name) ifFalse: [ problems add: 'no class ' , name ] ].
+(MCWorkingCopy allWorkingCopies select: [ :copy | copy packageName beginsWith: 'RTree' ]) do: [ :copy |
+	copy modified ifTrue: [ problems add: copy packageName , ' is modified' ] ].
+((IceRepository registry detect: [ :each | each name = 'RTree' ] ifNone: [ nil ])
+	ifNil: [ '' ] ifNotNil: [ :repository | [ repository origin url ] on: Error do: [ '' ] ]) asString
+		in: [ :url | (url includesSubstring: 'massimo-nocentini/RTree') ifFalse: [ problems add: 'RTree is not the fork: ' , url ] ].
+
+"(load.st gives Iceberg back the settings of the stock image)"
+IceCredentialsProvider providerType = IceNonInteractiveCredentialsProvider ifTrue: [
+	problems add: 'Iceberg keeps the non-interactive credentials of load.st' ].
+
+"2. the facades, in Smalltalk on any VM"
+(#( 3 1 2 ) copy timSort: [ :a :b | a <= b ]) = #( 1 2 3 ) ifFalse: [ problems add: 'timSort: does not sort' ].
+#( 3 1 2 ) copy timSortDescending = #( 3 2 1 ) ifFalse: [ problems add: 'timSortDescending does not sort' ].
+(2.0 times: 3.0 plus: 1.0) = 7.0 ifFalse: [ problems add: 'Float>>times:plus: is not 7.0' ].
+
+"3. the tests"
+suites := #( 'RTree-Tests' 'TimSort-Smalltalk-Tests' 'VM-Plugins-Primitives-Tests' ).
+mode = 'native' ifTrue: [
+	suites := suites , #( 'SimdJSON-Tests' 'SimdJSON-FFI-Tests' 'TimSort-FFI-Tests' 'LibGLib-Tests' 'LibPangoCairo-Tests'
+		'LibPoppler-Roassal-Tests' ) ].
+run := passed := skipped := failed := errors := 0.
+suites do: [ :packageName |
+	| package suite result ms |
+	package := PackageOrganizer default packageNamed: packageName ifAbsent: [ nil ].
+	package
+		ifNil: [ problems add: 'no package ' , packageName ]
+		ifNotNil: [
+			suite := TestSuite named: packageName.
+			(package definedClasses select: [ :each | (each inheritsFrom: TestCase) and: [ each isAbstract not ] ])
+				do: [ :each | suite addTests: each buildSuite tests ].
+			ms := Time millisecondsToRun: [ result := suite run ].
+			line value: 'Batteries smoke: ' , packageName , ' run ' , result runCount printString , ' passed '
+				, result passedCount printString , ' skipped ' , result skippedCount printString , ' failed '
+				, result failureCount printString , ' errors ' , result errorCount printString , ' ('
+				, (ms // 1000) printString , ' s)'.
+			result failures do: [ :each | problems add: 'failure ' , each printString ].
+			result errors do: [ :each | problems add: 'error ' , each printString ].
+			(mode = 'native' and: [ result runCount = 0 ]) ifTrue: [
+				problems add: packageName , ' ran no test (' , result skippedCount printString , ' skipped)' ].
+			run := run + result runCount.
+			passed := passed + result passedCount.
+			skipped := skipped + result skippedCount.
+			failed := failed + result failureCount.
+			errors := errors + result errorCount ] ] ]
+	on: Error
+	do: [ :error | problems add: 'error in smoke.st ' , error class name , ': ' , (error messageText ifNil: [ '' ]) asString ].
+
+problems do: [ :each | line value: 'Batteries smoke: ' , each ].
+ok := problems isEmpty.
+line value: 'Batteries smoke ' , mode , ' classes ' , classes size printString , ' tests ' , run printString , ' passed '
+	, passed printString , ' skipped ' , skipped printString , ' failed ' , failed printString , ' errors '
+	, errors printString , (ok ifTrue: [ ' ok' ] ifFalse: [ ' FAILED' ]).
+ok ifTrue: [ Smalltalk exitSuccess ] ifFalse: [ Smalltalk exitFailure ]
