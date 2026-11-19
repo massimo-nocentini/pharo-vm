@@ -451,6 +451,14 @@ while read -r name path; do
     [ -d "$root/include" ] && cp -R "$root/include/." "$prefix/include/"
     if [ -d "$root/lib" ]; then
         find "$root/lib" -maxdepth 1 -name '*.dll.a' -exec cp -p {} "$prefix/lib/" \;
+        # MSYS2's zlib 1.4 package builds two DLLs of one source: libz-1.dll
+        # (zlib 1.4's CMake name, imported through libz.dll.a: what -lz and
+        # CMake's FindZLIB pick) and zlib1.dll (libzlib1.dll.a: what cairo,
+        # FreeType, libpng and GLib import).  The stack ships zlib1.dll only,
+        # so -lz must mean zlib1.dll here too (Poppler imported libz-1.dll)
+        if [ -f "$root/lib/libzlib1.dll.a" ]; then
+            cp -p "$root/lib/libzlib1.dll.a" "$prefix/lib/libz.dll.a"
+        fi
         for inc in "$root"/lib/*/include; do
             [ -d "$inc" ] || continue
             mkdir -p "$prefix/lib/${inc#"$root/lib/"}"
