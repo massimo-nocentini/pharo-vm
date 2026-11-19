@@ -629,7 +629,9 @@ check_feature_summaries() {
     if [ "${1:-}" != poppler ] && in_platform_libs glib; then
         s=$sd/meson-summaries/glib.txt
         test -s "$s"; check $? "meson summary of glib"
-        for k in libmount selinux sysprof; do
+        # GLib's summary lists libmount and selinux on Linux only
+        ks=sysprof; [ "$platform" = linux ] && ks="libmount selinux sysprof"
+        for k in $ks; do
             grep -q "^ *$k *: false" "$s" 2>/dev/null; check $? "glib summary: $k false"
         done
     fi
@@ -746,9 +748,13 @@ check_darwin() {
     fonts_conf=
     if has_feature poppler; then
         # fontconfig with the macOS font directories, the bundle's fonts.conf (D5)
+        # (FC_DEFAULT_FONTS, the <dir> entries of its built-in configuration:
+        # "\t<dir>/System/Library/Fonts</dir>\n\t<dir>...", one C string)
         f=$lib/libfontconfig.1.dylib
-        strings "$f" 2>/dev/null | grep -q '^/System/Library/Fonts' && ! strings "$f" | grep -q '/usr/local/share/fonts'
-        check $? "libfontconfig.1.dylib has /System/Library/Fonts compiled in, not /usr/local/share/fonts"
+        fc_dirs=$(strings "$f" 2>/dev/null | grep -o '<dir>[^<]*</dir>')
+        echo "$fc_dirs" | grep -qx '<dir>/System/Library/Fonts</dir>' \
+            && ! echo "$fc_dirs" | grep -q -e '<dir>/usr/local/share/fonts</dir>' -e '<dir>/usr/share/fonts</dir>'
+        check $? "libfontconfig.1.dylib has the font directory /System/Library/Fonts compiled in, not /usr/share/fonts or /usr/local/share/fonts"
         if [ "$mode" = bundle ]; then
             fonts_conf=$nd/fontconfig/fonts.conf
             test -s "$fonts_conf"; check $? "fontconfig/fonts.conf in $nd (LibPoppler loads it)"

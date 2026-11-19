@@ -710,6 +710,12 @@ while read -r name path; do
                 cp "$pli" "$src/subprojects/packagecache/$(basename "$pli")"
                 wrap_mode=nodownload
                 set -- "$@" --force-fallback-for=intl -Dproxy-libintl:default_library=static
+                # GLib adds Objective-C on macOS (glib/gosxutils.m, gio's .m
+                # files), and meson links a library with Objective-C in it or
+                # in a library it links (so all four) with objc_link_args, not
+                # c_link_args: without these no LC_RPATH @loader_path, and the
+                # .m files compiled without the prefix map
+                set -- "$@" -Dobjc_args="$(meson_array "$c_args $prefix_map")" -Dobjc_link_args="$(meson_array "$link_args")"
             fi
             build_meson glib "$src" "$@"
             wrap_mode=nofallback
@@ -771,6 +777,15 @@ while read -r name path; do
             cmake_link=$rpath_flag
             build_cmake poppler "$src" "$@"
             cmake_summary poppler "$work/build/poppler.setup.log"
+            # DCTStream compiled against the headers of the static libjpeg-turbo
+            # it links, none of another libjpeg (an include directory of the
+            # compiler's own, such as /usr/local/include on Intel Macs): with
+            # another jpeglib.h libjpeg may refuse Poppler's decompressor (version
+            # or struct size), silently, and every JPEG of a PDF draws nothing
+            j_deps=$(ninja -C "$work/build/poppler" -t deps 2>/dev/null | awk '/\/(jpeglib|jconfig|jmorecfg|jerror)\.h$/ { print $1 }' | sort -u)
+            echo "$j_deps" | grep -q '/jpeglib\.h$' || die "poppler: no object includes jpeglib.h (ninja -t deps)"
+            j_bad=$(echo "$j_deps" | awk -v s="$static/include/" 'index($0, s) != 1' | tr '\n' ' ')
+            [ -z "$j_bad" ] || die "poppler: compiled against libjpeg headers outside $static/include: $j_bad"
             ;;
         *) die "pins.txt names $name, which build.sh does not know how to build" ;;
     esac
@@ -787,10 +802,11 @@ fi
 # and their references to each other, to absolute paths in <prefix>/lib,
 # which exist only on the build machine (a CMake build with CMAKE_SKIP_RPATH,
 # Poppler, may leave a bare file name instead): the bundle needs
-# @rpath/<name>, found through their LC_RPATH @loader_path.  Changing load
-# commands invalidates a signature, and arm64 loads only signed code, so
-# every library is then signed ad hoc again (x86_64 ones too, which the
-# linker does not sign, so that codesign -v holds on both).
+# @rpath/<name>, found through their LC_RPATH @loader_path (added to a
+# library whose link flags did not reach the linker).  Changing load commands
+# invalidates a signature, and arm64 loads only signed code, so every library
+# is then signed ad hoc again (x86_64 ones too, which the linker does not
+# sign, so that codesign -v holds on both).
 if [ "$platform" = darwin ]; then
     for d_f in "$prefix"/lib/*.dylib; do
         { [ -f "$d_f" ] && [ ! -L "$d_f" ]; } || continue
@@ -806,6 +822,10 @@ if [ "$platform" = darwin ]; then
                     install_name_tool -change "$d_dep" "@rpath/${d_dep##*/}" "$d_f" || die "install_name_tool -change on $d_f" ;;
             esac
         done
+        # every library finds its @rpath/ dependencies next to itself, whatever
+        # link flags its build system used
+        otool -l "$d_f" | awk '/cmd LC_RPATH/ { r = 1 } r && /path / { print $2; r = 0 }' | grep -qx '@loader_path' \
+            || install_name_tool -add_rpath @loader_path "$d_f" || die "install_name_tool -add_rpath on $d_f"
         codesign --force --sign - "$d_f" >/dev/null 2>&1 || die "codesign --sign - $d_f"
     done
 fi

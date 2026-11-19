@@ -18,10 +18,15 @@
  *
  *     pango <version> font-map <type> family <family> ink <n>
  *     poppler <version> pages <n> size <w>x<h> text "<page 1>" ink <n> jpeg <r>,<g>,<b>
+ *     poppler-image images <n> decoded <r>,<g>,<b>      (or: decoded none)
  *     base14 text "<page 1>" ink <n>
  *     instances ok          (or: instances FAIL <what>)
  *
- * where ink is the number of pixels drawn, and "instances" says that each of
+ * where ink is the number of pixels drawn, poppler-image the number of images
+ * of page 2 and the centre of the first as Poppler decodes it without drawing
+ * the page (poppler_page_get_image; informative: white there too is a JPEG
+ * that libjpeg refused, which Poppler does not report, red a page that drew
+ * it wrong), and "instances" says that each of
  * libglib, libgobject, libcairo, libfreetype, libharfbuzz, libpango and
  * libfontconfig that these parts load is loaded once, from <dir>.  It exits 0
  * when every part draws ink, the texts extract, the JPEG pixel is red and the
@@ -166,6 +171,8 @@ static void (*surface_finish)(ptr);
 static int (*surface_status)(ptr);
 static unsigned char *(*get_data)(ptr);
 static int (*get_stride)(ptr);
+static int (*get_width)(ptr);
+static int (*get_height)(ptr);
 static void (*set_source_rgb)(ptr, double, double, double);
 static void (*paint)(ptr);
 static void (*move_to)(ptr, double, double);
@@ -187,6 +194,10 @@ static void (*g_error_free)(ptr);
 static void (*g_object_unref)(ptr);
 static const char *(*g_type_name_from_instance)(ptr);
 
+/* GList: data, next, prev; PopplerImageMapping: a PopplerRectangle, image_id */
+struct glist { void *data; struct glist *next, *prev; };
+struct image_mapping { double x1, y1, x2, y2; int image_id; };
+
 /* GError: domain, code, message */
 struct gerror { uint32_t domain; int code; char *message; };
 
@@ -204,6 +215,8 @@ static void load_core(void)
     LOAD(cairo, surface_status, "cairo_surface_status");
     LOAD(cairo, get_data, "cairo_image_surface_get_data");
     LOAD(cairo, get_stride, "cairo_image_surface_get_stride");
+    LOAD(cairo, get_width, "cairo_image_surface_get_width");
+    LOAD(cairo, get_height, "cairo_image_surface_get_height");
     LOAD(cairo, set_source_rgb, "cairo_set_source_rgb");
     LOAD(cairo, paint, "cairo_paint");
     LOAD(cairo, move_to, "cairo_move_to");
@@ -377,6 +390,12 @@ static int run_poppler(const char *scratch)
     LOAD(poppler, page_get_size, "poppler_page_get_size");
     LOAD(poppler, page_get_text, "poppler_page_get_text");
     LOAD(poppler, page_render, "poppler_page_render");
+    ptr (*page_get_image_mapping)(ptr);
+    void (*page_free_image_mapping)(ptr);
+    ptr (*page_get_image)(ptr, int);
+    LOAD(poppler, page_get_image_mapping, "poppler_page_get_image_mapping");
+    LOAD(poppler, page_free_image_mapping, "poppler_page_free_image_mapping");
+    LOAD(poppler, page_get_image, "poppler_page_get_image");
     int ok = 1;
 
     /* The 2-page PDF, written by cairo */
@@ -438,6 +457,26 @@ static int run_poppler(const char *scratch)
     printf("poppler %s pages %d size %.0fx%.0f text ", get_version(), pages, w, h);
     print_quoted(text);
     printf(" ink %d jpeg %d,%d,%d\n", ink, r, g, b);
+    /* The image of page 2 as Poppler decodes it, without drawing the page */
+    page = document_get_page(doc, 1);
+    int images = 0;
+    char decoded[32] = "none";
+    if (page) {
+        struct glist *mapping = page_get_image_mapping(page);
+        for (struct glist *l = mapping; l; l = l->next) images++;
+        if (mapping) {
+            ptr im = page_get_image(page, ((struct image_mapping *)mapping->data)->image_id);
+            if (im && get_width(im) > 0 && get_height(im) > 0) {
+                surface_flush(im);
+                uint32_t q = pixel(im, get_width(im) / 2, get_height(im) / 2);
+                snprintf(decoded, sizeof decoded, "%u,%u,%u", (q >> 16) & 255, (q >> 8) & 255, q & 255);
+            }
+            if (im) surface_destroy(im);
+            page_free_image_mapping(mapping);
+        }
+        g_object_unref(page);
+    }
+    printf("poppler-image images %d decoded %s\n", images, decoded);
     ok = pages == 2 && w == 300 && h == 200 && text && strstr(text, "Hello Poppler") && ink > 0
         && r > 150 && g < 60 && b < 60;
     g_free(text);
