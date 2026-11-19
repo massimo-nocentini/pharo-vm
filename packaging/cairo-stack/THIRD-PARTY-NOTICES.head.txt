@@ -6,6 +6,16 @@ it runs is distributed by https://pharo.org/ under its own licence.
 
 Next to this file the VM carries @CONTENTS@, which the image
 loads to draw (Athens) and to read fonts, and the libraries that they need.
+@IF pango@
+With them come Pango @PANGO_VERSION@ and PangoCairo, which the image loads to
+lay out text, with GLib @GLIB_VERSION@, FriBidi and HarfBuzz.
+@ENDIF@
+@IF poppler@
+With them comes Poppler @POPPLER_VERSION@ (libpoppler and libpoppler-glib),
+which the image loads to read and render PDF documents, with GLib and
+libjpeg-turbo.  Poppler is under the GNU General Public License: see
+"Poppler (GPL)" below.
+@ENDIF@
 @ORIGIN@
 
     CAIRO-STACK.txt           every library or package: its version, the
@@ -28,15 +38,129 @@ cairo is available under the GNU Lesser General Public License version 2.1
 (LGPL-2.1) or under the Mozilla Public License version 1.1 (MPL-1.1); this
 distribution uses cairo under the LGPL-2.1.  LICENSE.cairo holds both texts.
 
+@IF !poppler@
 FreeType is available under the FreeType License (FTL) or under the GNU
-General Public License version 2 (GPLv2); this distribution uses FreeType
-under the FTL.  LICENSE.freetype holds both texts.  As the FTL asks:
+General Public License version 2 or (at your option) any later version; this
+distribution uses FreeType under the FTL.  LICENSE.freetype holds both texts.
+As the FTL asks:
+@ENDIF@
+@IF poppler@
+FreeType is available under the FreeType License (FTL) or under the GNU
+General Public License version 2 or (at your option) any later version; this
+distribution uses FreeType under the FTL; libpoppler, which links FreeType,
+uses it under FreeType's other licence, the GNU GPL version 2 or (at your
+option) any later version; LICENSE.freetype holds both texts.  As the FTL
+asks:
+@ENDIF@
 
     Portions of this software are copyright (C) 2026 The FreeType Project
     (www.freetype.org).  All rights reserved.
 
 The other libraries are under permissive licences (MIT, libpng, zlib and
 similar; see their LICENSE.<name>).
+@IF glib@
+So are PCRE2 (BSD-3-Clause with the PCRE2 exception) and libffi (MIT), which
+GLib uses (on Linux and macOS linked inside libglib and libgobject, hidden).
+@ENDIF@
+@IF pango@
+So is HarfBuzz (the "Old MIT" licence).
+@ENDIF@
+@IF glib@
+GLib, and the libraries of Pango, are under the GNU Lesser General Public
+License: see "Source code (LGPL)" below.
+@ENDIF@
+@IF poppler@
+
+
+Poppler (GPL)
+-------------
+
+libpoppler and libpoppler-glib (Poppler @POPPLER_VERSION@) are free software
+under the GNU General Public License, version 2 or (at your option) any later
+version; the parts derived from Xpdf are under the GPL version 2 or version 3.
+This VM distributes them under the GNU General Public License version 3,
+which every part allows.  LICENSE.poppler holds both licence texts.  The VM
+does not link Poppler; the image loads libpoppler-glib by name.  A program
+that uses Poppler through the image may be subject to the GPL.  A VM without
+Poppler is built with -DFEATURE_LIB_POPPLER=OFF.
+@ENDIF@
+@IF poppler mingw@
+
+The C and C++ compiler runtime next to the VM (LICENSE.mingw-runtime), which
+libpoppler uses, is a System Library in the sense of section 1 of the GNU GPL
+version 3.
+@ENDIF@
+@IF poppler@
+
+Complete corresponding source code.  The GitHub release that carries this VM
+attaches cairo-stack-sources.tar: the unmodified poppler-@POPPLER_VERSION@.tar.xz
+and every other pinned source archive or MSYS2 source package of the
+libraries in this bundle (the C and C++ compiler runtime, a System Library in
+the sense of GPLv3 section 1, is not included), with cmake/cairo-stack/ and
+scripts/cairo-stack/, the scripts that control the build.  In addition, for
+at least three years from the date of this release, whoever distributed this
+build offers any third party, for a charge no more than the cost of
+physically performing source distribution, a complete machine-readable copy
+of that source code on a medium customarily used for software interchange;
+ask through @SOURCE_OFFER_URL@.
+
+
+libjpeg-turbo
+-------------
+
+This software is based in part on the work of the Independent JPEG Group.
+
+libjpeg-turbo, which Poppler uses to decode JPEG images (on Linux and macOS
+linked inside libpoppler, hidden; on Windows MSYS2's libjpeg-8.dll), is under
+the IJG License (its README.ijg, in LICENSE.libjpeg-turbo) and the Modified
+(3-clause) BSD License; its SIMD code is under the zlib License.  As they ask:
+
+  Copyright (C) 2009-2026 D. R. Commander
+  Copyright (C) 2018-2023 Randy <randy408@protonmail.com>
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are met:
+
+  - Redistributions of source code must retain the above copyright notice,
+    this list of conditions and the following disclaimer.
+  - Redistributions in binary form must reproduce the above copyright notice,
+    this list of conditions and the following disclaimer in the documentation
+    and/or other materials provided with the distribution.
+  - Neither the name of the libjpeg-turbo Project nor the names of its
+    contributors may be used to endorse or promote products derived from this
+    software without specific prior written permission.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS",
+  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE
+  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+  POSSIBILITY OF SUCH DAMAGE.
+
+The zlib License of libjpeg-turbo's SIMD code (its copyright holders are
+named in each source file):
+
+  This software is provided 'as-is', without any express or implied
+  warranty.  In no event will the authors be held liable for any damages
+  arising from the use of this software.
+
+  Permission is granted to anyone to use this software for any purpose,
+  including commercial applications, and to alter it and redistribute it
+  freely, subject to the following restrictions:
+
+  1. The origin of this software must not be misrepresented; you must not
+     claim that you wrote the original software. If you use this software
+     in a product, an acknowledgment in the product documentation would be
+     appreciated but is not required.
+  2. Altered source versions must be plainly marked as such, and must not be
+     misrepresented as being the original software.
+  3. This notice may not be removed or altered from any source distribution.
+@ENDIF@
 
 
 FreeType's MIT notices
@@ -118,12 +242,33 @@ PCF driver (src/pcf/README):
   SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
-Source code (LGPL-2.1)
-----------------------
+Source code (LGPL)
+------------------
 
 cairo is a separate shared library, which the VM does not link: the image
 loads it by name, so it can be replaced with another build of cairo of the
-same interface.  The complete corresponding source code of cairo and of every
+same interface.
+@IF glib@
+The same holds for GLib @GLIB_VERSION@ (libglib, libgobject, libgio and
+libgmodule), under the GNU Lesser General Public License version 2.1 or (at
+your option) any later version.
+@ENDIF@
+@IF glib darwin@
+On macOS libglib contains proxy-libintl 0.5 (GNU Library General Public
+License version 2 or later), linked statically: libglib, itself under the
+LGPL, is replaceable as a whole.
+@ENDIF@
+@IF pango@
+The same holds for Pango @PANGO_VERSION@ (libpango and libpangocairo, and
+libpangoft2 except on macOS; GNU Library General Public License version 2 or
+later) and FriBidi (LGPL version 2.1 or later).
+@ENDIF@
+@IF pango mingw@
+On Windows MSYS2's Pango also needs libpangowin32 (the same licence), and
+libthai and libdatrie (LGPL version 2.1 or later), separate DLLs too;
+libthai's word-break dictionary is not bundled.
+@ENDIF@
+The complete corresponding source code of cairo and of every
 other library listed above is that of the pinned archive or package that
 CAIRO-STACK.txt names, which its SHA256 identifies, built as
 scripts/cairo-stack/ and cmake/cairoStack.cmake of the VM's repository say.

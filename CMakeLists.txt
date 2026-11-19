@@ -31,6 +31,9 @@ option(FEATURE_JIT_SIMD			"Use SIMD support in JIT compilation when available"		
 option(FEATURE_LIB_SDL2			"Build SDL2 support"												ON)
 option(FEATURE_LIB_CAIRO		"Build Cairo support"												ON)
 option(FEATURE_LIB_FREETYPE2	"Build freetype2 support"											ON)
+# Features of the cairo stack (cmake/cairoStack.cmake): both need FEATURE_LIB_CAIRO
+option(FEATURE_LIB_PANGO		"Bundle Pango and PangoCairo (cairo stack)"							ON)
+option(FEATURE_LIB_POPPLER		"Bundle Poppler and poppler-glib, GPL (cairo stack)"				ON)
 # The cairo and FreeType of the bundle (cmake/cairoStack.cmake, docs/CairoStack.md):
 # the stack pinned in cmake/cairo-stack/pins.txt, which the configure builds
 # (Linux, macOS; MSYS2's pinned packages on MinGW), or the one of
