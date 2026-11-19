@@ -91,12 +91,15 @@
 //          key files.  An id is 1 to 16 lower-case letters, digits and
 //          dashes (not first); pharo is "13.1" for the .sources
 //          Pharo13.1-64bit-d7c6f76.sources, null for a .sources of another
-//          name; label "Pharo 13.1", "Pharo 14" (for 14.0), or the id;
+//          name; label "Pharo 13.1", "Pharo 14" (for 14.0), or the id,
+//          and for an extra image whose label an image before it has (the
+//          default one first, then the extra ones in their order) that label
+//          and its id, "Pharo 15 (batteries)";
 //          pharoBuild the build of the stock image, from the name of the zip
 //          that download.cmake unpacked (<stock dir>.stamp), null when
 //          unknown; world and webPackage as the keys below, for that image
 //          (webPackage 0 for a stock image).  Sorted by pharo, numerically,
-//          those without one last, then by id
+//          those without one last, then the default one first, then by id
 //   libraries  ["libcairo.so.2", ...], sorted: the --library-file names, the
 //          placeholders of the libraries of the FFI (the FILES of
 //          pharo_wasm_ffi_library, which stage.cmake passes).  The worker
@@ -322,7 +325,7 @@ const pharoBuildOf = (dir) => {
   return build ? Number(build[1]) : null;
 };
 // The order of the catalog: by release, numerically, those of no release
-// last, then by id
+// last, then the default image first, then by id
 const catalogOrder = (a, b) => {
   const va = a.pharo && a.pharo.split('.').map(Number), vb = b.pharo && b.pharo.split('.').map(Number);
   if (va && vb) {
@@ -331,6 +334,7 @@ const catalogOrder = (a, b) => {
   } else if (va || vb) {
     return va ? -1 : 1;
   }
+  if (!!a.default != !!b.default) return a.default ? -1 : 1;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 };
 
@@ -377,10 +381,14 @@ const main = async () => {
   // The id of the default image: --image-id, else p<major> of its .sources
   const [first] = catalog;
   first.id = options.imageId || (first.pharo ? `p${first.pharo.split('.')[0]}` : 'default');
+  // (two images of one release are told apart by the id of the later one)
+  const labels = new Set();
   for (const image of catalog) {
     if (image != first && image.id == first.id)
       fail(`--extra-image ${image.id} has the id of the default image (--image-id)`);
     image.label = labelOf(image.pharo, image.id);
+    if (labels.has(image.label)) image.label = `${image.label} (${image.id})`;
+    labels.add(image.label);
   }
   // Two .sources of one name are the same file
   const sourcesByName = new Map();

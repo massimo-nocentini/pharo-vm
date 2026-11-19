@@ -832,7 +832,7 @@ manifest 'm.images.filter((i) => i.default).length === 1 && m.images[1].default 
 manifest 'same(urls(m.images[2].files), ["image/p99/Pharo.changes.gz", "image/p99/Pharo.image.gz", "image/p99/Pharo15.0-64bit-b85960f.sources.gz"])'
 manifest 'same(paths(m.images[2].files), ["Pharo.changes", "Pharo.image", "Pharo15.0-64bit-b85960f.sources"])'
 manifest 'm.images[2].world === true && m.images[2].webPackage === m.webPackage && m.images[2].pharoBuild === 50'
-manifest 'm.images[2].label === "Pharo 15" && !("default" in m.images[2])'
+manifest 'm.images[2].label === "Pharo 15 (p99)" && !("default" in m.images[2]) && m.images[1].label === "Pharo 15"'
 manifest 'm.images[0].label === "Pharo 13.1" && m.images[0].pharo === "13.1" && m.images[0].pharoBuild === 749'
 manifest 'm.images[0].world === false && m.images[0].webPackage === 0'
 manifest 'same(paths(m.images[0].files), ["Pharo.changes", "Pharo.image", "Pharo13.1-64bit-d7c6f76.sources"])'
@@ -843,10 +843,11 @@ manifest 'm.gitProxyDefault === "https://proxy.example/" && m.imageId === "p15"'
 manifest 'fs.readFileSync(path.join(out, "index.html"), "utf8").includes(m.build)'
 step="stage.mjs, an extra image named default"
 stage ok --extra-image "default=$sg/stock-p99" --git-proxy-default=
-manifest 'm.imageId === "p15" && same(m.images.map((i) => i.id), ["default", "p15"])'
+manifest 'm.imageId === "p15" && same(m.images.map((i) => i.id), ["p15", "default"])'
+manifest 'same(m.images.map((i) => i.label), ["Pharo 15", "Pharo 15 (default)"])'
 manifest 'same(urls(m.files), ["image/Pharo.changes.gz", "image/Pharo.image.gz", "image/Pharo15.0-64bit-b85960f.sources.gz"])'
-manifest 'm.images.filter((i) => i.default).length === 1 && same(m.images[1].files, m.files)'
-manifest 'same(urls(m.images[0].files), ["image/default/Pharo.changes.gz", "image/default/Pharo.image.gz", "image/default/Pharo15.0-64bit-b85960f.sources.gz"])'
+manifest 'm.images.filter((i) => i.default).length === 1 && same(m.images[0].files, m.files)'
+manifest 'same(urls(m.images[1].files), ["image/default/Pharo.changes.gz", "image/default/Pharo.image.gz", "image/default/Pharo15.0-64bit-b85960f.sources.gz"])'
 step="stage.mjs, the build id follows the build of an image"
 stage ok --extra-image "p99=$sg/stock-p99" --git-proxy-default=
 build_before=$("$NODE" -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).build)' "$sg/out/manifest.json")
