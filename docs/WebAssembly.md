@@ -846,11 +846,15 @@ The bench measured, on that machine with node 25.2.1, on a build with libgit2 (a
 | `eval '3+4'`, wall time | 325 ms | 80 ms |
 | 300k-deep block recursion | 189 ms | |
 | 1M-deep block recursion | 934 ms | 766 ms |
-| tinyBenchmarks bytecodes/s | 154.5M | 941.0M |
-| tinyBenchmarks sends/s | 9.5M | 48.0M |
-| `26 benchFib` | 41 ms | 8 ms |
-| 20 x 100000 `inject:into:` | 568 ms | 120 ms |
-| GC stress, 3M arrays | 2510 ms | 1460 ms |
+| tinyBenchmarks bytecodes/s | 360.3M (154.5M gnuified) | 941.0M |
+| tinyBenchmarks sends/s | 21.5M (9.5M gnuified) | 48.0M |
+| `26 benchFib` | 18 ms (41 ms gnuified) | 8 ms |
+| 20 x 100000 `inject:into:` | 277 ms (568 ms gnuified) | 120 ms |
+| GC stress, 3M arrays | 2133 ms (2510 ms gnuified) | 1460 ms |
+
+The interpreter is `interp.c`, the plain `switch` that Slang writes: `cmake/Emscripten.cache.cmake` sets `FEATURE_COMPILE_GNUISATION` OFF.
+The native builds compile the "gnuified" `gcc3x-interp.c` instead, whose dispatch is `goto *jumpTable[currentBytecode]` (`include/pharovm/unix/sqGnu.h`); WebAssembly has no indirect jump, so LLVM turns its 176 `goto *` into one shared `br_table` and adds a second dispatcher for the irreducible control flow, and that build is 2.1 to 2.4 times slower (the "gnuified" figures above, measured on the same machine, the same generated sources and node 25.2.1; in headless Chromium 163M against 394M bytecodes/s).
+A dispatch by tail calls (`[[clang::musttail]]` with `-mtail-call`, every bytecode a function) was measured too and loses to the switch: 208M bytecodes/s in node 25 and 157M in Chromium through the function table, 293M and 367M with direct tail calls.
 
 The lanes take these settings:
 
@@ -907,7 +911,7 @@ On the site of three images with libgit2, in Chromium and Firefox together, the 
 
 ## Limitations
 
-- StackVM only: 5 (sends) to 6 (bytecodes) times slower than the native StackVM, and 14 times (bytecodes) to 27 times (sends) slower than the native JIT on tinyBenchmarks; on the machine the port was made on, the JIT ran 2181M bytecodes/s and 260M sends/s.
+- StackVM only: 2.2 (sends) to 2.6 (bytecodes) times slower than the native StackVM, and 6 times (bytecodes) to 12 times (sends) slower than the native JIT on tinyBenchmarks; on the machine the port was made on, the JIT ran 2181M bytecodes/s and 260M sends/s.
 - No `dlopen`, and no external plugins: every plugin is built in, and the FFI reaches only the libraries and functions of its registry (see The FFI); a library the image loads by another name, or a function that no list names, is not found.
 - A declaration that does not match its C function other than in the width of an integer fails as a primitive, where natively it may work; a callback declared with another type than C's traps, and fails its callout.
 - A callback keeps the VM from its host until it returns: no output, input or Stop meanwhile.

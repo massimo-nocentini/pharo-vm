@@ -16,6 +16,13 @@
 set(FLAVOUR "StackVM" CACHE STRING "The kind of VM to generate. Possible values: StackVM, CoInterpreter" FORCE)
 set(GENERATE_SOURCES OFF CACHE BOOL "If it generates the C sources" FORCE)
 
+# The interpreter as Slang writes it (interp.c, a switch), not the "gnuified"
+# gcc3x-interp.c (goto *jumpTable[bytecode]): WebAssembly has no indirect
+# jump, so LLVM turns every goto * into one shared br_table plus a dispatcher
+# for the irreducible control flow, 2.1 to 2.4 times slower on tinyBenchmarks
+# (docs/WebAssembly.md, "Performance")
+set(FEATURE_COMPILE_GNUISATION OFF CACHE BOOL "Use gcc gnu extensions to compile the VM" FORCE)
+
 # One thread, and the same-thread FFI, on upstream libffi
 # (cmake/emscripten/deps/libffi.cmake), unless WASM_FFI is OFF
 # (cmake/emscripten/deps/options.cmake declares WASM_FFI too)
