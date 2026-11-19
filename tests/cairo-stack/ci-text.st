@@ -52,7 +52,11 @@ isWindows := OSPlatform current isWindows.
 isMac := OSPlatform current isMacOS.
 platform := isWindows ifTrue: [ #win ] ifFalse: [ isMac ifTrue: [ #mac ] ifFalse: [ #unix ] ].
 vmDir := Smalltalk vm directory.
-libDir := isMac ifTrue: [ (vmDir asFileReference / 'Plugins') fullName ] ifFalse: [ vmDir asFileReference fullName ].
+"on macOS Smalltalk vm directory is the directory of Pharo.app (fillApplicationDirectory), the
+libraries are next to the binary: Contents/MacOS/Plugins, as in FFIMacLibraryFinder>>basePaths"
+libDir := isMac
+	ifTrue: [ (Smalltalk vm binary parent / 'Plugins') fullName ]
+	ifFalse: [ vmDir asFileReference fullName ].
 
 "the names of each library (the classes of libpangocairo.st and libpoppler.st use the same)"
 names := Dictionary new.
