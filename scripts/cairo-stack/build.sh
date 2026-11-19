@@ -774,6 +774,14 @@ while read -r name path; do
             # Poppler's CMakeLists.txt sets CMAKE_INSTALL_RPATH_USE_LINK_PATH (a
             # build path in the RPATH): no CMake rpath, the linker flag instead
             set -- "$@" -DCMAKE_SKIP_RPATH=ON
+            # The headers of the static libjpeg-turbo as a plain -I, searched
+            # before every -isystem: CMake gives JPEG_INCLUDE_DIR as -isystem,
+            # and on the Intel runners another -isystem (or the compiler's
+            # own /usr/local/include, Homebrew's libjpeg) came first, so
+            # DCTStream got Homebrew's jpeglib.h and drew every JPEG white.
+            # (These flags replace build_cmake's own, which come before.)
+            set -- "$@" -DCMAKE_CXX_FLAGS="$prefix_map${gcc_cxx:+ $gcc_cxx} -I$static/include" \
+                -DCMAKE_C_FLAGS="$prefix_map${gcc_c:+ $gcc_c} -I$static/include"
             cmake_link=$rpath_flag
             build_cmake poppler "$src" "$@"
             cmake_summary poppler "$work/build/poppler.setup.log"
@@ -785,7 +793,11 @@ while read -r name path; do
             j_deps=$(ninja -C "$work/build/poppler" -t deps 2>/dev/null | awk '/\/(jpeglib|jconfig|jmorecfg|jerror)\.h$/ { print $1 }' | sort -u)
             echo "$j_deps" | grep -q '/jpeglib\.h$' || die "poppler: no object includes jpeglib.h (ninja -t deps)"
             j_bad=$(echo "$j_deps" | awk -v s="$static/include/" 'index($0, s) != 1' | tr '\n' ' ')
-            [ -z "$j_bad" ] || die "poppler: compiled against libjpeg headers outside $static/include: $j_bad"
+            if [ -n "$j_bad" ]; then
+                awk '/DCTStream\.cc\.o:/ { f = 1 } f && /^  (INCLUDES|FLAGS) =/ { print "build.sh: poppler DCTStream" $0 } f && /^$/ { exit }' \
+                    "$work/build/poppler/build.ninja" >&2
+                die "poppler: compiled against libjpeg headers outside $static/include: $j_bad"
+            fi
             ;;
         *) die "pins.txt names $name, which build.sh does not know how to build" ;;
     esac
