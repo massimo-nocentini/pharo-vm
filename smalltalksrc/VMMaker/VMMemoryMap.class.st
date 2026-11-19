@@ -346,7 +346,7 @@ VMMemoryMap >> ensureAtLeastPermSpaceOf: requestedSize [
 			 (src/emscripten/memoryEmscripten.c refuses it): answer false, so
 			 that the perm-space primitives fail rather than abort the VM in
 			 allocatePermObjectsSpace."
-			self cppIf: #__EMSCRIPTEN__ ifTrue: [ ^ false ].
+			self cppIf: #__EMSCRIPTEN__ ifTrue: [ ^ false ] ifFalse: [ ].
 			self initialPermSpaceSize: requestedSize.
 			self allocatePermObjectsSpace.
 			
