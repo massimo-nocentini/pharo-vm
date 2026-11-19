@@ -20,7 +20,7 @@ The pixels and the cairo state are the same as with the FFI.
 
 The bind accepts any cairo from 1.16.0 on, for other bundles and system cairos. On Linux the stack needs glibc 2.38 (Ubuntu 24.04+, Debian 13+, Fedora 39+, RHEL 10).
 
-With the stack, the plugin is compiled with the stack's `cairo.h`, and a compile-time check proves that its 57 function-pointer types are cairo's own. With `-DPHARO_CAIRO_STACK=prebuilt` (the old bundles, for one more release) it declares its own prototypes and includes no cairo header.
+With the stack, the plugin is compiled with the stack's `cairo.h`, and a compile-time check proves that its 57 function-pointer types are cairo's own. Without the stack (`BUILD_BUNDLE=OFF`, `FEATURE_LIB_CAIRO=OFF`, FreeBSD, OpenBSD, MSVC, Cygwin, whose bundles have no cairo) it declares its own prototypes and includes no cairo header, and binds the system's cairo.
 
 **Build option:** `FEATURE_PLUGIN_CAIRO` (`cmake/plugins.cmake`).
 - It is ON on 64-bit targets that build the SimdUTFPlugin (`FEATURE_PLUGIN_SIMDUTF`).

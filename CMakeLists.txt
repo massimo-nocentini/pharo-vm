@@ -32,12 +32,25 @@ option(FEATURE_LIB_SDL2			"Build SDL2 support"												ON)
 option(FEATURE_LIB_CAIRO		"Build Cairo support"												ON)
 option(FEATURE_LIB_FREETYPE2	"Build freetype2 support"											ON)
 # The cairo and FreeType of the bundle (cmake/cairoStack.cmake, docs/CairoStack.md):
-# source builds the stack pinned in cmake/cairo-stack/pins.txt (Linux, macOS;
-# MSYS2's pinned packages on MinGW); prebuilt bundles the old prebuilt
-# libraries (known CVEs, deprecated); PHARO_CAIRO_STACK_DIR bundles a stack
-# that scripts/cairo-stack/build.sh already built
-set(PHARO_CAIRO_STACK "source" CACHE STRING "cairo and FreeType of the bundle: source (the pinned stack) or prebuilt (deprecated)")
-set_property(CACHE PHARO_CAIRO_STACK PROPERTY STRINGS source prebuilt)
+# the stack pinned in cmake/cairo-stack/pins.txt, which the configure builds
+# (Linux, macOS; MSYS2's pinned packages on MinGW), or the one of
+# PHARO_CAIRO_STACK_DIR, which scripts/cairo-stack/build.sh already built.
+# PHARO_CAIRO_STACK used to choose between that stack (source) and the old
+# libraries of files.pharo.org (prebuilt, with known CVEs).  That choice was
+# removed: the variable is gone, the "source" of an older tree's cache is
+# dropped, and any other value stops the configure.
+if(DEFINED PHARO_CAIRO_STACK)
+    set(_pcs_mode "${PHARO_CAIRO_STACK}")
+    unset(PHARO_CAIRO_STACK CACHE)
+    unset(PHARO_CAIRO_STACK)
+    if(NOT _pcs_mode STREQUAL "source")
+        message(FATAL_ERROR "PHARO_CAIRO_STACK=${_pcs_mode}: this option was removed, with its prebuilt mode "
+            "(the old cairo and FreeType of files.pharo.org, which had known CVEs).  Every build now bundles "
+            "the pinned cairo stack: the configure builds it, or bundles the one of "
+            "-DPHARO_CAIRO_STACK_DIR=<prefix> (scripts/cairo-stack/build.sh); see docs/CairoStack.md.  "
+            "Configure again without -DPHARO_CAIRO_STACK.")
+    endif()
+endif()
 set(PHARO_CAIRO_STACK_DIR "" CACHE PATH "An installed cairo stack prefix (scripts/cairo-stack/build.sh --prefix) to bundle instead of building one")
 option(FEATURE_LIB_GIT2			"Build LibGit2 support"												ON)
 option(FEATURE_LIB_PTHREADW32	"Windows only, link to win32 version of pthread"					OFF)

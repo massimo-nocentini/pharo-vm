@@ -6,15 +6,17 @@
 # cmake/Windows.cmake, at the top level of the configure, before
 # cmake/plugins.cmake (whose CairoPlugin block reads
 # PHARO_CAIRO_STACK_INCLUDE_DIRS).  FreeBSD, OpenBSD, MSVC and Cygwin never
-# include it and keep importCairo.cmake/importFreetype2.cmake.
+# include it: their bundles have no cairo and no FreeType, and the image
+# loads the system's.
 #
-# The cache entries (CMakeLists.txt):
-#   PHARO_CAIRO_STACK      source (default) | prebuilt
+# The cache entry (CMakeLists.txt):
 #   PHARO_CAIRO_STACK_DIR  an installed stack prefix to bundle instead of
 #                          building one (scripts/cairo-stack/build.sh --prefix)
 # and, optionally, -DPHARO_CAIRO_STACK_GLIBC_MAX=<x.y> (build.sh --glibc-max).
+# (PHARO_CAIRO_STACK, whose prebuilt mode bundled the old libraries of
+# files.pharo.org, was removed; CMakeLists.txt refuses it.)
 #
-# Source mode (BUILD_BUNDLE on, FEATURE_LIB_CAIRO or FEATURE_LIB_FREETYPE2 on):
+# With BUILD_BUNDLE on and FEATURE_LIB_CAIRO or FEATURE_LIB_FREETYPE2 on:
 #   - without PHARO_CAIRO_STACK_DIR, the guard (pharo_cairo_stack_guard) checks
 #     that the stack can be built here, and ExternalProject pharo_cairo_stack
 #     runs ${CMAKE_BINARY_DIR}/cairo-stack/build-stack.sh, which runs
@@ -38,8 +40,8 @@
 #     (<prefix>/include;<prefix>/include/cairo;<prefix>/include/freetype2),
 #     which plugins/CairoPlugin/tests/run-c-tests.sh reads from CMakeCache.txt.
 #     Both are empty when the stack is not used.
-# Prebuilt mode (deprecated): today's files.pharo.org libraries (MinGW: MSYS2's
-# unpinned packages), with a WARNING that lists their known CVEs.
+# Otherwise (BUILD_BUNDLE off, or both features off) the stack is off: the
+# bundle has no cairo and no FreeType, and a STATUS line says so.
 #
 # The functions pharo_cairo_stack_platform, pharo_cairo_stack_guard,
 # pharo_cairo_stack_read_pins and pharo_cairo_stack_check_manifest have no side
@@ -78,7 +80,7 @@ set(PHARO_CAIRO_STACK_CAIRO_ONLY cairo pixman fontconfig expat)
 # ---------------------------------------------------------------- functions
 
 # pharo_cairo_stack_platform(<out> SYSTEM <CMAKE_SYSTEM_NAME> [MINGW <bool>] [CYGWIN <bool>])
-# linux, darwin or mingw: where source mode can run; "" elsewhere
+# linux, darwin or mingw: where the configure can build the stack; "" elsewhere
 function(pharo_cairo_stack_platform out)
     cmake_parse_arguments(A "" "SYSTEM;MINGW;CYGWIN" "" ${ARGN})
     set(p "")
@@ -120,7 +122,7 @@ endfunction()
 #     [CROSSCOMPILING <bool>] [OSX_ARCHITECTURES <list>]
 #     HOST_PROCESSOR <CMAKE_HOST_SYSTEM_PROCESSOR> [PROCESSOR <CMAKE_SYSTEM_PROCESSOR>]
 #     [POINTER_SIZE <bytes>])
-# Whether source mode can build the stack here: <out error> is "" when it can,
+# Whether the configure can build the stack here: <out error> is "" when it can,
 # otherwise the reason.  The tools are looked for on PATH (the environment's,
 # as build.sh will see it): sh, meson >= 1.11, ninja, pkg-config or pkgconf,
 # cmake and, on Linux, gperf; on MinGW (MSYS2's binary packages) sh, curl,
@@ -552,7 +554,8 @@ scripts/cairo-stack/build.sh.")
         endif()
     endforeach()
 
-    # Left from a prebuilt configure of the same tree: not this stack's
+    # Left in an older tree by the old files.pharo.org cairo and FreeType,
+    # which earlier versions of this build bundled: not this stack's
     if(PCS_PLATFORM STREQUAL "linux")
         file(GLOB stale LIST_DIRECTORIES false "${PCS_LIB_DIR}/libharfbuzz*" "${PCS_LIB_DIR}/libbz2*"
             "${PCS_LIB_DIR}/libexpat*" "${PCS_LIB_DIR}/libcairo.so.2.1170*" "${PCS_LIB_DIR}/libcairo.so.2.1160*")
@@ -563,7 +566,8 @@ scripts/cairo-stack/build.sh.")
         set(stale "")
     endif()
     if(stale)
-        message(WARNING "cairoStack.cmake: ${PCS_LIB_DIR} still has libraries of a prebuilt configure, "
+        message(WARNING "cairoStack.cmake: ${PCS_LIB_DIR} still has libraries that are not the cairo stack's "
+            "(the old files.pharo.org cairo and FreeType of an earlier configure of this tree), "
             "which the bundle must not ship: ${stale}.  Build in a fresh tree.")
     endif()
     list(LENGTH files nf)
@@ -620,36 +624,30 @@ set(PHARO_CAIRO_STACK_ACTIVE OFF)
 set(PHARO_CAIRO_STACK_PREFIX "" CACHE INTERNAL "The cairo stack prefix of this build (cmake/cairoStack.cmake)")
 set(PHARO_CAIRO_STACK_INCLUDE_DIRS "" CACHE INTERNAL "The include directories of the cairo stack (cmake/cairoStack.cmake)")
 
-if(NOT PHARO_CAIRO_STACK STREQUAL "source" AND NOT PHARO_CAIRO_STACK STREQUAL "prebuilt")
-    message(FATAL_ERROR "PHARO_CAIRO_STACK is '${PHARO_CAIRO_STACK}': source (default) or prebuilt")
-endif()
-
 if(BUILD_BUNDLE AND (FEATURE_LIB_CAIRO OR FEATURE_LIB_FREETYPE2))
-    if(PHARO_CAIRO_STACK STREQUAL "prebuilt")
-        if(PHARO_CAIRO_STACK_DIR)
-            message(WARNING "PHARO_CAIRO_STACK_DIR (${PHARO_CAIRO_STACK_DIR}) is ignored: PHARO_CAIRO_STACK is prebuilt")
-        endif()
-        message(WARNING "PHARO_CAIRO_STACK=prebuilt bundles the old prebuilt cairo and FreeType "
-            "(files.pharo.org; on MinGW, MSYS2's unpinned packages of the build machine), "
-            "which have known vulnerabilities: FreeType 2.10.0 (Linux aarch64) and 2.9.1 (Windows ARM64): "
-            "CVE-2020-15999 and CVE-2025-27363; FreeType 2.12.1 (Linux x86_64, Windows x86_64): "
-            "CVE-2025-27363, exploited in the wild (CISA KEV); cairo 1.16.0 (Linux aarch64, Windows ARM64): "
-            "CVE-2018-19876 and CVE-2020-35492; and libpng 1.6.37 (Linux, Windows). "
-            "This mode is deprecated and will be removed in the next release: use the default "
-            "PHARO_CAIRO_STACK=source, or PHARO_CAIRO_STACK_DIR (docs/CairoStack.md).")
-    else()
-        if(FEATURE_LIB_CAIRO AND NOT FEATURE_LIB_FREETYPE2)
-            message(FATAL_ERROR "FEATURE_LIB_CAIRO=ON with FEATURE_LIB_FREETYPE2=OFF: the cairo stack bundles "
-                "FreeType, since cairo-ft needs the image's FreeType (one FreeType for both, docs/CairoStack.md). "
-                "Turn FEATURE_LIB_FREETYPE2 on, or FEATURE_LIB_CAIRO off.")
-        endif()
-        set(PHARO_CAIRO_STACK_ACTIVE ON)
+    if(FEATURE_LIB_CAIRO AND NOT FEATURE_LIB_FREETYPE2)
+        message(FATAL_ERROR "FEATURE_LIB_CAIRO=ON with FEATURE_LIB_FREETYPE2=OFF: the cairo stack bundles "
+            "FreeType, since cairo-ft needs the image's FreeType (one FreeType for both, docs/CairoStack.md). "
+            "Turn FEATURE_LIB_FREETYPE2 on, or FEATURE_LIB_CAIRO off.")
     endif()
+    set(PHARO_CAIRO_STACK_ACTIVE ON)
+else()
+    # Nothing else bundles cairo or FreeType: the image loads the system's
+    if(NOT BUILD_BUNDLE)
+        set(_pcs_why "BUILD_BUNDLE=OFF")
+    else()
+        set(_pcs_why "FEATURE_LIB_CAIRO=OFF and FEATURE_LIB_FREETYPE2=OFF")
+    endif()
+    if(PHARO_CAIRO_STACK_DIR)
+        message(WARNING "PHARO_CAIRO_STACK_DIR (${PHARO_CAIRO_STACK_DIR}) is ignored: ${_pcs_why}")
+    endif()
+    message(STATUS "cairo stack: off (${_pcs_why}): the VM bundles no cairo and no FreeType, and the image loads the system's")
 endif()
 
 if(PHARO_CAIRO_STACK_ACTIVE)
-    set(_pcs_fix_msg "Configure with -DPHARO_CAIRO_STACK_DIR=<prefix> (a stack that scripts/cairo-stack/build.sh built "
-        "elsewhere) or -DPHARO_CAIRO_STACK=prebuilt (the old libraries, with known CVEs); docs/CairoStack.md.")
+    string(CONCAT _pcs_fix_msg "Configure with -DPHARO_CAIRO_STACK_DIR=<prefix> (a stack that scripts/cairo-stack/build.sh built "
+        "elsewhere, docs/CairoStack.md), or with -DFEATURE_LIB_CAIRO=OFF -DFEATURE_LIB_FREETYPE2=OFF "
+        "(a VM without cairo and FreeType).")
     pharo_cairo_stack_platform(PHARO_CAIRO_STACK_PLATFORM SYSTEM "${CMAKE_SYSTEM_NAME}" MINGW "${MINGW}" CYGWIN "${CYGWIN}")
     if(PHARO_CAIRO_STACK_PLATFORM STREQUAL "")
         message(FATAL_ERROR "cmake/cairoStack.cmake: no cairo stack for ${CMAKE_SYSTEM_NAME}. ${_pcs_fix_msg}")
@@ -697,7 +695,7 @@ if(PHARO_CAIRO_STACK_ACTIVE)
     endif()
 
     if(PHARO_CAIRO_STACK_DIR)
-        # A prebuilt stack (CI, or a developer's reuse): validate its manifest
+        # A stack built beforehand (CI, or a developer's reuse): validate its manifest
         get_filename_component(_pcs_prefix "${PHARO_CAIRO_STACK_DIR}" ABSOLUTE)
         pharo_cairo_stack_check_manifest(_pcs_errors
             MANIFEST "${_pcs_prefix}/share/pharo-cairo-stack/manifest.txt" PINS "${PHARO_CAIRO_STACK_PINS_FILE}"
@@ -722,8 +720,8 @@ if(PHARO_CAIRO_STACK_ACTIVE)
             HOST_PROCESSOR "${CMAKE_HOST_SYSTEM_PROCESSOR}" PROCESSOR "${CMAKE_SYSTEM_PROCESSOR}"
             POINTER_SIZE "${CMAKE_SIZEOF_VOID_P}")
         if(_pcs_error)
-            message(FATAL_ERROR "cmake/cairoStack.cmake: the cairo stack (cairo ${PHARO_CAIRO_VERSION} and FreeType, "
-                "PHARO_CAIRO_STACK=source) cannot be built here: ${_pcs_error}. ${_pcs_fix_msg}")
+            message(FATAL_ERROR "cmake/cairoStack.cmake: the cairo stack (cairo ${PHARO_CAIRO_VERSION} and FreeType) "
+                "cannot be built by this configure: ${_pcs_error}. ${_pcs_fix_msg}")
         endif()
         set(_pcs_prefix "${CMAKE_BINARY_DIR}/cairo-stack/prefix")
         set(_pcs_work "${CMAKE_BINARY_DIR}/cairo-stack/work")
@@ -862,7 +860,7 @@ ${_pcs_env}exec sh ${_q_script} ${_pcs_args} \"\$@\"
     set(PHARO_CAIRO_STACK_INCLUDE_DIRS "${_pcs_prefix}/include;${_pcs_prefix}/include/cairo;${_pcs_prefix}/include/freetype2"
         CACHE INTERNAL "The include directories of the cairo stack (cmake/cairoStack.cmake)")
 
-    # The bundle, at build time (the prefix of source mode exists only then)
+    # The bundle, at build time (the prefix that the configure builds exists only then)
     if(PHARO_CAIRO_STACK_PLATFORM STREQUAL "darwin")
         set(_pcs_notice_dir "${EXECUTABLE_OUTPUT_PATH}/${VM_EXECUTABLE_NAME}.app/Contents/Resources")
     else()

@@ -70,16 +70,16 @@ configure_file("${Win32ResourcesFolder}/${VM_EXECUTABLE_CONSOLE_NAME}.exe.manife
 # MinGW (MSYS2): cairo and FreeType are the cairo stack (cmake/cairoStack.cmake),
 # MSYS2's packages pinned in cmake/cairo-stack/pins.txt, set up here, before
 # cmake/plugins.cmake, whose CairoPlugin compiles with their headers.  MSVC and
-# Cygwin keep their prebuilt libraries.
+# Cygwin have no cairo stack: their bundles have no cairo and no FreeType.
 if(MINGW AND NOT CYGWIN)
     include(cmake/cairoStack.cmake)
 endif()
 
 macro(add_third_party_dependencies_per_platform)
 
-    # MSYS2 (MinGW-w64 with its own CMake): the DLLs of its packages, but for
-    # cairo and FreeType those of the cairo stack (importMinGWDependencies.cmake
-    # skips them then)
+    # MSYS2 (MinGW-w64 with its own CMake): the DLLs of its packages, and for
+    # cairo and FreeType those of the cairo stack, MSYS2's packages pinned in
+    # cmake/cairo-stack/pins.txt (importMinGWDependencies.cmake has neither)
     if (BUILD_BUNDLE AND MINGW AND NOT CYGWIN)
         include(cmake/importMinGWDependencies.cmake)
         pharo_cairo_stack_attach()
@@ -92,12 +92,16 @@ macro(add_third_party_dependencies_per_platform)
             include(cmake/importLibGit2.cmake)
         endif()
 
-        if(${FEATURE_LIB_FREETYPE2})
-            include(cmake/importFreetype2.cmake)
-        endif()
-
-        if(${FEATURE_LIB_CAIRO})
-            include(cmake/importCairo.cmake)
+        # cairo and FreeType: only the cairo stack of MSYS2 bundles them
+        # (cmake/cairoStack.cmake, docs/CairoStack.md); a bundle of MSVC or
+        # Cygwin has neither, and the image looks for them in the system
+        if(BUILD_BUNDLE AND (FEATURE_LIB_CAIRO OR FEATURE_LIB_FREETYPE2))
+            if(CYGWIN)
+                set(_pcs_toolchain "Cygwin")
+            else()
+                set(_pcs_toolchain "${CMAKE_C_COMPILER_ID}")
+            endif()
+            message(STATUS "cairo and FreeType: not bundled with ${_pcs_toolchain} (no cairo stack, only MSYS2 has one): the image loads the system's")
         endif()
 
         if(${FEATURE_LIB_SDL2})

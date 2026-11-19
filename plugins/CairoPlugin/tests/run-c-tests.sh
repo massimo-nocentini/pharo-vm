@@ -7,7 +7,8 @@
 #
 #   R            static rules (below)
 #   bind         tests/bindtest.c + src/binding/cpCairo.c (own types, as the
-#                prebuilt builds): a dlsym loader on a bundled libcairo.so.2
+#                builds without the stack's cairo.h): a dlsym loader on a
+#                bundled libcairo.so.2
 #                (--libcairo, default <--vm-build>/build/vm/libcairo.so.2):
 #                every function bound, matrices, drawing read back, text
 #   protocheck   host clang -fsyntax-only -Werror=incompatible-function-pointer-types
@@ -21,8 +22,9 @@
 #                repository's cmake/emscripten/deps/cairo/cairo-features.h):
 #                (1) cpCairo.c -DCP_HAVE_CAIRO_H -DCP_CAIRO_TYPES
 #                -DCP_STATIC_CAIRO (the Emscripten mode); (2)
-#                tests/protocheck-own.c (the own types of the prebuilt
-#                builds, field by field and function by function); (3)
+#                tests/protocheck-own.c (the own types of the builds
+#                without the stack's cairo.h, field by field and function
+#                by function); (3)
 #                cpCairo.c -DCP_HAVE_CAIRO_H -DCP_CAIRO_TYPES
 #                -DCP_CHECK_PROTOTYPES (the native mode with the stack: the
 #                prototype check); (4) the same with -include
@@ -42,8 +44,8 @@
 #                (PharoVM-*-{Linux,Darwin,Windows}-*-bin.zip: .so with
 #                llvm-nm -D, .dylib with llvm-nm, .dll with llvm-readobj
 #                --coff-exports); with --deps, by the old files.pharo.org
-#                bundles there (*_third-party_cairo-*.zip, what
-#                PHARO_CAIRO_STACK=prebuilt bundles); libCairoPlugin.so of
+#                bundles there (*_third-party_cairo-*.zip, the cairo of the
+#                VMs before the cairo stack); libCairoPlugin.so of
 #                --vm-build exports exactly the module functions, the
 #                primitives of tests/primitives.txt and their *AccessorDepth
 #                variables (142; no su_, no simdutf, no cp_ symbol), and
@@ -71,9 +73,10 @@
 #                (-DCP_HAVE_CAIRO_H -DCP_CAIRO_TYPES -DCP_CHECK_PROTOTYPES and
 #                the stack's include directories) as a shared and as a
 #                builtin plugin, plus one run with the own types as a shared
-#                plugin (what PHARO_CAIRO_STACK=prebuilt ships); without the
-#                stack, or with --own-types, with the own types as a shared
-#                and as a builtin plugin
+#                plugin (what a build without the stack's cairo.h ships:
+#                BUILD_BUNDLE=OFF, FEATURE_LIB_CAIRO=OFF, FreeBSD, OpenBSD,
+#                MSVC, Cygwin); without the stack, or with --own-types,
+#                with the own types as a shared and as a builtin plugin
 #   glue-basic   tests/glue-basic.c (WP-B), the same way
 #   glue-shape   tests/glue-shape.c (WP-C), the same way
 #   glue-text    tests/glue-text.c (WP-C), the same way
@@ -122,12 +125,13 @@
 #                     to LD_LIBRARY_PATH)
 #   --deps DIR        the archives: cairo-<v>.tar.xz and freetype-<v>.tar.xz
 #                     at the versions of cmake/cairo-stack/pins.txt, and
-#                     the old bundles *_third-party_cairo-*.zip
+#                     the old files.pharo.org bundles
+#                     *_third-party_cairo-*.zip (lane symbols)
 #   --zips DIR        the zips of the CI jobs (PharoVM-*-bin.zip), for the
 #                     lane symbols
 #   --own-types       the glue lanes compile the plugin with its own types
-#                     only, as PHARO_CAIRO_STACK=prebuilt builds it, even in
-#                     a tree with the cairo stack
+#                     only, as a build without the stack's cairo.h does,
+#                     even in a tree with the cairo stack
 #   --emsdk DIR       the Emscripten SDK (default: $EMSDK)
 #   --node PATH       node for glue-wasm64 (default: the newest of the SDK)
 #   --wasm-build DIR  a built Emscripten tree (WASM_BUILDDIR, with cmake/)
@@ -194,7 +198,7 @@ test -n "$wasmbuild" && wasmbuild=$(absdir "$wasmbuild")
 test -n "$zips" && zips=$(absdir "$zips")
 
 # The cairo stack of --vm-build (cmake/cairoStack.cmake): its prefix, empty
-# for a tree without it (PHARO_CAIRO_STACK=prebuilt, BUILD_BUNDLE=OFF) or
+# for a tree without it (BUILD_BUNDLE=OFF, or no stack on that platform) or
 # without cairo in it (FEATURE_LIB_CAIRO=OFF: FreeType only), where the
 # plugin has its own types (cmake/plugins.cmake)
 stackprefix= stackinc=
@@ -806,7 +810,7 @@ lane_glue() {
     ok=1
     # the type modes: "shipped" (the stack's cairo.h, cairo's types and the
     # prototype check, as the tree builds the plugin) and "own" (its own
-    # types, as PHARO_CAIRO_STACK=prebuilt builds it)
+    # types, as a build without the stack's cairo.h does)
     if test -n "$stackprefix" && test -z "$owntypes"; then
         typemodes="shipped own"
         runs="shipped:shared shipped:builtin own:shared"

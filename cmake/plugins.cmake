@@ -292,13 +292,13 @@ endif()
 # plugins/UtilsPlugin/vm-plugins-primitives.st (docs/CairoPlugin.md).
 # Natively it never links cairo: it resolves cairo at run time through the
 # VM's module loader, with the path the image's FFI uses.  With the cairo
-# stack (cmake/cairoStack.cmake, source mode or PHARO_CAIRO_STACK_DIR) it is
-# compiled with the stack's cairo.h, cairo's types and a compile-time check
-# of its prototypes against cairo.h (CP_CHECK_PROTOTYPES), so it depends on
-# the stack's headers (pharo_cairo_stack_bundle builds them first); without
-# it (PHARO_CAIRO_STACK=prebuilt, BUILD_BUNDLE=OFF, FEATURE_LIB_CAIRO=OFF,
-# FreeBSD, OpenBSD, MSVC) it declares its own types and prototypes
-# (include/common/cpCairo.h), as before.  Emscripten: a
+# stack (cmake/cairoStack.cmake, built by the configure or PHARO_CAIRO_STACK_DIR)
+# it is compiled with the stack's cairo.h, cairo's types and a compile-time
+# check of its prototypes against cairo.h (CP_CHECK_PROTOTYPES), so it depends
+# on the stack's headers (pharo_cairo_stack_bundle builds them first); without
+# it (BUILD_BUNDLE=OFF, FEATURE_LIB_CAIRO=OFF, FreeBSD, OpenBSD, MSVC,
+# Cygwin) it declares its own types and prototypes (include/common/cpCairo.h)
+# and binds whatever cairo the image loads.  Emscripten: a
 # builtin plugin linked to pharo_cairo (cmake/emscripten/deps/cairo.cmake),
 # compiled with cairo.h, so only with PHARO_WASM_HAS_CAIRO.  Its text
 # primitive encodes UTF-8 with the SimdUTF engine (pharo_su_engine, above),

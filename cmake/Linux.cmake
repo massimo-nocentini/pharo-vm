@@ -48,18 +48,8 @@ macro(add_third_party_dependencies_per_platform)
         include(cmake/importLibGit2.cmake)
     endif()
 
-    if(PHARO_CAIRO_STACK_ACTIVE)
-        # the pinned stack instead of importFreetype2.cmake and importCairo.cmake
-        pharo_cairo_stack_attach()
-    else()
-        if(${FEATURE_LIB_FREETYPE2})
-            include(cmake/importFreetype2.cmake)
-        endif()
-
-        if(${FEATURE_LIB_CAIRO})
-            include(cmake/importCairo.cmake)
-        endif()
-    endif()
+    # cairo and FreeType: the pinned stack, when it is on (cmake/cairoStack.cmake)
+    pharo_cairo_stack_attach()
 
     if(${FEATURE_LIB_SDL2})
         include(cmake/importSDL2.cmake)

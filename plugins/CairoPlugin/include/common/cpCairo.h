@@ -18,9 +18,9 @@
  *      builtin plugin linked with pharo_cairo; the table is filled
  *      statically (cp_cairo_bind_static), which type-checks every
  *      assignment against cairo.h;
- *   3. own types (no switch): no cairo header at build time
- *      (PHARO_CAIRO_STACK=prebuilt, whose bundles ship only the shared
- *      libraries, or a build without the stack): the declarations below,
+ *   3. own types (no switch): no cairo header at build time (a build
+ *      without the cairo stack: BUILD_BUNDLE=OFF, FEATURE_LIB_CAIRO=OFF,
+ *      FreeBSD, OpenBSD, MSVC, Cygwin): the declarations below,
  *      with the struct tags of cairo.h (pointer-compatible) and the layouts
  *      of its value structs; tests/protocheck-own.c checks them against
  *      cairo.h field by field and function by function.
@@ -132,8 +132,9 @@ typedef void *cp_ft_face_t;				/* FT_Face */
 #define CP_STATUS_SUCCESS 0
 /* the oldest cairo the bind accepts (CAIRO_VERSION_ENCODE(1, 16, 0)).  The
    VM bundles 1.18.6 (cmake/cairo-stack/pins.txt), but the image's FFI may
-   load another: a PHARO_CAIRO_STACK=prebuilt bundle (Linux aarch64 1.16.0),
-   or a system cairo */
+   load another: the system's cairo in a build without the stack
+   (BUILD_BUNDLE=OFF, FreeBSD, OpenBSD, MSVC, Cygwin), as old as the
+   1.16.0 of Ubuntu 20.04 or Debian 11 */
 #define CP_CAIRO_VERSION_MIN 11600
 
 /* The layouts the primitives rely on, in both modes (LP64 and LLP64: the

@@ -52,10 +52,13 @@ sh scripts/cairo-stack/build.sh --platform darwin --arch arm64 --prefix <prefix>
 sh scripts/cairo-stack/fetch-msys2.sh --prefix <prefix> [--env ucrt64|clangarm64] [--deps <dir>] [--downloads <dir>]
 ```
 
-The VM's CMake does this for you (`cmake/cairoStack.cmake`): in source mode it runs `build.sh` into `<build>/cairo-stack/prefix`, or bundles the prefix of `-DPHARO_CAIRO_STACK_DIR=<prefix>` after validating its manifest.
+The VM's CMake does this for you (`cmake/cairoStack.cmake`): it runs `build.sh` into `<build>/cairo-stack/prefix`, or bundles the prefix of `-DPHARO_CAIRO_STACK_DIR=<prefix>` after validating its manifest. The stack is the only cairo and FreeType a bundle can have: no prebuilt cairo or FreeType is downloaded any more, except Windows' MSYS2 packages pinned in `pins.txt`.
 
-- `-DPHARO_CAIRO_STACK_GLIBC_MAX=<x.y>` (Linux, source mode) is passed to `build.sh --glibc-max`: the stack build fails when a library needs a newer `GLIBC_` symbol version than that.
+- `-DPHARO_CAIRO_STACK_GLIBC_MAX=<x.y>` (Linux, stack built by the configure) is passed to `build.sh --glibc-max`: the stack build fails when a library needs a newer `GLIBC_` symbol version than that.
 - Every configure of a tree with `BUILD_BUNDLE` on (the default) acts on the stack, even one that only generates the VM's sources: without the tools it stops and names them. Such a configure can switch the stack off with `-DFEATURE_LIB_CAIRO=OFF -DFEATURE_LIB_FREETYPE2=OFF` (CI's `generate` job and the host tree of `make wasm` do), or reuse a stack with `PHARO_CAIRO_STACK_DIR`.
+- With `BUILD_BUNDLE=OFF`, or with both features off, the stack is off (a `cairo stack: off` line): the VM bundles no cairo and no FreeType, and the image loads the system's.
+- FreeBSD, OpenBSD, MSVC and Cygwin have no stack: their bundles have no cairo and no FreeType (a `not bundled` line), and the image loads the system's (on the BSDs, the cairo package and the FreeType it brings).
+- `-DPHARO_CAIRO_STACK=prebuilt`, which bundled the old files.pharo.org libraries (on Linux and Windows FreeType 2.9.1 to 2.12.1, cairo 1.16.0 and 1.17.4 and libpng 1.6.37, with known CVEs; on macOS cairo 1.18.4 and FreeType 2.14.3; on MSYS2, the unpinned packages of the build machine), was removed with the option itself: any value but `source` stops the configure.
 
 **Downloads.** Each archive is looked for in `--deps` (the VM passes `WASM_DEPS_DIR`, which also serves the wasm deps), then in `$PHARO_CAIRO_STACK_DOWNLOADS`, then in `--downloads`. Anything missing is downloaded over HTTPS only (`curl --proto =https --tlsv1.2`) from its URL, or from its `mirror`, into `--downloads`. **Every SHA256 is checked before anything is extracted**: one wrong hash stops the build with the prefix untouched.
 

@@ -40,12 +40,11 @@ macro(add_third_party_dependencies_per_platform)
         include(cmake/importLibGit2.cmake)
     endif()
 
-    if(${FEATURE_LIB_FREETYPE2})
-        include(cmake/importFreetype2.cmake)
-    endif()
-
-    if(${FEATURE_LIB_CAIRO})
-        include(cmake/importCairo.cmake)
+    # cairo and FreeType: there is no cairo stack for OpenBSD (cmake/cairoStack.cmake,
+    # docs/CairoStack.md), so the bundle has neither, and the image loads the
+    # system's (pkg_add cairo, which brings FreeType)
+    if(BUILD_BUNDLE AND (FEATURE_LIB_CAIRO OR FEATURE_LIB_FREETYPE2))
+        message(STATUS "cairo and FreeType: not bundled on OpenBSD (no cairo stack): the image loads the system's")
     endif()
 
     if(${FEATURE_LIB_SDL2})
