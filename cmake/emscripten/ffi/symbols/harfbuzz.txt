@@ -1,0 +1,12 @@
+# The functions of HarfBuzz (libharfbuzz.so.0, libharfbuzz.0.dylib,
+# libharfbuzz-0.dll) that the images bind through uFFI: the version check of
+# GLibInstanceCheck (package LibGLib) before Pango's first use
+# (libpangocairo.st, libpoppler.st; docs/PangoPoppler.md).  A name per line,
+# '#' starting a comment.  scripts/cairo-stack/check.sh asserts that the
+# native stack's library exports every name; a binding that calls another
+# function adds it here first.  The Emscripten VM has no Pango yet:
+# cmake/emscripten/ffiLibraries.cmake does not read this list, the input of
+# that round.
+#
+hb_version_atleast
+hb_version_string

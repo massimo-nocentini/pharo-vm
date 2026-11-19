@@ -1,0 +1,20 @@
+# The functions of GLib (libglib-2.0.so.0, libglib-2.0.0.dylib,
+# libglib-2.0-0.dll) that the images bind through uFFI: GLibLibrary of the
+# package LibGLib (libpangocairo.st, libpoppler.st; docs/PangoPoppler.md).  A
+# name per line, '#' starting a comment.  scripts/cairo-stack/check.sh asserts
+# that the native stack's library exports every name; a binding that calls
+# another function adds it here first.  The Emscripten VM has no GLib yet:
+# cmake/emscripten/ffiLibraries.cmake does not read this list, the input of
+# that round.
+#
+g_free
+g_strdup
+g_bytes_new
+g_bytes_unref
+g_bytes_get_size
+g_error_free
+g_error_new_literal
+g_quark_from_string
+g_quark_to_string
+g_markup_escape_text
+glib_check_version

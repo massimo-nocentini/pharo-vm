@@ -1,0 +1,13 @@
+# The functions of GObject (libgobject-2.0.so.0, libgobject-2.0.0.dylib,
+# libgobject-2.0-0.dll) that the images bind through uFFI: GObjectLibrary of
+# the package LibGLib (libpangocairo.st, libpoppler.st; docs/PangoPoppler.md).
+# A name per line, '#' starting a comment.  scripts/cairo-stack/check.sh
+# asserts that the native stack's library exports every name; a binding that
+# calls another function adds it here first.  The Emscripten VM has no GLib
+# yet: cmake/emscripten/ffiLibraries.cmake does not read this list, the input
+# of that round.
+#
+g_object_ref
+g_object_unref
+g_object_new_with_properties
+g_object_get_type
