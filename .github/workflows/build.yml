@@ -41,16 +41,24 @@
 #
 #   - Linux and macOS build it on the runner from the pinned archives
 #     (scripts/cairo-stack/build.sh: meson, ninja and pkgconf from PyPI by
-#     hash, gperf from apt on Linux), cached by the pins, the scripts and the
-#     toolchain, but not on the runs that publish a release.  Built on
-#     Ubuntu 24.04, the Linux stack needs glibc 2.38 (the VM itself 2.34);
-#   - Windows bundles MSYS2's packages of cairo, FreeType and their DLL
-#     closure, pinned there by URL and SHA256 (fetch-msys2.sh), not the
-#     runner's: x86_64 through the ExternalProject of cmake/cairoStack.cmake,
-#     as a developer's build does, arm64 through PHARO_CAIRO_STACK_DIR.
+#     hash; gperf, nasm and g++-13 from apt on Linux, gperf of Xcode on
+#     macOS), cached by the pins, the scripts and the toolchain, but not on
+#     the runs that publish a release.  Built on Ubuntu 24.04, the Linux
+#     stack needs glibc 2.38 (the VM itself 2.34) and, for Poppler, the
+#     libstdc++ of GCC 13 (GLIBCXX_3.4.32 at most);
+#   - Windows bundles MSYS2's packages of cairo, FreeType, Pango and their
+#     DLL closure, pinned there by URL and SHA256 (fetch-msys2.sh), not the
+#     runner's, and Poppler built from its pinned source against them:
+#     x86_64 through the ExternalProject of cmake/cairoStack.cmake, as a
+#     developer's build does, arm64 through build.sh and
+#     PHARO_CAIRO_STACK_DIR.
 #
-# scripts/cairo-stack/check.sh then checks the stack of each native zip, and
-# the step of the CairoPlugin draws toy text through it.  The cairo-stack job
+# The stack has the features pango (GLib, HarfBuzz, Pango and PangoCairo)
+# and poppler (Poppler's glib wrapper, GPL; docs/CairoStack.md), both on.
+# scripts/cairo-stack/check.sh then checks the stack of each native zip, the
+# step of the CairoPlugin draws toy text through it, and
+# tests/cairo-stack/ci-text.st draws text with Pango and renders PDFs with
+# Poppler, on the libraries of the zip only.  The cairo-stack job
 # checks the pins (scripts/cairo-stack/check-pins.sh) and gathers the sources
 # of the stack; .github/workflows/cairo-stack-watch.yml compares the pins
 # with the latest upstream releases every week.
@@ -99,18 +107,21 @@ jobs:
           git fetch --no-tags --force https://github.com/pharo-project/pharo-vm.git '+refs/tags/v*:refs/tags/v*'
           git describe --tags --match 'v[0-9]*'
 
-      # gperf (fontconfig) and python3-venv (meson, ninja and pkgconf) build
-      # the cairo stack.  The cairo of the zip has no X11: no libx11-6 or
-      # libxext6
+      # gperf (fontconfig), python3-venv (meson, ninja and pkgconf), nasm (the
+      # SIMD of libjpeg-turbo, in Poppler; unused on aarch64) and g++-13 build
+      # the cairo stack: build.sh hands clang the libstdc++ headers of GCC 13
+      # (--gcc-install-dir), not those of the GCC 14 of the runner, so that
+      # Poppler needs no GLIBCXX newer than 3.4.32.  The cairo of the zip has
+      # no X11: no libx11-6 or libxext6
       - name: Install the dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang cmake make unzip uuid-dev libssl-dev gperf python3-venv
+          sudo apt-get install -y --no-install-recommends clang cmake make unzip uuid-dev libssl-dev gperf python3-venv nasm g++-13
 
       # The cache key of the cairo stack holds the toolchain that builds it:
-      # the compilers, glibc, cmake, gperf and python (meson, ninja and
-      # pkgconf are pinned by scripts/cairo-stack/requirements.txt, so in the
-      # hash of the files)
+      # the compilers, glibc, cmake, gperf, nasm, python, GCC 13 and the GCC
+      # clang selects by itself (meson, ninja and pkgconf are pinned by
+      # scripts/cairo-stack/requirements.txt, so in the hash of the files)
       - name: Fingerprint the toolchain of the cairo stack
         id: toolchain
         shell: bash
@@ -122,7 +133,10 @@ jobs:
             ldd --version | sed -n 1p
             cmake --version | sed -n 1p
             gperf --version | sed -n 1p
+            nasm -v
             python3 --version
+            g++-13 --version | sed -n 1p
+            clang -v 2>&1 | grep 'Selected GCC'
           } | tee "$RUNNER_TEMP/toolchain.txt"
           echo "fp=$(sha256sum "$RUNNER_TEMP/toolchain.txt" | cut -c1-16)" >> "$GITHUB_OUTPUT"
 
@@ -191,13 +205,16 @@ jobs:
       # allow-list (the stack and glibc: no X11, libz.so.1 or libexpat.so.1);
       # DT_RPATH $ORIGIN; the exports the images bind; the version of the
       # pin; toy text with ink (probe.c, fontconfig on the runner's
-      # /etc/fonts); and the newest GLIBC_ version the stack needs, at most
-      # the runner's 2.39 (decision U1: 2.38 today).  The job summary has it
-      # next to the VM's own
+      # /etc/fonts); Pango and Poppler (probe-text.c: text, a PDF with a JPEG
+      # and a base-14 font, one GLib, HarfBuzz, cairo... in the process); the
+      # newest GLIBCXX_ version libpoppler needs, at most 3.4.32 (GCC 13);
+      # and the newest GLIBC_ version the stack needs, at most the runner's
+      # 2.39 (decision U1: 2.38 today).  The job summary has it next to the
+      # VM's own
       - name: Check the cairo stack of the zip
         shell: bash
         run: |
-          sh scripts/cairo-stack/check.sh --bundle "$RUNNER_TEMP/vm" --platform linux --glibc-max 2.39 | tee "$RUNNER_TEMP/cairo-stack-check.txt"
+          sh scripts/cairo-stack/check.sh --bundle "$RUNNER_TEMP/vm" --platform linux --glibc-max 2.39 --glibcxx-max 3.4.32 | tee "$RUNNER_TEMP/cairo-stack-check.txt"
           stack=$(sed -n 's/^glibc-max //p' "$RUNNER_TEMP/cairo-stack-check.txt")
           vm=$(objdump -T "$RUNNER_TEMP/vm/lib/pharo" "$RUNNER_TEMP/vm/lib/libPharoVMCore.so" | { grep -o 'GLIBC_[0-9.]*' || true; } | sed 's/^GLIBC_//' | sort -uV | tail -n 1)
           test -n "$stack" && test -n "$vm"
@@ -313,6 +330,89 @@ jobs:
           echo "libCairoPlugin.so: ${glibcxx:-no GLIBCXX}"
           test -z "$glibcxx" || test "$(printf '%s\n' "$glibcxx" GLIBCXX_3.4.21 | sort -V | tail -n 1)" = GLIBCXX_3.4.21
 
+      # Pango and Poppler of the zip through the image's FFI
+      # (tests/cairo-stack/ci-text.st, on the VMMaker image, which loads
+      # neither libpangocairo.st nor libpoppler.st): each library resolved by
+      # the image's finder inside the VM directory, the instance checks of
+      # GLibInstanceCheck (the GLib, GObject and HarfBuzz that libpangocairo
+      # and libpoppler-glib bind are the VM's), "Ag" laid out and drawn by
+      # PangoCairo on an Athens canvas, a PDF of cairo opened from bytes by
+      # poppler-glib (its text, its rendering) and a PDF whose Helvetica is
+      # not embedded (base 14: Poppler substitutes a font through
+      # fontconfig).  The versions must be the pins of
+      # cmake/cairo-stack/pins.txt.  Then once more under LD_DEBUG=libs (on
+      # stderr): every libglib-2.0, libpango-1.0, libpoppler-glib and libcairo
+      # that the dynamic loader initializes must be the one of the VM
+      # directory, once.  shell: bash runs the step with pipefail, so that a
+      # VM that dies after printing fails the step
+      - name: Draw text and a PDF through the zip
+        shell: bash
+        run: |
+          pango=$(awk '$1 == "pango" { print $2; exit }' cmake/cairo-stack/pins.txt | sed 's/\./\\./g')
+          poppler=$(awk '$1 == "poppler" { print $2; exit }' cmake/cairo-stack/pins.txt | sed 's/\./\\./g')
+          test -n "$pango" && test -n "$poppler"
+          probe() { "$RUNNER_TEMP/vm/pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st tests/cairo-stack/ci-text.st; }
+          probe | tee "$RUNNER_TEMP/text.txt"
+          grep -Eq "^PangoCairo ok pango $pango family .+ ink [1-9]" "$RUNNER_TEMP/text.txt"
+          grep -Eq "^Poppler ok poppler $poppler pages 1 text yes ink [1-9][0-9]* base14 text yes ink [1-9]" "$RUNNER_TEMP/text.txt"
+          LD_DEBUG=libs probe > "$RUNNER_TEMP/text-libs.txt" 2> "$RUNNER_TEMP/ld-debug.txt"
+          grep -q '^PangoCairo ok ' "$RUNNER_TEMP/text-libs.txt"
+          grep -q '^Poppler ok ' "$RUNNER_TEMP/text-libs.txt"
+          sed -n 's/^ *[0-9]*:[[:space:]]*calling init: //p' "$RUNNER_TEMP/ld-debug.txt" > "$RUNNER_TEMP/ld-init.txt"
+          lib=$(cd "$RUNNER_TEMP/vm/lib" && pwd -P)
+          for name in 'libglib-2\.0' 'libpango-1\.0' 'libpoppler-glib' 'libcairo'; do
+            { grep -E "/$name\.so(\.[0-9]+)*\$" "$RUNNER_TEMP/ld-init.txt" || true; } > "$RUNNER_TEMP/ld-one.txt"
+            cat "$RUNNER_TEMP/ld-one.txt"
+            shown=$(printf '%s' "$name" | tr -d '\\')
+            test "$(wc -l < "$RUNNER_TEMP/ld-one.txt")" -eq 1 || { echo "$shown: initialized $(wc -l < "$RUNNER_TEMP/ld-one.txt") times"; exit 1; }
+            dir=$(cd "$(dirname "$(cat "$RUNNER_TEMP/ld-one.txt")")" && pwd -P)
+            test "$dir" = "$lib" || { echo "$shown: from $dir, not from $lib"; exit 1; }
+          done
+
+      # The other half of the instance checks: with the GLib of the system
+      # loaded first (LD_PRELOAD), libpangocairo would bind it instead of the
+      # VM's; ci-text.st must refuse to use Pango ('PangoCairo FAILED') and
+      # exit normally, not crash.  The runner's libglib-2.0.so.0, if any
+      - name: Refuse a GLib of the system loaded first
+        if: matrix.arch == 'x86_64'
+        shell: bash
+        run: |
+          glib=$(PATH="$PATH:/usr/sbin:/sbin" ldconfig -p | awk '/libglib-2.0.so.0 /{print $NF; exit}')
+          if [ -z "$glib" ]; then
+            echo "::notice::the runner has no libglib-2.0.so.0: no negative instance test"
+            exit 0
+          fi
+          status=0
+          LD_PRELOAD="$glib" "$RUNNER_TEMP/vm/pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st tests/cairo-stack/ci-text.st > "$RUNNER_TEMP/text-preload.txt" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/text-preload.txt"
+          test "$status" -eq 0 || { echo "ci-text.st with LD_PRELOAD=$glib: exit status $status"; exit 1; }
+          grep -q '^PangoCairo FAILED ' "$RUNNER_TEMP/text-preload.txt"
+          if grep -Eq 'Segmentation fault|Bus error|core dumped' "$RUNNER_TEMP/text-preload.txt"; then exit 1; fi
+
+      # The tests of the Smalltalk bindings of the stack, when the repository
+      # has them as submodules under bindings/ (libpangocairo.st and
+      # libpoppler.st, which needs the former's GLib): each ci/run.sh loads
+      # its baseline from the checkout into the VMMaker image and runs its
+      # tests on the VM of the zip.  Without the submodules both steps do
+      # nothing
+      - name: Check out the bindings
+        if: matrix.arch == 'x86_64'
+        run: |
+          if git config -f .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null | grep -q ' bindings/'; then
+            git submodule update --init -- bindings
+          else
+            echo "no submodule under bindings/"
+          fi
+
+      - name: Test libpangocairo.st and libpoppler.st on the zip
+        if: matrix.arch == 'x86_64' && hashFiles('bindings/libpangocairo.st/ci/ci-load.st') != ''
+        shell: bash
+        run: |
+          sh bindings/libpangocairo.st/ci/run.sh "$RUNNER_TEMP/vm" build/build/vmmaker/image/VMMaker.image | tee "$RUNNER_TEMP/libpangocairo.txt"
+          grep -Eq '^LibPangoCairo [0-9][0-9.]* loaded .* pango [0-9.]+ ok$' "$RUNNER_TEMP/libpangocairo.txt"
+          LIBPANGOCAIRO_DIR="$PWD/bindings/libpangocairo.st" sh bindings/libpoppler.st/ci/run.sh "$RUNNER_TEMP/vm" build/build/vmmaker/image/VMMaker.image | tee "$RUNNER_TEMP/libpoppler.txt"
+          grep -Eq '^LibPoppler [0-9][0-9.]* loaded .* poppler [0-9.]+ ok$' "$RUNNER_TEMP/libpoppler.txt"
+
       - uses: actions/upload-artifact@v7
         with:
           path: build/build/packages/PharoVM-*-Linux-${{ matrix.arch }}-bin.zip
@@ -349,7 +449,7 @@ jobs:
         run: test "$(uname -m)" = "${{ matrix.arch }}"
 
       # As on Linux: the cache key of the cairo stack holds Xcode, its SDK,
-      # the compiler, cmake and python
+      # the compiler, cmake, gperf (fontconfig, for Poppler) and python
       - name: Fingerprint the toolchain of the cairo stack
         id: toolchain
         shell: bash
@@ -360,6 +460,7 @@ jobs:
             xcrun --show-sdk-version
             clang --version | sed -n 1p
             cmake --version | sed -n 1p
+            gperf --version | sed -n 1p
             python3 --version
           } | tee "$RUNNER_TEMP/toolchain.txt"
           echo "fp=$(shasum -a 256 "$RUNNER_TEMP/toolchain.txt" | cut -c1-16)" >> "$GITHUB_OUTPUT"
@@ -375,7 +476,9 @@ jobs:
       # As on Linux, with pkgconf from PyPI too (no Homebrew: build.sh also
       # keeps /opt/homebrew and /usr/local out of the CMake searches), for
       # the one architecture of the runner, from macOS 11.0 on (the VM's
-      # CMAKE_OSX_DEPLOYMENT_TARGET), with Quartz and without fontconfig
+      # CMAKE_OSX_DEPLOYMENT_TARGET), with Quartz (cairo) and CoreText
+      # (Pango), and fontconfig (with the macOS font directories) only for
+      # Poppler
       - name: Build the cairo stack
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
@@ -511,6 +614,37 @@ jobs:
           test "$(grep -c '/libfreetype' "$RUNNER_TEMP/dyld.txt")" -eq 1
           test "$(grep -c '/libcairo' "$RUNNER_TEMP/dyld.txt")" -eq 1
 
+      # As on Linux (Pango through CoreText, no pangoft2), with Poppler's
+      # fontconfig given the bundled Contents/Resources/fontconfig/fonts.conf
+      # first, as LibPoppler does: no "Fontconfig error" on stderr.  Then
+      # once more with DYLD_PRINT_LIBRARIES (on stderr): dyld must map one
+      # libglib, libgobject, libpango, libpangocairo, libpoppler-glib,
+      # libpoppler, libcairo, libfreetype and libfontconfig, each from
+      # Contents/MacOS/Plugins
+      - name: Draw text and a PDF through the zip
+        shell: bash
+        run: |
+          pango=$(awk '$1 == "pango" { print $2; exit }' cmake/cairo-stack/pins.txt | sed 's/\./\\./g')
+          poppler=$(awk '$1 == "poppler" { print $2; exit }' cmake/cairo-stack/pins.txt | sed 's/\./\\./g')
+          test -n "$pango" && test -n "$poppler"
+          probe() { "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st tests/cairo-stack/ci-text.st; }
+          probe 2> "$RUNNER_TEMP/text-err.txt" | tee "$RUNNER_TEMP/text.txt"
+          cat "$RUNNER_TEMP/text-err.txt"
+          grep -Eq "^PangoCairo ok pango $pango family .+ ink [1-9]" "$RUNNER_TEMP/text.txt"
+          grep -Eq "^Poppler ok poppler $poppler pages 1 text yes ink [1-9][0-9]* base14 text yes ink [1-9]" "$RUNNER_TEMP/text.txt"
+          if grep -q 'Fontconfig error' "$RUNNER_TEMP/text-err.txt"; then exit 1; fi
+          DYLD_PRINT_LIBRARIES=1 probe > "$RUNNER_TEMP/text-dyld.txt" 2> "$RUNNER_TEMP/text-dyld-err.txt"
+          grep -q '^PangoCairo ok ' "$RUNNER_TEMP/text-dyld.txt"
+          grep -q '^Poppler ok ' "$RUNNER_TEMP/text-dyld.txt"
+          if grep -q 'Fontconfig error' "$RUNNER_TEMP/text-dyld-err.txt"; then exit 1; fi
+          for name in 'libglib-2\.0' 'libgobject-2\.0' 'libpango-1\.0' 'libpangocairo-1\.0' 'libpoppler-glib' 'libpoppler' 'libcairo' 'libfreetype' 'libfontconfig'; do
+            { grep -E "/$name(\.[0-9]+)*\.dylib\$" "$RUNNER_TEMP/text-dyld-err.txt" || true; } > "$RUNNER_TEMP/dyld-one.txt"
+            cat "$RUNNER_TEMP/dyld-one.txt"
+            shown=$(printf '%s' "$name" | tr -d '\\')
+            test "$(wc -l < "$RUNNER_TEMP/dyld-one.txt")" -eq 1 || { echo "$shown: mapped $(wc -l < "$RUNNER_TEMP/dyld-one.txt") times"; exit 1; }
+            grep -q '/Pharo\.app/Contents/MacOS/Plugins/' "$RUNNER_TEMP/dyld-one.txt" || { echo "$shown: not from Contents/MacOS/Plugins"; exit 1; }
+          done
+
       - uses: actions/upload-artifact@v7
         with:
           path: build/build/packages/PharoVM-*-Darwin-${{ matrix.arch }}-bin.zip
@@ -618,7 +752,9 @@ jobs:
       # (with libunwind) and the objdump of LLVM, not GNU binutils.  No cairo
       # or freetype: the zip has MSYS2's packages pinned in
       # cmake/cairo-stack/pins.txt (scripts/cairo-stack/fetch-msys2.sh, which
-      # needs the curl, zstd and tar of MSYS2's base)
+      # needs the curl, zstd and tar of MSYS2's base), and the Poppler that
+      # build.sh compiles against them with clang, cmake, ninja, pkgconf and
+      # python (glib-mkenums)
       - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
           msystem: ${{ matrix.msystem }}
@@ -628,6 +764,8 @@ jobs:
             clang:p
             cmake:p
             ninja:p
+            pkgconf:p
+            python:p
             libffi:p
             libgit2-winhttp:p
             SDL2:p
@@ -647,24 +785,32 @@ jobs:
           path: build
 
       # The cairo stack of arm64: MSYS2's pinned packages, each checked
-      # against its SHA256 before anything is extracted, cached as on Linux
-      # by the pins and the scripts (the packages are binaries: the toolchain
-      # of the runner does not change them).  x86_64 has neither step: its
-      # Build runs the same script through the ExternalProject of
-      # cmake/cairoStack.cmake, the path of a developer's build
+      # against its SHA256 before anything is extracted, and Poppler compiled
+      # from its pinned archive against them (build.sh --platform mingw,
+      # which runs fetch-msys2.sh), cached as on Linux by the pins, the
+      # scripts and the compiler and cmake that build Poppler.  x86_64 has
+      # none of these steps: its Build runs the same script through the
+      # ExternalProject of cmake/cairoStack.cmake, the path of a developer's
+      # build, and so compiles Poppler on every run
+      - name: Fingerprint the toolchain of the cairo stack
+        id: toolchain
+        if: matrix.arch == 'arm64'
+        run: |
+          echo "fp=$({ clang --version; cmake --version; } | sha256sum | cut -c1-12)" >> "$(cygpath -u "$GITHUB_OUTPUT")"
+
       - name: Restore the cairo stack
         id: cache
         if: ${{ matrix.arch == 'arm64' && !(github.event_name == 'push' && github.ref == 'refs/heads/pharo-12') }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cairo-stack
-          key: cairo-stack-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('cmake/cairo-stack/**', 'scripts/cairo-stack/**') }}-msys2
+          key: cairo-stack-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('cmake/cairo-stack/**', 'scripts/cairo-stack/**') }}-msys2-${{ steps.toolchain.outputs.fp }}
 
       - name: Fetch the cairo stack
         if: matrix.arch == 'arm64' && steps.cache.outputs.cache-hit != 'true'
         run: |
           t=$(cygpath -u "$RUNNER_TEMP")
-          sh scripts/cairo-stack/fetch-msys2.sh --arch ${{ matrix.arch }} --prefix "$t/cairo-stack" \
+          sh scripts/cairo-stack/build.sh --platform mingw --arch ${{ matrix.arch }} --prefix "$t/cairo-stack" \
             --work "$t/cairo-stack-work" --downloads "$t/cairo-stack-dl"
 
       # CMake checks the manifest of the arm64 stack (pins, platform,
@@ -845,6 +991,29 @@ jobs:
           if (-not ($out -match "^CairoPlugin native 1 cairo $cairo ok")) { exit 1 }
           if (-not ($out -match '^CairoToy ok family .+ ink [1-9][0-9]*( |$)')) { exit 1 }
           if (-not ((Test-Path "$vm\CairoPlugin.dll") -or (Test-Path "$vm\libCairoPlugin.dll"))) { "missing CairoPlugin.dll"; exit 1 }
+
+      # As on Linux, with the same PATH (Pango of MSYS2's package, whose
+      # version is that of its msys2 line in pins.txt, and the Poppler built
+      # from the source pin): ci-text.st checks that the libglib-2.0-0.dll,
+      # libgobject-2.0-0.dll, libcairo-2.dll and libharfbuzz-0.dll the process
+      # loaded are those of the VM directory (not stale DLLs next to the image)
+      - name: Draw text and a PDF through the zip
+        shell: pwsh
+        run: |
+          $vm = "$env:RUNNER_TEMP\vm"
+          $env:PATH = "$vm;$env:SystemRoot\System32;$env:SystemRoot"
+          $msys = '${{ matrix.msystem }}'.ToLower()
+          $pin = Select-String -Path cmake/cairo-stack/pins.txt -Pattern "^msys2\s+$msys\s+\S+\s+mingw-w64-\S+-pango\s+(\S+)-[0-9]+\s" | Select-Object -First 1
+          if (-not $pin) { "no msys2 $msys pango line in cmake/cairo-stack/pins.txt"; exit 1 }
+          $pango = [regex]::Escape($pin.Matches[0].Groups[1].Value)
+          $pin = Select-String -Path cmake/cairo-stack/pins.txt -Pattern '^poppler\s+(\S+)' | Select-Object -First 1
+          if (-not $pin) { "no poppler line in cmake/cairo-stack/pins.txt"; exit 1 }
+          $poppler = [regex]::Escape($pin.Matches[0].Groups[1].Value)
+          $out = & "$vm\PharoConsole.exe" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st tests/cairo-stack/ci-text.st
+          if ($LASTEXITCODE -ne 0) { $out; exit $LASTEXITCODE }
+          $out
+          if (-not ($out -match "^PangoCairo ok pango $pango family .+ ink [1-9]")) { exit 1 }
+          if (-not ($out -match "^Poppler ok poppler $poppler pages 1 text yes ink [1-9][0-9]* base14 text yes ink [1-9]")) { exit 1 }
 
       - uses: actions/upload-artifact@v7
         with:
