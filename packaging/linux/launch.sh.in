@@ -1,6 +1,10 @@
 #!/bin/sh
 # Run the VM, setting SQUEAK_PLUGINS if unset to the VM's containing directory
-# if unset, and ensuring LD_LIBRARY_PATH includes the VM's containing directory.
+# if unset.  On Linux, LD_LIBRARY_PATH does not name the VM's directory: the
+# VM's ELF files find its libraries there by their DT_RPATH $ORIGIN
+# (cmake/Linux.cmake), and the programs that the image starts (OSProcess,
+# LibC system:) inherit LD_LIBRARY_PATH, so they must not load the VM's
+# libraries in place of their own.
 BIN=@PHARO_BIN_IN_ROOT@
 GDB=
 if [ "${SQUEAK_PLUGINS-unset}" = unset ]; then
@@ -56,11 +60,15 @@ if [ "$PLATFORMLIBDIR" = "" ]; then
     exit 1
 } 1>&2
 fi
-# prepending is less flexible but safer because it ensures we find the plugins
-# in the same directory as the VM.  We must include at least /lib and /usr/lib
-# if libraries there-in are to be found.  These directories are not implicit.
+# We must include at least /lib and /usr/lib if libraries there-in are to be
+# found.  These directories are not implicit.
 case $PLATFORMLIBDIR in
 /lib|/usr/lib)  SVMLLP=/lib:/usr/lib;;
 *)              SVMLLP="$PLATFORMLIBDIR:/lib:/usr$PLATFORMLIBDIR:/usr/lib"
 esac
+if [ "$(uname -s)" = "Linux" ]; then
+  LD_LIBRARY_PATH="$SVMLLP:${LD_LIBRARY_PATH}" exec $GDB "$BIN/@VM_EXECUTABLE_NAME@" "$@"
+fi
+# FreeBSD still links the VM with -rpath=. (cmake/FreeBSD.cmake): prepending the
+# VM's directory is how it finds its libraries and plugins
 LD_LIBRARY_PATH="$PLUGINS:$SVMLLP:${LD_LIBRARY_PATH}" exec $GDB "$BIN/@VM_EXECUTABLE_NAME@" "$@"

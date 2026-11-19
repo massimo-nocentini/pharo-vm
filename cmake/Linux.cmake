@@ -1,10 +1,29 @@
 option(READ_ONLY_CODE_ZONE "Makes Cogit's code zone never writeable and executable at the same time" OFF)
 
-# -rpath is a link-time flag; keep it out of CMAKE_C_FLAGS so it isn't passed to
-# every compile step (which makes clang emit -Wunused-command-line-argument).
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-rpath=.")
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-rpath=.")
-set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -Wl,-rpath=.")
+# Every ELF file of the VM (lib/pharo, libPharoVMCore.so, the plugins, the
+# FFI libraries) finds the libraries of the bundle in its own directory, and
+# nowhere else: the rpath is exactly $ORIGIN.  It used to be ".", the current
+# directory (a libPharoVMCore.so or libffi.so planted there was loaded:
+# CWE-426), plus the absolute path of the build tree, which the bundle copies
+# (build/vm).  The build tree gets the rpath of the bundle (CMake escapes
+# $ORIGIN for the generator); CMAKE_BUILD_RPATH_USE_ORIGIN keeps any build
+# rpath relative should a target leave that setting.
+# DT_RPATH (--disable-new-dtags), as the cairo stack's libraries have, rather
+# than DT_RUNPATH: the libraries the image loads from the VM's directory and
+# that have no rpath of their own (the files.pharo.org libgit2, libssh2 and
+# OpenSSL) find their dependencies through the DT_RPATH of the VM core and
+# of lib/pharo, and the bundle's libraries come before any LD_LIBRARY_PATH,
+# as when the launcher put the VM's directory first in it (it no longer
+# does: packaging/linux/launch.sh.in).
+# -Wl flags are link-time flags; keep them out of CMAKE_C_FLAGS so they aren't
+# passed to every compile step (clang: -Wunused-command-line-argument).
+set(CMAKE_SKIP_BUILD_RPATH OFF)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
+set(CMAKE_INSTALL_RPATH "$ORIGIN")
+set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--disable-new-dtags")
+set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--disable-new-dtags")
+set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -Wl,--disable-new-dtags")
 set(PHARO_BIN_LOCATION "default" CACHE STRING "The default location of the PHARO bin, used by the launch.sh.in")
 
 if(${PHARO_BIN_LOCATION} STREQUAL "default")
