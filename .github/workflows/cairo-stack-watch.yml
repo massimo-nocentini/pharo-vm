@@ -3,8 +3,10 @@
 #
 #   - scripts/cairo-stack/check-latest.sh compares each pin of
 #     cmake/cairo-stack/pins.txt with its upstream's latest release (the
-#     GitHub and GitLab APIs, the cairographics.org, savannah and SourceForge
-#     listings) and the msys2 section with MSYS2's repositories, and fails
+#     GitHub and GitLab APIs, the cairographics.org, savannah, SourceForge
+#     and poppler.freedesktop.org listings, GNOME's download index; the
+#     pinned GLib's wrap for proxy-libintl) and the msys2 section with
+#     MSYS2's repositories, and fails
 #     (a red run) when one is behind, gone or unknown; the job summary lists
 #     them.  A release that fixes a CVE reachable from the images is bumped
 #     within 14 days (docs/CairoStack.md);

@@ -6,11 +6,17 @@
 #
 #   check-latest.sh [--pins <file>] [--no-msys2]
 #
-# Sources: the GitHub releases API (zlib, expat), the GitLab API (fontconfig),
-# the cairographics.org listing (cairo and pixman, stable = even minor), the
-# savannah listing (FreeType), the SourceForge listing (libpng), and
-# https://repo.msys2.org/mingw/<env>/<env>.db.  GITHUB_TOKEN, when set, is
-# sent to the GitHub API (CI).
+# Sources: the GitHub releases API (zlib, expat, libffi, pcre2, fribidi,
+# harfbuzz, libjpeg-turbo: its pre-releases and x.y.9x betas skipped), the
+# GitLab API (fontconfig), the cairographics.org listing (cairo and pixman,
+# stable = even minor), the savannah listing (FreeType), the SourceForge
+# listing (libpng), GNOME's cache.json (glib, pango: stable = even minor;
+# pango 1.9x is the Pango 2 preview), the poppler.freedesktop.org listing
+# (Poppler), and https://repo.msys2.org/mingw/<env>/<env>.db.  proxy-libintl
+# (macOS, inside libglib) follows GLib: it is current while it is the wrap
+# that the pinned GLib release names (subprojects/proxy-libintl.wrap, its
+# version and SHA256), whatever the newest tag of frida/proxy-libintl.
+# GITHUB_TOKEN, when set, is sent to the GitHub API (CI).
 #
 # Prints "current", "accepted", "BEHIND" or "UNKNOWN" per library ("accepted": an
 # accepted-behind line of pins.txt covers exactly that newer release, until its date).  For MSYS2: "BEHIND" when
@@ -38,10 +44,20 @@ done
 
 status=0
 get() { curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 20 --max-time 90 "$@"; }
-github() {
-    if [ -n "${GITHUB_TOKEN:-}" ]; then get -H "Authorization: Bearer $GITHUB_TOKEN" "https://api.github.com/repos/$1/releases/latest"
-    else get "https://api.github.com/repos/$1/releases/latest"; fi
+# github_api <path>: https://api.github.com/<path>
+github_api() {
+    if [ -n "${GITHUB_TOKEN:-}" ]; then get -H "Authorization: Bearer $GITHUB_TOKEN" "https://api.github.com/$1"
+    else get "https://api.github.com/$1"; fi
 }
+github() { github_api "repos/$1/releases/latest"; }
+# github_stable <owner/repo>: the tag names of its releases that are not pre-releases
+github_stable() {
+    github_api "repos/$1/releases?per_page=50" | tr ',' '\n' \
+        | awk '/"tag_name":/ { t = $0; sub(/.*"tag_name": *"/, "", t); sub(/".*/, "", t) }
+               /"prerelease": *false/ { print t }'
+}
+# gnome <name>: the versions in GNOME's download index
+gnome() { get "https://download.gnome.org/sources/$1/cache.json" | grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"'; }
 # newest: the highest dotted version of stdin
 newest() { grep -E '^[0-9]+(\.[0-9]+)+$' | sort -u -t. -k1,1n -k2,2n -k3,3n -k4,4n | tail -n 1; }
 # even_minor: keeps the stable series (cairo, pixman: odd minor = development)
@@ -62,13 +78,52 @@ latest() {
                         | sed 's/freetype-\(.*\)\.tar\.xz/\1/' | newest ;;
         libpng) get 'https://sourceforge.net/projects/libpng/rss?path=/libpng16' | grep -o '/libpng16/[0-9.]*/' \
                         | sed 's#/libpng16/\(.*\)/#\1#' | newest ;;
+        libffi) github libffi/libffi | sed -n 's/.*"tag_name": *"v\([0-9.]*\)".*/\1/p' | newest ;;
+        pcre2) github PCRE2Project/pcre2 | sed -n 's/.*"tag_name": *"pcre2-\([0-9.]*\)".*/\1/p' | newest ;;
+        fribidi) github fribidi/fribidi | sed -n 's/.*"tag_name": *"v\{0,1\}\([0-9.]*\)".*/\1/p' | newest ;;
+        harfbuzz) github harfbuzz/harfbuzz | sed -n 's/.*"tag_name": *"\([0-9.]*\)".*/\1/p' | newest ;;
+        libjpeg-turbo) github_stable libjpeg-turbo/libjpeg-turbo | awk -F. '$3 < 90' | newest ;;   # x.y.9x are betas
+        glib) gnome glib | even_minor | newest ;;
+        pango) gnome pango | even_minor | awk -F. '$2 < 90' | newest ;;   # 1.9x: the Pango 2 preview
+        poppler) get https://poppler.freedesktop.org/releases.html | grep -o 'poppler-[0-9]*\.[0-9]*\.[0-9]*\.tar\.xz' \
+                        | sed 's/poppler-\(.*\)\.tar\.xz/\1/' | newest ;;
+        proxy-libintl) github_api repos/frida/proxy-libintl/tags | sed -n 's/.*"name": *"v\{0,1\}\([0-9.]*\)".*/\1/p' | newest ;;
         *) echo "" ;;
     esac
+}
+
+# glib_wrap: "<version> <sha256>" of the proxy-libintl wrap of the pinned GLib
+# release (GNOME's GitLab, else its GitHub mirror)
+wrap_at() {
+    get "$1" 2>/dev/null | awk -F' *= *' '$1 == "directory" { v = $2; sub(/^proxy-libintl-/, "", v) }
+                                         $1 == "source_hash" { h = $2 } END { if (v != "" && h != "") print v, h }'
+}
+glib_wrap() {
+    gv=$(awk '$1 == "glib" && NF >= 7 { print $2; exit }' "$pins")
+    [ -n "$gv" ] || return 0
+    w=$(wrap_at "https://gitlab.gnome.org/GNOME/glib/-/raw/$gv/subprojects/proxy-libintl.wrap")
+    [ -n "$w" ] || w=$(wrap_at "https://raw.githubusercontent.com/GNOME/glib/$gv/subprojects/proxy-libintl.wrap")
+    echo "$w"
 }
 
 echo "Source pins (Linux, macOS, wasm):"
 for line in $(awk '/^#/ || NF < 7 || $1 == "mirror" || $1 == "native-ahead" || $1 == "accepted-behind" || $1 ~ /^msys2/ { next } { print $1 "=" $2 }' "$pins"); do
     name=${line%%=*} pinned=${line#*=}
+    if [ "$name" = proxy-libintl ]; then
+        # GLib's own pin, not frida's newest tag: a GLib bump that moves its wrap makes this BEHIND
+        w=$(glib_wrap)
+        sha=$(awk '$1 == "proxy-libintl" && NF >= 7 { print $3; exit }' "$pins")
+        if [ -z "$w" ]; then
+            echo "  UNKNOWN $name $pinned (no proxy-libintl.wrap for the pinned GLib)"; status=1
+        elif [ "$w" = "$pinned $sha" ]; then
+            t=$(latest "$name" 2>/dev/null)
+            [ "$t" = "$pinned" ] && t=
+            echo "  current $name $pinned (glib's wrap${t:+; frida's newest tag: $t})"
+        else
+            echo "  BEHIND  $name $pinned, the pinned GLib's wrap is ${w% *} (SHA256 ${w#* })"; status=1
+        fi
+        continue
+    fi
     l=$(latest "$name" 2>/dev/null)
     if [ -z "$l" ]; then
         echo "  UNKNOWN $name $pinned (no answer from upstream)"; status=1
