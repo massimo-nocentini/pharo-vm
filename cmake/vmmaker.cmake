@@ -106,6 +106,7 @@ if(GENERATE_SOURCES)
 
             URL ${VM_URL}
             URL_HASH ${VM_URL_HASH}
+            BUILD_BYPRODUCTS ${VMMAKER_VM}
 	    BUILD_COMMAND       ""
 	    UPDATE_COMMAND      ""
 	    CONFIGURE_COMMAND   ""
@@ -114,8 +115,6 @@ if(GENERATE_SOURCES)
             PREFIX "${VMMAKER_DIR}"
             SOURCE_DIR "${VMMAKER_DIR}/vm"
             BUILD_IN_SOURCE True
-            # Ninja needs to know which rule makes the VM the generation depends on
-            BUILD_BYPRODUCTS ${VMMAKER_VM}
             )
     endif()
 
