@@ -1,4 +1,4 @@
-# The sources of pixman 0.44.2 for the Emscripten VM, relative to the
+# The sources of pixman 0.46.4 for the Emscripten VM, relative to the
 # archive's pixman/ directory: those of its meson build without SIMD
 # (cmake/emscripten/deps/cairo/README says how it ran), which
 # cmake/emscripten/deps/pixman.cmake compiles.  pixman-arm.c, pixman-mips.c,
@@ -30,6 +30,7 @@ set(PHARO_WASM_PIXMAN_SOURCES
     pixman-radial-gradient.c
     pixman-region16.c
     pixman-region32.c
+    pixman-region64f.c
     pixman-riscv.c
     pixman-solid-fill.c
     pixman-timer.c

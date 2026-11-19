@@ -1,7 +1,7 @@
 # athens-p15.txt - what tests/wasm/st/athens-parity.st prints on the image of
 # the world of Pharo 15, with the cairo of the WebAssembly VMs
-# (cmake/emscripten/deps/cairo.cmake: cairo 1.18.6, pixman 0.44.2, libpng
-# 1.6.59 and zlib 1.3.2, against the FreeType 2.15.0 of the VMs)
+# (cmake/emscripten/deps/cairo.cmake: cairo 1.18.6, pixman 0.46.4, libpng
+# 1.6.59 and zlib 1.4, against the FreeType 2.15.0 of the VMs)
 #
 # Lane 65 (tests/wasm/lanes/65-cairo.sh) runs athens-parity.st in the node VM
 # on the image of the world, which has the extension of OSWindow-Web that

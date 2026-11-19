@@ -4,10 +4,10 @@ Athens draws through **cairo** and reads its fonts through **FreeType**, which t
 
 | VM | How cairo gets there | cairo | FreeType | pixman | libpng | zlib | fontconfig | expat |
 |---|---|---|---|---|---|---|---|---|
-| Linux x86_64, aarch64 | built from the pinned archives (`scripts/cairo-stack/build.sh`) | 1.18.6 | 2.15.0 | 0.44.2 | 1.6.59 | 1.3.2 (static) | 2.18.4 | 2.10.0 (static) |
-| macOS x86_64, arm64 | the same | 1.18.6 | 2.15.0 | 0.44.2 | 1.6.59 | 1.3.2 (static) | — | — |
+| Linux x86_64, aarch64 | built from the pinned archives (`scripts/cairo-stack/build.sh`) | 1.18.6 | 2.15.0 | 0.46.4 | 1.6.59 | 1.4 (static) | 2.18.4 | 2.10.0 (static) |
+| macOS x86_64, arm64 | the same | 1.18.6 | 2.15.0 | 0.46.4 | 1.6.59 | 1.4 (static) | — | — |
 | Windows x86_64, ARM64 | MSYS2's binary packages, pinned by URL and SHA256 (`scripts/cairo-stack/fetch-msys2.sh`) | 1.18.6 + MSYS2's 2 patches | 2.15.0 | 0.46.4 | 1.6.59 | 1.4 | 2.18.3 | 2.10.0 |
-| WebAssembly | built by CMake from the same archives (`cmake/emscripten/deps/`, `docs/WebAssembly.md`) | 1.18.6 | 2.15.0 | 0.44.2 | 1.6.59 | 1.3.2 | — | — |
+| WebAssembly | built by CMake from the same archives (`cmake/emscripten/deps/`, `docs/WebAssembly.md`) | 1.18.6 | 2.15.0 | 0.46.4 | 1.6.59 | 1.4 | — | — |
 
 `cmake/cairo-stack/pins.txt` is the single source of these versions. `check-pins.sh` keeps the wasm pins equal to the native ones.
 
@@ -129,7 +129,7 @@ Only cairo and FreeType are loaded by the image; everything else is a private de
 |---|---|---|---|
 | cairo | `libcairo.so.2.11806.6`, symlinks `libcairo.so.2`, `libcairo.so` | `libcairo.2.dylib`, symlink `libcairo.dylib` | `libcairo-2.dll` |
 | FreeType | `libfreetype.so.6.20.7`, symlinks `.so.6`, `.so` | `libfreetype.6.dylib`, symlink `libfreetype.dylib` | `libfreetype-6.dll` |
-| pixman | `libpixman-1.so.0.44.2`, symlinks | `libpixman-1.0.dylib`, symlink | `libpixman-1-0.dll` |
+| pixman | `libpixman-1.so.0.46.4`, symlinks | `libpixman-1.0.dylib`, symlink | `libpixman-1-0.dll` |
 | libpng | `libpng16.so.16.59.0`, symlinks | `libpng16.16.59.0.dylib`, symlinks `libpng16.16.dylib`, `libpng16.dylib` | `libpng16-16.dll` |
 | fontconfig | `libfontconfig.so.1.17.0`, symlinks | — | `libfontconfig-1.dll` |
 | zlib, expat | static inside their users | static | `zlib1.dll`, `libexpat-1.dll` |
@@ -230,7 +230,7 @@ gh release create cairo-stack-msys2-<date> --repo <owner>/pharo-vm --notes "MSYS
 
 `check-pins.sh` probes every URL and falls back to the mirror; a package gone from both fails it.
 
-**accepted-behind.** A pin kept behind a newer upstream release on purpose (pixman 0.44.2 and zlib 1.3.2 since 2026-11-18, decision U4): `accepted-behind <name> <version> <until YYYY-MM-DD> <reason>` makes the weekly watch (`check-latest.sh`) report that exact release as "accepted" until the date; any other newer release, or the date passing, makes the run red again, so each exception is reviewed.
+**accepted-behind.** A pin kept behind a newer upstream release on purpose (decision U4; there is none today): `accepted-behind <name> <version> <until YYYY-MM-DD> <reason>` makes the weekly watch (`check-latest.sh`) report that exact release as "accepted" until the date; any other newer release, or the date passing, makes the run red again, so each exception is reviewed.
 
 **native-ahead.** A security fix may go into the native VMs before wasm (whose configuration must be regenerated): `native-ahead <name> <until YYYY-MM-DD> <reason>` makes `check-pins.sh` warn about the difference until that date and fail after it.
 
@@ -239,14 +239,12 @@ gh release create cairo-stack-msys2-<date> --repo <owner>/pharo-vm --notes "MSYS
 - `scripts/cairo-stack/check-latest.sh` compares each pin with its upstream's latest release (the GitHub releases API for zlib and expat, the GitLab API for fontconfig, the cairographics.org listing for cairo and pixman, savannah for FreeType, SourceForge for libpng) and each MSYS2 pin with MSYS2's database. It exits 1 when one is behind, and runs weekly in CI (`.github/workflows/cairo-stack-watch.yml`), so a pin behind its upstream shows as a red run.
 - A release that fixes a CVE reachable from the images is bumped within 14 days, natively first (`native-ahead`) if wasm needs a configuration regeneration.
 - zlib and expat are static and private on Linux and macOS: distributions' patches no longer reach them, and every fix needs a VM release.
-- Today `check-latest.sh` reports pixman 0.46.4 and zlib 1.4 as newer: they carry no fix reachable from the stack (below), and moving to them is a separate, deliberate bump.
+- Every source pin is at its upstream's latest release: pixman 0.44.2 and zlib 1.3.2, kept behind with `accepted-behind` from 2026-11-18, were bumped to 0.46.4 and 1.4 on 2026-11-19 (zlib 1.4 fixes the `gzwrite` and `infback9` CVEs and window overruns after `inflateSync`, `inflatePrime` or `inflateGetDictionary`; pixman 0.46 adds the `pixman_region64f_*` functions and no security fix).
 
 ## Known accepted issues
 
 - **cairo 1.18.6:** CVE-2025-50422, a reachable assertion in cairo-ft (MR !621 still open): with assertions on, it aborts the VM, as the previous bundles did. The image-information fixes on cairo's master (JPEG, JPEG 2000, JBIG2 bounds) are reachable only through `cairo_surface_set_mime_data`, which no image binds. 1.18.6 also creates more scaled fonts for toy text (commit 46d1e26c: the toy faces miss cairo's global cache); Athens' FreeType path is unaffected.
-- **zlib 1.3.2:** zlib 1.4 fixes `gzwrite` and `infback9` CVEs and window overruns after `inflateSync`, `inflatePrime` or `inflateGetDictionary`; the stack uses only `inflate` and `deflate`.
 - **expat 2.10.0:** upstream lists unfixed security issues; only fontconfig's XML configuration reaches it.
-- **pixman 0.44.2:** no security-relevant change up to 0.46.4.
 - **Windows:** the versions are MSYS2's (cairo 1.18.6 with the D2D/DWrite patch and MR !673, FreeType 2.15.0 with HarfBuzz), recorded in `CAIRO-STACK.txt`.
 - Linux aarch64: the `libz.so.1` of the zip (zlib 1.2.11) comes from libgit2's prebuilt dependencies, not from the cairo stack.
 

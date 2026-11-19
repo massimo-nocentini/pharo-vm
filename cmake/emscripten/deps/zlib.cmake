@@ -17,20 +17,21 @@
 # checks find that zconf.h uses, unistd.h and stdarg.h, is given here as
 # zconf.h's own results (Z_HAVE_UNISTD_H, Z_HAVE_STDARG_H), to whoever
 # includes its headers too, so that zlib and its users see the same zconf.h
-# (gzread.c needs unistd.h's read).  Emscripten's port of zlib, from the
-# archive of the tag v1.3.2, writes them into a zconf.h of its own.  (off_t
-# is 64 bits wide on wasm64: no _LARGEFILE64_SOURCE.)
+# (gzread.c needs unistd.h's read).  Emscripten's port of zlib, which is
+# older (1.3.2 in emsdk 6.0.10) and not used, writes them into a zconf.h of
+# its own.  (off_t and long, zlib 1.4's z_off_t, are 64 bits wide on wasm64:
+# no _LARGEFILE64_SOURCE.)
 
 if(TARGET pharo_zlib)
     return()
 endif()
 
-set(WASM_ZLIB_VERSION "1.3.2")
+set(WASM_ZLIB_VERSION "1.4")
 
 pharo_wasm_dep_fetch(zlib
     VERSION ${WASM_ZLIB_VERSION}
     URL "https://github.com/madler/zlib/releases/download/v${WASM_ZLIB_VERSION}/zlib-${WASM_ZLIB_VERSION}.tar.gz"
-    SHA256 bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
+    SHA256 02dd159783677a749c04adbdd02b55b8a2bcc7e054f51b76b549199a916ad584
     FILE zlib-${WASM_ZLIB_VERSION}.tar.gz
     LICENSES LICENSE)
 

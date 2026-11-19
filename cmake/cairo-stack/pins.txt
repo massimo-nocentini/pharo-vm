@@ -40,8 +40,8 @@
 # before anything is extracted.  Signatures are checked when bumping (gpgv with
 # keys/*.asc), not by the build.
 
-# signed-by 5ED46A6721D365587791E2AA783FCD8E58BCAFBA https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz.asc (Mark Adler; gpgv good, 2026-11-18)
-zlib 1.3.2 bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16 zlib-1.3.2.tar.gz https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz linux,darwin LICENSE
+# signed-by 5ED46A6721D365587791E2AA783FCD8E58BCAFBA https://github.com/madler/zlib/releases/download/v1.4/zlib-1.4.tar.gz.asc (Mark Adler; gpgv good, 2026-11-19)
+zlib 1.4 02dd159783677a749c04adbdd02b55b8a2bcc7e054f51b76b549199a916ad584 zlib-1.4.tar.gz https://github.com/madler/zlib/releases/download/v1.4/zlib-1.4.tar.gz linux,darwin LICENSE
 # unsigned: libpng publishes no signature for 1.6.59.  Cross-checked 2026-11-18: every file of this archive is byte-identical to the
 # GitHub tag archive https://github.com/pnggroup/libpng/archive/refs/tags/v1.6.59.tar.gz, whose SHA256 2540302a1844ad2b2b501977abecfa850f265f97b78f065a712ab4074a89f5b5
 # MSYS2's PKGBUILD pins (source package mingw-w64-libpng-1.6.59-2, below); same file list, 0 differing files.
@@ -53,8 +53,8 @@ expat 2.10.0 c624ba2998fc65df1163a49641ff3f9ab73138b11641d92c86bee0fb01b1bc7f ex
 # unsigned: fontconfig publishes a checksum only.  The hash equals that of
 # https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.18.4/fontconfig-2.18.4.tar.xz.sha256sum (same origin; 2026-11-18).
 fontconfig 2.18.4 95013637eff5f81d4871dd16cd098c273264c16d0f9f0b27cc43b81b2794bee3 fontconfig-2.18.4.tar.xz https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.18.4/fontconfig-2.18.4.tar.xz linux COPYING
-# signed-by 3BB639E56F861FA2E86505690FDD682D974CA72A https://www.cairographics.org/releases/pixman-0.44.2.tar.gz.sha512.asc (Matt Turner, signing subkey 16238A7D92448B02B7B10344B6B1CEAE5103DB07; the signed SHA512 matches; gpgv good, 2026-11-18)
-pixman 0.44.2 6349061ce1a338ab6952b92194d1b0377472244208d47ff25bef86fc71973466 pixman-0.44.2.tar.gz https://www.cairographics.org/releases/pixman-0.44.2.tar.gz linux,darwin COPYING
+# signed-by 3BB639E56F861FA2E86505690FDD682D974CA72A https://www.cairographics.org/releases/pixman-0.46.4.tar.gz.sha512.asc (Matt Turner, signing subkey 16238A7D92448B02B7B10344B6B1CEAE5103DB07; the signed SHA512 matches; gpgv good, 2026-11-19)
+pixman 0.46.4 d09c44ebc3bd5bee7021c79f922fe8fb2fb57f7320f55e97ff9914d2346a591c pixman-0.46.4.tar.gz https://www.cairographics.org/releases/pixman-0.46.4.tar.gz linux,darwin COPYING
 # signed-by 53EF3DC3B63E2899271BD26322E8091EEA11BBB7 https://www.cairographics.org/releases/cairo-1.18.6.tar.xz.sha256sum.asc (Emmanuele Bassi; the signed SHA256 matches; gpgv good, 2026-11-18; byte-identical to the signed tag 1.18.6, and MSYS2's source package mingw-w64-cairo-1.18.6-2 holds the same archive)
 cairo 1.18.6 1c767308174337a74694da0f3ec069c271452163a1ef4540964c50c301f157d4 cairo-1.18.6.tar.xz https://www.cairographics.org/releases/cairo-1.18.6.tar.xz linux,darwin COPYING COPYING-LGPL-2.1 COPYING-MPL-1.1
 
@@ -159,8 +159,3 @@ msys2-dll clangarm64 libpcre2-8-0.dll mingw-w64-clang-aarch64-pcre2
 #     KERNEL32.dll MSIMG32.dll ole32.dll RPCRT4.dll SHELL32.dll USER32.dll USP10.dll WS2_32.dll
 # not pinned (reached by the dependencies, but own no DLL of the closure): libffi libsystre libtre libunwind lzo2 mpdecimal ncurses openssl
 #     python python-packaging sqlite tcl tk tzdata wineditline xz zstd
-
-# Kept behind on purpose (decision U4, 2026-11-18): no security fix reachable
-# from the images is pending in these releases; reviewed again by the dates.
-accepted-behind pixman 0.46.4 2027-02-18 no security-flagged change since 0.44.2; the wasm source list would change
-accepted-behind zlib 1.4 2027-02-18 a 13-day-old major release; nothing reachable is pending in 1.3.2

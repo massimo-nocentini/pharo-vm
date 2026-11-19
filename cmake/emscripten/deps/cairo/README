@@ -2,7 +2,7 @@ The configuration of cairo and pixman for the Emscripten VM
 ===========================================================
 
 cmake/emscripten/deps/cairo.cmake and pixman.cmake build cairo 1.18.6 and
-pixman 0.44.2 with CMake alone, from their release archives: `make wasm'
+pixman 0.46.4 with CMake alone, from their release archives: `make wasm'
 needs no meson, ninja nor pkg-config.  What their meson builds would make at
 configure time is committed instead, here and in ../pixman/:
 
@@ -28,7 +28,7 @@ libcairo-script-interpreter.a, which no image uses, and which is not built
 here.)
 
 They were made with meson 1.12.1 and ninja from pip, pkgconf from pip as
-pkg-config, and emsdk 6.0.10, against zlib 1.3.2, libpng 1.6.59 and
+pkg-config, and emsdk 6.0.10, against zlib 1.4, libpng 1.6.59 and
 FreeType 2.15.0 built for the VM's mode: 64-bit objects and WebAssembly
 setjmp/longjmp (below), each given to meson by a .pc file.  The FreeType
 the VM links is a leaner build of the same version
@@ -47,7 +47,11 @@ cairo-features.h, cairo-features-pdf.h, the two source lists, and pixman's
 pixman-config.h, pixman-version.h and source list were all the same, but
 for the two lines of config.h and config-pdf.h below, so no file but the
 versions in the comments changed.  The compile command of cairo's sources
-was the same too.
+was the same too.  For pixman 0.46.4 and zlib 1.4 it was run again
+(2026-11-19): pixman-config.h and the compile command of pixman's sources
+were the same, pixman-version.h changed in its version only, and the
+source list has one file more, pixman-region64f.c (pixman's new
+pixman_region64f_* functions); cairo's files were the same as before.
 
 The two lines of config.h and config-pdf.h that differ from meson's comment
 out HAVE_FT_COLR_V1 and HAVE_FT_SVG_DOCUMENT.  They turn on cairo's
@@ -58,12 +62,15 @@ no paint) nor FT_CONFIG_OPTION_SVG (no glyph has FT_GLYPH_FORMAT_SVG).
 Without them pharo-web.wasm is 47,913 bytes smaller (17,896 gzipped), and
 draws the same.
 
-Emscripten's ports are older than these pins (FreeType 2.14.3 and libpng
-1.6.58 in emsdk 6.0.10), so FreeType and libpng were built for the
-recipe, into <prefix>; zlib is Emscripten's port (`embuilder build zlib
---wasm64'), whose .pc file names <sysroot>/lib/wasm64-emscripten -lz and
-<sysroot>/include.  FreeType with its own meson, static, with its default
-options (so with COLR and OT-SVG, as Emscripten's port):
+Emscripten's ports are older than these pins (zlib 1.3.2, FreeType 2.14.3
+and libpng 1.6.58 in emsdk 6.0.10), so zlib, FreeType and libpng were
+built for the recipe, into <prefix>.  zlib, as cmake/emscripten/deps/
+zlib.cmake builds it: its 15 sources compiled with `emcc -m64
+-sSUPPORT_LONGJMP=wasm -sWASM_LEGACY_EXCEPTIONS=0 -O2 -DZ_HAVE_UNISTD_H
+-DZ_HAVE_STDARG_H' into <prefix>/lib/libz.a, with zlib.h and zconf.h in
+<prefix>/include and a zlib.pc of Version 1.4.  FreeType with its own
+meson, static, with its default options (so with COLR and OT-SVG, as
+Emscripten's port):
 
     meson setup <freetype build> freetype-2.15.0 --cross-file wasm64.cross \
         --prefix=<prefix> --default-library=static --buildtype=release \
@@ -104,8 +111,8 @@ on Emscripten, which makes the memory of the module shared, and would reach
 every user of pixman-1.pc):
 
     sed -i "s/^dep_threads = dependency('threads')$/dep_threads = null_dep/" \
-        pixman-0.44.2/meson.build
-    meson setup <pixman build> pixman-0.44.2 --cross-file wasm64.cross \
+        pixman-0.46.4/meson.build
+    meson setup <pixman build> pixman-0.46.4 --cross-file wasm64.cross \
         --prefix=<prefix> --default-library=static --buildtype=release \
         -Doptimization=2 -Dloongson-mmi=disabled -Dmmx=disabled \
         -Dsse2=disabled -Dssse3=disabled -Dvmx=disabled -Darm-simd=disabled \

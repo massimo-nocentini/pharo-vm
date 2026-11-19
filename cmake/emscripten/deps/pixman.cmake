@@ -22,12 +22,12 @@
 # The version of the archive must be the one they were made for, or
 # configure stops: another pixman needs them made again.
 
-set(WASM_PIXMAN_VERSION "0.44.2")
+set(WASM_PIXMAN_VERSION "0.46.4")
 
 pharo_wasm_dep_fetch(pixman
     VERSION ${WASM_PIXMAN_VERSION}
     URL "https://www.cairographics.org/releases/pixman-${WASM_PIXMAN_VERSION}.tar.gz"
-    SHA256 6349061ce1a338ab6952b92194d1b0377472244208d47ff25bef86fc71973466
+    SHA256 d09c44ebc3bd5bee7021c79f922fe8fb2fb57f7320f55e97ff9914d2346a591c
     FILE pixman-${WASM_PIXMAN_VERSION}.tar.gz
     LICENSES COPYING)
 set(source "${pixman_SOURCE_DIR}")
