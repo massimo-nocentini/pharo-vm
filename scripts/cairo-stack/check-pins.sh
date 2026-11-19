@@ -253,7 +253,10 @@ drift freetype "WASM_CAIRO_FREETYPE_VERSION (cairo's wasm configuration)" "$ft_p
 
 # ---------------------------------------------------------------- 3. the URLs
 if [ "$probe" = yes ]; then
-    head_ok() { curl -fsIL --proto '=https' --tlsv1.2 --retry 2 --connect-timeout 20 --max-time 60 -o /dev/null "$1" 2>/dev/null; }
+    # --retry-all-errors: a release download of GitHub once failed in 6 s,
+    # an error --retry alone does not retry (only timeouts, 408, 429, 5xx)
+    head_ok() { curl -fsIL --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors --retry-delay 5 \
+        --connect-timeout 20 --max-time 60 -o /dev/null "$1" 2>/dev/null; }
     msys2_mirror=$(awk '$1 == "msys2-mirror" { print $2; exit }' "$pins")
     awk '
         /^#/ || NF == 0 { next }
