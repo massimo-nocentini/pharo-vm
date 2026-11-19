@@ -21,9 +21,13 @@ function(build_ffi)
 	message(STATUS "Building FFI")
 	include(cmake/DownloadProject.cmake)
 
+	# The pharo-project fork (libffi 3.3 with a CMake build), pinned by commit
+	# and SHA256: the head of its branch v3.3-cmake on 2026-11-19, which the
+	# build used to clone by name, unchecked
 	download_project(PROJ   libffi
-		GIT_REPOSITORY      https://github.com/pharo-project/libffi.git
-        GIT_TAG             "v3.3-cmake"
+		URL                 https://github.com/pharo-project/libffi/archive/2b832583491b9f468caf04cbfaf54d3d33c0e04a.tar.gz
+		URL_HASH            SHA256=d0c60bc6e46a7c8fce689dbddd106b3c1d030ceaeefc16943eda425135234eaf
+		DOWNLOAD_NAME       libffi-2b832583491b9f468caf04cbfaf54d3d33c0e04a.tar.gz
         ${UPDATE_DISCONNECTED_IF_AVAILABLE}
 	)
 
