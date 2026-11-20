@@ -3,7 +3,8 @@
 # cmake/emscripten/deps/CMakeLists.txt includes this file.  It defines
 #
 #     pharo_wasm_dep_fetch(<name> VERSION <version> URL <url> SHA256 <hash>
-#                          FILE <file> [LICENSES <path>...])
+#                          FILE <file> [LICENSES <path>...]
+#                          [PATCHES <file.patch>...])
 #
 # which finds the archive <file>, the pinned release <version> of the
 # library <name>, and unpacks it at configure time into
@@ -21,8 +22,11 @@
 # both hashes and WASM_DEPS_DIR.  A downloaded archive with another hash is
 # downloaded again once (it may be the one of an earlier pin).
 #
-# The archive is unpacked again only when the one unpacked had another hash
-# (deps/<name>.stamp records it), or deps/<name> is gone.
+# PATCHES are applied, in their order, to the sources once unpacked, with
+# patch -p1 (GNU patch, which must be on the PATH).  The archive
+# is unpacked and patched again only when the one unpacked had another hash,
+# or other patches (deps/<name>.stamp records the SHA256 of each), or
+# deps/<name> is gone.
 #
 # LICENSES are the files of the licence, relative to <name>_SOURCE_DIR.
 # Each must exist.  The library is recorded in the global property
@@ -33,8 +37,24 @@
 # with the absolute paths of its licence files, from which
 # cmake/emscripten/stage.cmake writes THIRD-PARTY-NOTICES.txt.
 
+# pharo_wasm_dep_patch(<dir> <patch> <what>): applies <patch> to the
+# sources in <dir>, or stops
+function(pharo_wasm_dep_patch dir patch what)
+    find_program(PHARO_WASM_PATCH_EXECUTABLE patch)
+    if(NOT PHARO_WASM_PATCH_EXECUTABLE)
+        message(FATAL_ERROR "Cannot patch ${what}: no patch on the PATH (GNU patch, which the libraries of WASM_PANGO need)")
+    endif()
+    set(command "${PHARO_WASM_PATCH_EXECUTABLE}" -p1 -N -s -i "${patch}")
+    message(STATUS "Patching ${what} with ${patch}")
+    execute_process(COMMAND ${command} WORKING_DIRECTORY "${dir}"
+        RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE output)
+    if(NOT result EQUAL 0)
+        message(FATAL_ERROR "${patch} does not apply to ${what} (in ${dir}): ${output}")
+    endif()
+endfunction()
+
 function(pharo_wasm_dep_fetch name)
-    cmake_parse_arguments(ARG "" "VERSION;URL;SHA256;FILE" "LICENSES" ${ARGN})
+    cmake_parse_arguments(ARG "" "VERSION;URL;SHA256;FILE" "LICENSES;PATCHES" ${ARGN})
     if(ARG_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "pharo_wasm_dep_fetch(${name}): unexpected arguments ${ARG_UNPARSED_ARGUMENTS}")
     endif()
@@ -110,15 +130,28 @@ function(pharo_wasm_dep_fetch name)
         file(RENAME "${archive}.part" "${archive}")
     endif()
 
-    # Unpacked, unless the archive of that hash is already
+    # Unpacked (and patched), unless the archive of that hash is already,
+    # with the same patches
     set(root "${CMAKE_BINARY_DIR}/deps")
     set(dest "${root}/${name}")
     set(stamp "${root}/${name}.stamp")
+    set(stampText "${sha256}\n")
+    set(patches "")
+    foreach(patch IN LISTS ARG_PATCHES)
+        get_filename_component(patch "${patch}" ABSOLUTE)
+        if(NOT EXISTS "${patch}")
+            message(FATAL_ERROR "pharo_wasm_dep_fetch(${name}): no patch ${patch}")
+        endif()
+        file(SHA256 "${patch}" patchHash)
+        string(APPEND stampText "${patchHash} ${patch}\n")
+        list(APPEND patches "${patch}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${patch}")
+    endforeach()
     set(unpacked "")
     if(EXISTS "${stamp}" AND IS_DIRECTORY "${dest}")
         file(READ "${stamp}" unpacked)
     endif()
-    if(NOT unpacked STREQUAL "${sha256}\n")
+    if(NOT unpacked STREQUAL stampText)
         message(STATUS "Unpacking ${archive} into ${dest}")
         set(unpack "${dest}.unpack")
         file(REMOVE "${stamp}")
@@ -130,8 +163,18 @@ function(pharo_wasm_dep_fetch name)
             file(REMOVE_RECURSE "${unpack}")
             message(FATAL_ERROR "Cannot unpack ${archive} into ${unpack}")
         endif()
+        file(GLOB entries LIST_DIRECTORIES true "${unpack}/*")
+        list(LENGTH entries count)
+        if(count EQUAL 1 AND IS_DIRECTORY "${entries}")
+            set(top "${entries}")
+        else()
+            set(top "${unpack}")
+        endif()
+        foreach(patch IN LISTS patches)
+            pharo_wasm_dep_patch("${top}" "${patch}" "${what}")
+        endforeach()
         file(RENAME "${unpack}" "${dest}")
-        file(WRITE "${stamp}" "${sha256}\n")
+        file(WRITE "${stamp}" "${stampText}")
     endif()
     file(GLOB entries LIST_DIRECTORIES true "${dest}/*")
     list(LENGTH entries count)

@@ -13,7 +13,8 @@
 #                            [ARCHIVES <lib.a>...] [EXCLUDE <regex>]
 #                            [SYMBOLS_FILE <file>] [NODE_ONLY]
 #                            [LINK <target or library>...] [CFLAGS <flag>...]
-#                            [FILES <file name>...] [ON_LOAD <function>])
+#                            [FILES <file name>...] [ON_LOAD <function>]
+#                            [DEPENDS <library>...])
 #         Adds the library <name>, the name the image gives reduced as
 #         src/externalPrimitives.c does (libc.so.6 is c, libgit2.so.1.4.4 is
 #         git2), or one of ALIASES.  Its table, ${CMAKE_BINARY_DIR}/wasm/ffi/
@@ -47,6 +48,10 @@
 #         ON_LOAD names a C function, void <function>(void), defined in the
 #         VM, which src/externalPrimitives.c calls the first time the library
 #         is loaded.  A NODE_ONLY library is in the node VM pharo only.
+#         DEPENDS names libraries of the registry, added before it, whose
+#         tables src/externalPrimitives.c searches, in their order, for a
+#         symbol the library's own table lacks, as dlsym on the handle of a
+#         shared library finds the symbols of its dependencies.
 #
 #         SYMBOLS_FILE, cmake/emscripten/ffi/symbols/<name>.txt, holds a
 #         name per line; '#' starts a comment line.  A line
@@ -85,7 +90,7 @@ get_filename_component(PHARO_WASM_FFI_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/../
 
 function(pharo_wasm_ffi_library name)
     cmake_parse_arguments(ARG "NODE_ONLY" "SYMBOLS_FILE;EXCLUDE;ON_LOAD"
-        "ALIASES;HEADERS;SOURCES;ARCHIVES;LINK;CFLAGS;FILES" ${ARGN})
+        "ALIASES;HEADERS;SOURCES;ARCHIVES;LINK;CFLAGS;FILES;DEPENDS" ${ARGN})
     if(ARG_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "pharo_wasm_ffi_library(${name}): unexpected arguments ${ARG_UNPARSED_ARGUMENTS}")
     endif()
@@ -102,6 +107,15 @@ function(pharo_wasm_ffi_library name)
     if(ARG_HEADERS AND ARG_SOURCES)
         message(FATAL_ERROR "pharo_wasm_ffi_library(${name}): HEADERS and SOURCES both: the table includes either")
     endif()
+    foreach(dependency IN LISTS ARG_DEPENDS)
+        if(NOT dependency IN_LIST names)
+            message(FATAL_ERROR "pharo_wasm_ffi_library(${name}): DEPENDS ${dependency}, which is not in the registry before it")
+        endif()
+        get_property(dependencyNodeOnly GLOBAL PROPERTY PHARO_WASM_FFI_NODE_ONLY_${dependency})
+        if(dependencyNodeOnly AND NOT ARG_NODE_ONLY)
+            message(FATAL_ERROR "pharo_wasm_ffi_library(${name}): DEPENDS ${dependency}, which is in the node VM only")
+        endif()
+    endforeach()
     if(ARG_ON_LOAD AND NOT ARG_ON_LOAD MATCHES "^[A-Za-z_][A-Za-z0-9_]*$")
         message(FATAL_ERROR "pharo_wasm_ffi_library(${name}): ON_LOAD '${ARG_ON_LOAD}' is not a C identifier")
     endif()
@@ -153,7 +167,7 @@ function(pharo_wasm_ffi_library name)
     list(APPEND cflags ${ARG_CFLAGS})
     # Lists go to the script with '|' between their items
     string(REPLACE ";" "|" cflags "${cflags}")
-    foreach(list ALIASES HEADERS ARCHIVES)
+    foreach(list ALIASES HEADERS ARCHIVES DEPENDS)
         string(REPLACE ";" "|" arg_${list} "${ARG_${list}}")
     endforeach()
     string(REPLACE ";" "|" arg_SOURCES "${sources}")
@@ -169,7 +183,7 @@ function(pharo_wasm_ffi_library name)
                 "-DALIASES=${arg_ALIASES}" "-DHEADERS=${arg_HEADERS}"
                 "-DSOURCES=${arg_SOURCES}" "-DARCHIVES=${arg_ARCHIVES}"
                 "-DEXCLUDE=${ARG_EXCLUDE}" "-DSYMBOLS_FILE=${symbolsFile}"
-                "-DENABLED=${arg_ENABLED}" "-DON_LOAD=${ARG_ON_LOAD}"
+                "-DENABLED=${arg_ENABLED}" "-DON_LOAD=${ARG_ON_LOAD}" "-DDEPENDS=${arg_DEPENDS}"
                 -P "${PHARO_WASM_FFI_LIBRARY_GENERATOR}"
         COMMAND ${CMAKE_COMMAND} -E touch_nocreate "${output}"
         DEPENDS ${symbolsFile} ${sources} ${ARG_ARCHIVES} ${depends}

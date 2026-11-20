@@ -40,6 +40,12 @@ typedef struct {
 	size_t count;
 	/* Called once, the first time the library is loaded, or NULL */
 	void (*onLoad)(void);
+	/* The libraries it depends on, NULL-terminated, or NULL: a symbol
+	 * that the library does not define is looked up in them, in their
+	 * order, as dlsym on the handle of a shared library finds the symbols
+	 * of its dependencies (the bindings of Pango look g_free up through
+	 * libpango, to check that it binds the GLib they call) */
+	const void *const *depends;
 } PharoFFILibrary;
 
 /* NULL-terminated */

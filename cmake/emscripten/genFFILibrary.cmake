@@ -6,14 +6,15 @@
 #           [-DALIASES=<m|dl>] [-DHEADERS=<stdlib.h|string.h>]
 #           [-DSOURCES=<a.c|b.c>] [-DARCHIVES=<lib.a|...>] [-DEXCLUDE=<regex>]
 #           [-DSYMBOLS_FILE=<c.txt>] [-DENABLED=<VARIABLE|...>]
-#           [-DON_LOAD=<function>]
+#           [-DON_LOAD=<function>] [-DDEPENDS=<glib|gobject>]
 #           -P genFFILibrary.cmake
 #
 # cmake/emscripten/ffiRegistry.cmake runs it at build time (the lists have
 # '|' between their items).  It writes OUTPUT, a translation unit that
 # defines pharoFFILibrary_<NAME> (include/pharovm/emscripten/ffiRegistry.h):
 # the symbols of the library, sorted by name (strcmp), with their addresses
-# and signatures, its ALIASES and its ON_LOAD function, and prints
+# and signatures, its ALIASES, its ON_LOAD function and the libraries of the
+# registry it DEPENDS on (searched for the symbols it lacks), and prints
 # 'FFI library <NAME>: <n> symbols, ...' with the number of signatures.
 #
 # The symbols are the names SYMBOLS_FILE lists outside its exempt sections
@@ -49,7 +50,7 @@ if(NOT NAME MATCHES "^[A-Za-z_][A-Za-z0-9_]*$")
     message(FATAL_ERROR "genFFILibrary.cmake: NAME '${NAME}' is not a C identifier")
 endif()
 file(MAKE_DIRECTORY "${WORK}")
-foreach(list CFLAGS ALIASES HEADERS SOURCES ARCHIVES ENABLED)
+foreach(list CFLAGS ALIASES HEADERS SOURCES ARCHIVES ENABLED DEPENDS)
     string(REPLACE "|" ";" ${list} "${${list}}")
 endforeach()
 
@@ -212,6 +213,17 @@ if(ON_LOAD)
     set(onLoad "${ON_LOAD}")
     set(onLoadDeclaration "\nextern void ${ON_LOAD}(void);\n")
 endif()
+set(depends "NULL")
+set(dependsDeclaration "")
+if(DEPENDS)
+    set(depends "depends")
+    set(rows "")
+    foreach(dependency IN LISTS DEPENDS)
+        string(APPEND dependsDeclaration "extern const PharoFFILibrary pharoFFILibrary_${dependency};\n")
+        string(APPEND rows "&pharoFFILibrary_${dependency}, ")
+    endforeach()
+    string(APPEND dependsDeclaration "static const void *const depends[] = { ${rows}NULL };\n")
+endif()
 
 # The text of the table, with the signatures signature_<symbol> ("-", or
 # unset, for NULL)
@@ -231,9 +243,9 @@ ${rows}\t{NULL, NULL, NULL}
 };
 
 static const char *const aliases[] = { ${aliases}NULL };
-
+${dependsDeclaration}
 const PharoFFILibrary pharoFFILibrary_${NAME} = {
-\t\"${NAME}\", aliases, symbols, ${count}, ${onLoad}
+\t\"${NAME}\", aliases, symbols, ${count}, ${onLoad}, ${depends}
 };
 " PARENT_SCOPE)
 endfunction()

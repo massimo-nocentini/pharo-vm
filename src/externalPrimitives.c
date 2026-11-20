@@ -342,7 +342,19 @@ compareSymbol(const void *name, const void *symbol)
 	return strcmp((const char *)name, ((const PharoFFISymbol *)symbol)->name);
 }
 
-/* A symbol of a library of the registry (its rows are sorted by strcmp);
+/* A symbol of the table of a library of the registry (its rows are sorted
+ * by strcmp), or NULL */
+static void *
+librarySymbol(const PharoFFILibrary *library, const char *symbol)
+{
+	const PharoFFISymbol *found = bsearch(symbol, library->symbols, library->count,
+		sizeof(PharoFFISymbol), compareSymbol);
+
+	return found ? found->address : NULL;
+}
+
+/* A symbol of a library of the registry, or of the libraries it depends on,
+ * in their order, as dlsym finds those of a shared library's dependencies;
  * with no module, a function of the VM's own module-less tables (vm_exports,
  * vmsupport_exports...), as dlsym(RTLD_DEFAULT) would find it natively:
  * TFFIBackend>>isAvailable looks up primitiveLoadSymbolFromModule so.  (The
@@ -353,10 +365,11 @@ getModuleSymbol(void *module, const char *symbol)
 {
 	if (module) {
 		const PharoFFILibrary *library = module;
-		const PharoFFISymbol *found = bsearch(symbol, library->symbols, library->count,
-			sizeof(PharoFFISymbol), compareSymbol);
+		void *address = librarySymbol(library, symbol);
 
-		return found ? found->address : NULL;
+		for (int i = 0; !address && library->depends && library->depends[i]; i++)
+			address = librarySymbol(library->depends[i], symbol);
+		return address;
 	}
 	for (int list = 0; pluginExports[list]; list++)
 		for (sqExport *row = pluginExports[list]; row->pluginName || row->primitiveName; row++)
