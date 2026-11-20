@@ -31,7 +31,11 @@
 #             exempt function must not be a row, the variable of a section
 #             must be one of the cache, and every library with such a list
 #             (c, freetype, cairo, ...) must have functions the image binds
-#             among its rows, which shows that its names were read.
+#             among its rows, which shows that its names were read; but
+#             for those of libpangocairo.st and libpoppler.st (glib,
+#             gobject, harfbuzz, pango, pangocairo, poppler_glib, with
+#             WASM_PANGO and WASM_POPPLER), which no image of the site binds
+#             unless it loaded the bindings (lane 76 runs them).
 #
 # The boots, the session and the glyphs must print no line of the guard ('FFI callout
 # failed, its declaration does not match ...' or 'FFI callout trapped in
@@ -170,9 +174,12 @@ covered() {
 	fail "$1" "exempt functions that are rows of their table: $(echo "$rows_exempt" | head -n 5 | tr '\n' ';')"
 	return 2
     fi
-    # the libraries that have a list of their functions
+    # the libraries that have a list of their functions, and whose
+    # functions the stock images bind (not those of the bindings of Pango
+    # and Poppler, projects that an image loads)
     listed=
     for library in $libraries; do
+	case " glib gobject harfbuzz pango pangocairo poppler_glib " in *" $library "*) continue ;; esac
 	if test -f "$SRCDIR/cmake/emscripten/ffi/symbols/$library.txt"; then listed="$listed $library"; fi
     done
     rm -f missing.txt

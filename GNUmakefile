@@ -532,15 +532,17 @@ wasm-check: wasm
 # and its Notebook tab, run on every build.  world.spec.mjs needs the image of
 # the world, which a build without one (WASM_WORLD=OFF, or no host Pharo)
 # skips, as lane 80 does, ffi.spec.mjs the FFI, which a build without it
-# (WASM_FFI=OFF) skips, and git.spec.mjs libgit2, which only a build with
-# WASM_LIBGIT2=ON has.
+# (WASM_FFI=OFF) skips, git.spec.mjs libgit2, which only a build with
+# WASM_LIBGIT2=ON has, and pango.spec.mjs Pango and Poppler (WASM_PANGO,
+# WASM_POPPLER) and an image of the site with their bindings, the batteries
+# image (it skips itself without them).
 # web/manifest.json says what the build has.
 wasm-check-browser: wasm
 	@if test -z "$$PLAYWRIGHT_MODULE" && ! (cd $(SRCDIR)/tests/wasm/lib && \
 	    $(NODE) -e 'require.resolve("playwright")') >/dev/null 2>&1; then \
 	  echo "make wasm-check-browser: the browser specs need Playwright: set PLAYWRIGHT_MODULE (and BROWSERS), e.g." >&2; \
 	  echo "  PLAYWRIGHT_MODULE=/path/to/node_modules/playwright BROWSERS=chromium,firefox make wasm-check-browser" >&2; \
-	  echo "(the specs are tests/wasm/page.spec.mjs, notebook.spec.mjs, world.spec.mjs, ffi.spec.mjs and git.spec.mjs)" >&2; \
+	  echo "(the specs are tests/wasm/page.spec.mjs, notebook.spec.mjs, world.spec.mjs, ffi.spec.mjs, git.spec.mjs and pango.spec.mjs)" >&2; \
 	  exit 1; \
 	fi
 	$(NODE) $(SRCDIR)/tests/wasm/page.spec.mjs $(W)/web
@@ -563,6 +565,7 @@ wasm-check-browser: wasm
 	else \
 	  echo "skip git.spec.mjs: $(W)/web/manifest.json has no libgit2 (WASM_LIBGIT2=OFF, the default, or WASM_FFI=OFF)"; \
 	fi
+	$(NODE) $(SRCDIR)/tests/wasm/pango.spec.mjs $(W)/web
 
 wasm-serve: wasm
 	$(NODE) $(SRCDIR)/packaging/emscripten/tools/serve.mjs $(W)/web $(WASM_PORT)
