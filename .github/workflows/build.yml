@@ -1223,6 +1223,19 @@ jobs:
           unzip -l "$RUNNER_TEMP/images/PharoBatteries-Pharo15.zip"
           echo "PHARO_BATTERIES_ZIP=$RUNNER_TEMP/images/PharoBatteries-Pharo15.zip" >> "$GITHUB_ENV"
 
+      # The bindings of Pango and Poppler (master), whose ci/run.sh lane 76
+      # of wasm-check runs on the node VM (LIBPANGOCAIRO_DIR, LIBPOPPLER_DIR)
+      - name: Clone libpangocairo.st and libpoppler.st
+        run: |
+          git clone -q --depth 1 https://github.com/massimo-nocentini/libpangocairo.st.git "$RUNNER_TEMP/libpangocairo.st"
+          git clone -q --depth 1 https://github.com/massimo-nocentini/libpoppler.st.git "$RUNNER_TEMP/libpoppler.st"
+          git -C "$RUNNER_TEMP/libpangocairo.st" log -1 --format='libpangocairo.st %h %s'
+          git -C "$RUNNER_TEMP/libpoppler.st" log -1 --format='libpoppler.st %h %s'
+          echo "LIBPANGOCAIRO_DIR=$RUNNER_TEMP/libpangocairo.st" >> "$GITHUB_ENV"
+          echo "LIBPOPPLER_DIR=$RUNNER_TEMP/libpoppler.st" >> "$GITHUB_ENV"
+
+      # Pango and Poppler (WASM_PANGO, WASM_POPPLER: docs/WebAssembly.md):
+      # with Poppler, under the GPL, the modules are distributed under the GPL 3
       # make wasm records its settings but does not remember them: give
       # wasm-check the same ones, or it builds the defaults again.  The node
       # VM (wasm64, a 64-bit table) needs node 24.15 or later: the node of
@@ -1235,7 +1248,8 @@ jobs:
           node --version
           make wasm WASM_IMAGE_ZIP="$PHARO15_ZIP" WASM_IMAGE_ID=p15 \
             WASM_EXTRA_IMAGES="p13=$PHARO13_ZIP p14=$PHARO14_ZIP batteries=$PHARO_BATTERIES_ZIP" \
-            WASM_EXTRA_SOURCES="$PHARO_LEGACY_SOURCES" WASM_LIBGIT2=ON
+            WASM_EXTRA_SOURCES="$PHARO_LEGACY_SOURCES" WASM_LIBGIT2=ON \
+            WASM_PANGO=ON WASM_POPPLER=ON
 
       - name: Check that CMake uses clang and clang++
         run: sh scripts/check-clang.sh build-wasm/host build-wasm/cmake
@@ -1246,7 +1260,8 @@ jobs:
           export PATH="$(dirname "$EMSDK_NODE"):$PATH"
           make wasm-check WASM_IMAGE_ZIP="$PHARO15_ZIP" WASM_IMAGE_ID=p15 \
             WASM_EXTRA_IMAGES="p13=$PHARO13_ZIP p14=$PHARO14_ZIP batteries=$PHARO_BATTERIES_ZIP" \
-            WASM_EXTRA_SOURCES="$PHARO_LEGACY_SOURCES" WASM_LIBGIT2=ON
+            WASM_EXTRA_SOURCES="$PHARO_LEGACY_SOURCES" WASM_LIBGIT2=ON \
+            WASM_PANGO=ON WASM_POPPLER=ON
 
       # The logs of the lanes (and the stderr of the VMs of the failed cases,
       # kept in their directories), which the job log shows only in part

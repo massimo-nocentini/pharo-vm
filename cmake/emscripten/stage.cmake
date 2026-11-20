@@ -108,6 +108,29 @@ endfunction()
 set(PHARO_WASM_NOTICES_HEAD "${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/THIRD-PARTY-NOTICES.head.txt")
 file(READ "${PHARO_WASM_NOTICES_HEAD}" PHARO_WASM_NOTICES_TEXT)
 string(REGEX REPLACE "\n+$" "" PHARO_WASM_NOTICES_TEXT "${PHARO_WASM_NOTICES_TEXT}")
+# With Pango, the text stack is under the LGPL; with Poppler, which is under
+# the GPL and linked into the modules (not a shared library, as natively), the
+# modules are a combined work that may be distributed only under the GPL 3
+if(PHARO_WASM_HAS_PANGO)
+    string(APPEND PHARO_WASM_NOTICES_TEXT "\n\n"
+        "This build has Pango (WASM_PANGO): GLib, GObject, GIO, Pango and FriBidi are\n"
+        "under the GNU LGPL 2.1 or later, and are linked into the WebAssembly modules;\n"
+        "their sources, and the build files that link them, are available as above,\n"
+        "so that a recipient can relink the modules with modified versions of them.")
+endif()
+if(PHARO_WASM_HAS_POPPLER)
+    string(APPEND PHARO_WASM_NOTICES_TEXT "\n\n"
+        "This build has Poppler (WASM_POPPLER), which is under the GNU General Public\n"
+        "License, version 2 or 3 (its COPYING), and is linked into the WebAssembly\n"
+        "modules.  The modules (pharo.wasm, pharo-web.wasm and their JavaScript) are\n"
+        "therefore a combined work that this build distributes under the GNU General\n"
+        "Public License version 3; the MIT License of the Pharo VM and the licences\n"
+        "of the other libraries below permit that.  The complete corresponding source\n"
+        "is the source of the Pharo VM at the commit of this build and the pinned\n"
+        "archives named below; the releases of the repository attach them\n"
+        "(cairo-stack-sources.tar), and they are available on request for three\n"
+        "years from whoever distributed this build.")
+endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PHARO_WASM_NOTICES_HEAD}")
 
 # The libraries: each item of PHARO_WASM_NOTICES is

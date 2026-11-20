@@ -36,7 +36,7 @@ It prints a line per project and per repository that Iceberg cloned, with its co
 The repositories of Iceberg stay registered in the image, without their clones (the zip has none): Iceberg shows them as missing, and clones them again on demand.
 
 On a VM of this repository every project uses its plugin or library; on another VM SimdJSON (which needs the SimdJSONPlugin or libSimdJSONFFI), Pango and Poppler do not work, and the others fall back to Smalltalk.
-In the browser, the WebAssembly VM has the plugins, and Pango and Poppler only when it is built with `WASM_PANGO=ON` and `WASM_POPPLER=ON` ([WebAssembly.md](WebAssembly.md), The libraries), which the site of GitHub Actions is not yet: there LibPangoCairo and LibPoppler are loaded, and their tests skip.
+In the browser, the WebAssembly VM has the plugins, and Pango and Poppler when it is built with `WASM_PANGO=ON` and `WASM_POPPLER=ON` ([WebAssembly.md](WebAssembly.md), The libraries), as the site of GitHub Actions is: there LibPangoCairo and LibPoppler work as natively, with the fonts of the VM (DejaVu).
 
 ## Building it
 
