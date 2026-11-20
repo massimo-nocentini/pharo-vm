@@ -171,6 +171,17 @@ if(PHARO_WASM_HAS_LIBGIT2)
         COMPILE_DEFINITIONS PHARO_WASM_GIT_HTTP=${PHARO_WASM_GIT_HTTP})
 endif()
 
+# Pango and Poppler (WASM_PANGO, WASM_POPPLER): src/emscripten/textSupport.c
+# has the function the registry calls when the image loads them
+# (pharoWasmTextInit, the ON_LOAD of ffiLibraries.cmake), which gives
+# fontconfig the fonts.conf of the VM.  The web VM carries the fonts in its
+# file system, at /usr/share/fonts/pharo (the node VM next to it, in
+# node/fonts: stage.cmake): PHARO_WASM_FONTS_DIR, which
+# cmake/emscripten/deps/pango.cmake fills.
+if(PHARO_WASM_HAS_PANGO)
+    list(APPEND EXTRACTED_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/emscripten/textSupport.c)
+endif()
+
 set(VM_FRONTEND_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/emscripten/emscriptenMain.c)
 
@@ -311,6 +322,9 @@ list(APPEND PHARO_WASM_WEB_LINK_FLAGS
     -sEXPORT_NAME=createPharoVM
     -sEXIT_RUNTIME=0
     -sEXPORTED_RUNTIME_METHODS=FS,ENV,HEAPU8,HEAP32,HEAPU32,UTF8ToString,stringToUTF8,lengthBytesUTF8)
+if(PHARO_WASM_HAS_PANGO)
+    list(APPEND PHARO_WASM_WEB_LINK_FLAGS "--embed-file=${PHARO_WASM_FONTS_DIR}@/usr/share/fonts/pharo")
+endif()
 
 function(pharo_wasm_link_executable TARGET)
     target_compile_definitions(${TARGET} PRIVATE PHARO_WASM_SLICE_MS=${WASM_SLICE_MS})
@@ -357,6 +371,10 @@ macro(add_third_party_dependencies_per_platform)
         target_link_libraries(pharo-web pharo_ffi_registry_web)
     endif()
     pharo_wasm_link_executable(pharo-web ${PHARO_WASM_WEB_LINK_FLAGS})
+    if(PHARO_WASM_HAS_PANGO)
+        file(GLOB PHARO_WASM_FONT_FILES "${PHARO_WASM_FONTS_DIR}/*")
+        set_target_properties(pharo-web PROPERTIES LINK_DEPENDS "${PHARO_WASM_FONT_FILES}")
+    endif()
 
     # The stock image, the image of the world (needs WASM_HOST_PHARO), then
     # node/ and web/

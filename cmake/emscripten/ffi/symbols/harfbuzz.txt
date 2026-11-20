@@ -4,9 +4,8 @@
 # (libpangocairo.st, libpoppler.st; docs/PangoPoppler.md).  A name per line,
 # '#' starting a comment.  scripts/cairo-stack/check.sh asserts that the
 # native stack's library exports every name; a binding that calls another
-# function adds it here first.  The Emscripten VM has no Pango yet:
-# cmake/emscripten/ffiLibraries.cmake does not read this list, the input of
-# that round.
+# function adds it here first.  The Emscripten VM
+# builds its table from it with WASM_PANGO (cmake/emscripten/ffiLibraries.cmake).
 #
 hb_version_atleast
 hb_version_string

@@ -1,0 +1,18 @@
+Pharo: poppler 26.11.0's Object(std::unique_ptr<Array>) takes its argument
+by value, so its inline body destroys a unique_ptr of the incomplete type
+Array, which the libc++ of Emscripten 6 refuses in C++23 (a constexpr
+destructor); taken by rvalue reference, as Object(std::unique_ptr<Dict> &&)
+is, it destroys none.
+
+diff -ru a/poppler/Object.h b/poppler/Object.h
+--- a/poppler/Object.h
++++ b/poppler/Object.h
+@@ -149,7 +149,7 @@
+ 
+     explicit Object(long long int64gA) : type { objInt64 }, data { int64gA } { }
+ 
+-    explicit Object(std::unique_ptr<Array> arrayA) : type { objArray }, data { std::shared_ptr<Array>(std::move(arrayA)) } { }
++    explicit Object(std::unique_ptr<Array> &&arrayA) : type { objArray }, data { std::shared_ptr<Array>(std::move(arrayA)) } { }
+ 
+     explicit Object(std::unique_ptr<Dict> &&dictA) : type { objDict }, data { std::shared_ptr<Dict>(std::move(dictA)) } { }
+ 

@@ -23,7 +23,9 @@
 #      cmake/emscripten/deps/<name>.cmake), and WASM_CAIRO_FREETYPE_VERSION is
 #      the FreeType pin.  A "native-ahead <name> <until YYYY-MM-DD> <reason>"
 #      line turns a difference into a warning until that date, and fails after.
-#      The GLib, Pango and Poppler pins are native only (no wasm build yet);
+#      The wasm VM builds the libraries of Pango and Poppler from the pins
+#      themselves, with the sources harvested from a build of each version
+#      (cmake/emscripten/deps/<name>/sources.cmake names it);
 #   3. every URL answers (HTTPS HEAD; the mirror when the URL does not): MSYS2
 #      removes superseded packages after a while.  --no-probe skips this.
 #
@@ -242,11 +244,29 @@ for name in cairo pixman freetype libpng zlib; do
     drift "$name" version "$pv" "$wv"
     drift "$name" SHA256 "$ps" "$ws"
 done
-# The libraries of the pango and poppler features: Linux and macOS only, the
-# wasm VM has none of them yet (its libffi is the uFFI one, a separate pin).
-for name in libffi pcre2 proxy-libintl glib fribidi harfbuzz pango libjpeg-turbo poppler; do
+# The libraries of the pango and poppler features.  The wasm VM builds
+# expat, fontconfig, GLib, FriBidi, HarfBuzz, Pango, libjpeg-turbo and
+# Poppler (WASM_PANGO, WASM_POPPLER) from these very lines
+# (cmake/emscripten/deps/pango.cmake reads pins.txt), with the sources that
+# scripts/wasm-deps/regen-text-stack.sh harvested from a build of that
+# version: the first line of cmake/emscripten/deps/<name>/sources.cmake must
+# name it.  libffi (the wasm VM's is the uFFI one, a separate pin), PCRE2
+# (no GRegex there) and proxy-libintl are native only.
+for name in expat fontconfig glib fribidi harfbuzz pango libjpeg-turbo poppler; do
     v=$(awk -v n="$name" '$1 == n && NF >= 7 { print $2; exit }' "$pins")
-    [ -n "$v" ] && ok "$name $v: native only (wasm deferred)" || err "no source line for $name (the feature map of build.sh builds it)"
+    f=$deps/$name/sources.cmake
+    if [ -z "$v" ]; then
+        err "no source line for $name (the feature map of build.sh builds it)"
+    elif ! [ -f "$f" ]; then
+        err "no cmake/emscripten/deps/$name/sources.cmake (scripts/wasm-deps/regen-text-stack.sh)"
+    else
+        hv=$(sed -n '1s/^# The sources of [^ ]* \([0-9][0-9.]*\) for the Emscripten VM.*/\1/p' "$f")
+        drift "$name" "version (deps/$name/sources.cmake)" "$v" "$hv"
+    fi
+done
+for name in libffi pcre2 proxy-libintl; do
+    v=$(awk -v n="$name" '$1 == n && NF >= 7 { print $2; exit }' "$pins")
+    [ -n "$v" ] && ok "$name $v: native only" || err "no source line for $name (the feature map of build.sh builds it)"
 done
 cfv=$(sed -n 's/^set(WASM_CAIRO_FREETYPE_VERSION "\([^"]*\)")/\1/p' "$deps/cairo.cmake" | head -n 1)
 drift freetype "WASM_CAIRO_FREETYPE_VERSION (cairo's wasm configuration)" "$ft_pin" "$cfv"

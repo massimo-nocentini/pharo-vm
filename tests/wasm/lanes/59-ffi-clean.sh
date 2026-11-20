@@ -27,7 +27,7 @@
 #             exempt in its cmake/emscripten/ffi/symbols/<library>.txt
 #             (a '# unavailable:' section, or a '# unavailable unless
 #             <VARIABLE>:' one whose variable is off in the CMake cache,
-#             such as the PDF surface of cairo unless WASM_CAIRO_PDF); an
+#             such as the PDF surface of cairo unless PHARO_WASM_HAS_CAIRO_PDF); an
 #             exempt function must not be a row, the variable of a section
 #             must be one of the cache, and every library with such a list
 #             (c, freetype, cairo, ...) must have functions the image binds

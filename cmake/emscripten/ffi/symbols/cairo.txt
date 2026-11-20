@@ -163,7 +163,16 @@ cairo_version
 # status of the context and the type of its scaled font (twin: user).
 cairo_scaled_font_get_type
 cairo_status
-# unavailable unless WASM_CAIRO_PDF: the PDF surface (AthensCairoPDFSurface) needs cairo's zlib configuration
+#
+# What libpangocairo.st and libpoppler.st call through CairoLibrary beyond
+# Athens (the extra_cairo_symbols of scripts/cairo-stack/check.sh), and so
+# their tests in the VM with WASM_PANGO and WASM_POPPLER
+cairo_set_source_surface
+cairo_surface_set_mime_data
+# unavailable unless PHARO_WASM_HAS_CAIRO_PDF: the PDF surface (AthensCairoPDFSurface, and LibPoppler's tests) needs cairo's zlib configuration (WASM_CAIRO_PDF, or WASM_POPPLER)
 cairo_pdf_surface_create
+cairo_pdf_surface_set_size
+cairo_pdf_surface_set_page_label
+cairo_pdf_surface_set_metadata
 # unavailable: the Quartz surface of macOS (AthensQuartzSurface)
 cairo_quartz_surface_create

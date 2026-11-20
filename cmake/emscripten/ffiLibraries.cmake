@@ -101,6 +101,67 @@ if(PHARO_WASM_HAS_LIBGIT2)
         ON_LOAD pharoWasmGitInit)
 endif()
 
+# Pango (PHARO_WASM_HAS_PANGO, cmake/emscripten/deps/pango.cmake): the
+# libraries of libpangocairo.st, GLibLibrary (libglib-2.0.so.0, so glib),
+# GObjectLibrary (gobject), PangoLibrary (pango) and PangoCairoLibrary
+# (pangocairo), with the functions of their lists, and harfbuzz, which no
+# class loads by name, for the instance check of the bindings (below).
+# Their placeholders are the sonames the bindings look for first.
+#
+# DEPENDS: a library looks up what its table lacks in the libraries it
+# depends on, as dlsym does on Linux, where the bindings' GLibInstanceCheck
+# looks glib_check_version, g_free and g_object_unref (and hb_version_atleast
+# and cairo_create) up through libpango, libpangocairo and libpoppler-glib to
+# check that they bind the GLib, GObject, HarfBuzz and cairo of GLibLibrary,
+# GObjectLibrary and CairoLibrary: here they do, the VM has one of each.
+# pharoWasmTextInit (src/emscripten/textSupport.c) gives fontconfig the
+# fonts of the VM before Pango or Poppler first runs.
+if(PHARO_WASM_HAS_PANGO)
+    pharo_wasm_ffi_library(glib
+        HEADERS glib.h
+        SYMBOLS_FILE ${CMAKE_CURRENT_LIST_DIR}/ffi/symbols/glib.txt
+        LINK pharo_glib
+        FILES libglib-2.0.so.0)
+    pharo_wasm_ffi_library(gobject
+        HEADERS glib-object.h
+        SYMBOLS_FILE ${CMAKE_CURRENT_LIST_DIR}/ffi/symbols/gobject.txt
+        LINK pharo_gobject
+        FILES libgobject-2.0.so.0
+        DEPENDS glib)
+    pharo_wasm_ffi_library(harfbuzz
+        HEADERS hb.h
+        SYMBOLS_FILE ${CMAKE_CURRENT_LIST_DIR}/ffi/symbols/harfbuzz.txt
+        LINK pharo_harfbuzz)
+    pharo_wasm_ffi_library(pango
+        HEADERS pango/pango.h
+        SYMBOLS_FILE ${CMAKE_CURRENT_LIST_DIR}/ffi/symbols/pango.txt
+        LINK pharo_pango
+        FILES libpango-1.0.so.0
+        ON_LOAD pharoWasmTextInit
+        DEPENDS gobject glib harfbuzz)
+    pharo_wasm_ffi_library(pangocairo
+        HEADERS pango/pangocairo.h
+        SYMBOLS_FILE ${CMAKE_CURRENT_LIST_DIR}/ffi/symbols/pangocairo.txt
+        LINK pharo_pango
+        FILES libpangocairo-1.0.so.0
+        ON_LOAD pharoWasmTextInit
+        DEPENDS pango gobject glib harfbuzz cairo)
+endif()
+
+# Poppler (PHARO_WASM_HAS_POPPLER, cmake/emscripten/deps/poppler.cmake):
+# PopplerLibrary of libpoppler.st, libpoppler-glib.so.8, which the VM
+# reduces to poppler-glib (an alias: the name of a table is a C name).
+if(PHARO_WASM_HAS_POPPLER)
+    pharo_wasm_ffi_library(poppler_glib
+        ALIASES poppler-glib
+        HEADERS poppler.h
+        SYMBOLS_FILE ${CMAKE_CURRENT_LIST_DIR}/ffi/symbols/poppler-glib.txt
+        LINK pharo_poppler_glib
+        FILES libpoppler-glib.so.8
+        ON_LOAD pharoWasmTextInit
+        DEPENDS gobject glib cairo)
+endif()
+
 # The library of the FFI tests (ffiTestLibrary, libTestLibrary.so to the
 # image), compiled where its table is: it has no header that declares its
 # functions.  It is in the node VM, for lane 58 (tests/wasm/lanes/58-ffi.sh)

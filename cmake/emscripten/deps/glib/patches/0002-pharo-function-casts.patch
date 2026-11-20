@@ -1,0 +1,444 @@
+Pharo: more function pointer casts of GLib that trap in WebAssembly, found
+with scripts/wasm-deps/castscan.py (-Wcast-function-type, then the casts
+whose two types differ as WebAssembly signatures) and by running Pango and
+Poppler in the VM: g_[s]list_free_full, g_queue_free_full and _clear_full,
+GAsyncQueue's item_free_func called through a GFunc; g_[s]list_sort,
+g_[s]list_insert_sorted, g_array_sort, g_ptr_array_sort and g_tree_new
+calling a GCompareFunc as a GCompareDataFunc; g_object_add_weak_pointer,
+g_signal_connect_object's guards, GBinding's and GCancellable's closure
+notifiers, the GSource closure callbacks and GTypeModule's class_init
+called with another number of arguments than they take.
+
+diff -ru a/gio/gcancellable.c b/gio/gcancellable.c
+--- a/gio/gcancellable.c
++++ b/gio/gcancellable.c
+@@ -549,6 +549,29 @@
+   g_object_unref (cancellable);
+ }
+ 
++/* (Pharo) GClosureNotify functions for one-argument destroy functions */
++typedef struct {
++  gpointer data;
++  GDestroyNotify destroy;
++} CancellableDestroyData;
++
++static void
++cancellable_destroy_data_notify (gpointer  data,
++                                 GClosure *closure)
++{
++  CancellableDestroyData *destroy = data;
++
++  destroy->destroy (destroy->data);
++  g_free (destroy);
++}
++
++static void
++cancellable_free_notify (gpointer  data,
++                         GClosure *closure)
++{
++  g_free (data);
++}
++
+ /**
+  * g_cancellable_connect:
+  * @cancellable: (not nullable): A #GCancellable.
+@@ -641,8 +664,17 @@
+     {
+       GClosure *closure;
+ 
+-      closure = g_cclosure_new (callback, g_steal_pointer (&data),
+-                                (GClosureNotify) g_steal_pointer (&data_destroy_func));
++      /* (Pharo) data_destroy_func takes one argument: as a GClosureNotify,
++       * called with two, it would trap in WebAssembly */
++      closure = g_cclosure_new (callback, data, NULL);
++      if (data_destroy_func != NULL)
++        {
++          CancellableDestroyData *destroy = g_new (CancellableDestroyData, 1);
++
++          destroy->data = g_steal_pointer (&data);
++          destroy->destroy = g_steal_pointer (&data_destroy_func);
++          g_closure_add_finalize_notifier (closure, destroy, cancellable_destroy_data_notify);
++        }
+ 
+       id = g_signal_connect_closure_by_id (cancellable, signals[CANCELLED],
+                                            0, closure, FALSE);
+@@ -896,7 +928,7 @@
+         g_signal_connect_data (cancellable, "cancelled",
+                                G_CALLBACK (cancellable_source_cancelled),
+                                cancellable_source->self_ptr,
+-                               (GClosureNotify) g_free, G_CONNECT_DEFAULT);
++                               cancellable_free_notify, G_CONNECT_DEFAULT);
+       if (g_cancellable_is_cancelled (cancellable))
+         g_source_set_ready_time (source, 0);
+     }
+diff -ru a/glib/garray.c b/glib/garray.c
+--- a/glib/garray.c
++++ b/glib/garray.c
+@@ -923,6 +923,18 @@
+   return farray;
+ }
+ 
++
++/* (Pharo) A GCompareFunc called as a GCompareDataFunc, with the function
++ * as its data: WebAssembly traps on a call through a function pointer of
++ * another type (the extra argument). */
++static gint
++compare_func_adapter (gconstpointer a,
++                      gconstpointer b,
++                      gpointer      compare_func)
++{
++  return ((GCompareFunc) compare_func) (a, b);
++}
++
+ /**
+  * g_array_sort:
+  * @array: an array
+@@ -948,8 +960,8 @@
+     g_sort_array (array->data,
+                   array->len,
+                   array->elt_size,
+-                  (GCompareDataFunc) compare_func,
+-                  NULL);
++                  compare_func_adapter,
++                  (gpointer) compare_func);
+ }
+ 
+ /**
+@@ -2435,8 +2447,8 @@
+     g_sort_array (array->pdata,
+                   array->len,
+                   sizeof (gpointer),
+-                  (GCompareDataFunc) compare_func,
+-                  NULL);
++                  compare_func_adapter,
++                  (gpointer) compare_func);
+ }
+ 
+ /* Please keep this doc-comment in sync with
+diff -ru a/glib/gasyncqueue.c b/glib/gasyncqueue.c
+--- a/glib/gasyncqueue.c
++++ b/glib/gasyncqueue.c
+@@ -182,7 +182,13 @@
+       g_mutex_clear (&queue->mutex);
+       g_cond_clear (&queue->cond);
+       if (queue->item_free_func)
+-        g_queue_foreach (&queue->queue, (GFunc) queue->item_free_func, NULL);
++        {
++          GList *l;
++
++          /* (Pharo) item_free_func takes one argument: called through a GFunc, it would trap in WebAssembly */
++          for (l = queue->queue.head; l != NULL; l = l->next)
++            queue->item_free_func (l->data);
++        }
+       g_queue_clear (&queue->queue);
+       g_free (queue);
+     }
+diff -ru a/glib/glist.c b/glib/glist.c
+--- a/glib/glist.c
++++ b/glib/glist.c
+@@ -159,7 +159,11 @@
+ g_list_free_full (GList          *list,
+                   GDestroyNotify  free_func)
+ {
+-  g_list_foreach (list, (GFunc) free_func, NULL);
++  GList *l;
++
++  /* (Pharo) free_func takes one argument: called through a GFunc, it would trap in WebAssembly */
++  for (l = list; l != NULL; l = l->next)
++    free_func (l->data);
+   g_list_free (list);
+ }
+ 
+@@ -1010,6 +1014,18 @@
+     }
+ }
+ 
++
++/* (Pharo) A GCompareFunc called as a GCompareDataFunc, with the function
++ * as its data: WebAssembly traps on a call through a function pointer of
++ * another type (the extra argument). */
++static gint
++compare_func_adapter (gconstpointer a,
++                      gconstpointer b,
++                      gpointer      compare_func)
++{
++  return ((GCompareFunc) compare_func) (a, b);
++}
++
+ static GList*
+ g_list_insert_sorted_real (GList    *list,
+                            gpointer  data,
+@@ -1086,7 +1102,7 @@
+                       gpointer      data,
+                       GCompareFunc  func)
+ {
+-  return g_list_insert_sorted_real (list, data, (GFunc) func, NULL);
++  return g_list_insert_sorted_real (list, data, (GFunc) compare_func_adapter, (gpointer) func);
+ }
+ 
+ /**
+@@ -1217,7 +1233,7 @@
+ g_list_sort (GList        *list,
+              GCompareFunc  compare_func)
+ {
+-  return g_list_sort_real (list, (GFunc) compare_func, NULL);
++  return g_list_sort_real (list, (GFunc) compare_func_adapter, (gpointer) compare_func);
+ }
+ 
+ /**
+diff -ru a/glib/gqueue.c b/glib/gqueue.c
+--- a/glib/gqueue.c
++++ b/glib/gqueue.c
+@@ -81,7 +81,11 @@
+ g_queue_free_full (GQueue        *queue,
+                   GDestroyNotify  free_func)
+ {
+-  g_queue_foreach (queue, (GFunc) free_func, NULL);
++  GList *l;
++
++  /* (Pharo) free_func takes one argument: called through a GFunc, it would trap in WebAssembly */
++  for (l = queue->head; l != NULL; l = l->next)
++    free_func (l->data);
+   g_queue_free (queue);
+ }
+ 
+@@ -140,7 +144,13 @@
+   g_return_if_fail (queue != NULL);
+ 
+   if (free_func != NULL)
+-    g_queue_foreach (queue, (GFunc) free_func, NULL);
++    {
++      GList *l;
++
++      /* (Pharo) as in g_queue_free_full () */
++      for (l = queue->head; l != NULL; l = l->next)
++        free_func (l->data);
++    }
+ 
+   g_queue_clear (queue);
+ }
+diff -ru a/glib/gslist.c b/glib/gslist.c
+--- a/glib/gslist.c
++++ b/glib/gslist.c
+@@ -146,7 +146,11 @@
+ g_slist_free_full (GSList         *list,
+ 		   GDestroyNotify  free_func)
+ {
+-  g_slist_foreach (list, (GFunc) free_func, NULL);
++  GSList *l;
++
++  /* (Pharo) free_func takes one argument: called through a GFunc, it would trap in WebAssembly */
++  for (l = list; l != NULL; l = l->next)
++    free_func (l->data);
+   g_slist_free (list);
+ }
+ 
+@@ -839,6 +843,18 @@
+     }
+ }
+ 
++
++/* (Pharo) A GCompareFunc called as a GCompareDataFunc, with the function
++ * as its data: WebAssembly traps on a call through a function pointer of
++ * another type (the extra argument). */
++static gint
++compare_func_adapter (gconstpointer a,
++                      gconstpointer b,
++                      gpointer      compare_func)
++{
++  return ((GCompareFunc) compare_func) (a, b);
++}
++
+ static GSList*
+ g_slist_insert_sorted_real (GSList   *list,
+                             gpointer  data,
+@@ -911,7 +927,7 @@
+                        gpointer      data,
+                        GCompareFunc  func)
+ {
+-  return g_slist_insert_sorted_real (list, data, (GFunc) func, NULL);
++  return g_slist_insert_sorted_real (list, data, (GFunc) compare_func_adapter, (gpointer) func);
+ }
+ 
+ /**
+@@ -1018,7 +1034,7 @@
+ g_slist_sort (GSList       *list,
+               GCompareFunc  compare_func)
+ {
+-  return g_slist_sort_real (list, (GFunc) compare_func, NULL);
++  return g_slist_sort_real (list, (GFunc) compare_func_adapter, (gpointer) compare_func);
+ }
+ 
+ /**
+diff -ru a/glib/gtree.c b/glib/gtree.c
+--- a/glib/gtree.c
++++ b/glib/gtree.c
+@@ -119,6 +119,18 @@
+   return node;
+ }
+ 
++
++/* (Pharo) A GCompareFunc called as a GCompareDataFunc, with the function
++ * as its data: WebAssembly traps on a call through a function pointer of
++ * another type (the extra argument). */
++static gint
++compare_func_adapter (gconstpointer a,
++                      gconstpointer b,
++                      gpointer      compare_func)
++{
++  return ((GCompareFunc) compare_func) (a, b);
++}
++
+ /**
+  * g_tree_new: (constructor)
+  * @key_compare_func: the function used to order the nodes in the #GTree.
+@@ -136,7 +148,7 @@
+ {
+   g_return_val_if_fail (key_compare_func != NULL, NULL);
+ 
+-  return g_tree_new_full ((GCompareDataFunc) key_compare_func, NULL,
++  return g_tree_new_full (compare_func_adapter, (gpointer) key_compare_func,
+                           NULL, NULL);
+ }
+ 
+diff -ru a/gobject/gbinding.c b/gobject/gbinding.c
+--- a/gobject/gbinding.c
++++ b/gobject/gbinding.c
+@@ -178,6 +178,15 @@
+   g_atomic_rc_box_release_full (context, (GDestroyNotify) binding_context_clear);
+ }
+ 
++/* (Pharo) a GClosureNotify takes two arguments: binding_context_unref, cast
++ * to one, would trap in WebAssembly */
++static void
++binding_context_closure_unref (gpointer  context,
++                               GClosure *closure)
++{
++  binding_context_unref (context);
++}
++
+ /* Reference counting for the transform functions to ensure that they're always
+  * valid while making use of them in the property notify callbacks.
+  *
+@@ -826,7 +835,7 @@
+   source_property_detail = g_quark_from_string (binding->source_property);
+   source_notify_closure = g_cclosure_new (G_CALLBACK (on_source_notify),
+                                           binding_context_ref (binding->context),
+-                                          (GClosureNotify) binding_context_unref);
++                                          binding_context_closure_unref);
+   binding->source_notify = g_signal_connect_closure_by_id (source,
+                                                            gobject_notify_signal_id,
+                                                            source_property_detail,
+@@ -843,7 +852,7 @@
+       target_property_detail = g_quark_from_string (binding->target_property);
+       target_notify_closure = g_cclosure_new (G_CALLBACK (on_target_notify),
+                                               binding_context_ref (binding->context),
+-                                              (GClosureNotify) binding_context_unref);
++                                              binding_context_closure_unref);
+       binding->target_notify = g_signal_connect_closure_by_id (target,
+                                                                gobject_notify_signal_id,
+                                                                target_property_detail,
+diff -ru a/gobject/gobject.c b/gobject/gobject.c
+--- a/gobject/gobject.c
++++ b/gobject/gobject.c
+@@ -4077,6 +4077,29 @@
+     }
+ }
+ 
++/* (Pharo) GWeakNotify and GClosureNotify take two arguments: the one-argument
++ * functions they were cast from would trap in WebAssembly */
++static void
++nullify_weak_pointer (gpointer  data,
++                      GObject  *where_the_object_was)
++{
++  g_nullify_pointer (data);
++}
++
++static void
++closure_object_ref (gpointer  data,
++                    GClosure *closure)
++{
++  g_object_ref (data);
++}
++
++static void
++closure_object_unref (gpointer  data,
++                      GClosure *closure)
++{
++  g_object_unref (data);
++}
++
+ /**
+  * g_object_add_weak_pointer: (skip)
+  * @object: The object that should be weak referenced.
+@@ -4101,7 +4124,7 @@
+   g_return_if_fail (weak_pointer_location != NULL);
+ 
+   g_object_weak_ref (object, 
+-                     (GWeakNotify) g_nullify_pointer, 
++                     nullify_weak_pointer, 
+                      weak_pointer_location);
+ }
+ 
+@@ -4123,7 +4146,7 @@
+   g_return_if_fail (weak_pointer_location != NULL);
+ 
+   g_object_weak_unref (object, 
+-                       (GWeakNotify) g_nullify_pointer, 
++                       nullify_weak_pointer, 
+                        weak_pointer_location);
+ }
+ 
+@@ -5768,8 +5791,8 @@
+ 
+   g_closure_add_invalidate_notifier (closure, object, object_remove_closure);
+   g_closure_add_marshal_guards (closure,
+-                                object, (GClosureNotify) g_object_ref,
+-                                object, (GClosureNotify) g_object_unref);
++                                object, closure_object_ref,
++                                object, closure_object_unref);
+ 
+   _g_datalist_id_update_atomic (&object->qdata,
+                                 quark_closure_array,
+diff -ru a/gobject/gsourceclosure.c b/gobject/gsourceclosure.c
+--- a/gobject/gsourceclosure.c
++++ b/gobject/gsourceclosure.c
+@@ -222,9 +222,23 @@
+   *data = cb_data;
+ }
+ 
++/* (Pharo) g_closure_ref answers the closure: through a void (*) (gpointer)
++ * it would trap in WebAssembly */
++static void
++source_closure_ref (gpointer closure)
++{
++  g_closure_ref (closure);
++}
++
++static void
++source_closure_unref (gpointer closure)
++{
++  g_closure_unref (closure);
++}
++
+ static GSourceCallbackFuncs closure_callback_funcs = {
+-  (void (*) (gpointer)) g_closure_ref,
+-  (void (*) (gpointer)) g_closure_unref,
++  source_closure_ref,
++  source_closure_unref,
+   closure_callback_get
+ };
+ 
+diff -ru a/gobject/gtypemodule.c b/gobject/gtypemodule.c
+--- a/gobject/gtypemodule.c
++++ b/gobject/gtypemodule.c
+@@ -123,7 +123,8 @@
+ }
+ 
+ static void
+-g_type_module_class_init (GTypeModuleClass *class)
++g_type_module_class_init (GTypeModuleClass *class,
++                          gpointer          class_data)
+ {
+   GObjectClass *gobject_class = G_OBJECT_CLASS (class);
+ 

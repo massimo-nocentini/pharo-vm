@@ -26,6 +26,14 @@
 #                              synchronous XHR (src/emscripten/gitSupport.c),
 #                              for http:// and https:// remotes behind a CORS
 #                              proxy
+#     PHARO_WASM_HAS_PANGO     GLib, GObject, GIO, FriBidi, HarfBuzz, expat,
+#                              fontconfig, Pango and PangoCairo (pangoft2),
+#                              for libpangocairo.st (PangoLibrary...), on
+#                              cairo with fontconfig, and the DejaVu fonts
+#     PHARO_WASM_HAS_POPPLER   Poppler and poppler-glib, with libjpeg-turbo,
+#                              for libpoppler.st (PopplerLibrary), on the
+#                              GLib and fontconfig of Pango, and cairo's PDF
+#                              surface
 #
 # Every library is an FFI library, so none is built without the FFI.  One
 # STATUS line gives the result.
@@ -80,6 +88,14 @@ option(WASM_CAIRO_PDF "Build the PDF, PostScript and script surfaces of cairo (w
 # TLS and sockets.
 option(WASM_LIBGIT2 "Build libgit2, for Iceberg (needs WASM_FFI)" OFF)
 option(WASM_LIBGIT2_HTTP "Give libgit2 its smart-HTTP transport over XHR (with libgit2)" ON)
+# Pango and Poppler (docs/PangoPoppler.md), the libraries of the native
+# VMs' cairo stack, at the same versions: off by default, since they cost
+# several MB of wasm, and the DejaVu fonts that Pango and Poppler draw with
+# (docs/WebAssembly.md, The libraries).  Pango needs cairo, which it then
+# builds with fontconfig; Poppler needs Pango's GLib and fontconfig, and
+# turns on cairo's PDF surface (the bindings write PDFs with it).
+option(WASM_PANGO "Build GLib, HarfBuzz, fontconfig, Pango and PangoCairo, for libpangocairo.st (needs cairo)" OFF)
+option(WASM_POPPLER "Build Poppler and poppler-glib, for libpoppler.st (needs WASM_PANGO)" OFF)
 # (WASM_SDL2 is gone: see above)
 if(DEFINED WASM_SDL2)
     if(WASM_SDL2)
@@ -130,13 +146,45 @@ if(WASM_FFI)
         set(PHARO_WASM_HAS_CAIRO OFF)
         set(PHARO_WASM_CAIRO_STATUS "cairo OFF")
     endif()
-    if(PHARO_WASM_HAS_CAIRO AND WASM_CAIRO_PDF)
+    if(WASM_PANGO)
+        if(NOT PHARO_WASM_HAS_CAIRO)
+            message(FATAL_ERROR "WASM_PANGO=ON needs cairo, which ${PHARO_WASM_CAIRO_STATUS}: PangoCairo draws "
+                "with the cairo of Athens.  Give WASM_FREETYPE=ON and WASM_CAIRO=AUTO or ON, or WASM_PANGO=OFF")
+        endif()
+        set(PHARO_WASM_HAS_PANGO ON)
+        set(PHARO_WASM_PANGO_STATUS "pango ON")
+    else()
+        set(PHARO_WASM_HAS_PANGO OFF)
+        set(PHARO_WASM_PANGO_STATUS "pango OFF")
+    endif()
+    if(WASM_POPPLER)
+        if(NOT PHARO_WASM_HAS_PANGO)
+            message(FATAL_ERROR "WASM_POPPLER=ON needs WASM_PANGO=ON: poppler-glib runs on the GLib, and Poppler "
+                "finds its fonts with the fontconfig, that WASM_PANGO builds")
+        endif()
+        set(PHARO_WASM_HAS_POPPLER ON)
+        string(APPEND PHARO_WASM_PANGO_STATUS ", poppler ON")
+    else()
+        set(PHARO_WASM_HAS_POPPLER OFF)
+        string(APPEND PHARO_WASM_PANGO_STATUS ", poppler OFF")
+    endif()
+    if(PHARO_WASM_HAS_CAIRO AND (WASM_CAIRO_PDF OR PHARO_WASM_HAS_POPPLER))
         set(PHARO_WASM_HAS_CAIRO_PDF ON)
-        string(APPEND PHARO_WASM_CAIRO_STATUS ", cairo pdf ON")
+        if(WASM_CAIRO_PDF)
+            string(APPEND PHARO_WASM_CAIRO_STATUS ", cairo pdf ON")
+        else()
+            string(APPEND PHARO_WASM_CAIRO_STATUS ", cairo pdf ON (poppler)")
+        endif()
+        if(PHARO_WASM_HAS_PANGO)
+            string(APPEND PHARO_WASM_CAIRO_STATUS ", cairo fontconfig ON (pango)")
+        endif()
     else()
         set(PHARO_WASM_HAS_CAIRO_PDF OFF)
         if(WASM_CAIRO_PDF)
             string(APPEND PHARO_WASM_CAIRO_STATUS ", cairo pdf OFF (no cairo)")
+        endif()
+        if(PHARO_WASM_HAS_PANGO)
+            string(APPEND PHARO_WASM_CAIRO_STATUS ", cairo fontconfig ON (pango)")
         endif()
     endif()
     if(WASM_LIBGIT2)
@@ -154,7 +202,7 @@ if(WASM_FFI)
         set(PHARO_WASM_LIBGIT2_STATUS "libgit2 OFF")
     endif()
     message(STATUS "wasm deps: ffi ON, freetype ${PHARO_WASM_HAS_FREETYPE}, ${PHARO_WASM_CAIRO_STATUS}, "
-        "${PHARO_WASM_LIBGIT2_STATUS}")
+        "${PHARO_WASM_LIBGIT2_STATUS}, ${PHARO_WASM_PANGO_STATUS}")
 else()
     set(PHARO_WASM_HAS_FFI OFF)
     set(PHARO_WASM_HAS_FREETYPE OFF)
@@ -162,5 +210,15 @@ else()
     set(PHARO_WASM_HAS_CAIRO_PDF OFF)
     set(PHARO_WASM_HAS_LIBGIT2 OFF)
     set(PHARO_WASM_HAS_LIBGIT2_HTTP OFF)
-    message(STATUS "wasm deps: ffi OFF (WASM_FFI=OFF): no library is built, freetype OFF, cairo OFF, libgit2 OFF")
+    set(PHARO_WASM_HAS_PANGO OFF)
+    set(PHARO_WASM_HAS_POPPLER OFF)
+    if(WASM_PANGO OR WASM_POPPLER)
+        message(FATAL_ERROR "WASM_PANGO and WASM_POPPLER need the FFI, which WASM_FFI=OFF leaves out")
+    endif()
+    message(STATUS "wasm deps: ffi OFF (WASM_FFI=OFF): no library is built, freetype OFF, cairo OFF, libgit2 OFF, pango OFF, poppler OFF")
 endif()
+
+# (in the cache too, for lane 59, which reads the variables of the
+# '# unavailable unless' sections of the FFI symbol lists there)
+set(PHARO_WASM_HAS_CAIRO_PDF "${PHARO_WASM_HAS_CAIRO_PDF}" CACHE INTERNAL
+    "cairo's PDF surface (WASM_CAIRO_PDF, or WASM_POPPLER): cmake/emscripten/ffi/symbols/cairo.txt")

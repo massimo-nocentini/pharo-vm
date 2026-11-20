@@ -4,9 +4,8 @@
 # libpoppler.st; docs/PangoPoppler.md).  A name per line, '#' starting a
 # comment.  scripts/cairo-stack/check.sh asserts that the native stack's
 # library exports every name; a binding that calls another function adds it
-# here first.  The Emscripten VM has no Poppler yet:
-# cmake/emscripten/ffiLibraries.cmake does not read this list, the input of
-# that round.
+# here first.  The Emscripten VM
+# builds its table from it with WASM_POPPLER (cmake/emscripten/ffiLibraries.cmake).
 #
 poppler_get_version
 poppler_document_new_from_bytes

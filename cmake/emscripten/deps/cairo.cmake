@@ -26,7 +26,15 @@
 #         surfaces as well (cairo_pdf_surface_create, which the image binds
 #         for AthensCairoPDFSurface)
 #
-# Both are meson's but for two lines, which leave out cairo's renderers of
+#     config-fc.h, cairo-features-fc.h
+#     config-pdf-fc.h, cairo-features-pdf-fc.h
+#         the same two with fontconfig (WASM_PANGO: PangoCairo's font map
+#         makes cairo's font faces from fontconfig patterns, and the toy
+#         fonts of cairo_select_font_face are found by fontconfig), which
+#         scripts/wasm-deps/regen-text-stack.sh makes; their sources are
+#         the same
+#
+# All are meson's but for two lines, which leave out cairo's renderers of
 # COLR v1 and OT-SVG colour glyphs: the VM's FreeType has neither.  The one
 # chosen is copied into the build tree as config.h, which only cairo's
 # sources include, and cairo-features.h, which cairo.h includes.
@@ -84,6 +92,9 @@ if(PHARO_WASM_HAS_CAIRO_PDF)
 else()
     set(variant "")
 endif()
+if(PHARO_WASM_HAS_PANGO)
+    string(APPEND variant "-fc")
+endif()
 configure_file("${CMAKE_CURRENT_LIST_DIR}/cairo/config${variant}.h" "${dir}/config/config.h" COPYONLY)
 configure_file("${CMAKE_CURRENT_LIST_DIR}/cairo/cairo-features${variant}.h" "${dir}/include/cairo-features.h" COPYONLY)
 set(sources "")
@@ -123,4 +134,8 @@ target_compile_definitions(pharo_cairo PRIVATE
 target_compile_options(pharo_cairo PRIVATE
     -std=gnu11 -fno-strict-aliasing -fno-common -fvisibility=hidden)
 target_link_libraries(pharo_cairo PUBLIC pharo_pixman pharo_png pharo_freetype)
+if(PHARO_WASM_HAS_PANGO)
+    # (pharo_fontconfig: cmake/emscripten/deps/pango.cmake)
+    target_link_libraries(pharo_cairo PUBLIC pharo_fontconfig)
+endif()
 pharo_wasm_dep_flags(pharo_cairo -O2)

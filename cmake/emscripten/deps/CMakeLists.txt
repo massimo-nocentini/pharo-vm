@@ -16,6 +16,12 @@
 #       zlib.cmake      pharo_zlib (for libpng, and the PDF surface)
 #     libgit2.cmake   pharo_git2, libgit2 for Iceberg (PHARO_WASM_HAS_LIBGIT2),
 #                     on the same pharo_zlib
+#     pango.cmake     pharo_glib, pharo_gobject, pharo_harfbuzz, pharo_pango...
+#                     for libpangocairo.st (PHARO_WASM_HAS_PANGO), on cairo
+#                     with fontconfig, from the sources that harvested.cmake
+#                     builds
+#     poppler.cmake   pharo_poppler_glib for libpoppler.st
+#                     (PHARO_WASM_HAS_POPPLER), on the same GLib
 #
 # The libraries are compiled with flags of their own, not with those of the
 # VM: a directory starts with what its parent set, and CMakeLists.txt and
@@ -33,8 +39,11 @@
 
 set_directory_properties(PROPERTIES COMPILE_OPTIONS "" COMPILE_DEFINITIONS "")
 set(CMAKE_C_FLAGS "-m64 ${PHARO_WASM_SJLJ_C_FLAGS}")
+# (HarfBuzz and Poppler are C++: the initial cache gives no -m64 to C++)
+set(CMAKE_CXX_FLAGS "-m64 ${PHARO_WASM_SJLJ_C_FLAGS}")
 foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
     set(CMAKE_C_FLAGS_${config} "")
+    set(CMAKE_CXX_FLAGS_${config} "")
 endforeach()
 
 # pharo_wasm_dep_flags(<target> <optimisation>): the flags of the library
@@ -60,4 +69,10 @@ if(PHARO_WASM_HAS_CAIRO)
 endif()
 if(PHARO_WASM_HAS_LIBGIT2)
     include(${CMAKE_CURRENT_LIST_DIR}/libgit2.cmake)
+endif()
+if(PHARO_WASM_HAS_PANGO)
+    include(${CMAKE_CURRENT_LIST_DIR}/pango.cmake)
+endif()
+if(PHARO_WASM_HAS_POPPLER)
+    include(${CMAKE_CURRENT_LIST_DIR}/poppler.cmake)
 endif()

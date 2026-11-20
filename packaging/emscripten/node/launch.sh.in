@@ -1,6 +1,12 @@
 #!/bin/sh
 # Run the Pharo VM for WebAssembly (pharo.js, next to this script) with node.
 # NODE selects node, and NODE_OPTIONS_WASM gives it options, such as
-# --stack-size=900 or --liftoff.
+# --stack-size=900 or --liftoff.  A VM with Pango (WASM_PANGO) has its fonts
+# in fonts/ next to it, with their fonts.conf, which fontconfig reads from
+# FONTCONFIG_FILE unless the environment gives another one.
 d=$(dirname "$0")
+if [ -z "${FONTCONFIG_FILE:-}" ] && [ -f "$d/fonts/fonts.conf" ]; then
+    FONTCONFIG_FILE=$(cd "$d/fonts" && pwd)/fonts.conf
+    export FONTCONFIG_FILE
+fi
 exec "${NODE:-node}" ${NODE_OPTIONS_WASM} "$d/pharo.js" "$@"

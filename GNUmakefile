@@ -99,6 +99,10 @@ WASM_CAIRO_PDF ?= OFF
 # libgit2, for Iceberg (opt-in), and its smart-HTTP transport over XHR
 WASM_LIBGIT2 ?= OFF
 WASM_LIBGIT2_HTTP ?= ON
+# Pango (GLib, HarfBuzz, fontconfig, PangoCairo) and Poppler (poppler-glib),
+# for libpangocairo.st and libpoppler.st (opt-in; Poppler needs Pango)
+WASM_PANGO ?= OFF
+WASM_POPPLER ?= OFF
 # offline builds: the image zip (the pinned Pharo 12 when empty, or another
 # image), a directory holding the pinned archives of the libraries
 # (cmake/emscripten/deps/fetch.cmake), the generated sources (a directory
@@ -376,6 +380,8 @@ WASM_CMAKE_FLAGS = \
   -DWASM_CAIRO_PDF=$(WASM_CAIRO_PDF) \
   -DWASM_LIBGIT2=$(WASM_LIBGIT2) \
   -DWASM_LIBGIT2_HTTP=$(WASM_LIBGIT2_HTTP) \
+  -DWASM_PANGO=$(WASM_PANGO) \
+  -DWASM_POPPLER=$(WASM_POPPLER) \
   -UWASM_SDL2 \
   "-DWASM_IMAGE_ZIP=$(IMAGE_ZIP)" \
   "-DWASM_IMAGE_ID=$(WASM_IMAGE_ID)" \
@@ -429,6 +435,8 @@ $(W)/config.make: FORCE | $(W)/.make-wasm
 	  echo "WASM_CAIRO_PDF = $(WASM_CAIRO_PDF)"; \
 	  echo "WASM_LIBGIT2 = $(WASM_LIBGIT2)"; \
 	  echo "WASM_LIBGIT2_HTTP = $(WASM_LIBGIT2_HTTP)"; \
+	  echo "WASM_PANGO = $(WASM_PANGO)"; \
+	  echo "WASM_POPPLER = $(WASM_POPPLER)"; \
 	  echo "WASM_IMAGE_ZIP = $(IMAGE_ZIP)"; \
 	  echo "WASM_IMAGE_ID = $(WASM_IMAGE_ID)"; \
 	  echo "WASM_EXTRA_IMAGES = $(EXTRA_IMAGES)"; \

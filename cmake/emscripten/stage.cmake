@@ -255,19 +255,39 @@ file(
 )
 set(PHARO_WASM_LAUNCHER ${CMAKE_CURRENT_BINARY_DIR}/build/packaging/emscripten/${VM_EXECUTABLE_NAME})
 
+# The fonts of Pango and Poppler (WASM_PANGO: cmake/emscripten/deps/pango.cmake),
+# in node/fonts, where the launcher points FONTCONFIG_FILE (the web VM has
+# them in its file system); a node/fonts of a build with Pango goes when it
+# is off.
+set(PHARO_WASM_NODE_FONTS "")
+set(PHARO_WASM_NODE_FONT_COMMANDS "")
+if(PHARO_WASM_HAS_PANGO)
+    file(GLOB PHARO_WASM_FONT_SOURCES "${PHARO_WASM_FONTS_DIR}/*")
+    foreach(PHARO_WASM_FONT IN LISTS PHARO_WASM_FONT_SOURCES)
+        get_filename_component(PHARO_WASM_FONT_NAME "${PHARO_WASM_FONT}" NAME)
+        list(APPEND PHARO_WASM_NODE_FONTS "${PHARO_WASM_NODE_DIR}/fonts/${PHARO_WASM_FONT_NAME}")
+    endforeach()
+    set(PHARO_WASM_NODE_FONT_COMMANDS
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${PHARO_WASM_NODE_DIR}/fonts"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${PHARO_WASM_FONTS_DIR}" "${PHARO_WASM_NODE_DIR}/fonts")
+else()
+    file(REMOVE_RECURSE "${PHARO_WASM_NODE_DIR}/fonts")
+endif()
+
 add_custom_command(
     OUTPUT "${PHARO_WASM_NODE_DIR}/${VM_EXECUTABLE_NAME}.js"
            "${PHARO_WASM_NODE_DIR}/${VM_EXECUTABLE_NAME}.wasm"
            "${PHARO_WASM_NODE_DIR}/${VM_EXECUTABLE_NAME}"
            "${PHARO_WASM_NODE_DIR}/THIRD-PARTY-NOTICES.txt"
-           ${PHARO_WASM_NODE_PLACEHOLDERS}
+           ${PHARO_WASM_NODE_PLACEHOLDERS} ${PHARO_WASM_NODE_FONTS}
     COMMAND ${CMAKE_COMMAND} -E make_directory "${PHARO_WASM_NODE_DIR}"
     COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:${VM_EXECUTABLE_NAME}>"
             "$<TARGET_FILE_DIR:${VM_EXECUTABLE_NAME}>/${VM_EXECUTABLE_NAME}.wasm"
             "${PHARO_WASM_LAUNCHER}" "${PHARO_WASM_NOTICES_FILE}" "${PHARO_WASM_NODE_DIR}"
     ${PHARO_WASM_NODE_PLACEHOLDER_COMMANDS}
+    ${PHARO_WASM_NODE_FONT_COMMANDS}
     DEPENDS ${VM_EXECUTABLE_NAME} "${PHARO_WASM_LAUNCHER}" "${PHARO_WASM_NOTICES_FILE}"
-            "${PHARO_WASM_FFI_FILES_LIST}" "${PHARO_WASM_FFI_EMPTY_FILE}"
+            "${PHARO_WASM_FFI_FILES_LIST}" "${PHARO_WASM_FFI_EMPTY_FILE}" ${PHARO_WASM_FONT_SOURCES}
     COMMENT "Staging ${PHARO_WASM_NODE_DIR}"
     VERBATIM)
 add_custom_target(wasm-node-stage ALL
@@ -275,7 +295,7 @@ add_custom_target(wasm-node-stage ALL
             "${PHARO_WASM_NODE_DIR}/${VM_EXECUTABLE_NAME}.wasm"
             "${PHARO_WASM_NODE_DIR}/${VM_EXECUTABLE_NAME}"
             "${PHARO_WASM_NODE_DIR}/THIRD-PARTY-NOTICES.txt"
-            ${PHARO_WASM_NODE_PLACEHOLDERS})
+            ${PHARO_WASM_NODE_PLACEHOLDERS} ${PHARO_WASM_NODE_FONTS})
 
 #
 # web/
