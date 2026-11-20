@@ -533,9 +533,9 @@ wasm-check: wasm
 # the world, which a build without one (WASM_WORLD=OFF, or no host Pharo)
 # skips, as lane 80 does, ffi.spec.mjs the FFI, which a build without it
 # (WASM_FFI=OFF) skips, git.spec.mjs libgit2, which only a build with
-# WASM_LIBGIT2=ON has, and pango.spec.mjs Pango and Poppler (WASM_PANGO,
-# WASM_POPPLER) and an image of the site with their bindings, the batteries
-# image (it skips itself without them).
+# WASM_LIBGIT2=ON has, and pango.spec.mjs Pango (WASM_PANGO), with Poppler
+# and an image of the site with their bindings, the batteries image (it
+# skips itself without them).
 # web/manifest.json says what the build has.
 wasm-check-browser: wasm
 	@if test -z "$$PLAYWRIGHT_MODULE" && ! (cd $(SRCDIR)/tests/wasm/lib && \
@@ -565,7 +565,12 @@ wasm-check-browser: wasm
 	else \
 	  echo "skip git.spec.mjs: $(W)/web/manifest.json has no libgit2 (WASM_LIBGIT2=OFF, the default, or WASM_FFI=OFF)"; \
 	fi
-	$(NODE) $(SRCDIR)/tests/wasm/pango.spec.mjs $(W)/web
+	@if grep -q '"libpango-1.0.so.0"' $(W)/web/manifest.json; then \
+	  echo "$(NODE) $(SRCDIR)/tests/wasm/pango.spec.mjs $(W)/web"; \
+	  $(NODE) $(SRCDIR)/tests/wasm/pango.spec.mjs $(W)/web; \
+	else \
+	  echo "skip pango.spec.mjs: $(W)/web/manifest.json has no Pango (WASM_PANGO=OFF, the default)"; \
+	fi
 
 wasm-serve: wasm
 	$(NODE) $(SRCDIR)/packaging/emscripten/tools/serve.mjs $(W)/web $(WASM_PORT)

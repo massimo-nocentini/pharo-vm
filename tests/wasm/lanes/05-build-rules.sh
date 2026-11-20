@@ -32,7 +32,8 @@
 #   - wasm-check-browser fails without Playwright, runs page.spec.mjs and
 #     then notebook.spec.mjs on every build, world.spec.mjs only for a build
 #     with the image of the world, ffi.spec.mjs only for one with the FFI,
-#     and git.spec.mjs only for one with libgit2;
+#     git.spec.mjs only for one with libgit2, and pango.spec.mjs only for
+#     one with Pango (the placeholder libpango-1.0.so.0 in its manifest);
 #   - a class of OSWindow-Web that comes, goes or changes prepares the image
 #     of the world again (and one that goes breaks nothing), and so does an
 #     edit of web-libgit.st, which the preparation evaluates, and nothing
@@ -215,6 +216,7 @@ echo 'console.log("notebook.spec.mjs " + process.argv[2])' >"$src/tests/wasm/not
 echo 'console.log("world.spec.mjs " + process.argv[2])' >"$src/tests/wasm/world.spec.mjs"
 echo 'console.log("ffi.spec.mjs " + process.argv[2])' >"$src/tests/wasm/ffi.spec.mjs"
 echo 'console.log("git.spec.mjs " + process.argv[2])' >"$src/tests/wasm/git.spec.mjs"
+echo 'console.log("pango.spec.mjs " + process.argv[2])' >"$src/tests/wasm/pango.spec.mjs"
 mkdir -p "$T/vmmaker"
 : >"$T/vmmaker/VMMaker.image"
 
@@ -541,7 +543,14 @@ fi
 step="wasm-check-browser, with the image of the world, the FFI and libgit2"
 printf '{\n  "world": true,\n  "ffi": true,\n  "git": true\n}\n' >"$W/web/manifest.json"
 PLAYWRIGHT_MODULE=$T/playwright wmake -o wasm wasm-check-browser
-for spec in page notebook world ffi git; do
+if grep -q "^pango.spec.mjs" "$T/make.out" || ! grep -q "^skip pango.spec.mjs" "$T/make.out"; then
+    cat "$T/make.out"
+    fail "$step: pango.spec.mjs ran, or no skip was reported"
+fi
+step="wasm-check-browser, with the image of the world, the FFI, libgit2 and Pango"
+printf '{\n  "world": true,\n  "ffi": true,\n  "git": true,\n  "libraries": [\n    "libcairo.so.2",\n    "libpango-1.0.so.0"\n  ]\n}\n' >"$W/web/manifest.json"
+PLAYWRIGHT_MODULE=$T/playwright wmake -o wasm wasm-check-browser
+for spec in page notebook world ffi git pango; do
     grep -q "^$spec.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: $spec.spec.mjs did not run"; }
 done
 if grep -q "^skip " "$T/make.out"; then cat "$T/make.out"; fail "$step: a spec was skipped"; fi
