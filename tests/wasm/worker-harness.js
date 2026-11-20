@@ -418,8 +418,12 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       const stalled = await settle();
       B.alive();
       assert(!/#done/.test(B.out), 'stalled before the end');
-      assert(stalled >= (1 << 20) && stalled < (1 << 20) + 600000,
-             'stalled just above 1 MiB unacked (' + stalled + ' chars)');
+      // The worker pauses at the end of the slice in which the output went
+      // over 1 MiB: the overshoot is what one slice writes, which grows with
+      // the speed of the machine (618 KB on a runner at 725M bytecodes/s).
+      // The acks below need only stalled >= 1 MiB.
+      assert(stalled >= (1 << 20) && stalled < (1 << 20) + (2 << 20),
+             'stalled above 1 MiB unacked, within a slice of output (' + stalled + ' chars)');
       // 600 KiB still unacked: still paused
       B.post({ type: 'ack', chars: stalled - 600 * 1024 });
       await sleep(600);
