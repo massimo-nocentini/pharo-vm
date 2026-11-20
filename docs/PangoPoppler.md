@@ -4,8 +4,8 @@ The native VMs of this fork carry, next to the cairo that Athens uses, **Pango 1
 
 | | Linux x86_64, aarch64 | macOS x86_64, arm64 | Windows x86_64, ARM64 | WebAssembly |
 |---|---|---|---|---|
-| Pango, PangoCairo | built from the pinned archives, fontconfig and FreeType fonts | built from the pinned archives, CoreText fonts | MSYS2's packages | — |
-| Poppler, poppler-glib | built from the pinned archive | built from the pinned archive | built from the pinned archive against MSYS2's packages | — |
+| Pango, PangoCairo | built from the pinned archives, fontconfig and FreeType fonts | built from the pinned archives, CoreText fonts | MSYS2's packages | built from the pinned archives with `WASM_PANGO=ON`, fontconfig and FreeType, the DejaVu fonts of the VM |
+| Poppler, poppler-glib | built from the pinned archive | built from the pinned archive | built from the pinned archive against MSYS2's packages | built from the pinned archive with `WASM_POPPLER=ON` |
 
 ## The features
 
@@ -14,7 +14,7 @@ Two options of the VM's CMake, both `ON` by default and independent of each othe
 - `-DFEATURE_LIB_PANGO=OFF`: no GLib, FriBidi, HarfBuzz, Pango or PangoCairo in the VM (unless Poppler needs GLib);
 - `-DFEATURE_LIB_POPPLER=OFF`: no Poppler and no libjpeg-turbo: **a VM without GPL code** (see [Licence](#licence)).
 
-`FEATURE_LIB_CAIRO=OFF` turns both off (`cairo stack: FEATURE_LIB_PANGO and FEATURE_LIB_POPPLER off (FEATURE_LIB_CAIRO is off)`), and the WebAssembly VM has neither (`cmake/Emscripten.cache.cmake`). The configure prints the features it bundles (`cairo stack: features pango poppler`), the bundle's `CAIRO-STACK.txt` names them (`Bundled features: cairo freetype pango poppler`), and `scripts/cairo-stack/build.sh --features` builds a stack with only some of them. The features need more tools than cairo alone (a C++ compiler, python3, cmake ≥ 3.28, on Linux `g++-13`, and with Poppler NASM on Linux x86_64 and gperf on macOS): [docs/CairoStack.md, "Tools"](CairoStack.md#tools).
+`FEATURE_LIB_CAIRO=OFF` turns both off (`cairo stack: FEATURE_LIB_PANGO and FEATURE_LIB_POPPLER off (FEATURE_LIB_CAIRO is off)`). The WebAssembly VM has neither feature (`cmake/Emscripten.cache.cmake`), but options of its own, `WASM_PANGO` and `WASM_POPPLER`, both off by default, which link the same libraries into it: see [WebAssembly](#webassembly). The configure prints the features it bundles (`cairo stack: features pango poppler`), the bundle's `CAIRO-STACK.txt` names them (`Bundled features: cairo freetype pango poppler`), and `scripts/cairo-stack/build.sh --features` builds a stack with only some of them. The features need more tools than cairo alone (a C++ compiler, python3, cmake ≥ 3.28, on Linux `g++-13`, and with Poppler NASM on Linux x86_64 and gperf on macOS): [docs/CairoStack.md, "Tools"](CairoStack.md#tools).
 
 On Linux, Poppler needs the system's libstdc++ with `GLIBCXX_3.4.32` (GCC 13's or later), as the whole stack needs glibc 2.38: Ubuntu 24.04+, Debian 13+, Fedora 39+, RHEL 10.
 
@@ -47,9 +47,9 @@ Both work on Pharo 12, 13, 14 and 15; their READMEs have the API, the memory and
 
 `cmake/emscripten/ffi/symbols/` has one file per library with the exact list of functions the bindings call, one name per line: `glib.txt`, `gobject.txt`, `harfbuzz.txt` (`hb_version_atleast`, `hb_version_string`: the instance check), `pango.txt`, `pangocairo.txt` and `poppler-glib.txt`, next to `cairo.txt`. They are the contract between this repository and the bindings:
 
-- `scripts/cairo-stack/check.sh` asserts that each library of a stack or bundle exports every name of its list (on Windows, the DLLs of `libglib-2.0-0`, `libgobject-2.0-0`, `libharfbuzz-0`, `libpango-1.0-0`, `libpangocairo-1.0-0` and `libpoppler-glib-8`). The cairo functions that the bindings and their tests use beyond `cairo.txt` (PDF surfaces, font options, `cairo_surface_set_mime_data`...) are the `extra_cairo_symbols` of `check.sh`: `cairo.txt` feeds the wasm registry and is left as it is.
+- `scripts/cairo-stack/check.sh` asserts that each library of a stack or bundle exports every name of its list (on Windows, the DLLs of `libglib-2.0-0`, `libgobject-2.0-0`, `libharfbuzz-0`, `libpango-1.0-0`, `libpangocairo-1.0-0` and `libpoppler-glib-8`). The cairo functions that the bindings and their tests use beyond `cairo.txt` (PDF surfaces, font options, `cairo_surface_set_mime_data`...) are the `extra_cairo_symbols` of `check.sh`; `cairo.txt`, which feeds the wasm registry, has those that the WebAssembly VM's Pango and Poppler need (`cairo_set_source_surface`, `cairo_surface_set_mime_data`, and the PDF surface's functions when cairo has it).
 - A binding that calls a new function adds it to the list first; the stack's check then proves that every VM exports it.
-- Nothing reads these lists in the wasm build yet: they are the input of a future wasm round (see [Deferred](#deferred)).
+- `cmake/emscripten/ffiLibraries.cmake` makes the tables of the registry of the WebAssembly VM from them, with `WASM_PANGO` and `WASM_POPPLER` ([WebAssembly](#webassembly)): a function the lists lack is missing there. The extra cairo functions of the bindings are in `cairo.txt` too, for that reason.
 
 ## One GLib per process
 
@@ -98,9 +98,13 @@ Poppler is built without network, signature, colour-management, JPEG 2000 and TI
 
 GLib, Pango and FriBidi are under the LGPL, shared and replaceable; HarfBuzz, PCRE2, libffi and libjpeg-turbo under permissive licences. Both binding repositories are MIT.
 
+## WebAssembly
+
+The WebAssembly VM links GLib, GObject, GIO, FriBidi, HarfBuzz, expat, fontconfig, Pango, pangoft2 and PangoCairo with `WASM_PANGO=ON`, and libjpeg-turbo, Poppler and poppler-glib with `WASM_POPPLER=ON` (which needs `WASM_PANGO`), at the versions and SHA256 of `cmake/cairo-stack/pins.txt`, with the features of the native Linux stack ([docs/WebAssembly.md, "The libraries"](WebAssembly.md#the-libraries)). There is no `dlopen`: the libraries are linked in, and the registry of the FFI answers the library names of the bindings (`libpango-1.0.so.0` is `pango`, `libpoppler-glib.so.8` is `poppler-glib`...). The instance check of the bindings passes: a library of the registry looks up what it lacks in the libraries it depends on, as `dlsym` does, and the VM has one GLib, GObject, HarfBuzz and cairo. Pango and Poppler draw with the DejaVu fonts (Sans, Serif, Sans Mono) that the VMs carry, through fontconfig, with the generic families and the base-14 fonts of PDF mapped to them. Its own lane, `tests/wasm/lanes/76-pango-poppler.sh`, runs `tests/cairo-stack/ci-text.st` in both VMs, and the bindings' `ci/run.sh` on the node VM with `LIBPANGOCAIRO_DIR` and `LIBPOPPLER_DIR`.
+
 ## Deferred
 
-- **WebAssembly:** the wasm VM has no GLib, Pango or Poppler (both features off; `check-pins.sh` reports their pins as "native only (wasm deferred)"). The symbol lists above are the input of that work.
+- **WebAssembly:** the options are off by default, in the site of GitHub Actions too, until their size is accepted ([docs/WebAssembly.md](WebAssembly.md)); libjpeg-turbo has no SIMD there.
 - Poppler's API beyond documents, pages, sizes, labels, title, author, text and rendering (annotations, forms, links and outline, attachments, find and selection, signatures, layers, media, saving, per-area text, thumbnails); Pango's beyond layouts, font descriptions and attribute lists (attribute objects per run, tab arrays, iterators, index and position mapping, font metrics, the choice of font map, Pango 2).
 - libthai natively and Thai's dictionary on Windows; poppler-data; JPEG 2000, colour management, TIFF and signatures in Poppler.
 - One libffi for the VM and the stack on Linux and macOS (the VM links its own; GLib has a private static copy).

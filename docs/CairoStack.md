@@ -7,7 +7,7 @@ Athens draws through **cairo** and reads its fonts through **FreeType**, which t
 | Linux x86_64, aarch64 | built from the pinned archives (`scripts/cairo-stack/build.sh`) | 1.18.6 | 2.15.0 | 0.46.4 | 1.6.59 | 1.4 (static) | 2.18.4 | 2.10.0 (static) |
 | macOS x86_64, arm64 | the same | 1.18.6 | 2.15.0 | 0.46.4 | 1.6.59 | 1.4 (static) | 2.18.4, Poppler's only | 2.10.0 (static), Poppler's only |
 | Windows x86_64, ARM64 | MSYS2's binary packages, pinned by URL and SHA256 (`scripts/cairo-stack/fetch-msys2.sh`) | 1.18.6 + MSYS2's 2 patches | 2.15.0 | 0.46.4 | 1.6.59 | 1.4 | 2.18.3 | 2.10.0 |
-| WebAssembly | built by CMake from the same archives (`cmake/emscripten/deps/`, `docs/WebAssembly.md`) | 1.18.6 | 2.15.0 | 0.46.4 | 1.6.59 | 1.4 | — | — |
+| WebAssembly | built by CMake from the same archives (`cmake/emscripten/deps/`, `docs/WebAssembly.md`) | 1.18.6 | 2.15.0 | 0.46.4 | 1.6.59 | 1.4 | 2.18.4 with `WASM_PANGO` | 2.10.0 with `WASM_PANGO` |
 
 The features (`FEATURE_LIB_PANGO`, `FEATURE_LIB_POPPLER`; `build.sh --features`):
 
@@ -16,7 +16,7 @@ The features (`FEATURE_LIB_PANGO`, `FEATURE_LIB_POPPLER`; `build.sh --features`)
 | `pango` | GLib 2.90.1 (with PCRE2 10.49 and libffi 3.8.1 static inside), FriBidi 1.0.18, HarfBuzz 15.1.0, Pango 1.58.2 and PangoCairo | built from the pinned archives (macOS: proxy-libintl 0.5 static inside GLib) | MSYS2's packages: the same versions, plus libthai 0.1.30 and libdatrie 0.2.14 |
 | `poppler` | GLib, libjpeg-turbo 3.2.1 (static inside libpoppler), Poppler 26.11.0 (libpoppler and libpoppler-glib, **GPL**) | built from the pinned archives (macOS also expat and fontconfig) | Poppler built from its pinned archive in the MSYS2 shell, against MSYS2's packages (libjpeg-turbo 3.2.1) |
 
-The WebAssembly VM has neither feature (`cmake/Emscripten.cache.cmake` turns both off).
+The WebAssembly VM has neither feature (`cmake/Emscripten.cache.cmake` turns both off), but its own options for the same libraries, `WASM_PANGO` and `WASM_POPPLER` ([docs/WebAssembly.md](WebAssembly.md), The libraries), which build them from these pins.
 
 `cmake/cairo-stack/pins.txt` is the single source of these versions. `check-pins.sh` keeps the wasm pins equal to the native ones, and reports the names that only the native VMs have.
 
@@ -283,7 +283,7 @@ awk '!/^#/ && NF && $1!="mirror" && $1!="native-ahead" && $1!="accepted-behind" 
    ```
 
    A new signer key is a deliberate change of `keys/`. For an unsigned archive, cross-check the hash with a second source: libpng, its files are byte-identical to the GitHub tag archive that MSYS2's PKGBUILD pins; fontconfig, its `.sha256sum`, and a distribution's record if there is one; GLib and Pango, GNOME's `.sha256sum` and MSYS2's PKGBUILD; libffi, FriBidi and HarfBuzz, MSYS2's PKGBUILD. Write the result into the comment line before the pin.
-1. Edit the line in `pins.txt` and, for a library the wasm VM has, the matching `cmake/emscripten/deps/<name>.cmake` (version and SHA256; `WASM_CAIRO_FREETYPE_VERSION` for FreeType). The libraries of the features are native only.
+1. Edit the line in `pins.txt` and, for a library the wasm VM has, the matching `cmake/emscripten/deps/<name>.cmake` (version and SHA256; `WASM_CAIRO_FREETYPE_VERSION` for FreeType). The wasm VM takes the libraries of the features (and expat and fontconfig) from `pins.txt` itself, but compiles the sources harvested from a build of the pinned version: for one of them, run `scripts/wasm-deps/regen-text-stack.sh` (and refresh its patches if they no longer apply), which `check-pins.sh` asks for.
 2. For cairo, pixman or FreeType, regenerate the wasm configuration with `cmake/emscripten/deps/cairo/README` and diff it.
 3. Run `check-pins.sh`, the stack build and `check.sh`, the C lanes of the CairoPlugin, the Smalltalk suites and the wasm lanes 64, 65 and 74; regenerate the lane-65 goldens. For a library of a feature, `check.sh` (the exports of the symbol lists, the summaries, the probe) and `tests/cairo-stack/ci-text.st` on the built VM, and the suites of libpangocairo.st and libpoppler.st.
 4. For cairo, pixman or FreeType, re-measure the round-2 limits of the CairoPlugin.
