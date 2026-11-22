@@ -61,6 +61,9 @@
 #   R9  setjmp is called exactly once, in cm_guarded (src/engine/cmTrack.c),
 #       and no file of the glue or the engine includes cmark-config/private
 #       or a "config.h"
+#   R10 docs/CMark.md describes the line table's CM_CURSORS cursors
+#       (src/engine/cmPrivate.h) by their number, "the last four lines
+#       resolved", and not as one cursor
 #   V   the --cmark tree is the pin: src/cmark-gfm_version.h.in, the
 #       versions 29 and 14 of its CMakeLists.txt, and the SHA256 of the 34
 #       sources, the headers, the CLI and the test files in
@@ -242,6 +245,24 @@ rules() {
         echo "R9: the glue or the engine includes cmark's config.h"
         bad=1
     fi
+    # R10: the docs name as many line cursors as the engine keeps
+    doc=$SRCDIR/../../docs/CMark.md
+    ncur=$(sed -n 's/^enum { CM_CURSORS = \([0-9]*\) };$/\1/p' "$SRCDIR/src/engine/cmPrivate.h")
+    case $ncur in
+    2) wcur=two ;; 3) wcur=three ;; 4) wcur=four ;; 5) wcur=five ;;
+    6) wcur=six ;; 7) wcur=seven ;; 8) wcur=eight ;; *) wcur= ;;
+    esac
+    if test -z "$wcur"; then
+        echo "R10: CM_CURSORS is not an integer from 2 to 8 in cmPrivate.h: '$ncur'"
+        bad=1
+    elif ! test -f "$doc"; then
+        echo "R10: no $doc"
+        bad=1
+    elif ! grep -q "the last $wcur lines resolved" "$doc" \
+        || grep -n "the last line resolved" "$doc"; then
+        echo "R10: $doc does not describe the $wcur line cursors (CM_CURSORS = $ncur)"
+        bad=1
+    fi
     # V: the pin
     if test -n "$cmark"; then
         if ! test -f "$cmark/src/cmark-gfm_version.h.in" \
@@ -255,7 +276,7 @@ rules() {
         fi
     fi
     if test $bad = 0; then
-        echo "R1 R2 R3 R5 R7 R8 R9${cmark:+ V} ok"
+        echo "R1 R2 R3 R5 R7 R8 R9 R10${cmark:+ V} ok"
     else
         echo "R FAILED"
         failed=1
