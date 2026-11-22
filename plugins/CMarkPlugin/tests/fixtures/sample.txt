@@ -1,0 +1,28 @@
+Heading one
+
+Setext heading
+
+Some emphasis, strong, ~struck~, code, a link
+and an image, autolinks www.pharo.org and https://x.y,
+a hard break
+and raw html. Footnote[^1].
+
+Block quote with a
+lazy line
+
+1.  first
+2.  second
+      - nested bullet
+    - [ ] open task
+    - [x] done task
+
+Transcript show: 'hi'
+
+indented code
+
+| Left | Centre | Right | None |
+| :-- | :-: | --: | --- |
+| a | b | c | d \| e |
+| f |  |  |  |
+
+[^1]: The footnote text.

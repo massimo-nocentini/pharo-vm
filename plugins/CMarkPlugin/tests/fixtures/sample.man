@@ -1,0 +1,51 @@
+.SH
+Heading \f[I]one\f[]
+.SS
+Setext heading
+.PP
+Some \f[I]emphasis\f[], \f[B]strong\f[], 
+.ST "struck"
+, \f[C]code\f[], a link (https://example.org)
+and an [IMAGE: image], autolinks www.pharo.org (http://www.pharo.org) and https://x.y (https://x.y),
+a hard break.PD 0
+.P
+.PD
+and raw html. Footnote.
+.RS
+.PP
+Block quote with a
+lazy line
+.RE
+.IP "1." 4
+first
+.IP "2." 4
+second
+.IP \[bu] 2
+nested bullet
+.IP \[bu] 2
+open task
+.IP \[bu] 2
+done task
+.IP
+.nf
+\f[C]
+Transcript show: 'hi'
+\f[]
+.fi
+.IP
+.nf
+\f[C]
+indented code
+\f[]
+.fi
+.TS
+tab(@);
+lcrc.
+Left@Centre@Right@None
+a@\f[B]b\f[]@\f[C]c\f[]@d \| e
+f@@@
+.TE
+.PP
+  *  *  *  *  *
+.PP
+The footnote text.

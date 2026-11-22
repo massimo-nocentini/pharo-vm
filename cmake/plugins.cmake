@@ -289,6 +289,48 @@ if(FEATURE_PLUGIN_UTILS)
     endif()
 endif()
 
+# CMarkPlugin: Markdown parsed by cmark-gfm 0.29.0.gfm.14 (GitHub's
+# CommonMark parser with its table, strikethrough, autolink, tagfilter and
+# tasklist extensions, C, cmake/cmark.cmake) into a flat tape of node records
+# that the image decodes into a tree, and rendered by cmark-gfm to HTML, XML,
+# CommonMark, plain text, LaTeX or man; every C allocation of a call is
+# tracked and limited, so that no input aborts the VM.  The plugin of the
+# package CMark (the submodule plugins/CMarkPlugin/cmark-gfm.st, whose
+# CMark-Roassal draws a document as one Roassal shape); docs/CMark.md.  ON on
+# every 64-bit target, OFF on 32-bit ones, where turning it on is refused:
+# its answers carry SmallIntegers above 2^30.  No HOST_PLUGIN_FLAGS entry in
+# the GNUmakefile (as for the TimSortPlugin): the host tree of make wasm
+# builds no plugin, but it configures this one, and so takes the archive of
+# cmark-gfm (300 KB, WASM_DEPS_DIR, else GitHub) at its configure
+if(SIZEOF_VOID_P EQUAL 8)
+    set(pharo_cmark_default ON)
+else()
+    set(pharo_cmark_default OFF)
+endif()
+option(FEATURE_PLUGIN_CMARK "Build the CMarkPlugin (cmark-gfm Markdown parser, C)" ${pharo_cmark_default})
+if(FEATURE_PLUGIN_CMARK AND NOT SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "FEATURE_PLUGIN_CMARK needs a 64-bit VM (void* is ${SIZEOF_VOID_P} bytes)")
+endif()
+if(FEATURE_PLUGIN_CMARK)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/cmark.cmake)
+    set(cm_dir ${CMAKE_CURRENT_SOURCE_DIR}/plugins/CMarkPlugin)
+    add_vm_plugin(CMarkPlugin FALSE FALSE)               # globs src/common/*.c; a builtin STATIC lib on Emscripten
+    # the engine: the one file that includes cmark-gfm's headers, the text
+    # (UTF-8, lines, indices) and the tracking allocator with its setjmp
+    target_sources(CMarkPlugin PRIVATE
+        ${cm_dir}/src/engine/cmEngine.c ${cm_dir}/src/engine/cmText.c ${cm_dir}/src/engine/cmTrack.c)
+    # (pharo_cmark's include directories come with it: cmark-config/public,
+    # src/ and extensions/ of cmark-gfm, never its private config.h)
+    target_link_libraries(CMarkPlugin PRIVATE pharo_cmark)
+    target_compile_options(CMarkPlugin PRIVATE -O2)
+    # C99 for the engine (C_EXTENSIONS stays on: the glue includes the VM's
+    # headers); the primitiveInfo version comes from cmark_version_string(),
+    # and CM_TESTING is for the C tests only.  (C keeps the default
+    # visibility: the VM looks up the entry points; the engine's functions
+    # are hidden by CM_API, include/common/cmEngine.h)
+    set_target_properties(CMarkPlugin PROPERTIES C_STANDARD 99)
+endif()
+
 # CairoPlugin: Athens drawing through cairo without the FFI's callout, for the
 # package VM-Plugins-Primitives-Cairo of the submodule
 # plugins/UtilsPlugin/vm-plugins-primitives.st (docs/CairoPlugin.md).

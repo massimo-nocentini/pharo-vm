@@ -341,6 +341,24 @@ jobs:
           grep -q '^UtilsPlugin native 1 ok' "$RUNNER_TEMP/utils.txt"
           test -f "$RUNNER_TEMP/vm/lib/libUtilsPlugin.so" || { echo "missing libUtilsPlugin.so"; exit 1; }
 
+      # The CMarkPlugin (C, cmake/cmark.cmake): cmark-gfm 0.29.0.gfm.14 must
+      # answer the known parse trees and HTML of tests/ci-load.st, and then
+      # its limits: a C budget, a maxDepth and the parses after them, so that
+      # every native job (x86_64 and arm64) runs the setjmp/longjmp landing of
+      # the engine at least once, and checks that it restores the state that
+      # cmark-gfm keeps between parses.  The notice of cmark-gfm (its COPYING)
+      # must be in the zip, next to the plugins.  shell: bash runs the step
+      # with pipefail, so that a VM that dies after printing fails the step
+      - name: Load the CMarkPlugin of the zip
+        shell: bash
+        run: |
+          "$RUNNER_TEMP/vm/pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/CMarkPlugin/tests/ci-load.st | tee "$RUNNER_TEMP/cmark.txt"
+          grep -q '^CMarkPlugin native 0\.29\.0\.gfm\.14 1 ok' "$RUNNER_TEMP/cmark.txt"
+          grep -q '^CMarkPlugin limits ok' "$RUNNER_TEMP/cmark.txt"
+          for f in libCMarkPlugin.so LICENSE.cmark-gfm; do
+            test -f "$RUNNER_TEMP/vm/lib/$f" || { echo "missing $f"; exit 1; }
+          done
+
       # The CairoPlugin (C, and the C++ engine of the SimdUTFPlugin for its
       # text, cmake/plugins.cmake): bound to the libcairo of the zip that the
       # image's FFI loads (one library, the same instance), it must draw a
@@ -639,6 +657,15 @@ jobs:
         run: |
           "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/UtilsPlugin/tests/ci-load.st | tee "$RUNNER_TEMP/utils.txt"
           grep -q '^UtilsPlugin native 1 ok' "$RUNNER_TEMP/utils.txt"
+
+      # As on Linux; the notice goes to Contents/Resources (cmake/cmark.cmake)
+      - name: Load the CMarkPlugin of the zip
+        shell: bash
+        run: |
+          "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/CMarkPlugin/tests/ci-load.st | tee "$RUNNER_TEMP/cmark.txt"
+          grep -q '^CMarkPlugin native 0\.29\.0\.gfm\.14 1 ok' "$RUNNER_TEMP/cmark.txt"
+          grep -q '^CMarkPlugin limits ok' "$RUNNER_TEMP/cmark.txt"
+          test -f "$RUNNER_TEMP/vm/Pharo.app/Contents/Resources/LICENSE.cmark-gfm" || { echo "missing LICENSE.cmark-gfm"; exit 1; }
 
       # As on Linux: the CairoPlugin bound to the libcairo of the zip (the
       # pinned cairo), in Contents/MacOS/Plugins with the other plugins, and
@@ -1027,6 +1054,22 @@ jobs:
           if ($LASTEXITCODE -ne 0) { $out; exit $LASTEXITCODE }
           $out
           if (-not ($out -match '^UtilsPlugin native 1 ok')) { exit 1 }
+
+      # As on Linux, on x64 and on arm64: the landing of the C limits has
+      # never run on Windows before this step.  The plugin is CMarkPlugin.dll,
+      # or libCMarkPlugin.dll as MinGW names it
+      - name: Load the CMarkPlugin of the zip
+        shell: pwsh
+        run: |
+          $vm = "$env:RUNNER_TEMP\vm"
+          $env:PATH = "$vm;$env:SystemRoot\System32;$env:SystemRoot"
+          $out = & "$vm\PharoConsole.exe" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/CMarkPlugin/tests/ci-load.st
+          if ($LASTEXITCODE -ne 0) { $out; exit $LASTEXITCODE }
+          $out
+          if (-not ($out -match '^CMarkPlugin native 0\.29\.0\.gfm\.14 1 ok')) { exit 1 }
+          if (-not ($out -match '^CMarkPlugin limits ok')) { exit 1 }
+          if (-not ((Test-Path "$vm\CMarkPlugin.dll") -or (Test-Path "$vm\libCMarkPlugin.dll"))) { "missing CMarkPlugin.dll"; exit 1 }
+          if (-not (Test-Path "$vm\LICENSE.cmark-gfm")) { "missing LICENSE.cmark-gfm"; exit 1 }
 
       # As on Linux, with the same PATH: the CairoPlugin (CairoPlugin.dll, or
       # libCairoPlugin.dll as MinGW names it) bound to the libcairo of the

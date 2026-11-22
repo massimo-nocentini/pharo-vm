@@ -1,0 +1,4 @@
+# The fixtures are the exact bytes of cmark-gfm's input and outputs, trailing blanks
+# included (a hard break is two trailing spaces in sample.md and sample.out.md, and
+# sample.man has lines that end with a blank): git must not flag them.
+* -whitespace
