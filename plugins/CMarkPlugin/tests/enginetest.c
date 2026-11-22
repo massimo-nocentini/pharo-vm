@@ -614,6 +614,24 @@ testPositions(void)
 		  "0xc009 clamped [\"\\n\"]\n"
 		  "0xc001 [\"https://x.y\"]\n"
 		  "0xc001 [\" d\"]\n" },
+		/* the inlines of a table cell after an escaped pipe start (and
+		   end) one column early per \| before them, as upstream's
+		   --sourcepos reports: inside the line, so not clamped (known bug 5) */
+		{ "escaped pipe (known bug 5)", LIT("| a | b |\n|---|---|\n| x \\| y *e* | z |\n"), 31,
+		  "0x8001 [\"| a | b |\\n|---|---|\\n| x \\\\| y *e* | z |\"]\n"
+		  "0x8100 [\"| a | b |\\n|---|---|\\n| x \\\\| y *e* | z |\"]\n"
+		  "0x8101 [\"| a | b |\"]\n"
+		  "0x8102 [\" a \"]\n"
+		  "0xc001 [\"a\"]\n"
+		  "0x8102 [\" b \"]\n"
+		  "0xc001 [\"b\"]\n"
+		  "0x8101 [\"| x \\\\| y *e* | z |\"]\n"
+		  "0x8102 [\" x \\\\| y *e* \"]\n"
+		  "0xc001 [\"x \\\\| y\"]\n"
+		  "0xc007 [\" *e\"]\n"
+		  "0xc001 [\"*\"]\n"
+		  "0x8102 [\" z \"]\n"
+		  "0xc001 [\"z\"]\n" },
 		/* an unresolved reference is a TEXT without a position, merged
 		   into the TEXT before it if any, which then ends at 0 */
 		{ "unresolved footnote", LIT("[^nope]*x*\n\na [^gone]\n"), 31,
