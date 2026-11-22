@@ -102,7 +102,7 @@ echo "image: $(basename "$IMAGE_ZIP") as $WORK/image/$NAME.image"
 echo "vm: $vm ($("$vm" --version 2>/dev/null | head -n 1))"
 
 # the local checkouts given to load.st
-for key in ROASSAL VMPLUGINSPRIMITIVES SIMDJSON SIMDUTF TIMSORT LIBPANGOCAIRO LIBPOPPLER; do
+for key in ROASSAL VMPLUGINSPRIMITIVES SIMDJSON SIMDUTF TIMSORT LIBPANGOCAIRO LIBPOPPLER CMARK; do
     repository=
     eval "repository=\${BATTERIES_$key:-}"
     case $repository in

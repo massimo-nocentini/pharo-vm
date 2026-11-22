@@ -16,10 +16,12 @@ The projects, loaded in this order by `packaging/batteries/load.st`:
 | TimSort ([TimSort.md](TimSort.md)) | `TimSort`, `default` | `github://massimo-nocentini/timsort.st:master/src` |
 | GLib, Pango and PangoCairo by uFFI ([PangoPoppler.md](PangoPoppler.md)) | `LibPangoCairo`, `default` | `github://massimo-nocentini/libpangocairo.st:master/src` |
 | poppler-glib by uFFI | `LibPoppler`, `default` | `github://massimo-nocentini/libpoppler.st:master/src` |
+| CMark: Markdown parse trees of the CMarkPlugin (cmark-gfm), and their Roassal view ([CMark.md](CMark.md)) | `CMark`, `default` (Core, Tests, Roassal and RoassalTests: not the opt-in RoassalFork group, since the fork is loaded first anyway) | `github://massimo-nocentini/cmark-gfm.st:master/src` |
 
 Every `default` group has the project's tests.
 Roassal comes first: Pharo 15 ships Roassal and RTree, and the Roassal packages of LibPangoCairo and LibPoppler then build on the fork.
 LibPangoCairo comes before LibPoppler, whose baseline loads its GLib group: each project is locked to its repository once loaded, so that the reference of `BaselineOfLibPoppler` to libpangocairo.st is honoured from where libpangocairo.st came.
+CMark comes last: `CMark-Roassal` uses only the Roassal API of the stock images, and draws here on the fork loaded first.
 
 Two loads need care, and `load.st` takes it:
 
@@ -31,7 +33,7 @@ Any error stops `load.st` with exit status 1 before the image is saved, and so d
 It prints a line per project and per repository that Iceberg cloned, with its commit:
 
     Batteries repository RTree https://github.com/massimo-nocentini/RTree.git master a875929baa2b562d1b4d1b6bdf55882b31678034
-    Batteries loaded 7 projects on Pharo 15.0 (0 warnings) ok
+    Batteries loaded 8 projects on Pharo 15.0 (0 warnings) ok
 
 The repositories of Iceberg stay registered in the image, without their clones (the zip has none): Iceberg shows them as missing, and clones them again on demand.
 
@@ -48,7 +50,7 @@ It needs network access to GitHub (git over HTTPS) and `unzip`, and `zip` or `py
 
 The settings, all environment variables:
 
-- `BATTERIES_<KEY>`: the repository of a project instead of its `master` (or `Pharo15`) on GitHub, any Metacello repository; for a local checkout `tonel://<checkout>/src`, whose commit `build.sh` prints. The keys are `ROASSAL`, `VMPLUGINSPRIMITIVES`, `SIMDJSON`, `SIMDUTF`, `TIMSORT`, `LIBPANGOCAIRO` and `LIBPOPPLER`.
+- `BATTERIES_<KEY>`: the repository of a project instead of its `master` (or `Pharo15`) on GitHub, any Metacello repository; for a local checkout `tonel://<checkout>/src`, whose commit `build.sh` prints. The keys are `ROASSAL`, `VMPLUGINSPRIMITIVES`, `SIMDJSON`, `SIMDUTF`, `TIMSORT`, `LIBPANGOCAIRO`, `LIBPOPPLER` and `CMARK`.
 - `BATTERIES_<KEY>_GROUPS`: its groups, separated by blanks.
 - `BATTERIES_SMOKE`: `basic` (the default) or `native`, below.
 - `BATTERIES_NAME` (the name of the image, `Pharo15-batteries`), `BATTERIES_TIMEOUT` (seconds per run of the VM, 1800), `BATTERIES_ICEBERG_REMOTE` (`httpsUrl`, or `scpUrl` to clone with SSH).
@@ -60,7 +62,7 @@ For example, with the checkouts of libpangocairo.st and libpoppler.st next to th
     BATTERIES_SMOKE=native \
         sh packaging/batteries/build.sh build/build/vm Pharo15.0-SNAPSHOT.build.117.sha.053a562682.arch.64bit.zip PharoBatteries.zip
 
-`smoke.st` checks that the image starts again, that a class or two of every project are there, the RTree of the fork (its collections, its packages not modified, its repository), the settings of Iceberg, `timSort:`, `timSortDescending` and `Float>>#times:plus:`, and runs the tests of RTree-Tests, TimSort-Smalltalk-Tests and VM-Plugins-Primitives-Tests (about 15 s).
+`smoke.st` checks that the image starts again, that a class or two of every project are there, the RTree of the fork (its collections, its packages not modified, its repository), the settings of Iceberg, `timSort:`, `timSortDescending` and `Float>>#times:plus:`, and runs the tests of RTree-Tests, TimSort-Smalltalk-Tests, VM-Plugins-Primitives-Tests, CMark-Tests and CMark-Roassal-Tests (about 25 s; without the CMarkPlugin, the CMark tests that parse skip themselves).
 With `BATTERIES_SMOKE=native`, on a VM of this repository, it also runs SimdJSON-Tests, SimdJSON-FFI-Tests, TimSort-FFI-Tests, LibGLib-Tests, LibPangoCairo-Tests and LibPoppler-Roassal-Tests, each of which must run tests, not only skip them (about 50 s).
 Its last line is `Batteries smoke <mode> classes <n> tests <run> passed <p> skipped <s> failed <f> errors <e> ok`, or `FAILED`.
 

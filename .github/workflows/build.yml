@@ -77,12 +77,12 @@
 # The batteries image (docs/Batteries.md) is the stock Pharo 15 image of
 # the site with the Smalltalk projects of this VM's plugins and libraries
 # (vm-plugins-primitives.st, simdjson.st, simdutf.st, timsort.st,
-# libpangocairo.st, libpoppler.st, from their master branches) and the
-# forks of Roassal and RTree, loaded by packaging/batteries/build.sh.  Its
-# job needs no other one: it runs the VM of files.pharo.org, not one of
-# this workflow, and so starts with the generate job; the WebAssembly job,
-# which offers it on the site, waits for it (a few minutes), not for the
-# native jobs.
+# libpangocairo.st, libpoppler.st, cmark-gfm.st, from their master
+# branches) and the forks of Roassal and RTree, loaded by
+# packaging/batteries/build.sh.  Its job needs no other one: it runs the VM
+# of files.pharo.org, not one of this workflow, and so starts with the
+# generate job; the WebAssembly job, which offers it on the site, waits for
+# it (a few minutes), not for the native jobs.
 #
 # <version> comes from `git describe` (cmake/versionExtraction.cmake), so
 # every job checks out the whole history and fetches the release tags of

@@ -6,7 +6,8 @@ The image starts again (so the save of load.st left nothing running), has the cl
 of the fork, its facades answer in Smalltalk, and the tests of a few packages pass:
 
 	basic (any VM, the default): RTree-Tests, TimSort-Smalltalk-Tests, VM-Plugins-Primitives-Tests (the
-	        UtilsPlugin's Smalltalk twin, and the plugin too when the VM has it), about 15 s;
+	        UtilsPlugin's Smalltalk twin, and the plugin too when the VM has it), CMark-Tests and
+	        CMark-Roassal-Tests (whose tests that parse skip without the CMarkPlugin), about 25 s;
 	native (BATTERIES_SMOKE=native, on a VM of this repository, whose plugins and cairo stack the tests then
 	        use): also SimdJSON-Tests, SimdJSON-FFI-Tests, TimSort-FFI-Tests, LibGLib-Tests, LibPangoCairo-Tests and
 	        LibPoppler-Roassal-Tests, each of which must run tests, not only skip them.
@@ -33,7 +34,7 @@ mode := (environment at: 'BATTERIES_SMOKE' ifAbsent: [ '' ]) trimBoth ifEmpty: [
 "1. a class or two of every project, the fork's RTree and Roassal"
 classes := #( #RSCanvas #RSPangoText #RSPdfPage #RTNaryTreeCollection #RTPackedTreeCollection #RTGridCollection
 	#RTLooseQuadtreeCollection #UtilsPlugin #KnuthRandom #SplitMix64 #SimdJSONReader #NeoJSONReader #SimdUTF #TimSort
-	#TimSortSmalltalk #PangoLayout #PopplerDocument #BaselineOfRoassalMN ).
+	#TimSortSmalltalk #PangoLayout #PopplerDocument #BaselineOfRoassalMN #CMark #CMarkParser #CMarkRoassalRenderer ).
 classes do: [ :name |
 	(Smalltalk globals includesKey: name) ifFalse: [ problems add: 'no class ' , name ] ].
 (MCWorkingCopy allWorkingCopies select: [ :copy | copy packageName beginsWith: 'RTree' ]) do: [ :copy |
@@ -52,7 +53,7 @@ IceCredentialsProvider providerType = IceNonInteractiveCredentialsProvider ifTru
 (2.0 times: 3.0 plus: 1.0) = 7.0 ifFalse: [ problems add: 'Float>>times:plus: is not 7.0' ].
 
 "3. the tests"
-suites := #( 'RTree-Tests' 'TimSort-Smalltalk-Tests' 'VM-Plugins-Primitives-Tests' ).
+suites := #( 'RTree-Tests' 'TimSort-Smalltalk-Tests' 'VM-Plugins-Primitives-Tests' 'CMark-Tests' 'CMark-Roassal-Tests' ).
 mode = 'native' ifTrue: [
 	suites := suites , #( 'SimdJSON-Tests' 'SimdJSON-FFI-Tests' 'TimSort-FFI-Tests' 'LibGLib-Tests' 'LibPangoCairo-Tests'
 		'LibPoppler-Roassal-Tests' ) ].

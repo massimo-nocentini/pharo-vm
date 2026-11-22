@@ -11,17 +11,18 @@
 	TimSort              github://massimo-nocentini/timsort.st:master/src        default
 	LibPangoCairo        github://massimo-nocentini/libpangocairo.st:master/src  default
 	LibPoppler           github://massimo-nocentini/libpoppler.st:master/src     default
+	CMark                github://massimo-nocentini/cmark-gfm.st:master/src      default (CMark-Roassal on the fork)
 
 Roassal comes first: Pharo 15 ships Roassal and RTree, which the forks replace, and the Roassal packages of
 LibPangoCairo and LibPoppler then build on the fork.  LibPangoCairo comes before LibPoppler, whose baseline
 needs its GLib group: once loaded, every project is locked to the repository it came from, so that the
 reference of BaselineOfLibPoppler to github://massimo-nocentini/libpangocairo.st:master/src is honoured from
-there.
+there.  CMark comes last: its renderer uses only the Roassal API of the stock images, and draws on the fork here.
 
 Environment:
 	BATTERIES_<KEY>          the repository of a project instead of the one above, any Metacello repository
 	                         (github://..., gitlocal://..., tonel:///<checkout>/src for a local checkout); the keys
-	                         are ROASSAL, VMPLUGINSPRIMITIVES, SIMDJSON, SIMDUTF, TIMSORT, LIBPANGOCAIRO, LIBPOPPLER
+	                         are ROASSAL, VMPLUGINSPRIMITIVES, SIMDJSON, SIMDUTF, TIMSORT, LIBPANGOCAIRO, LIBPOPPLER, CMARK
 	BATTERIES_<KEY>_GROUPS   its groups, separated by blanks, instead of the ones above
 	BATTERIES_ICEBERG_REMOTE the protocol of the clones of github:// repositories, httpsUrl by default (no SSH key
 	                         needed) or scpUrl
@@ -55,7 +56,8 @@ projects := {
 	{ 'SIMDUTF'. 'SimdUTF'. 'github://massimo-nocentini/simdutf.st:master/src'. #( 'default' ) }.
 	{ 'TIMSORT'. 'TimSort'. 'github://massimo-nocentini/timsort.st:master/src'. #( 'default' ) }.
 	{ 'LIBPANGOCAIRO'. 'LibPangoCairo'. 'github://massimo-nocentini/libpangocairo.st:master/src'. #( 'default' ) }.
-	{ 'LIBPOPPLER'. 'LibPoppler'. 'github://massimo-nocentini/libpoppler.st:master/src'. #( 'default' ) } }.
+	{ 'LIBPOPPLER'. 'LibPoppler'. 'github://massimo-nocentini/libpoppler.st:master/src'. #( 'default' ) }.
+	{ 'CMARK'. 'CMark'. 'github://massimo-nocentini/cmark-gfm.st:master/src'. #( 'default' ) } }.
 projects := projects collect: [ :each |
 	| key repository groups |
 	key := each first.
