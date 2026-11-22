@@ -351,7 +351,7 @@ So for String and WideString sources, character k of the source is code point k 
 
 The character indices (words 8 and 9 of a record) come from cmark-gfm's line and byte column:
 
-- `lineStart(l)` is the byte offset of line l of `T`, cut as cmark-gfm cuts lines (at `\r\n`, a lone `\r` or a lone `\n`), with `lineStart(L+1) = |T|`, the phantom line that blocks ending at the end of the input report as `L+1:0`; the table is sparse (the start of every 64th line, and a scan from the nearer of that and the last line resolved), since a dense one would take 4 to 8 bytes an input byte for a document of empty lines;
+- `lineStart(l)` is the byte offset of line l of `T`, cut as cmark-gfm cuts lines (at `\r\n`, a lone `\r` or a lone `\n`), with `lineStart(L+1) = |T|`, the phantom line that blocks ending at the end of the input report as `L+1:0`; the table is sparse (the start of every 64th line, and a scan from the nearest of that checkpoint and the last four lines resolved), since a dense one would take 4 to 8 bytes an input byte for a document of empty lines;
 - `charIndex(b)`, for the byte offset b of the last byte of a character, is `(b + 1) - cont(b + 1)`, where `cont(k)` counts the continuation bytes of `T` before k, from a checkpoint every 64 bytes;
 - for a node with HAS_POS, `startIndex = charIndex(lineStart(sl) + sc - 1)`, and `endIndex = charIndex(lineStart(el) + ec - 1)` when `ec >= 1`, else the character before line el (its line terminator, so such a block's `sourceText` ends with it), or 0 when line el starts at 0;
 - a position beyond line L+1, or a byte column at or beyond the end of its line, is clamped to the last byte of that line (or of `T`), and CLAMPED is set; that covers the angle-autolink columns of gfm.14 (see Limitations);
