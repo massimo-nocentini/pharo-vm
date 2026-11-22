@@ -64,6 +64,11 @@
 #   R10 docs/CMark.md describes the line table's CM_CURSORS cursors
 #       (src/engine/cmPrivate.h) by their number, "the last four lines
 #       resolved", and not as one cursor
+#   R11 --only refuses blanks and empty names, which would else select
+#       nothing and pass: the script runs itself with CM_OPTIONS_ONLY=1 (it
+#       checks its options, then exits 0 without running anything) and
+#       'R engine', ' R', 'R,', ',R', 'R,,engine' and a tab, each of which
+#       must exit 2, and 'R,engine', which must exit 0
 #   V   the --cmark tree is the pin: src/cmark-gfm_version.h.in, the
 #       versions 29 and 14 of its CMakeLists.txt, and the SHA256 of the 34
 #       sources, the headers, the CLI and the test files in
@@ -82,7 +87,8 @@
 #                  default: read from DIR/CMakeCache.txt
 #   --build DIR    where to build (kept, and reused by the next run);
 #                  default: a temporary directory, removed at the end
-#   --only LIST    comma-separated lanes (above) and R, e.g. engine,glue,R;
+#   --only LIST    comma-separated lanes (above) and R, e.g. engine,glue,R,
+#                  without blanks or empty names (a usage error);
 #                  default: R and every lane that can run here but upstream
 #                  (glue with --vm-build, engine-wasm64 with an SDK)
 #
@@ -110,12 +116,21 @@ while test $# -gt 0; do
 done
 
 all_lanes="engine engine-gcc engine-uchar engine-asan engine-wasm64 glue upstream"
+# selected() matches whole comma-separated names: a blank or an empty name
+# would select nothing, and the run would pass with nothing run
+case $only in
+*[[:space:]]*|,*|*,|*,,*)
+    echo "run-c-tests: --only takes names separated by commas, without blanks or empty names, not '$only'" >&2
+    exit 2 ;;
+esac
 for name in $(echo "$only" | tr ',' ' '); do
     case " R $all_lanes " in
     *" $name "*) ;;
     *) echo "run-c-tests: unknown lane $name (R $all_lanes)" >&2; exit 2 ;;
     esac
 done
+# (rule R11: the options only)
+test -z "${CM_OPTIONS_ONLY:-}" || exit 0
 
 selected() {
     test -z "$only" || case ",$only," in *",$1,"*) true ;; *) false ;; esac
@@ -263,6 +278,18 @@ rules() {
         echo "R10: $doc does not describe the $wcur line cursors (CM_CURSORS = $ncur)"
         bad=1
     fi
+    # R11: --only refuses what would select nothing (the options only: the
+    # script never runs itself further)
+    for o in 'R engine' ' R' 'R,' ',R' 'R,,engine' "$(printf 'R\tengine')" 'R,engine'; do
+        want=2
+        test "$o" != 'R,engine' || want=0
+        ostatus=0
+        out=$(CM_OPTIONS_ONLY=1 sh "$SRCDIR/tests/run-c-tests.sh" --only "$o" 2>&1) || ostatus=$?
+        if test $ostatus != $want; then
+            echo "R11: --only '$o' exits $ostatus, not $want: $out"
+            bad=1
+        fi
+    done
     # V: the pin
     if test -n "$cmark"; then
         if ! test -f "$cmark/src/cmark-gfm_version.h.in" \
@@ -276,7 +303,7 @@ rules() {
         fi
     fi
     if test $bad = 0; then
-        echo "R1 R2 R3 R5 R7 R8 R9 R10${cmark:+ V} ok"
+        echo "R1 R2 R3 R5 R7 R8 R9 R10 R11${cmark:+ V} ok"
     else
         echo "R FAILED"
         failed=1
@@ -323,6 +350,10 @@ for lane in $all_lanes; do
     lanes="$lanes $lane"
 done
 if test -z "$lanes"; then
+    if ! selected R; then
+        echo "run-c-tests: --only $only selects no lane and no rule" >&2
+        exit 2
+    fi
     test $failed = 0 && echo "run-c-tests: all lanes passed" || echo "run-c-tests: FAILED"
     exit $failed
 fi
