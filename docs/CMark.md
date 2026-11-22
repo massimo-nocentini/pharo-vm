@@ -457,8 +457,8 @@ Measured (2026-11-22, Linux x86_64, clang 18.1.3, Emscripten 6.0.10):
 
 - the C lanes: the rules and V, `engine`, `engine-gcc`, `engine-uchar`, `engine-asan` (81,974 checks each), `engine-wasm64` in both setjmp modes (81,973 checks each) and `glue` (1,107 checks shared, 1,127 builtin) pass; `upstream`: spec.txt 670, smart_punct 16, extensions 29 of 30 (spec and roundtrip; example 25, as expected), table-prefer-style-attributes 1, full-info-string 4, regression 26;
 - the native CoInterpreter VM builds with the plugin, `libCMarkPlugin.so` exports only its module functions, primitives and accessor depths, and `ci-load.st` prints both lines on stock Pharo 12 and 15;
-- `run-st-tests.sh` with that VM: `CMark-Tests` 105 tests, 0 skipped, on stock Pharo 12, 13, 14 and 15; `CMark-Roassal-Tests` 64 tests, 0 skipped, on the same four images and on the batteries image; with a VM without the plugin (Pharo 15 and the batteries image), 60 pass and 45 skip, and 53 pass and 11 skip;
-- the WebAssembly lanes 05, 20, 50 and 75 pass on Pharo 15 (lane 75: 8 checks in 37 s, `CMark-Tests` 105 tests on the node and the web VMs, `CMark-Roassal-Tests` 57 passed and 7 skipped), and with `-DFEATURE_PLUGIN_CMARK=OFF` lanes 20 and 50 pass and lane 75 skips.
+- `run-st-tests.sh` with that VM: `CMark-Tests` 105 tests, 0 skipped, on stock Pharo 12, 13, 14 and 15; `CMark-Roassal-Tests` 78 tests, 0 skipped, on the same four images and on the batteries image; with a VM without the plugin (Pharo 15 and the batteries image), 60 pass and 45 skip, and 67 pass and 11 skip;
+- the WebAssembly lanes 05, 20, 50 and 75 pass on Pharo 15 (lane 75: 8 checks in 41 s, `CMark-Tests` 105 tests on the node and the web VMs, `CMark-Roassal-Tests` 70 passed and 8 skipped), and with `-DFEATURE_PLUGIN_CMARK=OFF` lanes 20 and 50 pass and lane 75 skips.
 
 ## Benchmarks
 
