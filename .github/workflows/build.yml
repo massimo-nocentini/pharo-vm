@@ -1204,10 +1204,11 @@ jobs:
       CXX: clang++
     steps:
       # (with the submodules plugins/SimdJSONPlugin/simdjson.st,
-      # plugins/SimdUTFPlugin/simdutf.st, plugins/TimSortPlugin/timsort.st and
-      # plugins/UtilsPlugin/vm-plugins-primitives.st, the Smalltalk code that
-      # lanes 68, 69, 71, 73 and 74 of wasm-check load; 74 the packages of
-      # the CairoPlugin, from vm-plugins-primitives.st too)
+      # plugins/SimdUTFPlugin/simdutf.st, plugins/TimSortPlugin/timsort.st,
+      # plugins/UtilsPlugin/vm-plugins-primitives.st and
+      # plugins/CMarkPlugin/cmark-gfm.st, the Smalltalk code that lanes 68,
+      # 69, 71, 73, 74 and 75 of wasm-check load; 74 the packages of the
+      # CairoPlugin, from vm-plugins-primitives.st too)
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
