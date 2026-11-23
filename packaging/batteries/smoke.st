@@ -10,7 +10,8 @@ few packages pass:
 	        UtilsPlugin's Smalltalk twin, and the plugin too when the VM has it), CMark-Tests and
 	        CMark-Roassal-Tests (whose tests that parse skip without the CMarkPlugin), Delimcc-Tests,
 	        Delimcc-Continuation-Tests and ContinuationTest (Pharo's, with the fixes of Delimcc-Continuation),
-	        MaterialSymbols-Tests (which put the gray pack back after each test);
+	        MaterialSymbols-Tests (which put the gray pack back after each test; skipped when
+	        BATTERIES_MATERIALICONS_GROUPS, as for load.st, has no SymbolsTests and the package is not there);
 	native (BATTERIES_SMOKE=native, on a VM of this repository, whose plugins and cairo stack the tests then
 	        use): also SimdJSON-Tests, SimdJSON-FFI-Tests, TimSort-FFI-Tests, LibGLib-Tests, LibPangoCairo-Tests and
 	        LibPoppler-Roassal-Tests, each of which must run tests, not only skip them.
@@ -22,7 +23,7 @@ One line per failure and error, then
 ending in FAILED instead of ok when anything went wrong; exit status 0 for ok, 1 otherwise.  Nothing is saved
 (--no-source keeps the .changes as it is)."
 
-| environment out lineEnd line problems mode classes suites run passed skipped failed errors ok |
+| environment out lineEnd line problems mode classes suites optional run passed skipped failed errors ok |
 environment := OSEnvironment current.
 out := Stdio stdout.
 lineEnd := OSPlatform current lineEnding.
@@ -81,6 +82,9 @@ suites := #( 'RTree-Tests' 'TimSort-Smalltalk-Tests' 'VM-Plugins-Primitives-Test
 mode = 'native' ifTrue: [
 	suites := suites , #( 'SimdJSON-Tests' 'SimdJSON-FFI-Tests' 'TimSort-FFI-Tests' 'LibGLib-Tests' 'LibPangoCairo-Tests'
 		'LibPoppler-Roassal-Tests' ) ].
+"(the groups of MaterialIcons that load.st was given may leave out its tests)"
+optional := ((environment at: 'BATTERIES_MATERIALICONS_GROUPS' ifAbsent: [ '' ]) substrings: ' ')
+	in: [ :groups | (groups isEmpty or: [ groups includes: 'SymbolsTests' ]) ifTrue: [ #() ] ifFalse: [ #( 'MaterialSymbols-Tests' ) ] ].
 run := passed := skipped := failed := errors := 0.
 suites do: [ :packageName |
 	| package classes suite result ms |
@@ -90,7 +94,10 @@ suites do: [ :packageName |
 		ifNil: [ (Smalltalk globals at: packageName asSymbol ifAbsent: [ nil ]) ifNotNil: [ :class | { class } ] ]
 		ifNotNil: [ package definedClasses ].
 	classes
-		ifNil: [ problems add: 'no package ' , packageName ]
+		ifNil: [
+			(optional includes: packageName)
+				ifTrue: [ line value: 'Batteries smoke: ' , packageName , ' not loaded (BATTERIES_MATERIALICONS_GROUPS)' ]
+				ifFalse: [ problems add: 'no package ' , packageName ] ]
 		ifNotNil: [
 			suite := TestSuite named: packageName.
 			(classes select: [ :each | (each inheritsFrom: TestCase) and: [ each isAbstract not ] ])
