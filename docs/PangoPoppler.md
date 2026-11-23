@@ -1,6 +1,6 @@
 # Pango and Poppler
 
-The native VMs of this fork carry, next to the cairo that Athens uses, **Pango 1.58.2** with PangoCairo (text layout: wrapping, alignment, ellipsizing, markup, any script that HarfBuzz shapes) and **Poppler 26.11.0** with its GLib interface, poppler-glib (reading and rendering PDF documents), with the **GLib 2.90.1** and **HarfBuzz 15.1.0** they need. The image binds them by uFFI, through two repositories of Smalltalk bindings; the VM has no plugin or primitive for them. This page explains what the VM carries, how the image finds it, and its limits; [docs/CairoStack.md](CairoStack.md) explains how the libraries are built, checked and bumped.
+The native VMs of this fork carry, next to the cairo that Athens uses, **Pango 1.58.2** with PangoCairo (text layout: wrapping, alignment, ellipsizing, markup, any script that HarfBuzz shapes) and **Poppler 26.11.0** with its GLib interface, poppler-glib (reading and rendering PDF documents), with the **GLib 2.90.1** and **HarfBuzz 15.2.0** they need. The image binds them by uFFI, through two repositories of Smalltalk bindings; the VM has no plugin or primitive for them. This page explains what the VM carries, how the image finds it, and its limits; [docs/CairoStack.md](CairoStack.md) explains how the libraries are built, checked and bumped.
 
 | | Linux x86_64, aarch64 | macOS x86_64, arm64 | Windows x86_64, ARM64 | WebAssembly |
 |---|---|---|---|---|

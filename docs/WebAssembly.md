@@ -11,7 +11,7 @@ Two VMs are linked from the same objects:
 - a VM for a Web Worker, which a static web site runs: the Console, a Smalltalk REPL with Stop, Save, Download, Open, which starts an image of your own, and Images, which starts another image of the site or one saved in the browser, and its Notebook tab, cells of Smalltalk, which a second VM of their own runs, and of Markdown, which the page renders.
 
 The site also has the world page: the Morphic world of the image in a canvas, drawn through the WebDisplayPlugin.
-Both VMs link the libraries that the image calls through its FFI, built from pinned archives: FreeType 2.15.0 for the fonts of the world, and cairo 1.18.6 for Athens and Roassal, by default (the versions of the native VMs, `cmake/cairo-stack/pins.txt`); and, on request, libgit2 1.4.4 for Iceberg (`WASM_LIBGIT2=ON`), and the libraries of [docs/PangoPoppler.md](PangoPoppler.md): GLib 2.90.1, HarfBuzz 15.1.0, fontconfig, Pango 1.58.2 and PangoCairo for libpangocairo.st (`WASM_PANGO=ON`), and Poppler 26.11.0 with poppler-glib for libpoppler.st (`WASM_POPPLER=ON`).
+Both VMs link the libraries that the image calls through its FFI, built from pinned archives: FreeType 2.15.0 for the fonts of the world, and cairo 1.18.6 for Athens and Roassal, by default (the versions of the native VMs, `cmake/cairo-stack/pins.txt`); and, on request, libgit2 1.4.4 for Iceberg (`WASM_LIBGIT2=ON`), and the libraries of [docs/PangoPoppler.md](PangoPoppler.md): GLib 2.90.1, HarfBuzz 15.2.0, fontconfig, Pango 1.58.2 and PangoCairo for libpangocairo.st (`WASM_PANGO=ON`), and Poppler 26.11.0 with poppler-glib for libpoppler.st (`WASM_POPPLER=ON`).
 
 Requirements:
 
@@ -568,7 +568,7 @@ Every library is built by a file of `cmake/emscripten/deps` from its pinned rele
 | fontconfig 2.18.4 | `fontconfig-2.18.4.tar.xz` | `WASM_PANGO` | `-O2` |
 | GLib 2.90.1 (GLib, GObject, GModule, GIO) | `glib-2.90.1.tar.xz` | `WASM_PANGO` | `-O2`, GIO `-Os` |
 | FriBidi 1.0.18 | `fribidi-1.0.18.tar.xz` | `WASM_PANGO` | `-O2` |
-| HarfBuzz 15.1.0 | `harfbuzz-15.1.0.tar.xz` | `WASM_PANGO` | `-O2` |
+| HarfBuzz 15.2.0 | `harfbuzz-15.2.0.tar.xz` | `WASM_PANGO` | `-O2` |
 | Pango 1.58.2 (Pango, pangoft2, PangoCairo) | `pango-1.58.2.tar.xz` | `WASM_PANGO` | `-O2` |
 | DejaVu fonts 2.37 | `dejavu-fonts-ttf-2.37.tar.bz2` | `WASM_PANGO` | |
 | libjpeg-turbo 3.2.1 | `libjpeg-turbo-3.2.1.tar.gz` | `WASM_POPPLER` | `-O2` |

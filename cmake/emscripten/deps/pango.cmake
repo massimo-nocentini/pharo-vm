@@ -15,7 +15,7 @@
 #     pharo_gio         GIO (GListModel of the font maps, GFile and streams
 #                       of poppler-glib)
 #     pharo_fribidi     FriBidi 1.0.18
-#     pharo_harfbuzz    HarfBuzz 15.1.0, on the VM's FreeType
+#     pharo_harfbuzz    HarfBuzz 15.2.0, on the VM's FreeType
 #     pharo_pango       Pango 1.58.2, pangoft2 (fontconfig and FreeType) and
 #                       PangoCairo
 #

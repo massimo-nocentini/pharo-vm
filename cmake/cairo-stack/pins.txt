@@ -81,8 +81,8 @@ mirror proxy-libintl https://github.com/mesonbuild/wrapdb/releases/download/prox
 glib 2.90.1 93c941aa17d5eb1d53fe838365f29a8b4e539c222a256d974ec8f30fc413e396 glib-2.90.1.tar.xz https://download.gnome.org/sources/glib/2.90/glib-2.90.1.tar.xz linux,darwin COPYING
 # unsigned: equal to MSYS2's PKGBUILD mingw-w64-fribidi 1.0.18-1.
 fribidi 1.0.18 1de5e8073d035388b71d0b2d452b1da1f8caeea8a7702997b401fe1b6250727f fribidi-1.0.18.tar.xz https://github.com/fribidi/fribidi/releases/download/v1.0.18/fribidi-1.0.18.tar.xz linux,darwin COPYING
-# unsigned: equal to MSYS2's PKGBUILD mingw-w64-harfbuzz 15.1.0-1 (the package pinned below for Windows).
-harfbuzz 15.1.0 0fc7c565443a5f4be7da65ac5ee5bd737d9b158dc908708b7689a0a5796b0c8d harfbuzz-15.1.0.tar.xz https://github.com/harfbuzz/harfbuzz/releases/download/15.1.0/harfbuzz-15.1.0.tar.xz linux,darwin COPYING
+# unsigned: equal to MSYS2's PKGBUILD mingw-w64-harfbuzz 15.2.0-1 (the package pinned below for Windows), whose source package holds the same archive (2026-11-23).
+harfbuzz 15.2.0 e2ec49090744383cdbe7df808c1cedaafba06a97be8dc4211fe546ba585f12cb harfbuzz-15.2.0.tar.xz https://github.com/harfbuzz/harfbuzz/releases/download/15.2.0/harfbuzz-15.2.0.tar.xz linux,darwin COPYING
 # unsigned: equal to https://download.gnome.org/sources/pango/1.58/pango-1.58.2.sha256sum and MSYS2's PKGBUILD mingw-w64-pango 1.58.2-1.
 pango 1.58.2 342385b6ca3b7c73455d7c80a13b7dbe4489e00bc3bd4c5bd6ed4dce421e374a pango-1.58.2.tar.xz https://download.gnome.org/sources/pango/1.58/pango-1.58.2.tar.xz linux,darwin COPYING
 # signed-by 0338C8D8D9FDA62CF9C421BD7EC2DBB6F4DBF434 https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.2.1/libjpeg-turbo-3.2.1.tar.gz.sig (The libjpeg-turbo Project; gpgv good, 2026-11-19)

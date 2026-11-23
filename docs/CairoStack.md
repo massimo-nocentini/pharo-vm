@@ -13,7 +13,7 @@ The features (`FEATURE_LIB_PANGO`, `FEATURE_LIB_POPPLER`; `build.sh --features`)
 
 | Feature | Libraries | Linux, macOS | Windows |
 |---|---|---|---|
-| `pango` | GLib 2.90.1 (with PCRE2 10.49 and libffi 3.8.1 static inside), FriBidi 1.0.18, HarfBuzz 15.1.0, Pango 1.58.2 and PangoCairo | built from the pinned archives (macOS: proxy-libintl 0.5 static inside GLib) | MSYS2's packages: the same versions, plus libthai 0.1.30 and libdatrie 0.2.14 |
+| `pango` | GLib 2.90.1 (with PCRE2 10.49 and libffi 3.8.1 static inside), FriBidi 1.0.18, HarfBuzz 15.2.0, Pango 1.58.2 and PangoCairo | built from the pinned archives (macOS: proxy-libintl 0.5 static inside GLib) | MSYS2's packages: the same versions, plus libthai 0.1.30 and libdatrie 0.2.14 |
 | `poppler` | GLib, libjpeg-turbo 3.2.1 (static inside libpoppler), Poppler 26.11.0 (libpoppler and libpoppler-glib, **GPL**) | built from the pinned archives (macOS also expat and fontconfig) | Poppler built from its pinned archive in the MSYS2 shell, against MSYS2's packages (libjpeg-turbo 3.2.1) |
 
 The WebAssembly VM has neither feature (`cmake/Emscripten.cache.cmake` turns both off), but its own options for the same libraries, `WASM_PANGO` and `WASM_POPPLER` ([docs/WebAssembly.md](WebAssembly.md), The libraries), which build them from these pins.
@@ -193,7 +193,7 @@ cairo and FreeType are loaded by the image, and with the features GLib, GObject,
 | GLib, GObject | `libglib-2.0.so.0.9000.1`, **`.so.0`**, `.so`; the same for `libgobject-2.0` | **`libglib-2.0.0.dylib`**, **`libgobject-2.0.0.dylib`**, symlinks | **`libglib-2.0-0.dll`**, **`libgobject-2.0-0.dll`** | pango or poppler (Windows: libglib is core) |
 | GIO, GModule | `libgio-2.0.so.0(.9000.1)`, `libgmodule-2.0.so.0(.9000.1)` | `libgio-2.0.0.dylib`, `libgmodule-2.0.0.dylib` | `libgio-2.0-0.dll`, `libgmodule-2.0-0.dll` | pango or poppler |
 | FriBidi | `libfribidi.so.0(.4.0)` | `libfribidi.0.dylib` | `libfribidi-0.dll` | pango |
-| HarfBuzz | `libharfbuzz.so.0(.61510.0)` | `libharfbuzz.0.dylib` | `libharfbuzz-0.dll` | pango (Windows: core) |
+| HarfBuzz | `libharfbuzz.so.0(.61520.0)` | `libharfbuzz.0.dylib` | `libharfbuzz-0.dll` | pango (Windows: core) |
 | Pango, PangoCairo | `libpango-1.0.so.0.5800.2`, **`.so.0`**, `.so`; the same for `libpangocairo-1.0`; `libpangoft2-1.0.so.0(.5800.2)` | **`libpango-1.0.0.dylib`**, **`libpangocairo-1.0.0.dylib`**, symlinks | **`libpango-1.0-0.dll`**, **`libpangocairo-1.0-0.dll`**, `libpangoft2-1.0-0.dll`, `libpangowin32-1.0-0.dll` | pango |
 | libthai, libdatrie | — | — | `libthai-0.dll`, `libdatrie-1.dll` | pango |
 | Poppler | `libpoppler.so.166(.0.0)`; `libpoppler-glib.so.8.31.0`, **`.so.8`**, `.so` | `libpoppler.166.dylib`; **`libpoppler-glib.8.dylib`**, symlinks | `libpoppler-166.dll`, **`libpoppler-glib-8.dll`** | poppler |
