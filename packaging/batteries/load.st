@@ -16,7 +16,7 @@
 	ContainersCategory   github://massimo-nocentini/Containers-Category:master/src default
 	Delimcc              github://massimo-nocentini/delimcc.st:master            default (FileTree, at the root of the repository)
 	MaterialIcons        github://massimo-nocentini/material-icons.st:master/src SymbolsRoundedSmall SymbolsThemePack SymbolsTests,
-	                     then MaterialSymbolsThemeIcons installColor: Color gray.
+	                     then MaterialSymbolsThemeIcons installColor: Color gray monochrome: true.
 
 Roassal comes first: Pharo 15 ships Roassal and RTree, which the forks replace, and the Roassal packages of
 LibPangoCairo and LibPoppler then build on the fork.  LibPangoCairo comes before LibPoppler, whose baseline
@@ -28,8 +28,8 @@ BaselineOfContainersEssentials names RoassalMN, VMPluginsPrimitives, LibPangoCai
 above, which their locks hold (so a BATTERIES_<KEY> repository is the one they get, and Roassal is loaded once, by
 BaselineOfRoassalMN: nothing loads BaselineOfRoassal).  MaterialIcons comes last, with the Material Symbols at 16, 24
 and 32 pixels, their pack of Pharo's icons and its tests (not their 192-pixel masters, nor the Material Icons, nor
-the filled symbols), and the expression after it makes the pack the icons of the UI, in gray: the image is saved
-with it.
+the filled symbols), and the expression after it makes the pack the icons of the UI, every key in gray,
+the status keys of tests, errors and warnings too (monochrome): the image is saved with it.
 
 Environment:
 	BATTERIES_<KEY>          the repository of a project instead of the one above, any Metacello repository
@@ -75,7 +75,7 @@ projects := {
 	{ 'CONTAINERSCATEGORY'. 'ContainersCategory'. 'github://massimo-nocentini/Containers-Category:master/src'. #( 'default' ) }.
 	{ 'DELIMCC'. 'Delimcc'. 'github://massimo-nocentini/delimcc.st:master'. #( 'default' ) }.
 	{ 'MATERIALICONS'. 'MaterialIcons'. 'github://massimo-nocentini/material-icons.st:master/src'.
-		#( 'SymbolsRoundedSmall' 'SymbolsThemePack' 'SymbolsTests' ). 'MaterialSymbolsThemeIcons installColor: Color gray.' } }.
+		#( 'SymbolsRoundedSmall' 'SymbolsThemePack' 'SymbolsTests' ). 'MaterialSymbolsThemeIcons installColor: Color gray monochrome: true.' } }.
 "{ key. baseline. repository. groups. the expression evaluated after the load, or nil }"
 projects := projects collect: [ :each |
 	| key repository groups |

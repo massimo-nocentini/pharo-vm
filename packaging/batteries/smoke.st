@@ -53,16 +53,19 @@ classes do: [ :name |
 IceCredentialsProvider providerType = IceNonInteractiveCredentialsProvider ifTrue: [
 	problems add: 'Iceberg keeps the non-interactive credentials of load.st' ].
 
-"the icons of the UI, as load.st left them: the Material Symbols in gray (five keys that take the colour of the pack)"
+"the icons of the UI, as load.st left them: the Material Symbols in gray, monochrome (five keys that take the colour of
+ the pack, and five status keys, which have fixed colours unless the pack is monochrome)"
 ((ThemeIcons classVarNamed: #Current) ifNil: [ nil ] ifNotNil: [ :pack | pack class name ]) = #MaterialSymbolsThemeIcons
 	ifFalse: [ problems add: 'the icons of the UI are not MaterialSymbolsThemeIcons' ]
 	ifTrue: [
 		| pack gray keys |
 		pack := ThemeIcons current.
 		pack color = Color gray ifFalse: [ problems add: 'the Material Symbols are not gray: ' , pack color printString ].
+		pack monochrome ifFalse: [ problems add: 'the Material Symbols are not monochrome' ].
 		gray := (Color gray pixelValueForDepth: 32) bitAnd: 16rFFFFFF.
-		keys := (((Smalltalk globals at: #MaterialSymbolsThemeIconsArt) entries select: [ :each | each fifth isNil ])
-			collect: [ :each | each first ]) first: 5.
+		keys := #( true false ) flatCollect: [ :plain |
+			(((Smalltalk globals at: #MaterialSymbolsThemeIconsArt) entries select: [ :each | each fifth isNil = plain ])
+				collect: [ :each | each first ]) first: 5 ].
 		keys do: [ :key |
 			| form |
 			form := pack iconNamed: key.
