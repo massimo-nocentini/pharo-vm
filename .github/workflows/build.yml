@@ -71,8 +71,8 @@
 # tests/cairo-stack/ci-text.st draws text with Pango and renders PDFs with
 # Poppler, on the libraries of the zip only.  The cairo-stack job
 # checks the pins (scripts/cairo-stack/check-pins.sh) and gathers the sources
-# of the stack; .github/workflows/cairo-stack-watch.yml compares the pins
-# with the latest upstream releases every week.
+# of the stack; scripts/cairo-stack/watch.sh, run by hand, compares the pins
+# with the latest upstream releases.
 #
 # The batteries image (docs/Batteries.md) is the stock Pharo 15 image of
 # the site with the Smalltalk projects of this VM's plugins and libraries
