@@ -15,7 +15,8 @@
 	ContainersEssentials github://massimo-nocentini/Containers-Essentials:master default (Containers-Array2D of pharo-containers too)
 	ContainersCategory   github://massimo-nocentini/Containers-Category:master/src default
 	Delimcc              github://massimo-nocentini/delimcc.st:master            default (FileTree, at the root of the repository)
-	MaterialIcons        github://massimo-nocentini/material-icons.st:master/src SymbolsRoundedSmall SymbolsThemePack SymbolsTests,
+	MaterialIcons        github://massimo-nocentini/material-icons.st:master/src SymbolsRoundedSmall SymbolsThemePack SymbolsTests
+	                     SymbolsProtocols SymbolsProtocolsTests,
 	                     then MaterialSymbolsThemeIcons installColor: Color gray monochrome: true.
 
 Roassal comes first: Pharo 15 ships Roassal and RTree, which the forks replace, and the Roassal packages of
@@ -27,8 +28,9 @@ ContainersEssentials and ContainersCategory, which Delimcc needs, come before it
 BaselineOfContainersEssentials names RoassalMN, VMPluginsPrimitives, LibPangoCairo and LibPoppler by the repositories
 above, which their locks hold (so a BATTERIES_<KEY> repository is the one they get, and Roassal is loaded once, by
 BaselineOfRoassalMN: nothing loads BaselineOfRoassal).  MaterialIcons comes last, with the Material Symbols at 16, 24
-and 32 pixels, their pack of Pharo's icons and its tests (not their 192-pixel masters, nor the Material Icons, nor
-the filled symbols), and the expression after it makes the pack the icons of the UI, every key in gray,
+and 32 pixels, their pack of Pharo's icons, the symbols of the common method protocols in the browsers
+(MaterialProtocolSymbols) and their tests (not their 192-pixel masters, nor the Material Icons, nor the filled
+symbols), and the expression after it makes the pack the icons of the UI, every key in gray,
 the status keys of tests, errors and warnings too (monochrome): the image is saved with it.
 
 Environment:
@@ -75,7 +77,7 @@ projects := {
 	{ 'CONTAINERSCATEGORY'. 'ContainersCategory'. 'github://massimo-nocentini/Containers-Category:master/src'. #( 'default' ) }.
 	{ 'DELIMCC'. 'Delimcc'. 'github://massimo-nocentini/delimcc.st:master'. #( 'default' ) }.
 	{ 'MATERIALICONS'. 'MaterialIcons'. 'github://massimo-nocentini/material-icons.st:master/src'.
-		#( 'SymbolsRoundedSmall' 'SymbolsThemePack' 'SymbolsTests' ). 'MaterialSymbolsThemeIcons installColor: Color gray monochrome: true.' } }.
+		#( 'SymbolsRoundedSmall' 'SymbolsThemePack' 'SymbolsTests' 'SymbolsProtocols' 'SymbolsProtocolsTests' ). 'MaterialSymbolsThemeIcons installColor: Color gray monochrome: true.' } }.
 "{ key. baseline. repository. groups. the expression evaluated after the load, or nil }"
 projects := projects collect: [ :each |
 	| key repository groups |
