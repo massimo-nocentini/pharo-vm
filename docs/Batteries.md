@@ -1,6 +1,6 @@
 # The batteries image
 
-`PharoBatteries-<version>-Pharo15.zip` is the stock Pharo 15 image (the one the WebAssembly site boots, build 117) with the Smalltalk projects that go with the plugins and the libraries of this VM, loaded by Metacello and saved as `Pharo15-batteries.image`.
+`PharoBatteries-<version>-Pharo15.zip` is the stock Pharo 15 image (the one the WebAssembly site boots, build 117) with the Smalltalk projects that go with the plugins and the libraries of this VM, Delimcc and the Material Symbols, loaded by Metacello and saved as `Pharo15-batteries.image`, whose UI has the Material Symbols as its icons, in gray.
 CI builds it on every run and the release of a push to `pharo-12` carries it next to the VM zips; the WebAssembly site offers it as one more image (see [The site](#the-site)).
 
 ## What it holds
@@ -17,11 +17,18 @@ The projects, loaded in this order by `packaging/batteries/load.st`:
 | GLib, Pango and PangoCairo by uFFI ([PangoPoppler.md](PangoPoppler.md)) | `LibPangoCairo`, `default` | `github://massimo-nocentini/libpangocairo.st:master/src` |
 | poppler-glib by uFFI | `LibPoppler`, `default` | `github://massimo-nocentini/libpoppler.st:master/src` |
 | CMark: Markdown parse trees of the CMarkPlugin (cmark-gfm), and their Roassal view ([CMark.md](CMark.md)) | `CMark`, `default` (Core, Tests, Roassal and RoassalTests: not the opt-in RoassalFork group, since the fork is loaded first anyway) | `github://massimo-nocentini/cmark-gfm.st:master/src` |
+| Containers-Essentials, which Delimcc needs (with Containers-Array2D of pharo-containers) | `ContainersEssentials`, `default` | `github://massimo-nocentini/Containers-Essentials:master` (Tonel at the root of the repository) |
+| Containers-Category, which Delimcc needs | `ContainersCategory`, `default` | `github://massimo-nocentini/Containers-Category:master/src` |
+| Delimcc: multi-prompt delimited continuations (shift, reset and their kin), and the fixes to Pharo's `Continuation` (Delimcc-Continuation, with the fixed `ContinuationTest`) | `Delimcc`, `default` (Delimcc, Delimcc-Tests, Delimcc-Continuation and Delimcc-Continuation-Tests) | `github://massimo-nocentini/delimcc.st:master` (FileTree at the root of the repository) |
+| Material Symbols Rounded (all 3944, at 16, 24 and 32 pixels and their 192-pixel masters) and `MaterialSymbolsThemeIcons`, the icons of Pharo's UI drawn with them | `MaterialIcons`, `SymbolsRounded`, `SymbolsThemePack` and `SymbolsTests` (not the Material Icons Rounded, nor the filled symbols) | `github://massimo-nocentini/material-icons.st:master/src` |
 
-Every `default` group has the project's tests.
+Every `default` group has the project's tests, and so do the groups of MaterialIcons.
+After loading MaterialIcons, `load.st` evaluates `MaterialSymbolsThemeIcons installColor: Color gray.`: the image is saved with the Material Symbols as the icons of its UI, in gray (the status keys, of tests, errors, warnings..., keep the colours of their mapping), over the default pack of Pharo 15, which `MaterialSymbolsThemeIcons uninstall` puts back.
 Roassal comes first: Pharo 15 ships Roassal and RTree, and the Roassal packages of LibPangoCairo and LibPoppler then build on the fork.
 LibPangoCairo comes before LibPoppler, whose baseline loads its GLib group: each project is locked to its repository once loaded, so that the reference of `BaselineOfLibPoppler` to libpangocairo.st is honoured from where libpangocairo.st came.
-CMark comes last: `CMark-Roassal` uses only the Roassal API of the stock images, and draws here on the fork loaded first.
+CMark comes next: `CMark-Roassal` uses only the Roassal API of the stock images, and draws here on the fork loaded first.
+ContainersEssentials and ContainersCategory come before Delimcc, which needs them, for the reason LibPangoCairo comes before LibPoppler: `BaselineOfContainersEssentials` names RoassalMN, VMPluginsPrimitives, LibPangoCairo and LibPoppler by the repositories of the table, whose locks Metacello honours, so that a `BATTERIES_<KEY>` repository is also the one they get, and Roassal is loaded once, by `BaselineOfRoassalMN` (nothing loads `BaselineOfRoassal`, whose registration of Pharo stays as it is). The `postLoadDoIt` of `BaselineOfContainersEssentials` fails unless the fork's Roassal-UML has the UML sequence diagrams (`RSUMLSequenceBuilder`).
+MaterialIcons comes last; it needs nothing else.
 
 Two loads need care, and `load.st` takes it:
 
@@ -29,11 +36,11 @@ Two loads need care, and `load.st` takes it:
 - `BaselineOfRoassalMN` is a subclass of `BaselineOfRoassal` that only changes the repository of RTree; declaring Roassal as a nested project instead made Metacello keep the Roassal and RTree projects that Pharo registers (`MetacelloConflictingProjectError`). The load also answers a conflict with the incoming project and an upgrade with the incoming version.
 
 Each Metacello load runs with `IceNonInteractiveCredentialsProvider` and HTTPS clones (GitHub answers a repository that does not exist with a 401, which would otherwise wait for credentials forever); the image is saved with the settings of Iceberg of the stock image.
-Any error stops `load.st` with exit status 1 before the image is saved, and so does a new variable in `Undeclared` but two that the fork of Roassal has as upstream, classes of Pharo 12 that Pharo 15 has no more (`ClyCommandRegistry` in `RSThemedMapBuilder>>#showMenu:`, `RPackage` in `RSUMLPackageCalypso class>>#classUmlTapActivation2`), which it prints.
+Any error stops `load.st` with exit status 1 before the image is saved, and so do icons of the UI that are not `MaterialSymbolsThemeIcons`, and a new variable in `Undeclared` but two that the fork of Roassal has as upstream, classes of Pharo 12 that Pharo 15 has no more (`ClyCommandRegistry` in `RSThemedMapBuilder>>#showMenu:`, `RPackage` in `RSUMLPackageCalypso class>>#classUmlTapActivation2`), which it prints.
 It prints a line per project and per repository that Iceberg cloned, with its commit:
 
     Batteries repository RTree https://github.com/massimo-nocentini/RTree.git master a875929baa2b562d1b4d1b6bdf55882b31678034
-    Batteries loaded 8 projects on Pharo 15.0 (0 warnings) ok
+    Batteries loaded 12 projects on Pharo 15.0 (0 warnings) ok
 
 The repositories of Iceberg stay registered in the image, without their clones (the zip has none): Iceberg shows them as missing, and clones them again on demand.
 
@@ -50,7 +57,7 @@ It needs network access to GitHub (git over HTTPS) and `unzip`, and `zip` or `py
 
 The settings, all environment variables:
 
-- `BATTERIES_<KEY>`: the repository of a project instead of its `master` (or `Pharo15`) on GitHub, any Metacello repository; for a local checkout `tonel://<checkout>/src`, whose commit `build.sh` prints. The keys are `ROASSAL`, `VMPLUGINSPRIMITIVES`, `SIMDJSON`, `SIMDUTF`, `TIMSORT`, `LIBPANGOCAIRO`, `LIBPOPPLER` and `CMARK`.
+- `BATTERIES_<KEY>`: the repository of a project instead of its `master` (or `Pharo15`) on GitHub, any Metacello repository; for a local checkout `tonel://<checkout>/src`, whose commit `build.sh` prints. The keys are `ROASSAL`, `VMPLUGINSPRIMITIVES`, `SIMDJSON`, `SIMDUTF`, `TIMSORT`, `LIBPANGOCAIRO`, `LIBPOPPLER`, `CMARK`, `CONTAINERSESSENTIALS`, `CONTAINERSCATEGORY`, `DELIMCC` (`filetree://<checkout>` for a local checkout) and `MATERIALICONS`.
 - `BATTERIES_<KEY>_GROUPS`: its groups, separated by blanks.
 - `BATTERIES_SMOKE`: `basic` (the default) or `native`, below.
 - `BATTERIES_NAME` (the name of the image, `Pharo15-batteries`), `BATTERIES_TIMEOUT` (seconds per run of the VM, 1800), `BATTERIES_ICEBERG_REMOTE` (`httpsUrl`, or `scpUrl` to clone with SSH).
@@ -62,8 +69,9 @@ For example, with the checkouts of libpangocairo.st and libpoppler.st next to th
     BATTERIES_SMOKE=native \
         sh packaging/batteries/build.sh build/build/vm Pharo15.0-SNAPSHOT.build.117.sha.053a562682.arch.64bit.zip PharoBatteries.zip
 
-`smoke.st` checks that the image starts again, that a class or two of every project are there, the RTree of the fork (its collections, its packages not modified, its repository), the settings of Iceberg, `timSort:`, `timSortDescending` and `Float>>#times:plus:`, and runs the tests of RTree-Tests, TimSort-Smalltalk-Tests, VM-Plugins-Primitives-Tests, CMark-Tests and CMark-Roassal-Tests (about 25 s; without the CMarkPlugin, the CMark tests that parse skip themselves).
-With `BATTERIES_SMOKE=native`, on a VM of this repository, it also runs SimdJSON-Tests, SimdJSON-FFI-Tests, TimSort-FFI-Tests, LibGLib-Tests, LibPangoCairo-Tests and LibPoppler-Roassal-Tests, each of which must run tests, not only skip them (about 50 s).
+`smoke.st` checks that the image starts again, that a class or two of every project are there, the RTree of the fork (its collections, its packages not modified, its repository), the settings of Iceberg, that the icons of the UI are `MaterialSymbolsThemeIcons` in gray (five of its keys drawn in `Color gray` only), `timSort:`, `timSortDescending` and `Float>>#times:plus:`, and runs the tests of RTree-Tests, TimSort-Smalltalk-Tests, VM-Plugins-Primitives-Tests, CMark-Tests, CMark-Roassal-Tests, Delimcc-Tests, Delimcc-Continuation-Tests, Pharo's `ContinuationTest` (with the fixes of Delimcc-Continuation) and MaterialSymbols-Tests, which put the gray pack back after each test (about 2 min, 80 s of them for MaterialSymbols-Tests; without the CMarkPlugin, the CMark tests that parse skip themselves).
+It runs in the work directory of `build.sh`, where Iceberg has its clones: on an image unzipped elsewhere the check of the repository of RTree fails, since the zip has none.
+With `BATTERIES_SMOKE=native`, on a VM of this repository, it also runs SimdJSON-Tests, SimdJSON-FFI-Tests, TimSort-FFI-Tests, LibGLib-Tests, LibPangoCairo-Tests and LibPoppler-Roassal-Tests, each of which must run tests, not only skip them (about 50 s more).
 Its last line is `Batteries smoke <mode> classes <n> tests <run> passed <p> skipped <s> failed <f> errors <e> ok`, or `FAILED`.
 
 ## In CI
@@ -72,9 +80,10 @@ The `batteries` job of `.github/workflows/build.yml` builds it on ubuntu-24.04 w
 It needs no other job, so it runs while the generate job and the native jobs do; the WebAssembly job, which stages it, waits for it (a few minutes), and the release of a push to `pharo-12` attaches it.
 The plugins and the libraries that the projects use are checked on the VM zips by the native jobs (their `ci-load.st` steps, and `tests/cairo-stack/ci-text.st` for Pango and Poppler), not by this job; `BATTERIES_SMOKE=native` runs the projects' own tests on such a VM, by hand.
 
-It loads every project from `master` (Roassal from `Pharo15`) on GitHub: the job passes only when those branches hold the code above (for libpangocairo.st and libpoppler.st, their `stack` branches published as `master`).
+It loads every project from `master` (Roassal from `Pharo15`) on GitHub: the job passes only when those branches hold the code above (for libpangocairo.st and libpoppler.st, their `stack` branches published as `master`; for Containers-Essentials, a `master` whose `postLoadDoIt` finds the UML sequence diagrams in the Roassal-UML of the `Pharo15` of Roassal).
 
 ## The site
 
 The WebAssembly site of CI offers the image as the extra image `batteries` (`WASM_EXTRA_IMAGES="... batteries=PharoBatteries-<version>-Pharo15.zip"`, [WebAssembly.md](WebAssembly.md), Building): its pages list it as **Pharo 15 (batteries)** (a second image of one release gets its id after the label), prepared for the world as the others, and it is not the default, which stays the stock Pharo 15.
-It adds about 26 MB to the site (its image, 18 MB gzipped, its `.changes`, and its own copy of the `.sources` of Pharo 15, 7.9 MB gzipped), downloaded only by those who choose it.
+It adds about 64 MB to the site (its image, 116 MB, 43 MB gzipped, its `.changes`, 23 MB, 12 MB gzipped, and its own copy of the `.sources` of Pharo 15, 7.9 MB gzipped), downloaded only by those who choose it; before Delimcc and the Material Symbols it was 27 MB (an image of 68 MB, 18 MB gzipped).
+Most of the growth is the Material Symbols, whose Forms are in the image and whose sources (their PNGs, in literal byte arrays) are in the `.changes`: `BATTERIES_MATERIALICONS_GROUPS='SymbolsRoundedSmall SymbolsThemePack'`, without the 192-pixel masters and the tests (which need them), makes an image of 93 MB (28 MB gzipped) and a `.changes` of 12 MB (4.7 MB gzipped), about 40 MB in all, but the smoke then misses MaterialSymbols-Tests.

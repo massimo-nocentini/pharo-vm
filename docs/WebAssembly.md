@@ -4,7 +4,7 @@ The VM can be cross-built to WebAssembly with Emscripten.
 The build runs from the root of this repository, out of tree, by default in `build-wasm/`.
 It builds the StackVM, the interpreter (a JIT needs executable memory), for 64-bit images, with the FFI on libffi but no threads, and runs the stock Pharo 12 image by default.
 Pharo 13, 14 and 15 images run too: a site is built with one (`WASM_IMAGE_ZIP`), may offer several, which its pages let the user choose from (`WASM_EXTRA_IMAGES`), and the pages open any of them from disk; the Smalltalk of the pages works with all of them (see Pharo versions).
-The site that GitHub Actions builds offers Pharo 15 (the default), 14, 13.1 and the batteries image, Pharo 15 with the projects of this VM's plugins and libraries ([Batteries.md](Batteries.md)).
+The site that GitHub Actions builds offers Pharo 15 (the default), 14, 13.1 and the batteries image, Pharo 15 with the projects of this VM's plugins and libraries, Delimcc and the Material Symbols, its icons in gray ([Batteries.md](Batteries.md)).
 Two VMs are linked from the same objects:
 
 - a command-line VM for node, with access to the host file system, environment and exit status;
