@@ -564,7 +564,7 @@ Every library is built by a file of `cmake/emscripten/deps` from its pinned rele
 | pixman 0.46.4 | `pixman-0.46.4.tar.gz` | cairo | `-O2` |
 | cairo 1.18.6 | `cairo-1.18.6.tar.xz` | `WASM_CAIRO` | `-O2` |
 | libgit2 1.4.4 | `libgit2-1.4.4.tar.gz` | `WASM_LIBGIT2` | `-Os` |
-| expat 2.10.0 | `expat-2.10.0.tar.xz` | `WASM_PANGO` | `-O2` |
+| expat 2.11.0 | `expat-2.11.0.tar.xz` | `WASM_PANGO` | `-O2` |
 | fontconfig 2.18.4 | `fontconfig-2.18.4.tar.xz` | `WASM_PANGO` | `-O2` |
 | GLib 2.90.1 (GLib, GObject, GModule, GIO) | `glib-2.90.1.tar.xz` | `WASM_PANGO` | `-O2`, GIO `-Os` |
 | FriBidi 1.0.18 | `fribidi-1.0.18.tar.xz` | `WASM_PANGO` | `-O2` |

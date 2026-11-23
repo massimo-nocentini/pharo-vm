@@ -6,7 +6,7 @@
 # pinned archives of the native VMs' cairo stack (cmake/cairo-stack/
 # pins.txt: the same versions and SHA256), the static libraries
 #
-#     pharo_expat       expat 2.10.0, for fontconfig
+#     pharo_expat       expat 2.11.0, for fontconfig
 #     pharo_fontconfig  fontconfig 2.18.4, the font map of Pango, cairo's
 #                       toy fonts and Poppler's substitution of fonts
 #     pharo_glib        GLib 2.90.1: libglib, with libcharset

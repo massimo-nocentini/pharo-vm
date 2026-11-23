@@ -61,8 +61,8 @@ zlib 1.4 02dd159783677a749c04adbdd02b55b8a2bcc7e054f51b76b549199a916ad584 zlib-1
 libpng 1.6.59 86a3e4b501f7f50e392c4e456ea158893e9a595b1c63eb88c7bb9f6cf8772dad libpng-1.6.59.tar.gz https://download.sourceforge.net/libpng/libpng-1.6.59.tar.gz linux,darwin LICENSE
 # signed-by E30674707856409FF1948010BE6C3AAC63AD8E3F https://download.savannah.gnu.org/releases/freetype/freetype-2.15.0.tar.xz.sig (Werner Lemberg; gpgv good, 2026-11-18; MSYS2's source package mingw-w64-freetype-2.15.0-1 holds the same archive)
 freetype 2.15.0 93cd47eb719c325107f2d3cf087d06299e944c3b48a40b55537302304dea1dd5 freetype-2.15.0.tar.xz https://download.savannah.gnu.org/releases/freetype/freetype-2.15.0.tar.xz linux,darwin LICENSE.TXT docs/FTL.TXT docs/GPLv2.TXT src/bdf/README src/pcf/README src/base/fthash.c
-# signed-by 3176EF7DB2367F1FCA4F306B1F9B0E909AF37285 https://github.com/libexpat/libexpat/releases/download/R_2_10_0/expat-2.10.0.tar.xz.asc (Sebastian Pipping, signing subkey CB8DE70A90CFBF6C3BF5CC5696262ACFFBD3AEC6; gpgv good, 2026-11-18)
-expat 2.10.0 c624ba2998fc65df1163a49641ff3f9ab73138b11641d92c86bee0fb01b1bc7f expat-2.10.0.tar.xz https://github.com/libexpat/libexpat/releases/download/R_2_10_0/expat-2.10.0.tar.xz linux,darwin COPYING
+# signed-by 3176EF7DB2367F1FCA4F306B1F9B0E909AF37285 https://github.com/libexpat/libexpat/releases/download/R_2_11_0/expat-2.11.0.tar.xz.asc (Sebastian Pipping, signing subkey CB8DE70A90CFBF6C3BF5CC5696262ACFFBD3AEC6; gpgv good, 2026-11-23)
+expat 2.11.0 61e7614b602201c28a189dafee78f5bceaee192bbde46a930752ff09cf5542fa expat-2.11.0.tar.xz https://github.com/libexpat/libexpat/releases/download/R_2_11_0/expat-2.11.0.tar.xz linux,darwin COPYING
 # unsigned: fontconfig publishes a checksum only.  The hash equals that of
 # https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.18.4/fontconfig-2.18.4.tar.xz.sha256sum (same origin; 2026-11-18).
 fontconfig 2.18.4 95013637eff5f81d4871dd16cd098c273264c16d0f9f0b27cc43b81b2794bee3 fontconfig-2.18.4.tar.xz https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.18.4/fontconfig-2.18.4.tar.xz linux,darwin COPYING
