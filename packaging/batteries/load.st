@@ -12,17 +12,29 @@
 	LibPangoCairo        github://massimo-nocentini/libpangocairo.st:master/src  default
 	LibPoppler           github://massimo-nocentini/libpoppler.st:master/src     default
 	CMark                github://massimo-nocentini/cmark-gfm.st:master/src      default (CMark-Roassal on the fork)
+	ContainersEssentials github://massimo-nocentini/Containers-Essentials:master default (Containers-Array2D of pharo-containers too)
+	ContainersCategory   github://massimo-nocentini/Containers-Category:master/src default
+	Delimcc              github://massimo-nocentini/delimcc.st:master            default (FileTree, at the root of the repository)
+	MaterialIcons        github://massimo-nocentini/material-icons.st:master/src SymbolsRounded SymbolsThemePack SymbolsTests,
+	                     then MaterialSymbolsThemeIcons installColor: Color gray.
 
 Roassal comes first: Pharo 15 ships Roassal and RTree, which the forks replace, and the Roassal packages of
 LibPangoCairo and LibPoppler then build on the fork.  LibPangoCairo comes before LibPoppler, whose baseline
 needs its GLib group: once loaded, every project is locked to the repository it came from, so that the
 reference of BaselineOfLibPoppler to github://massimo-nocentini/libpangocairo.st:master/src is honoured from
-there.  CMark comes last: its renderer uses only the Roassal API of the stock images, and draws on the fork here.
+there.  CMark comes next: its renderer uses only the Roassal API of the stock images, and draws on the fork here.
+ContainersEssentials and ContainersCategory, which Delimcc needs, come before it for the same reason as LibPangoCairo:
+BaselineOfContainersEssentials names RoassalMN, VMPluginsPrimitives, LibPangoCairo and LibPoppler by the repositories
+above, which their locks hold (so a BATTERIES_<KEY> repository is the one they get, and Roassal is loaded once, by
+BaselineOfRoassalMN: nothing loads BaselineOfRoassal).  MaterialIcons comes last, with the Material Symbols, their
+pack of Pharo's icons and its tests (not the Material Icons, nor the filled symbols), and the expression after it
+makes the pack the icons of the UI, in gray: the image is saved with it.
 
 Environment:
 	BATTERIES_<KEY>          the repository of a project instead of the one above, any Metacello repository
 	                         (github://..., gitlocal://..., tonel:///<checkout>/src for a local checkout); the keys
-	                         are ROASSAL, VMPLUGINSPRIMITIVES, SIMDJSON, SIMDUTF, TIMSORT, LIBPANGOCAIRO, LIBPOPPLER, CMARK
+	                         are ROASSAL, VMPLUGINSPRIMITIVES, SIMDJSON, SIMDUTF, TIMSORT, LIBPANGOCAIRO, LIBPOPPLER, CMARK,
+	                         CONTAINERSESSENTIALS, CONTAINERSCATEGORY, DELIMCC, MATERIALICONS
 	BATTERIES_<KEY>_GROUPS   its groups, separated by blanks, instead of the ones above
 	BATTERIES_ICEBERG_REMOTE the protocol of the clones of github:// repositories, httpsUrl by default (no SSH key
 	                         needed) or scpUrl
@@ -31,8 +43,8 @@ Pharo ships BaselineOfRoassal and the Roassal and RTree packages, which Monticel
 asks whether to load the new versions over them (MCMergeOrLoadWarning), and the answer is Load (a plain resume
 would keep the methods of the image).  Any other warning is printed and resumed.  Any error stops the script with
 exit status 1, before the image is saved.  After the load: the fork's RTree must be there (RTNaryTreeCollection,
-and no RTree package left modified), no load may leave a new Undeclared variable, and one line per repository
-gives what was loaded:
+and no RTree package left modified), the icons of the UI must be MaterialSymbolsThemeIcons, no load may leave a new
+Undeclared variable, and one line per repository gives what was loaded:
 
 	Batteries project <name> <repository> groups <groups>
 	Batteries repository <name> <remote> <branch> <commit>     (the clones of Iceberg: github:// repositories)
@@ -57,14 +69,20 @@ projects := {
 	{ 'TIMSORT'. 'TimSort'. 'github://massimo-nocentini/timsort.st:master/src'. #( 'default' ) }.
 	{ 'LIBPANGOCAIRO'. 'LibPangoCairo'. 'github://massimo-nocentini/libpangocairo.st:master/src'. #( 'default' ) }.
 	{ 'LIBPOPPLER'. 'LibPoppler'. 'github://massimo-nocentini/libpoppler.st:master/src'. #( 'default' ) }.
-	{ 'CMARK'. 'CMark'. 'github://massimo-nocentini/cmark-gfm.st:master/src'. #( 'default' ) } }.
+	{ 'CMARK'. 'CMark'. 'github://massimo-nocentini/cmark-gfm.st:master/src'. #( 'default' ) }.
+	{ 'CONTAINERSESSENTIALS'. 'ContainersEssentials'. 'github://massimo-nocentini/Containers-Essentials:master'. #( 'default' ) }.
+	{ 'CONTAINERSCATEGORY'. 'ContainersCategory'. 'github://massimo-nocentini/Containers-Category:master/src'. #( 'default' ) }.
+	{ 'DELIMCC'. 'Delimcc'. 'github://massimo-nocentini/delimcc.st:master'. #( 'default' ) }.
+	{ 'MATERIALICONS'. 'MaterialIcons'. 'github://massimo-nocentini/material-icons.st:master/src'.
+		#( 'SymbolsRounded' 'SymbolsThemePack' 'SymbolsTests' ). 'MaterialSymbolsThemeIcons installColor: Color gray.' } }.
+"{ key. baseline. repository. groups. the expression evaluated after the load, or nil }"
 projects := projects collect: [ :each |
 	| key repository groups |
 	key := each first.
 	repository := (environment at: 'BATTERIES_' , key ifAbsent: [ '' ]) trimBoth ifEmpty: [ each third ].
 	groups := ((environment at: 'BATTERIES_' , key , '_GROUPS' ifAbsent: [ '' ]) substrings: ' ') asArray
 		ifEmpty: [ each fourth ].
-	{ key. each second. repository. groups } ].
+	{ key. each second. repository. groups. each size >= 5 ifTrue: [ each fifth ] ifFalse: [ nil ] } ].
 
 remoteType := ((environment at: 'BATTERIES_ICEBERG_REMOTE' ifAbsent: [ '' ]) trimBoth ifEmpty: [ 'httpsUrl' ]) asSymbol.
 remoteTypeBefore := Iceberg remoteTypeSelector.
@@ -106,6 +124,10 @@ projects do: [ :project |
 		baseline: project second;
 		repository: project third;
 		lock.
+	"(compiled now: its classes are there only after the load)"
+	project fifth ifNotNil: [ :expression |
+		line value: 'Batteries: evaluating ' , expression.
+		Smalltalk compiler evaluate: expression ].
 	line value: 'Batteries: loaded ' , project second , ' in '
 		, ((Time millisecondClockValue - started) // 1000) printString , ' s' ] ]
 	on: Error
@@ -122,14 +144,19 @@ projects do: [ :project |
 	(copy packageName beginsWith: 'RTree') or: [ copy packageName beginsWith: 'Roassal' ] ])
 		do: [ :copy | copy modified ifTrue: [ fail value: copy packageName , ' is modified after the load' ] ].
 
-"Two are known, in the fork of Roassal as upstream, and only printed: classes of Pharo 12 that Pharo 15 has no
- more (RSThemedMapBuilder>>#showMenu: names ClyCommandRegistry, RSUMLPackageCalypso
- class>>#classUmlTapActivation2 RPackage)"
+"The icons of the UI: the Material Symbols, in gray (ThemeIcons current would load the default pack when none is)"
+((ThemeIcons classVarNamed: #Current) ifNil: [ '' ] ifNotNil: [ :pack | pack class name ]) = #MaterialSymbolsThemeIcons
+	ifFalse: [ fail value: 'the icons of the UI are not MaterialSymbolsThemeIcons' ].
+
+"Three are known, and only printed: classes of Pharo 12 that Pharo 15 has no more, in the fork of Roassal as
+ upstream (RSThemedMapBuilder>>#showMenu: names ClyCommandRegistry, RSUMLPackageCalypso
+ class>>#classUmlTapActivation2 RPackage), and LibLua, of a binding of Lua that the batteries do not load
+ (CTNotebookKeyedValuedOrderedCollection>>#liblua of Containers-Essentials-Outliner)"
 newUndeclared := Undeclared keys asSet reject: [ :each | undeclaredBefore includes: each ].
 newUndeclared do: [ :name |
 	(SystemNavigation default allReferencesTo: (Undeclared associationAt: name)) do: [ :method |
 		line value: 'Batteries: Undeclared ' , name , ' in ' , method printString ] ].
-newUndeclared := newUndeclared reject: [ :each | #( #ClyCommandRegistry #RPackage ) includes: each ].
+newUndeclared := newUndeclared reject: [ :each | #( #ClyCommandRegistry #RPackage #LibLua ) includes: each ].
 newUndeclared ifNotEmpty: [
 	fail value: 'new Undeclared variables ' , newUndeclared asSortedCollection asArray printString ].
 
