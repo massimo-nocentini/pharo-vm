@@ -7,13 +7,14 @@ of the fork, the icons of its UI are the Material Symbols in gray, its facades a
 few packages pass:
 
 	basic (any VM, the default): RTree-Tests, TimSort-Smalltalk-Tests, VM-Plugins-Primitives-Tests (the
-	        UtilsPlugin's Smalltalk twin, and the plugin too when the VM has it), CMark-Tests and
-	        CMark-Roassal-Tests (whose tests that parse skip without the CMarkPlugin), Delimcc-Tests,
+	        UtilsPlugin's Smalltalk twin, and the plugin too when the VM has it), CMark-Tests, CMark-Roassal-Tests
+	        and CMark-Calypso-Tests (whose tests that parse skip without the CMarkPlugin), Delimcc-Tests,
 	        Delimcc-Continuation-Tests and ContinuationTest (Pharo's, with the fixes of Delimcc-Continuation),
 	        MaterialSymbols-Tests (which put the gray pack back after each test) and
-	        MaterialSymbols-Protocols-Tests (the protocol symbols, in headless Calypso browsers): each skipped when
-	        BATTERIES_MATERIALICONS_GROUPS, as for load.st, has not its group (SymbolsTests, SymbolsProtocolsTests)
-	        and the package is not there;
+	        MaterialSymbols-Protocols-Tests (the protocol symbols, in headless Calypso browsers): CMark-Calypso-Tests
+	        skipped when BATTERIES_CMARK_GROUPS, as for load.st, has not its group (CalypsoTests), and the last two
+	        when BATTERIES_MATERIALICONS_GROUPS has not theirs (SymbolsTests, SymbolsProtocolsTests), and the
+	        package is not there;
 	native (BATTERIES_SMOKE=native, on a VM of this repository, whose plugins and cairo stack the tests then
 	        use): also SimdJSON-Tests, SimdJSON-FFI-Tests, TimSort-FFI-Tests, LibGLib-Tests, LibPangoCairo-Tests and
 	        LibPoppler-Roassal-Tests, each of which must run tests, not only skip them.
@@ -83,18 +84,20 @@ IceCredentialsProvider providerType = IceNonInteractiveCredentialsProvider ifTru
 
 "3. the tests"
 suites := #( 'RTree-Tests' 'TimSort-Smalltalk-Tests' 'VM-Plugins-Primitives-Tests' 'CMark-Tests' 'CMark-Roassal-Tests'
-	'Delimcc-Tests' 'Delimcc-Continuation-Tests' 'ContinuationTest' 'MaterialSymbols-Tests' 'MaterialSymbols-Protocols-Tests' ).
+	'CMark-Calypso-Tests' 'Delimcc-Tests' 'Delimcc-Continuation-Tests' 'ContinuationTest' 'MaterialSymbols-Tests'
+	'MaterialSymbols-Protocols-Tests' ).
 mode = 'native' ifTrue: [
 	suites := suites , #( 'SimdJSON-Tests' 'SimdJSON-FFI-Tests' 'TimSort-FFI-Tests' 'LibGLib-Tests' 'LibPangoCairo-Tests'
 		'LibPoppler-Roassal-Tests' ) ].
-"(the groups of MaterialIcons that load.st was given may leave out its tests)"
-optional := ((environment at: 'BATTERIES_MATERIALICONS_GROUPS' ifAbsent: [ '' ]) substrings: ' ')
-	in: [ :groups |
-		groups isEmpty
-			ifTrue: [ #() ]
-			ifFalse: [
-				(#( #( 'SymbolsTests' 'MaterialSymbols-Tests' ) #( 'SymbolsProtocolsTests' 'MaterialSymbols-Protocols-Tests' ) )
-					reject: [ :each | groups includes: each first ]) collect: [ :each | each second ] ] ].
+"(the groups of CMark and MaterialIcons that load.st was given may leave out their tests: the package of tests, and
+ the variable whose groups lack its group)"
+optional := Dictionary new.
+#( #( 'BATTERIES_CMARK_GROUPS' 'CalypsoTests' 'CMark-Calypso-Tests' )
+	#( 'BATTERIES_MATERIALICONS_GROUPS' 'SymbolsTests' 'MaterialSymbols-Tests' )
+	#( 'BATTERIES_MATERIALICONS_GROUPS' 'SymbolsProtocolsTests' 'MaterialSymbols-Protocols-Tests' ) ) do: [ :each |
+		| groups |
+		groups := (environment at: each first ifAbsent: [ '' ]) substrings: ' '.
+		(groups notEmpty and: [ (groups includes: each second) not ]) ifTrue: [ optional at: each third put: each first ] ].
 run := passed := skipped := failed := errors := 0.
 suites do: [ :packageName |
 	| package classes suite result ms |
@@ -105,8 +108,8 @@ suites do: [ :packageName |
 		ifNotNil: [ package definedClasses ].
 	classes
 		ifNil: [
-			(optional includes: packageName)
-				ifTrue: [ line value: 'Batteries smoke: ' , packageName , ' not loaded (BATTERIES_MATERIALICONS_GROUPS)' ]
+			(optional includesKey: packageName)
+				ifTrue: [ line value: 'Batteries smoke: ' , packageName , ' not loaded (' , (optional at: packageName) , ')' ]
 				ifFalse: [ problems add: 'no package ' , packageName ] ]
 		ifNotNil: [
 			suite := TestSuite named: packageName.

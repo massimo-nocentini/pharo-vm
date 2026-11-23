@@ -23,7 +23,8 @@
 #            which the runner counts as passes, and a run where everything
 #            skipped would pass as green;
 #   test     every test package that the groups loaded (CMark-Tests,
-#            CMark-Roassal-Tests), as load-cmark.st lists them.
+#            CMark-Roassal-Tests, CMark-Calypso-Tests), as load-cmark.st
+#            lists them.
 #
 # A JUnit file of each package is left in the directory.  The status is 0
 # when every step passed.  The plugin is never hidden by deleting it (a VM

@@ -3,8 +3,10 @@
 the parse tree, its visitor, the decoder of the plugin's tape, parsing and rendering through the
 CMarkPlugin), Tests (CMark-Tests), Roassal (Core and CMark-Roassal: a document as one RSComposite),
 RoassalTests (Roassal and CMark-Roassal-Tests), RoassalFork (the user's fork of Roassal, then
-Roassal) and default (Core Tests Roassal RoassalTests).  The submodule's commit is the version of
-the Smalltalk code that goes with this plugin (docs/CMark.md).
+Roassal), Calypso (Roassal and CMark-Calypso: the Markdown tab of class comments in Calypso),
+CalypsoTests (Calypso, RoassalTests and CMark-Calypso-Tests) and default (Core Tests Roassal
+RoassalTests Calypso CalypsoTests).  The submodule's commit is the version of the Smalltalk code
+that goes with this plugin (docs/CMark.md).
 
 	CMARK_PLUGIN_DIR=<repository>/plugins/CMarkPlugin CMARK_GROUPS='Core Tests' \
 	pharo --headless X.image --no-default-preferences st --save --quit load-cmark.st
