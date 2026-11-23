@@ -1,0 +1,11 @@
+# The functions of fontconfig (libfontconfig.so.1) that the images bind
+# through uFFI: PangoFontconfigLibrary of the package LibPangoCairo
+# (libpangocairo.st), with which PangoImageFonts adds the fonts of the image
+# to fontconfig's current configuration (on Linux, where Pango's font map is
+# fontconfig's).  A name per line, '#' starting a comment.
+# scripts/cairo-stack/check.sh asserts that the Linux stack's library exports
+# every name; a binding that calls another function adds it here first.  The
+# Emscripten VM builds its table from it with WASM_PANGO
+# (cmake/emscripten/ffiLibraries.cmake).
+#
+FcConfigAppFontAddFile

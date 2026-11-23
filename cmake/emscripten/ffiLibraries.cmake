@@ -103,10 +103,14 @@ endif()
 
 # Pango (PHARO_WASM_HAS_PANGO, cmake/emscripten/deps/pango.cmake): the
 # libraries of libpangocairo.st, GLibLibrary (libglib-2.0.so.0, so glib),
-# GObjectLibrary (gobject), PangoLibrary (pango) and PangoCairoLibrary
-# (pangocairo), with the functions of their lists, and harfbuzz, which no
-# class loads by name, for the instance check of the bindings (below).
-# Their placeholders are the sonames the bindings look for first.
+# GObjectLibrary (gobject), PangoLibrary (pango), PangoCairoLibrary
+# (pangocairo), PangoFontconfigLibrary (libfontconfig.so.1, fontconfig) and
+# PangoFt2Library (pangoft2), with the functions of their lists, and
+# harfbuzz, which no class loads by name, for the instance check of the
+# bindings (below).  Their placeholders are the sonames the bindings look
+# for first.  fontconfig and pangoft2 serve PangoImageFonts, which adds the
+# fonts of the image to fontconfig (FcConfigAppFontAddFile) and makes Pango
+# forget its cached fonts (pango_fc_font_map_config_changed).
 #
 # DEPENDS: a library looks up what its table lacks in the libraries it
 # depends on, as dlsym does on Linux, where the bindings' GLibInstanceCheck
@@ -115,7 +119,7 @@ endif()
 # check that they bind the GLib, GObject, HarfBuzz and cairo of GLibLibrary,
 # GObjectLibrary and CairoLibrary: here they do, the VM has one of each.
 # pharoWasmTextInit (src/emscripten/textSupport.c) gives fontconfig the
-# fonts of the VM before Pango or Poppler first runs.
+# fonts of the VM before Pango, Poppler or fontconfig itself first runs.
 if(PHARO_WASM_HAS_PANGO)
     pharo_wasm_ffi_library(glib
         HEADERS glib.h
@@ -146,6 +150,19 @@ if(PHARO_WASM_HAS_PANGO)
         FILES libpangocairo-1.0.so.0
         ON_LOAD pharoWasmTextInit
         DEPENDS pango gobject glib harfbuzz cairo)
+    pharo_wasm_ffi_library(fontconfig
+        HEADERS fontconfig/fontconfig.h
+        SYMBOLS_FILE ${CMAKE_CURRENT_LIST_DIR}/ffi/symbols/fontconfig.txt
+        LINK pharo_fontconfig
+        FILES libfontconfig.so.1
+        ON_LOAD pharoWasmTextInit)
+    pharo_wasm_ffi_library(pangoft2
+        HEADERS pango/pangofc-fontmap.h
+        SYMBOLS_FILE ${CMAKE_CURRENT_LIST_DIR}/ffi/symbols/pangoft2.txt
+        LINK pharo_pango
+        FILES libpangoft2-1.0.so.0
+        ON_LOAD pharoWasmTextInit
+        DEPENDS pango gobject glib harfbuzz fontconfig)
 endif()
 
 # Poppler (PHARO_WASM_HAS_POPPLER, cmake/emscripten/deps/poppler.cmake):

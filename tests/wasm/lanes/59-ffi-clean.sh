@@ -33,8 +33,9 @@
 #             (c, freetype, cairo, ...) must have functions the image binds
 #             among its rows, which shows that its names were read; but
 #             for those of libpangocairo.st and libpoppler.st (glib,
-#             gobject, harfbuzz, pango, pangocairo, poppler_glib, with
-#             WASM_PANGO and WASM_POPPLER), which no image of the site binds
+#             gobject, harfbuzz, pango, pangocairo, fontconfig, pangoft2,
+#             poppler_glib, with WASM_PANGO and WASM_POPPLER), which no
+#             image of the site binds
 #             unless it loaded the bindings (lane 76 runs them).
 #
 # The boots, the session and the glyphs must print no line of the guard ('FFI callout
@@ -179,7 +180,7 @@ covered() {
     # and Poppler, projects that an image loads)
     listed=
     for library in $libraries; do
-	case " glib gobject harfbuzz pango pangocairo poppler_glib " in *" $library "*) continue ;; esac
+	case " glib gobject harfbuzz pango pangocairo fontconfig pangoft2 poppler_glib " in *" $library "*) continue ;; esac
 	if test -f "$SRCDIR/cmake/emscripten/ffi/symbols/$library.txt"; then listed="$listed $library"; fi
     done
     rm -f missing.txt

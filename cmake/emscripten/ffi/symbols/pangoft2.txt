@@ -1,0 +1,11 @@
+# The functions of pangoft2 (libpangoft2-1.0.so.0), Pango's fontconfig and
+# FreeType backend, that the images bind through uFFI: PangoFt2Library of
+# the package LibPangoCairo (libpangocairo.st), for PangoFontMap>>configChanged
+# after PangoImageFonts added fonts to fontconfig (on Linux, where Pango's font
+# map is fontconfig's).  A name per line, '#' starting a comment.
+# scripts/cairo-stack/check.sh asserts that the Linux stack's library exports
+# every name; a binding that calls another function adds it here first.  The
+# Emscripten VM builds its table from it with WASM_PANGO
+# (cmake/emscripten/ffiLibraries.cmake).
+#
+pango_fc_font_map_config_changed

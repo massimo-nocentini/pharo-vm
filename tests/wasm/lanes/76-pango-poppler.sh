@@ -8,7 +8,8 @@
 # with AthensCairoCanvas>>getHandle (Pharo 12's handle) for ci-text.st:
 #
 #   registry  the registry of each VM has the libraries glib, gobject,
-#             harfbuzz, pango, pangocairo (and poppler_glib with Poppler),
+#             harfbuzz, pango, pangocairo, fontconfig, pangoft2 (and
+#             poppler_glib with Poppler),
 #             and node/ the placeholders the bindings look for and the fonts
 #             with their fonts.conf;
 #   probe     tests/cairo-stack/ci-text.st, the probe of the native CI jobs,
@@ -109,8 +110,8 @@ retire
 check_dir=
 checks=$((checks + 1))
 missing=
-libraries="glib gobject harfbuzz pango pangocairo"
-files="libglib-2.0.so.0 libgobject-2.0.so.0 libpango-1.0.so.0 libpangocairo-1.0.so.0 fonts/fonts.conf fonts/DejaVuSans.ttf fonts/DejaVuSans-Bold.ttf fonts/DejaVuSerif.ttf fonts/DejaVuSerif-Bold.ttf fonts/DejaVuSansMono.ttf"
+libraries="glib gobject harfbuzz pango pangocairo fontconfig pangoft2"
+files="libglib-2.0.so.0 libgobject-2.0.so.0 libpango-1.0.so.0 libpangocairo-1.0.so.0 libfontconfig.so.1 libpangoft2-1.0.so.0 fonts/fonts.conf fonts/DejaVuSans.ttf fonts/DejaVuSans-Bold.ttf fonts/DejaVuSerif.ttf fonts/DejaVuSerif-Bold.ttf fonts/DejaVuSansMono.ttf"
 if test $poppler = yes; then
     libraries="$libraries poppler_glib"
     files="$files libpoppler-glib.so.8"
@@ -124,7 +125,7 @@ done
 for f in $files; do
     test -f "$WASM_DIR/node/$f" || missing="$missing node/$f"
 done
-for f in libglib-2.0.so.0 libpango-1.0.so.0 libpangocairo-1.0.so.0; do
+for f in libglib-2.0.so.0 libpango-1.0.so.0 libpangocairo-1.0.so.0 libfontconfig.so.1 libpangoft2-1.0.so.0; do
     grep -q "\"$f\"" "$WASM_DIR/web/manifest.json" || missing="$missing manifest.libraries:$f"
 done
 if test -n "$missing"; then
@@ -253,14 +254,16 @@ binding() {   # binding <name> <dir> <summary regex>
 	ok "$name" "$(grep -E "$3" smoke.out | tail -n 1)"
 	return
     fi
-    # the tests that cannot pass here: those whose only failure is one of
-    # $inapplicable, and nothing else wrong, pass with a note
+    # the tests that cannot pass here: those whose only failures and errors
+    # are some of $inapplicable (as many as the summary counts), and nothing
+    # else wrong, pass with a note
     summary=$(grep -E "$3" smoke.out | tail -n 1)
     failed=$(grep -E '^(FAIL|ERROR) [A-Za-z0-9_]+>>' smoke.out | sed -E 's/^(FAIL|ERROR) ([^ ]*).*/\2/' | sort -u)
     others=$(echo "$failed" | grep -v -x -F "$inapplicable")
-    if test -n "$summary" && test -n "$failed" && test -z "$others" \
-	&& ! grep -Eq '^(UNDECLARED|UNIMPLEMENTED|LINT|SKIP)' smoke.out \
-	&& echo "$summary" | grep -Eq ' errors 0 [a-z]+ [0-9.]+ FAILED$'; then
+    counted=$(echo "$summary" | sed -nE 's/.* failed ([0-9]+) errors ([0-9]+) [a-z]+ [0-9.]+ FAILED$/\1 + \2/p')
+    if test -n "$summary" && test -n "$failed" && test -z "$others" && test -n "$counted" \
+	&& test $(($counted)) -eq "$(echo "$failed" | grep -c .)" \
+	&& ! grep -Eq '^(UNDECLARED|UNIMPLEMENTED|LINT|SKIP)' smoke.out; then
 	ok "$name" "$summary, but for $(echo $failed), which cannot pass in WebAssembly"
     else
 	fail "$name" "$(grep -E "$3|^FAIL" smoke.out | tail -n 2 | tr '\n' ' ')"
@@ -271,8 +274,12 @@ binding() {   # binding <name> <dir> <summary regex>
 # libcairo.so.2 elsewhere and expects the check to find a second cairo in
 # it: the VM has one cairo, which any copy of its placeholder names (the
 # test is for Linux, where a copy is another instance; it should skip on
-# Emscripten, as on macOS and Windows)
-inapplicable='GLibTest>>testInstanceCheckMismatchOnCopiedCairo'
+# Emscripten, as on macOS and Windows).
+# PangoMicrodownCompatTest>>testHttpInputFileIsFetchedAsBefore serves the
+# file of an inputFile from a ZnServer on 127.0.0.1: the VMs have no
+# sockets (NameLookupFailure).
+inapplicable='GLibTest>>testInstanceCheckMismatchOnCopiedCairo
+PangoMicrodownCompatTest>>testHttpInputFileIsFetchedAsBefore'
 if test -z "$LIBPANGOCAIRO_DIR"; then
     skip_check libpangocairo "no LIBPANGOCAIRO_DIR (a checkout of libpangocairo.st)"
 elif ! test -f "$LIBPANGOCAIRO_DIR/ci/run.sh"; then

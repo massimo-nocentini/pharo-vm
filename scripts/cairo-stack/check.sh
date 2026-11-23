@@ -28,8 +28,9 @@
 #   --minos    macOS: fail when a library's minimum macOS is newer
 #   --symbols  cairo.txt, the list of cairo functions the images bind; the
 #              lists of the other libraries (glib.txt, gobject.txt,
-#              harfbuzz.txt, pango.txt, pangocairo.txt, poppler-glib.txt) are
-#              read from the same directory
+#              harfbuzz.txt, pango.txt, pangocairo.txt, poppler-glib.txt, and
+#              on Linux fontconfig.txt and pangoft2.txt) are read from the
+#              same directory
 #   --no-probe do not compile and run probe.c (Linux and macOS: toy text) and
 #              probe-text.c (Pango, Poppler)
 #
@@ -512,7 +513,8 @@ check_linux() {
         check_exports libcairo "$t" "$(basename "$symbols")" extra-cairo
     fi
     for e in 'glib.txt:libglib-2.0.so.*' 'gobject.txt:libgobject-2.0.so.*' 'harfbuzz.txt:libharfbuzz.so.*' \
-             'pango.txt:libpango-1.0.so.*' 'pangocairo.txt:libpangocairo-1.0.so.*' 'poppler-glib.txt:libpoppler-glib.so.*'; do
+             'pango.txt:libpango-1.0.so.*' 'pangocairo.txt:libpangocairo-1.0.so.*' 'poppler-glib.txt:libpoppler-glib.so.*' \
+             'fontconfig.txt:libfontconfig.so.*' 'pangoft2.txt:libpangoft2-1.0.so.*'; do
         f=$(real_of "${e#*:}")
         [ -n "$f" ] || continue
         [ "${e%%:*}" != harfbuzz.txt ] || has_feature pango || continue
