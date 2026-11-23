@@ -139,9 +139,9 @@ steps add: 'file clone' -> [
 	clone branchName ].
 run := [ :list |
 	list do: [ :step |
-		(wanted isNil
-			ifTrue: [ step key ~= 'unresolved clone' ]
-			ifFalse: [ (wanted includes: 'all') or: [ wanted includes: step key ] ]) ifTrue: [
+		(wanted
+			ifNil: [ step key ~= 'unresolved clone' ]
+			ifNotNil: [ (wanted includes: 'all') or: [ wanted includes: step key ] ]) ifTrue: [
 			| value ms |
 			"(described in the handler: once it returns, the stack of the error is gone)"
 			ms := [ value := [ step value value ] on: Error do: [ :error |
