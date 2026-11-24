@@ -93,8 +93,12 @@ sc_inline void scan(sc_job *j, const bool store) {
             const carries saved = c;
             masks m[4];
 
-            for (int i = 0; i < 4; i++)
+            /* (hints: an address beyond the input or the output is none) */
+            __builtin_prefetch((const void *)((uintptr_t)(dest + fields) + 2048), 1);
+            for (int i = 0; i < 4; i++) {
+                __builtin_prefetch((const void *)((uintptr_t)u + p + 64 * (unsigned)i + 768));
                 m[i] = block(u + p + 64 * i, n, ~(uint64_t)0, c);
+            }
             if (__builtin_expect((m[0].bad | m[1].bad | m[2].bad | m[3].bad) != 0, 0)) {
                 c = saved;      /* the loop below stops there */
                 break;
