@@ -331,6 +331,47 @@ if(FEATURE_PLUGIN_CMARK)
     set_target_properties(CMarkPlugin PROPERTIES C_STANDARD 99)
 endif()
 
+# SimdCSVPlugin: CSV indexed as simdcsv does (the positions of the separators
+# and of the line ends, outside of quotes, 64 bytes at a time) into a word
+# array of the image, and rows built from such an index.  The AVX2 and NEON
+# kernels are simdcsv's (Geoff Langdale, cmake/simdcsv.cmake), chosen at run
+# time among them, SSE2 and a portable one, the only one on Emscripten; the
+# plugin of the package SimdCSV (github.com/massimo-nocentini/simdcsv.st);
+# docs/SimdCSV.md.  ON on every 64-bit target, OFF on 32-bit ones, where
+# turning it on is refused: its answers carry SmallIntegers above 2^30.  No
+# HOST_PLUGIN_FLAGS entry in the GNUmakefile (as for the TimSortPlugin): the
+# host tree of make wasm builds no plugin, but it configures this one, and so
+# takes the archive of simdcsv (340 KB, WASM_DEPS_DIR, else GitHub) at its
+# configure; the Emscripten tree takes none
+if(SIZEOF_VOID_P EQUAL 8)
+    set(pharo_simdcsv_default ON)
+else()
+    set(pharo_simdcsv_default OFF)
+endif()
+option(FEATURE_PLUGIN_SIMDCSV "Build the SimdCSVPlugin (simdcsv CSV indexing and row building, C++17)" ${pharo_simdcsv_default})
+if(FEATURE_PLUGIN_SIMDCSV AND NOT SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "FEATURE_PLUGIN_SIMDCSV needs a 64-bit VM (void* is ${SIZEOF_VOID_P} bytes)")
+endif()
+if(FEATURE_PLUGIN_SIMDCSV)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/simdcsv.cmake)
+    add_vm_plugin(SimdCSVPlugin FALSE FALSE)            # globs src/common/*.c; a builtin STATIC lib on Emscripten
+    # The engine by its file and not by its target: CMake links a library that
+    # depends on a C++ target with the C++ driver (even with LINKER_LANGUAGE
+    # C, its implicit libraries), and the plugin would need libstdc++ and
+    # libm; the engine uses neither.  The file is relinked when the engine
+    # changes, and on Emscripten it follows the static plugin into the links
+    # of the VM, which this plugin does not make C++.
+    target_link_libraries(SimdCSVPlugin PRIVATE $<TARGET_FILE:pharo_sc_engine>)
+    add_dependencies(SimdCSVPlugin pharo_sc_engine)
+    # primitiveInfo answers it (the glue includes nothing of simdcsv)
+    target_compile_definitions(SimdCSVPlugin PRIVATE PHARO_SIMDCSV_VERSION="${PHARO_SIMDCSV_VERSION}")
+    target_compile_options(SimdCSVPlugin PRIVATE -O2)
+    # C99 (C_EXTENSIONS stays on: the glue includes the VM's headers).  (C
+    # keeps the default visibility: the VM looks up the entry points; the
+    # engine's functions are hidden by SC_API, include/common/scEngine.h)
+    set_target_properties(SimdCSVPlugin PROPERTIES C_STANDARD 99)
+endif()
+
 # CairoPlugin: Athens drawing through cairo without the FFI's callout, for the
 # package VM-Plugins-Primitives-Cairo of the submodule
 # plugins/UtilsPlugin/vm-plugins-primitives.st (docs/CairoPlugin.md).
