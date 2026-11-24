@@ -76,6 +76,13 @@ say value: 'closures of every number of arguments' value: [ | z | z := 1. { [ z 
 say value: 'closures of many variables and temporaries' value: [ | z1 z2 z3 z4 z5 z6 z7 z8 f | z1 := z2 := z3 := z4 := z5 := z6 := z7 := z8 := 1. f := [ :a1 | | t1 t2 t3 t4 t5 | t1 := z1 + z2. t2 := z3 + z4 + t1. t3 := z5 + z6 + t2. t4 := z7 + z8 + t3. z1 := z1 + a1. t5 ifNil: [ t4 ] ifNotNil: [ #notNil ] ]. { f value: 1. f value: 2. f value: 3. z1 } ].
 c compile: 'recur: k ^ k = 0 ifTrue: [ 0 ] ifFalse: [ [ :x | (self recur: x - 1) + 1 ] value: k ]'.
 say value: 'closures and recursion' value: [ c new recur: 30000 ].
+BlockClosure compile: 'interpV: x <primitive: 207> ^ #failed'.
+FullBlockClosure compile: 'interpV: x (x n: x n + 1; n) > 5 ifTrue: [ ^ #recursion ]. ^ super interpV: x'.
+c compile: 'block ^ [ :x | self class name -> x n ]'.
+say value: 'super sends to the primitive of a block, which fails' value: [ | z o1 o2 o3 b r | z := 1. o1 := c new n: 0. o2 := c new n: 0. o3 := c new.
+	r := (5 to: 6) collect: [ :k | [ :x | x n + z + k ] interpV: (c new n: 0) ].
+	b := o3 block. o3 becomeForward: 'other' copy.
+	{ r. [ z ] interpV: o1. o1 n. (1 to: 3) collect: [ :k | [ :x :y | x ] interpV: (c new n: k) ]. [ z ] perform: #interpV: with: o2. o2 n. b interpV: (c new n: 0). b interpV: (c new n: 1) } ].
 
 "---- bytecodes that the compiler does not make, written into methods: a SmallInteger, a Character, class, a short jump, the nil of a block"
 s := [ :bytes | | m | m := (c compile: 'made ^ self yourself yourself yourself yourself yourself yourself'; yourself) >> #made.

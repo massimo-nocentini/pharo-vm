@@ -34,6 +34,7 @@ wrong numbers of arguments of closures: #(#error #error #error #error #error #er
 closures of every number of arguments: #(1 2 4 7 11 12)
 closures of many variables and temporaries: #(8 9 11 7)
 closures and recursion: 30000
+super sends to the primitive of a block, which fails: {#(7 8). #failed. 1. #(#failed #failed #failed). #failed. 1. #ByteString->1. #ByteString->2}
 bytecodes: {65. 200. -56. $A. 200. #InterpC. #SmallInteger. 0. 1. UndefinedObject}
 the nil of a block: nil
 closures with a receiver from the stack, and without an outer context: #(#(true 0 false #True 1 0) #(true 0 false #InterpC 1 1) #(true 0 true #InterpC 1 1) #(true 0 true #True 1 0))

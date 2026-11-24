@@ -216,8 +216,8 @@ case HC(119): { sqInt r_ = TOPV; uint32_t ci_ = (uint32_t)r_ & 7;
 	if (UNLIKELY(ci_ == 8)) GENERIC;
 	DROP1; tos = LDQ(LDQ(GIV(hiddenRootsObj) + (ci_ >> 10) * 8, 8) + (ci_ & 1023) * 8, 8); FETCH1; NEXT1; }
 
-case HC(121): FLUSH; hotRcvr = LDQ(SP, 0); ARGC(0); if (!(hotRcvr & 7) && (LDWU(hotRcvr, 0) & 0x3FFFFF) == ClassFullBlockClosureCompactIndex) { GIV(messageSelector) = 0; goto hotClosure; } hotSel = SPLSEL(25); goto hotSend;
-case HC(122): FLUSH; hotRcvr = LDQ(SP, 8); ARGC(1); if (!(hotRcvr & 7) && (LDWU(hotRcvr, 0) & 0x3FFFFF) == ClassFullBlockClosureCompactIndex) { GIV(messageSelector) = 0; goto hotClosure; } hotSel = SPLSEL(26); goto hotSend;
+case HC(121): FLUSH; hotRcvr = LDQ(SP, 0); ARGC(0); if (!(hotRcvr & 7) && (LDWU(hotRcvr, 0) & 0x3FFFFF) == ClassFullBlockClosureCompactIndex) { hotMethod = 0; goto hotClosure; } hotSel = SPLSEL(25); goto hotSend;
+case HC(122): FLUSH; hotRcvr = LDQ(SP, 8); ARGC(1); if (!(hotRcvr & 7) && (LDWU(hotRcvr, 0) & 0x3FFFFF) == ClassFullBlockClosureCompactIndex) { hotMethod = 0; goto hotClosure; } hotSel = SPLSEL(26); goto hotSend;
 case HC(115): case HC(116): case HC(117): case HC(123): case HC(124): case HC(125): case HC(126): case HC(127):
 	FLUSH; hotSel = SPLSEL(OPB - 96); { uint32_t n_ = (uint32_t)SPLARGC(OPB - 96); ARGC(n_); hotRcvr = LDQ(SP + n_ * 8, 0); } goto hotSend;
 case HC(128): case HC(129): case HC(130): case HC(131): case HC(132): case HC(133): case HC(134): case HC(135):

@@ -86,7 +86,7 @@ static __attribute__((noinline)) sqInt hotAfterPrimitive(iaddr fp, iaddr sp)
 static sqInt interpretGeneric(sqInt hotEntry, sqInt hotArg);
 sqInt interpret(void)
 {
-	iaddr lfpb, local_instructionPointer, local_stackPointer;
+	iaddr lfpb, local_instructionPointer, local_stackPointer, hotMethod;
 	uint32_t currentBytecode, hotTag;
 	sqInt tos, hotRet, hotRcvr, hotSel, hotEntry, hotArg = 0;
 	double hotD1;
@@ -162,7 +162,7 @@ hotReturnBlock: {
 	goto hotH0; }
 
 
-hotClosure: {	/* hotRcvr, a FullBlockClosure, is at SP + argumentCount * 8 */
+hotClosure: {	/* hotRcvr, a FullBlockClosure, is at SP + argumentCount * 8; hotMethod, the entry of the method cache, or 0 for bytecodes 121 and 122 */
 	uint32_t ac_ = (uint32_t)GIV(argumentCount);
 	sqInt m_ = LDQ(hotRcvr, 16), br_ = LDQ(hotRcvr, 32);
 	uint32_t ns_ = LDBU(hotRcvr, 7);
@@ -180,7 +180,11 @@ hotClosure: {	/* hotRcvr, a FullBlockClosure, is at SP + argumentCount * 8 */
 		if (UNLIKELY(--ioHeartbeatPollCountdown < 0) || UNLIKELY(SP < (iaddr)GIV(stackLimit))) goto hotOverflow;
 		FETCH0; tos = 0; goto hotH0;
 	}
-	if (!GIV(messageSelector)) GIV(messageSelector) = SPLSEL(ac_ ? 26 : 25);
+	if (hotMethod) {	/* the primitive of the method that was found, which a super send did not look up in the class of hotRcvr */
+		GIV(messageSelector) = LDQ(hotMethod, 8);
+		GIV(newMethod) = (sqInt)LDQ(hotMethod, 24); primitiveFunctionPointer = (void (*)())(sqIntptr_t)LDQ(hotMethod, 32);
+		hotEntry = HE_EXECUTE; goto hotCallGeneric; }
+	GIV(messageSelector) = SPLSEL(ac_ ? 26 : 25);
 	hotArg = ClassFullBlockClosureCompactIndex; hotEntry = HE_SEND; goto hotCallGeneric; }
 
 hotSend:
@@ -220,8 +224,7 @@ hotSendTag: {
 		}
 		hotTag = (uint32_t)hotRcvr & 7;	/* the class of the receiver: of a super send, not the one looked up */
 		if (!hotTag) hotTag = LDWU(hotRcvr, 0) & 0x3FFFFF;
-		GIV(messageSelector) = LDQ(e_, 8);
-		if (pf_ == (sqIntptr_t)primitiveFullClosureValue && hotTag == ClassFullBlockClosureCompactIndex) goto hotClosure;
+		if (pf_ == (sqIntptr_t)primitiveFullClosureValue && hotTag == ClassFullBlockClosureCompactIndex) { hotMethod = e_; goto hotClosure; }
 		{ uint32_t ac_ = (uint32_t)GIV(argumentCount);
 		if (pf_ == (sqIntptr_t)primitiveClass && ac_ == 0) {
 			tos = LDQ(LDQ(GIV(hiddenRootsObj) + (hotTag >> 10) * 8, 8) + (hotTag & 1023) * 8, 8); SP += 8; FETCHH1; goto hotH0; }
