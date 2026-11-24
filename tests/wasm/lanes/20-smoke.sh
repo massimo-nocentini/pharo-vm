@@ -1,7 +1,7 @@
 #!/bin/sh
 # 20-smoke - the node CLI against the smoke checks S1-S22 (wasm-smoke.sh)
 #
-# build-wasm/node/pharo, the VM for node (memory64), on fresh copies of the
+# build-wasm/node/pharo, the VM for node, on fresh copies of the
 # stock image: exact stdout of eval and st, the platform it reports, files,
 # environment, Delays and preemption, deep recursion, a growing heap, image
 # save and reload in wasm and natively, exit statuses, time zones, the

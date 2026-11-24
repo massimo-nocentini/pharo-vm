@@ -5,9 +5,11 @@
 # drives it as Spur does (see its comment): fixed spaces, segments that grow
 # again where freed ones were and come back zeroed, and old space that never
 # leaves its window [base, 2 * base) nor reaches perm space; then, run with
-# 'big', a first segment larger than the window.  It is built for wasm64 with
-# the memory settings of the VM (growth up to 4GB), against a stub of
-# pharovm/pharo.h written below, and run in node; it needs no VM build.
+# 'big', a first segment larger than the window.  It is built for 64-bit
+# pointers, linked with a 32-bit memory (-sMEMORY64=2, the default of the
+# VMs) and then with memory64, with the memory settings of the VM (growth up
+# to 4GB), against a stub of pharovm/pharo.h written below, and run in node;
+# it needs no VM build.
 #
 # Each run is stopped after WASM_CHECK_TIMEOUT (120) seconds, which fails the
 # lane.
@@ -58,30 +60,33 @@ typedef unsigned long long usqInt;
 EOF
 
 echo "56-memory-unit: $SRCDIR/src/emscripten/memoryEmscripten.c"
-if ! $cc -O1 -Wall -Werror=implicit-function-declaration -sENVIRONMENT=node \
-    -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=32MB -sMAXIMUM_MEMORY=4GB \
-    -I "$out/include" -o "$out/memory-unit.js" "$SRCDIR/tests/wasm/memory-unit.c" \
-    >"$out/build.log" 2>&1; then
-    cat "$out/build.log"
-    echo "FAIL 56-memory-unit: memory-unit.c does not build"
-    exit 1
-fi
+for memory in -sMEMORY64=2 -sMEMORY64=1; do
+    if ! $cc -O1 -Wall -Werror=implicit-function-declaration -sENVIRONMENT=node $memory \
+	-sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=32MB -sMAXIMUM_MEMORY=4GB \
+	-I "$out/include" -o "$out/memory-unit.js" "$SRCDIR/tests/wasm/memory-unit.c" \
+	>"$out/build.log" 2>&1; then
+	cat "$out/build.log"
+	echo "FAIL 56-memory-unit: memory-unit.c does not build with $memory"
+	exit 1
+    fi
+    echo "$memory:"
 
-for mode in '' big; do
-    status=0
-    limit "$timeout" "$NODE" "$out/memory-unit.js" $mode </dev/null >"$out/stdout.log" 2>"$out/stderr.log" || status=$?
-    grep -v '^logError: ' "$out/stdout.log" || true
-    cat "$out/stderr.log" >&2
-    if test "$status" -eq 124; then
-        echo "FAIL 56-memory-unit: memory-unit.js $mode timed out after $timeout s"
-        exit 1
-    fi
-    if grep -Eq "$engine_errors" "$out/stderr.log"; then
-        echo "FAIL 56-memory-unit: the engine failed (memory-unit.js $mode)"
-        exit 1
-    fi
-    if test "$status" -ne 0; then
-        echo "FAIL 56-memory-unit: memory-unit.js $mode: exit status $status"
-        exit 1
-    fi
+    for mode in '' big; do
+	status=0
+	limit "$timeout" "$NODE" "$out/memory-unit.js" $mode </dev/null >"$out/stdout.log" 2>"$out/stderr.log" || status=$?
+	grep -v '^logError: ' "$out/stdout.log" || true
+	cat "$out/stderr.log" >&2
+	if test "$status" -eq 124; then
+	    echo "FAIL 56-memory-unit: memory-unit.js $mode timed out after $timeout s ($memory)"
+	    exit 1
+	fi
+	if grep -Eq "$engine_errors" "$out/stderr.log"; then
+	    echo "FAIL 56-memory-unit: the engine failed (memory-unit.js $mode, $memory)"
+	    exit 1
+	fi
+	if test "$status" -ne 0; then
+	    echo "FAIL 56-memory-unit: memory-unit.js $mode: exit status $status ($memory)"
+	    exit 1
+	fi
+    done
 done

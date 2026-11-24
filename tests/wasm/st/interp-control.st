@@ -70,6 +70,20 @@ say value: 'deep recursion' value: [ #( 10 1000 50000 200000 ) collect: [ :m | d
 c compile: 'down: k ^ k = 0 ifTrue: [ #bottom ] ifFalse: [ self down: k - 1 ]'. c compile: 'sum: k ^ k = 0 ifTrue: [ 0 ] ifFalse: [ k + (self sum: k - 1) ]'.
 say value: 'deep sends' value: [ { c new down: 100000. c new sum: 100000 } ].
 
+"---- blocks that are closures (of self or of a variable: the others are clean, and need no FullBlockClosure)"
+say value: 'wrong numbers of arguments of closures' value: [ | z | z := 1. { [ [ :n1 | n1 + z ] value ] on: Error do: [ :e | #error ]. [ [ z ] value: 2 ] on: Error do: [ :e | #error ]. [ [ :n1 | n1 + z ] value: 1 value: 2 ] on: Error do: [ :e | #error ]. [ [ :n1 :n2 | z ] value: 1 ] on: Error do: [ :e | #error ]. [ [ :n1 | z ] valueWithArguments: #() ] on: Error do: [ :e | #error ]. [ [ :n1 :n2 :n3 | z ] value: 1 value: 2 ] on: Error do: [ :e | #error ] } ].
+say value: 'closures of every number of arguments' value: [ | z | z := 1. { [ z ] value. [ :a1 | a1 + z ] value: 1. [ :a1 :a2 | a1 + a2 + z ] value: 1 value: 2. [ :a1 :a2 :a3 | a1 + a2 + a3 + z ] value: 1 value: 2 value: 3. [ :a1 :a2 :a3 :a4 | a1 + a2 + a3 + a4 + z ] value: 1 value: 2 value: 3 value: 4. [ :a1 :a2 | a1 + a2 + z ] valueWithArguments: #(5 6) } ].
+say value: 'closures of many variables and temporaries' value: [ | z1 z2 z3 z4 z5 z6 z7 z8 f | z1 := z2 := z3 := z4 := z5 := z6 := z7 := z8 := 1. f := [ :a1 | | t1 t2 t3 t4 t5 | t1 := z1 + z2. t2 := z3 + z4 + t1. t3 := z5 + z6 + t2. t4 := z7 + z8 + t3. z1 := z1 + a1. t5 ifNil: [ t4 ] ifNotNil: [ #notNil ] ]. { f value: 1. f value: 2. f value: 3. z1 } ].
+c compile: 'recur: k ^ k = 0 ifTrue: [ 0 ] ifFalse: [ [ :x | (self recur: x - 1) + 1 ] value: k ]'.
+say value: 'closures and recursion' value: [ c new recur: 30000 ].
+
+"---- bytecodes that the compiler does not make, written into methods: a SmallInteger, a Character, class, a short jump, the nil of a block"
+s := [ :bytes | | m | m := (c compile: 'made ^ self yourself yourself yourself yourself yourself yourself'; yourself) >> #made.
+	bytes withIndexDo: [ :b :i | m at: m initialPC + i - 1 put: b ]. Object flushCache. c new made ].
+say value: 'bytecodes' value: [ { s value: #[232 65 92]. s value: #[232 200 92]. s value: #[225 255 232 200 92]. s value: #[233 65 92]. (s value: #[233 200 92]) asInteger.
+	(s value: #[76 119 92]) name. (s value: #[80 119 92]) name. s value: #[80 77 184 81 92]. s value: #[80 78 184 81 92]. s value: #[79 119 92] } ].
+say value: 'the nil of a block' value: [ | z b m | z := 3. b := [ :x | z + x ]. m := b compiledBlock. m at: m initialPC put: 93. [ b value: 1 ] value ].
+
 "---- contexts"
 c compile: 'context | t | t := 5. ^ { thisContext tempNamed: #t. thisContext receiver == self. thisContext selector. thisContext method numArgs. [ self. thisContext outerContext selector ] value }'.
 say value: 'thisContext' value: [ c new context ].

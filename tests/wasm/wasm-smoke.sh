@@ -3,7 +3,7 @@
 #
 # usage: sh tests/wasm/wasm-smoke.sh [LANE ...]
 #
-#   default  every check, S1-S22, with build-wasm/node/pharo (memory64)
+#   default  every check, S1-S22, with build-wasm/node/pharo
 #   liftoff  the checks that stress the engine, S2, S8 and S9, with Liftoff
 #            code only (--liftoff-only) and a 900 KB stack
 #            (NODE_OPTIONS_WASM), and S2t, which checks that V8 compiled no

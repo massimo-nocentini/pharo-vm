@@ -14,7 +14,8 @@
 #   - a .st file of smalltalksrc that comes, goes or changes refreshes the
 #     VMMaker image and generates the sources again, and nothing else does;
 #   - an edit of cmake/Emscripten.cache.cmake configures the wasm build again,
-#     and so does a change of WASM_FFI, WASM_FREETYPE, WASM_LIBGIT2,
+#     and so does a change of WASM_FAST_INTERP, WASM_TUNE, WASM_NODE_MEMORY64
+#     (by default ON, NARROW and 2), WASM_FFI, WASM_FREETYPE, WASM_LIBGIT2,
 #     WASM_LIBGIT2_HTTP, WASM_DEPS_DIR, WASM_IMAGE_ID,
 #     WASM_EXTRA_IMAGES, WASM_EXTRA_SOURCES or WASM_GIT_PROXY, which
 #     config.make records (a WASM_DEPS_DIR that does not exist is refused, and
@@ -308,6 +309,20 @@ calls "emcmake" "configure cmake"
 step="a setting changes"
 wmake "$W/cmake/.configured" WASM_SLICE_MS=10
 calls "emcmake" "configure cmake"
+step="the generated interpreter, in a memory64 node VM"
+wmake "$W/cmake/.configured" WASM_FAST_INTERP=OFF WASM_TUNE=OFF WASM_NODE_MEMORY64=1
+calls "emcmake" "configure cmake"
+for s in WASM_FAST_INTERP=OFF WASM_TUNE=OFF WASM_NODE_MEMORY64=1 WASM_WEB_MEMORY64=2; do
+    grep -qx "${s%%=*} = ${s#*=}" "$W/config.make" || { cat "$W/config.make"; fail "$step: config.make does not record $s"; }
+    grep -q -- " -D$s " "$log.configure" || { cat "$log.configure"; fail "$step: cmake was not given -D$s"; }
+done
+step="the fast interpreter, with 32-bit memories, by default"
+wmake "$W/cmake/.configured"
+calls "emcmake" "configure cmake"
+for s in WASM_FAST_INTERP=ON WASM_TUNE=NARROW WASM_NODE_MEMORY64=2 WASM_WEB_MEMORY64=2; do
+    grep -qx "${s%%=*} = ${s#*=}" "$W/config.make" || { cat "$W/config.make"; fail "$step: config.make does not record $s"; }
+    grep -q -- " -D$s " "$log.configure" || { cat "$log.configure"; fail "$step: cmake was not given -D$s"; }
+done
 step="the FFI is turned off"
 wmake "$W/cmake/.configured" WASM_FFI=OFF
 calls "emcmake" "configure cmake"

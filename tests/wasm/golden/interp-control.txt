@@ -30,6 +30,12 @@ returns: #(1 2 nil)
 recursion: 6765
 deep recursion: #(10 1000 50000 200000)
 deep sends: #(#bottom 5000050000)
+wrong numbers of arguments of closures: #(#error #error #error #error #error #error)
+closures of every number of arguments: #(1 2 4 7 11 12)
+closures of many variables and temporaries: #(8 9 11 7)
+closures and recursion: 30000
+bytecodes: {65. 200. -56. $A. 200. #InterpC. #SmallInteger. 0. 1. UndefinedObject}
+the nil of a block: nil
 thisContext: #(5 true #context 0 #context)
 a context in a block: #(#Context #UndefinedObject #CompiledBlock #SmallInteger #SmallInteger 1)
 a temporary of a context: #(6 6)

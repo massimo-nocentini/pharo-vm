@@ -11,7 +11,8 @@
 #
 #   <program>         in build-wasm/node/pharo: what it prints must be the
 #                     golden file tests/wasm/golden/interp-<program>.txt,
-#                     the same for Pharo 12 to 15, with nothing on stderr; a
+#                     the same for Pharo 12 to 15, with nothing on stderr
+#                     (but the assertions of Emscripten in a Debug build); a
 #                     line 'DIFF ...' is a bytecode that does not answer
 #                     what the primitive of its selector does;
 #   <program>-1ms     the same in slices of 1 ms (arith, control and
@@ -26,8 +27,8 @@
 #
 # Without HOST_PHARO the last ones are skipped.  With FASTINTERP_OFF_DIR, the
 # directory of a build with WASM_FAST_INTERP=OFF, its node VM runs the
-# programs too (<program>-off).  Every run is stopped after 300 s, or
-# WASM_CHECK_TIMEOUT when that is more.  The lane passes with either
+# programs too (<program>-off).  Every run is stopped after
+# WASM_CHECK_TIMEOUT (300 here) seconds.  The lane passes with either
 # interpreter; docs/WebAssembly.md (Faster interpreters) has the mistakes
 # that it was seen to catch.
 #
@@ -48,7 +49,7 @@ for f in "$WASM_DIR/node/pharo" "$WASM_DIR/web/pharo-web.js" "$WASM_DIR/web/phar
 	exit 1
     fi
 done
-if test "$timeout" -lt 300; then timeout=300; fi
+timeout=${WASM_CHECK_TIMEOUT:-300}
 fast=$(sed -n 's/^WASM_FAST_INTERP:[A-Z]*=//p' "$WASM_DIR/cmake/CMakeCache.txt" 2>/dev/null)
 echo "77-interpreter: $WASM_DIR/node/pharo, WASM_FAST_INTERP=${fast:-?}, Pharo $(cat "$WASM_DIR/image/stock/pharo.version" 2>/dev/null)"
 
@@ -93,7 +94,8 @@ compare() {
 	    fail "$compare_name" "$(grep -c '^DIFF ' smoke.out) bytecodes do not answer what their primitives do: $(grep '^DIFF ' smoke.out | head -n 1)"
 	elif ! diff "$GOLDEN/interp-$program.txt" smoke.out >diff.out; then
 	    fail "$compare_name" "other lines than golden/interp-$program.txt: $(sed -n '/^[<>]/p' diff.out | head -n 2 | cut -c 1-200 | tr '\n' ' ')"
-	elif test -s smoke.err; then
+	elif grep -v -e '^Heap resize call ' -e '^program exited ' smoke.err | grep -q .; then
+	    # (what Emscripten's assertions of a Debug build say, but nothing else)
 	    fail "$compare_name" "stderr is not empty"
 	else
 	    ok "$compare_name" "$(wc -l <smoke.out | tr -d ' ') lines"

@@ -11,6 +11,12 @@
 #           nor old for the write barrier), then stores young Strings into
 #           an Array at the top of old space and scavenges: every slot must
 #           keep its String;
+#   large   the same objects in the largest window of a 32-bit memory,
+#           [1 GB, 2 GB), with PHARO_WASM_OLD_SPACE_BASE=0x40000000, which
+#           they nearly fill;
+#   limit   in a VM with a 32-bit memory (WASM_NODE_MEMORY64=2), whose maximum
+#           is a page under 4 GB, 0x80000000 is refused when it starts, with
+#           the message that says why;
 #   regrow  with the window of 512 MB, oldspace-regrow.st allocates
 #           ByteArrays of 50, 100 and 150 MB, each one garbage collected
 #           before the next: the segment of each must go where the freed one
@@ -39,6 +45,8 @@ pharo_run() { limit "$timeout" "$WASM_DIR/node/pharo" "$@"; }
 P="pharo_run --headless Pharo.image --no-default-preferences"
 
 window() ( PHARO_WASM_OLD_SPACE_BASE=0x10000000; export PHARO_WASM_OLD_SPACE_BASE; $P st --quit "$ST/oldspace-window.st" )
+large() ( PHARO_WASM_OLD_SPACE_BASE=0x40000000; export PHARO_WASM_OLD_SPACE_BASE; $P st --quit "$ST/oldspace-window.st" )
+limit_of_memory() ( PHARO_WASM_OLD_SPACE_BASE=0x80000000; export PHARO_WASM_OLD_SPACE_BASE; $P eval 1 )
 regrow() ( PHARO_WASM_OLD_SPACE_BASE=0x20000000; export PHARO_WASM_OLD_SPACE_BASE; $P st --quit "$ST/oldspace-regrow.st" )
 perm() { $P st --quit "$ST/permspace.st"; }
 
@@ -54,6 +62,27 @@ if run window window; then
     else
 	ok window "old space of $2 bytes"
     fi
+fi
+
+fresh large
+if run large large; then
+    size=$(sed -n '1s/.* //p' smoke.out)
+    if test "$status" -ne 0; then
+	fail large "exit status $status"
+    elif ! is_number "$size" || test "$size" -le 900000000 || test "$size" -gt 1073741824; then
+	fail large "expected old space of more than 900000000 and at most 1073741824 bytes, got '$(sed -n 1p smoke.out)'"
+    elif test "x$(sed -n 2p smoke.out)" != "xbad slots: 0"; then
+	fail large "expected 'bad slots: 0', got '$(sed -n 2p smoke.out)'"
+    else
+	ok large "old space of $size bytes"
+    fi
+fi
+
+if grep -q '^WASM_NODE_MEMORY64:[A-Z]*=2$' "$WASM_DIR/cmake/CMakeCache.txt" 2>/dev/null; then
+    fresh limit
+    expect_error limit 'Invalid PHARO_WASM_OLD_SPACE_BASE 0x80000000: old space needs a power of two .* at most half the maximum memory' limit_of_memory
+else
+    skip_check limit "the node VM has memory64 (WASM_NODE_MEMORY64=1)"
 fi
 
 fresh regrow

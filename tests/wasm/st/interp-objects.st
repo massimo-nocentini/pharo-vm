@@ -8,7 +8,7 @@
  perform:, and a difference is a line 'DIFF ...'.  (interp-methods.st has the methods
  that become others.)"
 
-| out say describe checksum make receivers indices values define c p churn old holders keep |
+| out say describe checksum make receivers indices values define c p churn age old barriers keep |
 out := [ :s | Stdio stdout nextPutAll: s; lf; flush ].
 say := [ :label :block | out value: label , ': ' , ([ block value printString ] on: Error do: [ :e | 'ERR ' , e class name ]) ].
 checksum := [ :h :s | s inject: h into: [ :acc :ch | (acc * 33 + ch asInteger) bitAnd: 16rFFFFFFFFF ] ].
@@ -84,30 +84,36 @@ p compile: 'x ^ x'. p compile: 'x: v x := v'.
 say value: 'new' value: [ { (Array new: 3). Object new class. String new. (Array basicNew). [ Array new: -1 ] on: Error do: [ :e | #error ]. [ SmallInteger new ] on: Error do: [ :e | #error ]. [ Character new ] on: Error do: [ :e | #error ]. Class new class. [ CompiledMethod new ] on: Error do: [ :e | #error ]. (WeakArray new) size. (Association new key: 1 value: 2) value. (Smalltalk at: #InterpA) new l. (Smalltalk at: #InterpBoth) new basicSize } ].
 say value: 'many new' value: [ | s | s := 0. 1 to: 300000 do: [ :i | | x | x := (Smalltalk at: #InterpA) new. x a: i. (x l isNil and: [ x a = i ]) ifTrue: [ s := s + 1 ] ]. s ].
 
-"---- the write barrier: old objects (the full garbage collection makes them old) that hold young ones only, after scavenges"
+"---- the write barrier: old objects that are the only ones to hold young ones, after scavenges.  (Objects are old once more than
+ new space, 22 MB, was allocated after them and is kept; a garbage collection alone leaves them young.)"
 churn := [ 1 to: 400000 do: [ :i | Array new: 12 ] ].
-old := [ :factory | | r | r := (1 to: 64) collect: factory. Smalltalk garbageCollect. r ].
-keep := [ :label :objects :store :fetch | | bad |
-	objects withIndexDo: [ :x :i | store value: x value: i ].
+age := [ | kept | kept := (1 to: 250000) collect: [ :i | Array new: 24 ]. kept size ].
+old := [ :factory | | r | r := (1 to: 64) collect: factory. age value. r ].
+barriers := OrderedCollection new.
+keep := [ :label :objects :store :fetch | barriers add: { label. objects. store. fetch } ].
+keep value: 'at:put:' value: ((1 to: 64) collect: [ :i | Array new: 4 ]) value: [ :x :i | x at: 3 put: 'young ' , i printString ] value: [ :x | x at: 3 ].
+keep value: 'at:put: that the cache has' value: ((1 to: 64) collect: [ :i | | x | x := Array new: 4. x at: 1 put: 0. x ]) value: [ :x :i | x at: 1 put: i. x at: 2 put: i. x at: 3 put: 'young ' , i printString ] value: [ :x | x at: 3 ].
+keep value: 'at:put: of a big array' value: ((1 to: 64) collect: [ :i | Array new: 600 ]) value: [ :x :i | x at: 599 put: i. x at: 600 put: 'young ' , i printString ] value: [ :x | x at: 600 ].
+keep value: 'at:put: of a class with fields' value: ((1 to: 64) collect: [ :i | (Smalltalk at: #InterpBoth) new: 4 ]) value: [ :x :i | x at: 1 put: i. x at: 4 put: 'young ' , i printString ] value: [ :x | x at: 4 ].
+keep value: 'basicAt:put:' value: ((1 to: 64) collect: [ :i | Array new: 4 ]) value: [ :x :i | x basicAt: 3 put: 'young ' , i printString ] value: [ :x | x at: 3 ].
+keep value: 'super at:put:' value: ((1 to: 64) collect: [ :i | (Smalltalk at: #InterpB) new: 4 ]) value: [ :x :i | x at: 3 put: 'young ' , i printString ] value: [ :x | (x basicAt: 3) first ].
+keep value: 'a slot' value: ((1 to: 64) collect: [ :i | (Smalltalk at: #InterpA) new ]) value: [ :x :i | x a: 'young ' , i printString ] value: [ :x | x a ].
+keep value: 'the last short slot' value: ((1 to: 64) collect: [ :i | (Smalltalk at: #InterpA) new ]) value: [ :x :i | x h: 'young ' , i printString ] value: [ :x | x h ].
+keep value: 'a far slot' value: ((1 to: 64) collect: [ :i | (Smalltalk at: #InterpA) new ]) value: [ :x :i | x i: 'young ' , i printString ] value: [ :x | x i ].
+keep value: 'a far slot, kept on the stack' value: ((1 to: 64) collect: [ :i | (Smalltalk at: #InterpA) new ]) value: [ :x :i | x l: 'young ' , i printString ] value: [ :x | x l ].
+keep value: 'an association' value: ((1 to: 64) collect: [ :i | Association new ]) value: [ :x :i | x value: 'young ' , i printString ] value: [ :x | x value ].
+keep value: 'a temporary of a block' value: ((1 to: 64) collect: [ :i | | t | { [ :v | t := v ]. [ t ] } ]) value: [ :x :i | x first value: 'young ' , i printString ] value: [ :x | x second value ].
+keep value: 'a temporary of a block, kept on the stack' value: ((1 to: 64) collect: [ :i | | t u | u := 0. { [ :v | u := t := v ]. [ t ]. [ u ] } ]) value: [ :x :i | x first value: 'young ' , i printString ] value: [ :x | (x second value == x third value) ifTrue: [ x second value ] ifFalse: [ #different ] ].
+keep value: 'instVarAt:put:' value: ((1 to: 64) collect: [ :i | (Smalltalk at: #InterpA) new ]) value: [ :x :i | x instVarAt: 12 put: 'young ' , i printString ] value: [ :x | x l ].
+keep value: 'replaceFrom:to:with:' value: ((1 to: 64) collect: [ :i | Array new: 4 ]) value: [ :x :i | x replaceFrom: 1 to: 4 with: { 1. 2. 'young ' , i printString. 4 } startingAt: 1 ] value: [ :x | x at: 3 ].
+age value.
+barriers do: [ :barrier | | objects bad |
+	objects := barrier second.
+	objects withIndexDo: [ :x :i | barrier third value: x value: i ].
 	churn value.
 	bad := 0.
-	objects withIndexDo: [ :x :i | ((fetch value: x) = ('young ' , i printString)) ifFalse: [ bad := bad + 1 ] ].
-	out value: 'barrier ' , label , ': ' , bad printString ].
-keep value: 'at:put:' value: (old value: [ :i | Array new: 4 ]) value: [ :x :i | x at: 3 put: 'young ' , i printString ] value: [ :x | x at: 3 ].
-keep value: 'at:put: that the cache has' value: (old value: [ :i | | x | x := Array new: 4. x at: 1 put: 0. x ]) value: [ :x :i | x at: 1 put: i. x at: 2 put: i. x at: 3 put: 'young ' , i printString ] value: [ :x | x at: 3 ].
-keep value: 'at:put: of a big array' value: (old value: [ :i | Array new: 600 ]) value: [ :x :i | x at: 599 put: i. x at: 600 put: 'young ' , i printString ] value: [ :x | x at: 600 ].
-keep value: 'at:put: of a class with fields' value: (old value: [ :i | (Smalltalk at: #InterpBoth) new: 4 ]) value: [ :x :i | x at: 1 put: i. x at: 4 put: 'young ' , i printString ] value: [ :x | x at: 4 ].
-keep value: 'basicAt:put:' value: (old value: [ :i | Array new: 4 ]) value: [ :x :i | x basicAt: 3 put: 'young ' , i printString ] value: [ :x | x at: 3 ].
-keep value: 'super at:put:' value: (old value: [ :i | (Smalltalk at: #InterpB) new: 4 ]) value: [ :x :i | x at: 3 put: 'young ' , i printString ] value: [ :x | (x basicAt: 3) first ].
-keep value: 'a slot' value: (old value: [ :i | (Smalltalk at: #InterpA) new ]) value: [ :x :i | x a: 'young ' , i printString ] value: [ :x | x a ].
-keep value: 'the last short slot' value: (old value: [ :i | (Smalltalk at: #InterpA) new ]) value: [ :x :i | x h: 'young ' , i printString ] value: [ :x | x h ].
-keep value: 'a far slot' value: (old value: [ :i | (Smalltalk at: #InterpA) new ]) value: [ :x :i | x i: 'young ' , i printString ] value: [ :x | x i ].
-keep value: 'a far slot, kept on the stack' value: (old value: [ :i | (Smalltalk at: #InterpA) new ]) value: [ :x :i | x l: 'young ' , i printString ] value: [ :x | x l ].
-keep value: 'an association' value: (old value: [ :i | Association new ]) value: [ :x :i | x value: 'young ' , i printString ] value: [ :x | x value ].
-keep value: 'a temporary of a block' value: (old value: [ :i | | t | { [ :v | t := v ]. [ t ] } ]) value: [ :x :i | x first value: 'young ' , i printString ] value: [ :x | x second value ].
-keep value: 'a temporary of a block, kept on the stack' value: (old value: [ :i | | t u | u := 0. { [ :v | u := t := v ]. [ t ]. [ u ] } ]) value: [ :x :i | x first value: 'young ' , i printString ] value: [ :x | (x second value == x third value) ifTrue: [ x second value ] ifFalse: [ #different ] ].
-keep value: 'instVarAt:put:' value: (old value: [ :i | (Smalltalk at: #InterpA) new ]) value: [ :x :i | x instVarAt: 12 put: 'young ' , i printString ] value: [ :x | x l ].
-keep value: 'replaceFrom:to:with:' value: (old value: [ :i | Array new: 4 ]) value: [ :x :i | x replaceFrom: 1 to: 4 with: { 1. 2. 'young ' , i printString. 4 } startingAt: 1 ] value: [ :x | x at: 3 ].
+	objects withIndexDo: [ :x :i | ((barrier fourth value: x) = ('young ' , i printString)) ifFalse: [ bad := bad + 1 ] ].
+	out value: 'barrier ' , barrier first , ': ' , bad printString ].
 say value: 'barrier, slots of every kind' value: [ | xs | xs := old value: [ :i | (Smalltalk at: #InterpA) new ].
 	xs withIndexDo: [ :x :i | x popAll: i printString copy ]. churn value.
 	(xs withIndexCollect: [ :x :i | x asArrayOfAll allSatisfy: [ :v | v = i printString ] ]) allSatisfy: [ :b | b ] ].
