@@ -157,8 +157,9 @@ image:
 
 ## Limits
 
-- The interpreter only (no JIT): about 5 to 6 times slower than the
-  native StackVM, 14 to 27 times slower than the native JIT.
+- The interpreter only (no JIT): about 1.4 times slower than the native
+  StackVM, 4 to 6 times slower than the native JIT (tinyBenchmarks).
+- The VMs have a 32-bit memory, of at most 4 GB, with 64-bit pointers.
 - The FFI reaches only the libraries and functions built into the VM
   (libffi, FreeType, cairo, libgit2 and the C library); no
   name resolution, fork, OSProcess, SSL, SSH or threads.

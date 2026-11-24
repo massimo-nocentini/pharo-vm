@@ -30,7 +30,7 @@ Engines, as Emscripten's feature matrix gives them for the default settings:
 
 - Both VMs have a 32-bit memory with 64-bit pointers (`WASM_NODE_MEMORY64=2` and `WASM_WEB_MEMORY64=2`), and use the exnref instructions of WebAssembly exception handling, for setjmp and longjmp.
 - The node VM needs node 24.15 or later.
-- The web VM needs Chrome and Edge 137, Firefox 131 or Safari 18.4, or later.
+- The web VM needs Chrome or Edge 137, Firefox 131 or Safari 18.4, or later.
   `WASM_SJLJ=wasm-legacy` builds it for engines without exnref (Chrome 95, Firefox 100, Safari 15.2).
 - The pages inflate what they download with DecompressionStream (Chrome 80, Firefox 113, Safari 16.4), and say so in a browser without it, so a `wasm-legacy` build needs Chrome 95, Firefox 113 or Safari 16.4, or later.
 - The pages were tested in Chromium 153 and Firefox 155.
@@ -449,14 +449,37 @@ V8 runs a function that is entered once in its baseline code (Liftoff), and uses
 
 ### Faster interpreters
 
-Two options, both `OFF` by default, make the interpreter faster without a change of the generated sources.
-`make wasm WASM_FAST_INTERP=ON WASM_TUNE=NARROW` is the fastest combination (2026-11-24, web VM against the default build, geometric means over 22 measures and, after the slash, over 20 programs that neither was developed with): Chromium 156 1.37 / 1.23, Firefox 1.85 / 1.58, node 25 1.53, node 24 1.47; 28 KB more of raw wasm and 10 KB gzipped, and no difference in the time to start.
-With `WASM_NODE_MEMORY64=2` too, the node VM is 1.64 times as fast in node 24 and 1.71 in node 25; with memory64, 1.11.
+Three settings, the defaults since 2026-11-24, make the interpreter faster without a change of the generated sources: `WASM_FAST_INTERP=ON`, `WASM_TUNE=NARROW` and, for the node VM, `WASM_NODE_MEMORY64=2`.
+`make wasm WASM_FAST_INTERP=OFF WASM_TUNE=OFF WASM_NODE_MEMORY64=1` builds the VMs of before, with the generated interpreter alone, and a node VM in which a stray pointer traps (see Memory).
 
 - `WASM_FAST_INTERP=ON`: `cmake/emscripten/fastInterpreter.py` puts `src/emscripten/fastinterp/interpret.inc`, written by hand, in front of the generated interpreter, which keeps the rare bytecodes.
   It holds the top of the stack in a local, and 32-bit addresses in a VM with a 32-bit memory; it activates methods from what the method cache holds (4096 entries of 64 bytes, instead of 1024 of 32), and has the commonest primitives inline.
-  The script finds the code it changes by its text, and stops the build when a change of `smalltalksrc` moves it; a change of what the hand-written code repeats (frames, headers, the bytecodes, the write barrier) must be made there too.
 - `WASM_TUNE=NARROW`: the link folds small constants into the offsets of the loads and stores, and `packaging/emscripten/tools/wasm-narrow.mjs` narrows the address arithmetic to 32 bits: 1.03 to 1.04 alone in Chromium and Firefox, and more with the fast interpreter in Firefox and node.
+  It is for the modules with a 32-bit memory, and not for a Debug build.
+- `WASM_NODE_MEMORY64=2`: without it, the fast interpreter makes the node VM 1.11 times as fast.
+
+The speed against the build of before, both with libgit2, Pango and Poppler (2026-11-24, geometric means of the medians of 7 interleaved runs on pinned cores, with their 95% intervals, over 22 measures, and over 20 programs that the interpreter was not developed with); no measure became slower:
+
+| Engine | 22 measures | 20 programs |
+|---|---|---|
+| web VM, Chromium 156 | 1.37 (1.36 to 1.38) | 1.24 (1.24 to 1.25) |
+| web VM, Firefox 155 | 1.85 (1.84 to 1.86) | 1.62 (1.61 to 1.63) |
+| web VM, node 24.19 | 1.47 (1.46 to 1.48) | 1.31 (1.30 to 1.31) |
+| web VM, node 25.2.1 | 1.53 (1.52 to 1.54) | 1.33 (1.32 to 1.34) |
+| node VM, node 24.19 | 1.65 (1.64 to 1.66) | 1.42 (1.41 to 1.43) |
+| node VM, node 25.2.1 | 1.72 (1.70 to 1.72) | 1.47 (1.45 to 1.48) |
+
+The VMs start in the same time (the node VM 40 ms sooner); `pharo-web.wasm` is 24 KB larger (12 KB with `gzip -9`), and `pharo.wasm` 394 KB (49 KB).
+
+The fast interpreter repeats what the generated one does, so a change of `smalltalksrc` that changes the generated code of what it repeats must be made there too, and the build stops until it is:
+
+- `fastInterpreter.py` finds the code that it rewrites by its text, and knows the shape of the caches and the functions that use them;
+- `src/emscripten/fastinterp/generated.txt` has a hash of the generated code of every bytecode that `handlers.inc` handles, of the sends and the returns, and of the primitives that `interpret.inc` has inline (without comments and the numbers of labels).
+  The message names what changed: compare the two with `fastInterpreter.py --pieces`, change the fast interpreter, and record the new code with `python3 cmake/emscripten/fastInterpreter.py --accept build-wasm/host/generated/64/vm/src/interp.c src/emscripten/fastinterp`;
+- `checks.inc` has static assertions on the constants of the layout of objects, classes, methods, blocks, frames and caches, of the tags and of the poll of the heartbeat.
+
+Lane 78 checks that each of these stops the build, and lane 77 that the interpreter does what Pharo and the native VM do.
+Of 49 mistakes planted in the fast interpreter, in its overflows, float comparisons, class and selector checks of the cache, entries of methods that changed, bounds, write barrier, read-only checks, forwarders, returns, polls, primitives, jumps, closures and literals, the static assertions stopped one and lane 77 caught the 48 others: 9 made a VM that does not start, lanes 20 and 22 caught 9 more, and 30 passed them.
 
 ### The heartbeat
 
@@ -901,20 +924,20 @@ The times below are those of an earlier run, on a Pharo 12 build with libgit2 an
 | 80-world-harness | `tests/wasm/keymap.test.mjs`, then `tests/wasm/world-harness.mjs`, which plays the world page in node with a memory framebuffer, on the default image and then on every other world image of the catalog (`WORLD_IMAGE_ID`), and `tests/wasm/st/osweb-native.st` on the native VM | 16 + 16 per world image + 27 | 20 s (one image) |
 | 82-osweb-windows | `tests/wasm/st/osweb-windows.st` on the native VM: a second OSWindow without an event handler leaves the world shown, and the window of the Emergency Debugger (in Pharo 15, which has none, a window of the same kind) takes the canvas and the input, then gives them back | 11 | 10 s |
 
-The bench measured, on that machine with node 25.2.1, on a build with libgit2 (and SDL2, which the VMs had then):
+The bench measured, on that machine with node 25.2.1, on a build with libgit2, Pango and Poppler (in parentheses, the same build with the generated interpreter and memory64, `WASM_FAST_INTERP=OFF WASM_TUNE=OFF WASM_NODE_MEMORY64=1`):
 
 | Measure | This build | Native StackVM |
 |---|---|---|
-| `eval '3+4'`, wall time | 325 ms | 80 ms |
-| 300k-deep block recursion | 189 ms | |
-| 1M-deep block recursion | 934 ms | 766 ms |
-| tinyBenchmarks bytecodes/s | 360.3M (154.5M gnuified) | 941.0M |
-| tinyBenchmarks sends/s | 21.5M (9.5M gnuified) | 48.0M |
-| `26 benchFib` | 18 ms (41 ms gnuified) | 8 ms |
-| 20 x 100000 `inject:into:` | 277 ms (568 ms gnuified) | 120 ms |
-| GC stress, 3M arrays | 2133 ms (2510 ms gnuified) | 1460 ms |
+| `eval '3+4'`, wall time | 383 ms (507 ms) | 80 ms |
+| 300k-deep block recursion | 173 ms (190 ms) | |
+| 1M-deep block recursion | 860 ms (921 ms) | 766 ms |
+| tinyBenchmarks bytecodes/s | 653.8M (357.2M) | 941.0M |
+| tinyBenchmarks sends/s | 36.4M (21.6M) | 48.0M |
+| `26 benchFib` | 12 ms (18 ms) | 8 ms |
+| 20 x 100000 `inject:into:` | 155 ms (275 ms) | 120 ms |
+| GC stress, 3M arrays | 1717 ms (2094 ms) | 1460 ms |
 
-The interpreter is `interp.c`, the plain `switch` that Slang writes: `cmake/Emscripten.cache.cmake` sets `FEATURE_COMPILE_GNUISATION` OFF.
+The generated interpreter is `interp.c`, the plain `switch` that Slang writes: `cmake/Emscripten.cache.cmake` sets `FEATURE_COMPILE_GNUISATION` OFF.
 The native builds compile the "gnuified" `gcc3x-interp.c` instead, whose dispatch is `goto *jumpTable[currentBytecode]` (`include/pharovm/unix/sqGnu.h`); WebAssembly has no indirect jump, so LLVM turns its 176 `goto *` into one shared `br_table` and adds a second dispatcher for the irreducible control flow, and that build is 2.1 to 2.4 times slower (the "gnuified" figures above, measured on the same machine, the same generated sources and node 25.2.1; in headless Chromium 163M against 394M bytecodes/s).
 A dispatch by tail calls (`[[clang::musttail]]` with `-mtail-call`, every bytecode a function) was measured too and loses to the switch: 208M bytecodes/s in node 25 and 157M in Chromium through the function table, 293M and 367M with direct tail calls.
 
@@ -975,7 +998,7 @@ On the site of three images with libgit2, in Chromium and Firefox together, the 
 
 ## Limitations
 
-- StackVM only: 2.2 (sends) to 2.6 (bytecodes) times slower than the native StackVM, and 6 times (bytecodes) to 12 times (sends) slower than the native JIT on tinyBenchmarks; on the machine the port was made on, the JIT ran 2181M bytecodes/s and 260M sends/s.
+- StackVM only: 1.3 (sends) to 1.4 (bytecodes) times slower than the native StackVM, and 3.7 times (bytecodes) to 6 times (sends) slower than the native JIT on tinyBenchmarks, in node 25; on the machine the port was made on, the JIT of the VMMaker VM ran 2470M bytecodes/s and 219M sends/s.
 - No `dlopen`, and no external plugins: every plugin is built in, and the FFI reaches only the libraries and functions of its registry (see The FFI); a library the image loads by another name, or a function that no list names, is not found.
 - A declaration that does not match its C function other than in the width of an integer fails as a primitive, where natively it may work; a callback declared with another type than C's traps, and fails its callout.
 - A callback keeps the VM from its host until it returns: no output, input or Stop meanwhile.
