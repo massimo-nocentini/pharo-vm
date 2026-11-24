@@ -15,7 +15,7 @@
 // A function is found in the profile by the hash of its code without the
 // constants, offsets and indices that change from link to link; one that is
 // not found gets no hints.  So the profile outlives a relink, not a change of
-// the code: then make it again (docs/WebAssembly.md, Branch hints).
+// the code: then make it again (docs/WebAssembly.md, Faster interpreters).
 //
 // Why: an engine compiles `interpret' with every local in a register until a
 // call, and spills them around all the calls it thinks may be reached.  Told

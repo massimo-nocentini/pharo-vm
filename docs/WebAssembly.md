@@ -356,7 +356,10 @@ To keep two builds, give each its own `WASM_BUILDDIR`:
   The libraries are compiled in the same mode, since every object of a link must share it.
 - `WASM_WEB_MEMORY64`: the memory of the web VM (default `2`).
   `2` is a 32-bit memory with 64-bit pointers, which is 15 to 18% faster and runs in engines without memory64; `1` is memory64, as in the node VM, and the Console says so in a browser without it.
-  The node VM always has memory64, so that a stray pointer traps rather than wrapping around.
+  The node VM has memory64, so that a stray pointer traps rather than wrapping around, unless `WASM_NODE_MEMORY64=2` gives it a 32-bit memory too.
+- `WASM_NODE_MEMORY64`: the memory of the node VM: `1` (the default), memory64, or `2`, a 32-bit memory with 64-bit pointers.
+- `WASM_TUNE`: experiments on the linked modules that have a 32-bit memory (default `OFF`; see Faster interpreters): `NARROW`, or `ON` for the branch hints too.
+- `WASM_FAST_INTERP`: `ON` builds the fast interpreter of `src/emscripten/fastinterp` (default `OFF`; needs python3; see Faster interpreters).
 - `WASM_STACK_SIZE`: the C stack (default `8MB`); FreeType's autofitter needs more than Emscripten's default of 64 KB.
 - `WASM_INITIAL_MEMORY`, `WASM_MAXIMUM_MEMORY`: the linear memory, its initial size (default `32MB`) and its maximum (default `4GB`); it grows between them.
 - `WASM_OLD_SPACE_BASE`: where old space begins (default `0x20000000`, 512 MiB), a power of two above new space.
@@ -442,6 +445,21 @@ The node VM runs the slices from node's event loop (`packaging/emscripten/node/n
 
 Entering `interpret()` again is also what makes the VM fast.
 V8 runs a function that is entered once in its baseline code (Liftoff), and uses its optimised code only when the function is called again: 20 loops of `inject:into:` over 100000 elements took 1217 ms in one activation, and 585 ms with the same objects re-entered every slice.
+
+### Faster interpreters
+
+Two options, both `OFF` by default, make the interpreter faster without a change of the generated sources.
+`make wasm WASM_FAST_INTERP=ON WASM_TUNE=NARROW` is the fastest combination (2026-11-24, web VM against the default build, geometric means over 22 measures and, after the slash, over 20 programs that neither was developed with): Chromium 156 1.37 / 1.23, Firefox 1.85 / 1.58, node 25 1.53, node 24 1.47; 28 KB more of raw wasm and 10 KB gzipped, and no difference in the time to start.
+With `WASM_NODE_MEMORY64=2` too, the node VM is 1.64 times as fast in node 24 and 1.71 in node 25; with memory64, 1.11.
+
+- `WASM_FAST_INTERP=ON`: `cmake/emscripten/fastInterpreter.py` puts `src/emscripten/fastinterp/interpret.inc`, written by hand, in front of the generated interpreter, which keeps the rare bytecodes.
+  It holds the top of the stack in a local, and 32-bit addresses in a VM with a 32-bit memory; it activates methods from what the method cache holds (4096 entries of 64 bytes, instead of 1024 of 32), and has the commonest primitives inline.
+  The script finds the code it changes by its text, and stops the build when a change of `smalltalksrc` moves it; a change of what the hand-written code repeats (frames, headers, the bytecodes, the write barrier) must be made there too.
+- `WASM_TUNE=NARROW`: the link folds small constants into the offsets of the loads and stores, and `packaging/emscripten/tools/wasm-tune.mjs` narrows the address arithmetic to 32 bits: 1.03 to 1.04 alone in Chromium and Firefox, and more with the fast interpreter in Firefox and node.
+- `WASM_TUNE=ON`: also the branch hints of `packaging/emscripten/profile/wasm-tune.json`, which V8 uses by default in Chrome and node 25 (not in node 24): for the generated interpreter, 1.33 / 1.21 in Chromium, 1.36 in node 25, nothing in Firefox.
+  With the fast interpreter they give nothing more.
+  The profile is keyed by the code: after a change of `interp.c`, of the flags or of wasm-opt, the build says `interpreter not in the profile: make it again`, and works without its hints.
+  To make it again, build with `WASM_TUNE=NARROW`, then run `wasm-tune.mjs instrument` on `pharo-web.wasm`, the instrumented VM in node with `-r packaging/emscripten/tools/wasm-tune-capture.cjs` and `BH_OUT=counts.json` over a run of the image's tests, and `wasm-tune.mjs profile`.
 
 ### The heartbeat
 
