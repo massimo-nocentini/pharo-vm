@@ -15,8 +15,8 @@
 # Natively the archive is taken as simdjson's is (cmake/simdjson.cmake): from
 # WASM_DEPS_DIR, then <build>/downloads, otherwise downloaded;
 # -DSIMDCSV_SOURCE_DIR=<tree> uses a source tree instead (an extraction of the
-# same archive, or a clone at that commit).  The slice is cut out of it at
-# configure time, its SHA256 checked, into
+# same archive, or a clone at that commit; its LICENSE is checked too).  The
+# slice is cut out of it at configure time, its SHA256 checked, into
 # <build>/deps/simdcsv-slice/simdcsv_slice.inc, which only
 # src/engine/scKernels.inc includes.
 #
@@ -48,6 +48,7 @@ if(NOT EMSCRIPTEN)
     set(PHARO_SIMDCSV_SHA256 27eb10cce2765e92244a83ad90698c545ac865ad9e8383cf87d83b6692f256c4)
     set(PHARO_SIMDCSV_MAIN_SHA256 d9b98882a52d2b018980ee9e6a07625af05be1911a706b60f0a105b2018fc383)
     set(PHARO_SIMDCSV_SLICE_SHA256 bf5511f156c66cc1c718cac01fd8b32fd5788aa1b6ba7276c0eb546b68d50874)
+    set(PHARO_SIMDCSV_LICENSE_SHA256 c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4)
     set(PHARO_SIMDCSV_URL "https://github.com/geofflangdale/simdcsv/archive/${PHARO_SIMDCSV_COMMIT}.tar.gz")
     set(SIMDCSV_SOURCE_DIR "" CACHE PATH
         "A simdcsv ${PHARO_SIMDCSV_VERSION} source tree to use instead of the pinned archive")
@@ -72,8 +73,17 @@ if(NOT EMSCRIPTEN)
     if(NOT EXISTS "${pharo_simdcsv_main}")
         message(FATAL_ERROR "SimdCSVPlugin: ${simdcsv_SOURCE_DIR} has no src/main.cpp")
     endif()
-    # (the hash is of the variable, as everything is quoted: CMake keeps the
-    # bytes of the file, semicolons and brackets too)
+    # The hashes are of variables, and everything is quoted, so that semicolons
+    # and brackets are kept; but CMake reads text: CRLF becomes LF, so that a
+    # checkout with CRLF gives the same slice and the same LICENSE (and on
+    # Windows the .inc is written with CRLF: the same tokens).
+    # tests/run-c-tests.sh hashes the bytes of the files, and refuses CRLF.
+    file(READ "${simdcsv_SOURCE_DIR}/LICENSE" pharo_simdcsv_text)
+    string(SHA256 pharo_simdcsv_hash "${pharo_simdcsv_text}")
+    if(NOT pharo_simdcsv_hash STREQUAL PHARO_SIMDCSV_LICENSE_SHA256)
+        message(FATAL_ERROR "SimdCSVPlugin: ${simdcsv_SOURCE_DIR}/LICENSE is not that of simdcsv ${PHARO_SIMDCSV_VERSION}: "
+            "its SHA256 is ${pharo_simdcsv_hash}, not ${PHARO_SIMDCSV_LICENSE_SHA256}")
+    endif()
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${pharo_simdcsv_main}")
     file(READ "${pharo_simdcsv_main}" pharo_simdcsv_text)
     string(FIND "${pharo_simdcsv_text}" "struct simd_input {" pharo_simdcsv_begin)

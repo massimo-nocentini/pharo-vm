@@ -50,6 +50,9 @@
 #       the macro's and the slice's
 #   R11 --only refuses blanks and empty names, which would else select nothing
 #       and pass
+#   R12 cmake/simdcsv.cmake checks the hashes of V, that of LICENSE too, and the
+#       CI probes of the plugin on Linux, macOS and Windows check the names of
+#       the kernels
 #   V   the pin: the SHA256 of the archive (when --simdcsv is one), of its
 #       LICENSE and src/main.cpp, and of the slice
 #
@@ -256,9 +259,29 @@ rules() {
             bad=1
         fi
     done
+    # R12
+    for h in $ARCHIVE_SHA256 $LICENSE_SHA256 $MAIN_SHA256 $SLICE_SHA256; do
+        if ! grep -q "_SHA256 $h)" "$repo/cmake/simdcsv.cmake"; then
+            echo "R12: cmake/simdcsv.cmake does not have the hash $h"
+            bad=1
+        fi
+    done
+    if ! grep -q 'pharo_simdcsv_hash STREQUAL PHARO_SIMDCSV_LICENSE_SHA256' "$repo/cmake/simdcsv.cmake"; then
+        echo "R12: cmake/simdcsv.cmake does not check LICENSE"
+        bad=1
+    fi
+    ci=$repo/.github/workflows/build.yml
+    if test -f "$ci"; then
+        n=$(grep -c -E "SimdCSVPlugin native (neon|\(avx2\|sse2\)) a9494a8 1 forced - ok" "$ci" || true)
+        k=$(grep -c -F "'neon' } else { '(avx2|sse2)' }" "$ci" || true)
+        if test "$n" != 4 || test "$k" != 1 || grep -q -E 'SimdCSVPlugin native \.\* forced - ok' "$ci"; then
+            echo "R12: build.yml does not check the kernels of the three systems"
+            bad=1
+        fi
+    fi
     test -z "$pin" || bad=1
     if test $bad = 0; then
-        echo "R2 R3 R6 R8 R11${simdcsv:+ V} ok"
+        echo "R2 R3 R6 R8 R11 R12${simdcsv:+ V} ok"
     else
         echo "R FAILED"
         failed=1

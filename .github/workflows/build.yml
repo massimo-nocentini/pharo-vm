@@ -697,14 +697,19 @@ jobs:
           test -f "$RUNNER_TEMP/vm/Pharo.app/Contents/Resources/LICENSE.cmark-gfm" || { echo "missing LICENSE.cmark-gfm"; exit 1; }
 
       # As on Linux, without the check of libstdc++ (the kernels AVX2, SSE2
-      # and NEON have never run on macOS before this step); the licence goes
-      # to Contents/Resources (cmake/simdcsv.cmake)
+      # and NEON have never run on macOS before this step, and one that is
+      # not compiled in must not go unseen: the kernel is checked by its
+      # name); the licence goes to Contents/Resources (cmake/simdcsv.cmake)
       - name: Load the SimdCSVPlugin of the zip
         shell: bash
         run: |
           probe() { "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/SimdCSVPlugin/tests/ci-load.st; }
           probe | tee "$RUNNER_TEMP/simdcsv.txt"
-          grep -q '^SimdCSVPlugin native .* forced - ok' "$RUNNER_TEMP/simdcsv.txt"
+          if [ "${{ matrix.arch }}" = arm64 ]; then
+            grep -q '^SimdCSVPlugin native neon a9494a8 1 forced - ok' "$RUNNER_TEMP/simdcsv.txt"
+          else
+            grep -Eq '^SimdCSVPlugin native (avx2|sse2) a9494a8 1 forced - ok' "$RUNNER_TEMP/simdcsv.txt"
+          fi
           SIMDCSV_FORCE_IMPLEMENTATION=bogus probe | tee "$RUNNER_TEMP/simdcsv-bogus.txt"
           grep -q '^SimdCSVPlugin native .* forced refused bogus ok' "$RUNNER_TEMP/simdcsv-bogus.txt"
           SIMDCSV_FORCE_IMPLEMENTATION=fallback probe | tee "$RUNNER_TEMP/simdcsv-fallback.txt"
@@ -1117,7 +1122,8 @@ jobs:
           if (-not (Test-Path "$vm\LICENSE.cmark-gfm")) { "missing LICENSE.cmark-gfm"; exit 1 }
 
       # As on Linux, with the same PATH (no C++ runtime DLL is of any use to
-      # the plugin): the kernels have never run on Windows before this step.
+      # the plugin): the kernels have never run on Windows before this step,
+      # and the one that is chosen is checked by its name, as on macOS.
       # The plugin is SimdCSVPlugin.dll, or libSimdCSVPlugin.dll as MinGW
       # names it
       - name: Load the SimdCSVPlugin of the zip
@@ -1132,7 +1138,8 @@ jobs:
           }
           $out = Probe
           $out
-          if (-not ($out -match '^SimdCSVPlugin native .* forced - ok')) { exit 1 }
+          $kernel = if ('${{ matrix.arch }}' -eq 'arm64') { 'neon' } else { '(avx2|sse2)' }
+          if (-not ($out -match "^SimdCSVPlugin native $kernel a9494a8 1 forced - ok")) { exit 1 }
           $env:SIMDCSV_FORCE_IMPLEMENTATION = 'bogus'
           $out = Probe
           $out
