@@ -938,7 +938,7 @@ The bench measured, on that machine with node 25.2.1, on a build with libgit2, P
 | GC stress, 3M arrays | 1717 ms (2094 ms) | 1460 ms |
 
 The generated interpreter is `interp.c`, the plain `switch` that Slang writes: `cmake/Emscripten.cache.cmake` sets `FEATURE_COMPILE_GNUISATION` OFF.
-The native builds compile the "gnuified" `gcc3x-interp.c` instead, whose dispatch is `goto *jumpTable[currentBytecode]` (`include/pharovm/unix/sqGnu.h`); WebAssembly has no indirect jump, so LLVM turns its 176 `goto *` into one shared `br_table` and adds a second dispatcher for the irreducible control flow, and that build is 2.1 to 2.4 times slower (the "gnuified" figures above, measured on the same machine, the same generated sources and node 25.2.1; in headless Chromium 163M against 394M bytecodes/s).
+The native builds compile the "gnuified" `gcc3x-interp.c` instead, whose dispatch is `goto *jumpTable[currentBytecode]` (`include/pharovm/unix/sqGnu.h`); WebAssembly has no indirect jump, so LLVM turns its 176 `goto *` into one shared `br_table` and adds a second dispatcher for the irreducible control flow, and that build is 2.1 to 2.4 times slower (measured on the same machine, with the generated interpreter alone and node 25.2.1: 154.5M against 360.3M bytecodes/s, 9.5M against 21.5M sends/s; in headless Chromium 163M against 394M bytecodes/s).
 A dispatch by tail calls (`[[clang::musttail]]` with `-mtail-call`, every bytecode a function) was measured too and loses to the switch: 208M bytecodes/s in node 25 and 157M in Chromium through the function table, 293M and 367M with direct tail calls.
 
 The lanes take these settings:
