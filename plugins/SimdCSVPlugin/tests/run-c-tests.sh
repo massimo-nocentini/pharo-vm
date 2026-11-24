@@ -25,7 +25,9 @@
 #                  only, nothing undefined but the list below, no ymm register
 #                  outside of sc_avx2, a shared library NEEDED libc only
 #                  (Linux); with the glue and --vm-build: the plugin exports
-#                  only primitives and module functions
+#                  only primitives and module functions, and needs libc and
+#                  what every plugin of the VM is linked with (its library,
+#                  libffi, libm)
 #   wasm64         em++ -O3 -m64 -sMEMORY64=1, without the slice, under node
 #   memory64-2     the same with -sMEMORY64=2
 #   arm64          (opt-in) aarch64-linux-gnu-g++-13 under qemu -cpu
@@ -475,7 +477,11 @@ symbols_lane() {
         so=$(find "$vmbuild/build" -name 'libSimdCSVPlugin.so' 2>/dev/null | head -n 1)
         if test -n "$so"; then
             exported=$(nm -D --defined-only "$so" | awk '{ print $3 }' | grep -v -E '^(primitive(Info|Measure|Index|Rows)(AccessorDepth)?|getModuleName|initialiseModule|shutdownModule|setInterpreter|_init|_fini|__bss_start|_end|_edata)$' || true)
-            needed=$(readelf -dW "$so" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' | tr '\n' ' ')
+            # (add_vm_plugin links every plugin with the VM's library, which
+            # brings libffi and libm: a linker without --as-needed by default,
+            # clang's here, lists them all, gcc's only libc)
+            needed=$(readelf -dW "$so" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' \
+                | grep -v -E '^(libPharoVMCore\.so|libffi\.so|libm\.so)' | tr '\n' ' ')
             if test -n "$exported" || test "$needed" != "libc.so.6 "; then
                 echo "-- libSimdCSVPlugin.so exports: $exported; NEEDED $needed"
                 status=1
