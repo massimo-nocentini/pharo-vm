@@ -260,4 +260,12 @@ d594824a4aaf085d  function primitiveIdentical
 7821e4eff6459b1d  function primitiveFullClosureValue
 de15f37441605fed  function floatObjectOf
 7173e25c26990c02  function floatValueOf
+f76f34a59a869890  function isSmallFloatValue
+54130218708eb9d3  function initializeHeaderOfStartAddressnumSlotsformatclassIndexpinned
+5a67f3c6942b3092  function fetchClassOfNonImm
+a3f8da6cc655c65b  function numSlotsOf
+67ec505cf3f40afd  function fetchPointerofObject
+d135bb75aa25b4ba  function splObj
+e4cd93a32b4aa082  function rawHeaderOf
+593c1fbe7d8de679  function literalCountOfMethodHeader
 85476d87a457c99b  the start of perm space

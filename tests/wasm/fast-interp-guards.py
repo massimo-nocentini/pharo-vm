@@ -111,6 +111,10 @@ change('frames', 'a return', inCase(88, 'VM_LABEL(commonReturn)', 'changed(); VM
 for f in re.findall(r'^\w+  function (\w+)$', open(os.path.join(inc, 'generated.txt')).read(), re.M):
     change('functions', f, inFunction(f, '\n{', '\n{ changed();'), re.compile(r'has changed: [^.]*function %s' % f))
     change('functions', f + ', gone', re.sub(r'(?m)^%s\(' % f, f + 'Other(', interp), re.compile(r'no function %s|has changed|has \d+ times|there is no|other functions|there are 0' % f))
+for f, old, new in (('isSmallFloatValue', '_exponent <= (0xFF +', '_exponent <= (0x7F +'),
+                    ('initializeHeaderOfStartAddressnumSlotsformatclassIndexpinned', '_pinFlag = ((sqInt) _isPinned );', '_pinFlag = ((sqInt) _isPinned ) + 2;'),
+                    ('fetchClassOfNonImm', '_classTablePage == GIV(nilObj)', '_classTablePage == GIV(trueObj)')):
+    change('functions that the others call', f, inFunction(f, old, new), re.compile(r'has changed: function %s\.' % f))
 change('primitive numbers', 'a longer range of quick primitives', replaced(interp, '#define MaxQuickPrimitiveIndex 519', '#define MaxQuickPrimitiveIndex 520'), 'assumes that MaxQuickPrimitiveIndex')
 
 # the caches

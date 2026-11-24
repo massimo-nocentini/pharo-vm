@@ -41,7 +41,8 @@ head, body, tail = src[:s], src[s:e], src[e:]
 
 # ---- what DIR repeats
 
-# the generated functions that interpret.inc repeats (inlines), or whose effects on the caches it relies on
+# the generated functions that interpret.inc repeats (inlines), those that they and the bytecodes only call but that it
+# repeats too, and those whose effects on the caches it relies on
 FUNCTIONS = '''
 addNewMethodToCache findNewMethodInClassTag inlineLookupInMethodCacheSelclassTag lookupInMethodCacheSelclassTag
 rewriteMethodCacheEntryForExternalPrimitiveToFunction primitiveFlushCache primitiveFlushCacheByMethod
@@ -49,6 +50,8 @@ primitiveFlushCacheBySelector primitiveAdoptInstance primitiveChangeClass primit
 executeQuickPrimitive methodHeaderHasPrimitive
 primitiveAt primitiveAtPut primitiveStringAt primitiveStringAtPut primitiveNew instantiateClassisPinnedisOldSpace
 primitiveClass primitiveIdentical primitiveFullClosureValue floatObjectOf floatValueOf
+isSmallFloatValue initializeHeaderOfStartAddressnumSlotsformatclassIndexpinned fetchClassOfNonImm
+numSlotsOf fetchPointerofObject splObj rawHeaderOf literalCountOfMethodHeader
 '''.split()
 # the functions that may use the caches: (method cache, at cache)
 CACHE_USERS = {
