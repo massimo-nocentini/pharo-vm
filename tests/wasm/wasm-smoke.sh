@@ -321,11 +321,12 @@ on the host: written by Pharo' s4
     # FEATURE_PLUGIN_SIMDUTF on, TimSortPlugin when it turns
     # FEATURE_PLUGIN_TIMSORT on, UtilsPlugin when it turns
     # FEATURE_PLUGIN_UTILS on, CMarkPlugin when it turns FEATURE_PLUGIN_CMARK
-    # on, CairoPlugin when it turns FEATURE_PLUGIN_CAIRO
-    # on and its PHARO_CAIRO_PLUGIN_BUILT is not OFF (WASM_CAIRO=OFF leaves
-    # the plugin out whatever the cached option says) (never SurfacePlugin, which
-    # cmake/plugins.cmake leaves out of the Emscripten VMs), and one for each
-    # src/emscripten/plugins/*.c (WebHostPlugin, then WebDisplayPlugin)
+    # on, SimdCSVPlugin when it turns FEATURE_PLUGIN_SIMDCSV on, CairoPlugin
+    # when it turns FEATURE_PLUGIN_CAIRO on and its PHARO_CAIRO_PLUGIN_BUILT
+    # is not OFF (WASM_CAIRO=OFF leaves the plugin out whatever the cached
+    # option says) (never SurfacePlugin, which cmake/plugins.cmake leaves out
+    # of the Emscripten VMs), and one for each src/emscripten/plugins/*.c
+    # (WebHostPlugin, then WebDisplayPlugin)
     modules=13
     if grep -Eiq '^FEATURE_PLUGIN_UUID:BOOL=(ON|TRUE|YES|Y|1)$' "$WASM_DIR/cmake/CMakeCache.txt" 2>/dev/null; then
 	modules=$((modules + 1))
@@ -343,6 +344,9 @@ on the host: written by Pharo' s4
 	modules=$((modules + 1))
     fi
     if grep -Eiq '^FEATURE_PLUGIN_CMARK:BOOL=(ON|TRUE|YES|Y|1)$' "$WASM_DIR/cmake/CMakeCache.txt" 2>/dev/null; then
+	modules=$((modules + 1))
+    fi
+    if grep -Eiq '^FEATURE_PLUGIN_SIMDCSV:BOOL=(ON|TRUE|YES|Y|1)$' "$WASM_DIR/cmake/CMakeCache.txt" 2>/dev/null; then
 	modules=$((modules + 1))
     fi
     if grep -Eiq '^FEATURE_PLUGIN_CAIRO:BOOL=(ON|TRUE|YES|Y|1)$' "$WASM_DIR/cmake/CMakeCache.txt" 2>/dev/null \

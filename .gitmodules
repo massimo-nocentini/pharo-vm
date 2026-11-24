@@ -1,6 +1,9 @@
 [submodule "plugins/CMarkPlugin/cmark-gfm.st"]
 	path = plugins/CMarkPlugin/cmark-gfm.st
 	url = https://github.com/massimo-nocentini/cmark-gfm.st.git
+[submodule "plugins/SimdCSVPlugin/simdcsv.st"]
+	path = plugins/SimdCSVPlugin/simdcsv.st
+	url = https://github.com/massimo-nocentini/simdcsv.st.git
 [submodule "plugins/SimdJSONPlugin/simdjson.st"]
 	path = plugins/SimdJSONPlugin/simdjson.st
 	url = https://github.com/massimo-nocentini/simdjson.st.git

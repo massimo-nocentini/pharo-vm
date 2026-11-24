@@ -76,9 +76,9 @@
 #
 # The batteries image (docs/Batteries.md) is the stock Pharo 15 image of
 # the site with the Smalltalk projects of this VM's plugins and libraries
-# (vm-plugins-primitives.st, simdjson.st, simdutf.st, timsort.st,
-# libpangocairo.st, libpoppler.st, cmark-gfm.st, from their master
-# branches) and the forks of Roassal and RTree, loaded by
+# (vm-plugins-primitives.st, simdjson.st, simdutf.st, simdcsv.st,
+# timsort.st, libpangocairo.st, libpoppler.st, cmark-gfm.st, from their
+# master branches) and the forks of Roassal and RTree, loaded by
 # packaging/batteries/build.sh.  Its job needs no other one: it runs the VM
 # of files.pharo.org, not one of this workflow, and so starts with the
 # generate job; the WebAssembly job, which offers it on the site, waits for
@@ -358,6 +358,35 @@ jobs:
           for f in libCMarkPlugin.so LICENSE.cmark-gfm; do
             test -f "$RUNNER_TEMP/vm/lib/$f" || { echo "missing $f"; exit 1; }
           done
+
+      # The SimdCSVPlugin (C, and an engine in C++ without the C++ library,
+      # cmake/simdcsv.cmake): it must index and build the known rows of
+      # tests/ci-load.st with the best kernel of the runner (AVX2, else SSE2,
+      # on x86_64; NEON on arm64), refuse a bogus
+      # SIMDCSV_FORCE_IMPLEMENTATION, honour fallback (the portable kernel of
+      # every build), and need no libstdc++ at all.  The licence of simdcsv
+      # must be in the zip, next to the plugins.  shell: bash runs the step
+      # with pipefail, so that a VM that dies after printing fails the step
+      - name: Load the SimdCSVPlugin of the zip
+        shell: bash
+        run: |
+          probe() { "$RUNNER_TEMP/vm/pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/SimdCSVPlugin/tests/ci-load.st; }
+          probe | tee "$RUNNER_TEMP/simdcsv.txt"
+          if [ "$(uname -m)" = x86_64 ]; then
+            grep -Eq '^SimdCSVPlugin native (avx2|sse2) a9494a8 1 forced - ok' "$RUNNER_TEMP/simdcsv.txt"
+          else
+            grep -q '^SimdCSVPlugin native neon a9494a8 1 forced - ok' "$RUNNER_TEMP/simdcsv.txt"
+          fi
+          SIMDCSV_FORCE_IMPLEMENTATION=bogus probe | tee "$RUNNER_TEMP/simdcsv-bogus.txt"
+          grep -q '^SimdCSVPlugin native .* forced refused bogus ok' "$RUNNER_TEMP/simdcsv-bogus.txt"
+          SIMDCSV_FORCE_IMPLEMENTATION=fallback probe | tee "$RUNNER_TEMP/simdcsv-fallback.txt"
+          grep -q '^SimdCSVPlugin native fallback .* forced fallback ok' "$RUNNER_TEMP/simdcsv-fallback.txt"
+          for f in libSimdCSVPlugin.so LICENSE.simdcsv; do
+            test -f "$RUNNER_TEMP/vm/lib/$f" || { echo "missing $f"; exit 1; }
+          done
+          needed=$(readelf -d "$RUNNER_TEMP/vm/lib/libSimdCSVPlugin.so" | grep NEEDED)
+          echo "$needed"
+          case $needed in *libstdc++*|*libgcc_s*) echo "libSimdCSVPlugin.so needs the C++ library"; exit 1 ;; esac
 
       # The CairoPlugin (C, and the C++ engine of the SimdUTFPlugin for its
       # text, cmake/plugins.cmake): bound to the libcairo of the zip that the
@@ -666,6 +695,27 @@ jobs:
           grep -q '^CMarkPlugin native 0\.29\.0\.gfm\.14 1 ok' "$RUNNER_TEMP/cmark.txt"
           grep -q '^CMarkPlugin limits ok' "$RUNNER_TEMP/cmark.txt"
           test -f "$RUNNER_TEMP/vm/Pharo.app/Contents/Resources/LICENSE.cmark-gfm" || { echo "missing LICENSE.cmark-gfm"; exit 1; }
+
+      # As on Linux, without the check of libstdc++ (the kernels AVX2, SSE2
+      # and NEON have never run on macOS before this step, and one that is
+      # not compiled in must not go unseen: the kernel is checked by its
+      # name); the licence goes to Contents/Resources (cmake/simdcsv.cmake)
+      - name: Load the SimdCSVPlugin of the zip
+        shell: bash
+        run: |
+          probe() { "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Pharo" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/SimdCSVPlugin/tests/ci-load.st; }
+          probe | tee "$RUNNER_TEMP/simdcsv.txt"
+          if [ "${{ matrix.arch }}" = arm64 ]; then
+            grep -q '^SimdCSVPlugin native neon a9494a8 1 forced - ok' "$RUNNER_TEMP/simdcsv.txt"
+          else
+            grep -Eq '^SimdCSVPlugin native (avx2|sse2) a9494a8 1 forced - ok' "$RUNNER_TEMP/simdcsv.txt"
+          fi
+          SIMDCSV_FORCE_IMPLEMENTATION=bogus probe | tee "$RUNNER_TEMP/simdcsv-bogus.txt"
+          grep -q '^SimdCSVPlugin native .* forced refused bogus ok' "$RUNNER_TEMP/simdcsv-bogus.txt"
+          SIMDCSV_FORCE_IMPLEMENTATION=fallback probe | tee "$RUNNER_TEMP/simdcsv-fallback.txt"
+          grep -q '^SimdCSVPlugin native fallback .* forced fallback ok' "$RUNNER_TEMP/simdcsv-fallback.txt"
+          test -f "$RUNNER_TEMP/vm/Pharo.app/Contents/MacOS/Plugins/libSimdCSVPlugin.dylib" || { echo "missing libSimdCSVPlugin.dylib"; exit 1; }
+          test -f "$RUNNER_TEMP/vm/Pharo.app/Contents/Resources/LICENSE.simdcsv" || { echo "missing LICENSE.simdcsv"; exit 1; }
 
       # As on Linux: the CairoPlugin bound to the libcairo of the zip (the
       # pinned cairo), in Contents/MacOS/Plugins with the other plugins, and
@@ -1071,6 +1121,37 @@ jobs:
           if (-not ((Test-Path "$vm\CMarkPlugin.dll") -or (Test-Path "$vm\libCMarkPlugin.dll"))) { "missing CMarkPlugin.dll"; exit 1 }
           if (-not (Test-Path "$vm\LICENSE.cmark-gfm")) { "missing LICENSE.cmark-gfm"; exit 1 }
 
+      # As on Linux, with the same PATH (no C++ runtime DLL is of any use to
+      # the plugin): the kernels have never run on Windows before this step,
+      # and the one that is chosen is checked by its name, as on macOS.
+      # The plugin is SimdCSVPlugin.dll, or libSimdCSVPlugin.dll as MinGW
+      # names it
+      - name: Load the SimdCSVPlugin of the zip
+        shell: pwsh
+        run: |
+          $vm = "$env:RUNNER_TEMP\vm"
+          $env:PATH = "$vm;$env:SystemRoot\System32;$env:SystemRoot"
+          function Probe {
+            $out = & "$vm\PharoConsole.exe" --headless build/build/vmmaker/image/VMMaker.image --no-default-preferences st plugins/SimdCSVPlugin/tests/ci-load.st
+            if ($LASTEXITCODE -ne 0) { $out; exit $LASTEXITCODE }
+            $out
+          }
+          $out = Probe
+          $out
+          $kernel = if ('${{ matrix.arch }}' -eq 'arm64') { 'neon' } else { '(avx2|sse2)' }
+          if (-not ($out -match "^SimdCSVPlugin native $kernel a9494a8 1 forced - ok")) { exit 1 }
+          $env:SIMDCSV_FORCE_IMPLEMENTATION = 'bogus'
+          $out = Probe
+          $out
+          if (-not ($out -match '^SimdCSVPlugin native .* forced refused bogus ok')) { exit 1 }
+          $env:SIMDCSV_FORCE_IMPLEMENTATION = 'fallback'
+          $out = Probe
+          $out
+          if (-not ($out -match '^SimdCSVPlugin native fallback .* forced fallback ok')) { exit 1 }
+          Remove-Item Env:SIMDCSV_FORCE_IMPLEMENTATION
+          if (-not ((Test-Path "$vm\SimdCSVPlugin.dll") -or (Test-Path "$vm\libSimdCSVPlugin.dll"))) { "missing SimdCSVPlugin.dll"; exit 1 }
+          if (-not (Test-Path "$vm\LICENSE.simdcsv")) { "missing LICENSE.simdcsv"; exit 1 }
+
       # As on Linux, with the same PATH: the CairoPlugin (CairoPlugin.dll, or
       # libCairoPlugin.dll as MinGW names it) bound to the libcairo of the
       # zip (MSYS2's build of the pinned cairo), with the C++ runtime DLLs of
@@ -1205,9 +1286,10 @@ jobs:
     steps:
       # (with the submodules plugins/SimdJSONPlugin/simdjson.st,
       # plugins/SimdUTFPlugin/simdutf.st, plugins/TimSortPlugin/timsort.st,
-      # plugins/UtilsPlugin/vm-plugins-primitives.st and
-      # plugins/CMarkPlugin/cmark-gfm.st, the Smalltalk code that lanes 68,
-      # 69, 71, 73, 74 and 75 of wasm-check load; 74 the packages of the
+      # plugins/UtilsPlugin/vm-plugins-primitives.st,
+      # plugins/CMarkPlugin/cmark-gfm.st and
+      # plugins/SimdCSVPlugin/simdcsv.st, the Smalltalk code that lanes 68,
+      # 69, 71, 73, 74, 75 and 77 of wasm-check load; 74 the packages of the
       # CairoPlugin, from vm-plugins-primitives.st too)
       - uses: actions/checkout@v7
         with:

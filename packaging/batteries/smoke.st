@@ -7,7 +7,8 @@ of the fork, the icons of its UI are the Material Symbols in gray, its facades a
 few packages pass:
 
 	basic (any VM, the default): RTree-Tests, TimSort-Smalltalk-Tests, VM-Plugins-Primitives-Tests (the
-	        UtilsPlugin's Smalltalk twin, and the plugin too when the VM has it), CMark-Tests, CMark-Roassal-Tests
+	        UtilsPlugin's Smalltalk twin, and the plugin too when the VM has it), SimdCSV-Tests (its Smalltalk
+	        backend, and the plugin too when the VM has it; its slow tests skip), CMark-Tests, CMark-Roassal-Tests
 	        and CMark-Calypso-Tests (whose tests that parse skip without the CMarkPlugin), Delimcc-Tests,
 	        Delimcc-Continuation-Tests and ContinuationTest (Pharo's, with the fixes of Delimcc-Continuation),
 	        MaterialSymbols-Tests (which put the gray pack back after each test) and
@@ -40,10 +41,10 @@ mode := (environment at: 'BATTERIES_SMOKE' ifAbsent: [ '' ]) trimBoth ifEmpty: [
 [
 "1. a class or two of every project, the fork's RTree and Roassal"
 classes := #( #RSCanvas #RSPangoText #RSPdfPage #RTNaryTreeCollection #RTPackedTreeCollection #RTGridCollection
-	#RTLooseQuadtreeCollection #UtilsPlugin #KnuthRandom #SplitMix64 #SimdJSONReader #NeoJSONReader #SimdUTF #TimSort
-	#TimSortSmalltalk #PangoLayout #PopplerDocument #BaselineOfRoassalMN #CMark #CMarkParser #CMarkRoassalRenderer
-	#CTArray2D #CTKeyedValuedOrderedCollection #CTCategory #PartialContinuation #DelimccPrompt #MaterialIcons
-	#MaterialSymbolsThemeIcons ).
+	#RTLooseQuadtreeCollection #UtilsPlugin #KnuthRandom #SplitMix64 #SimdJSONReader #NeoJSONReader #SimdUTF #SimdCSV
+	#SimdCSVReader #TimSort #TimSortSmalltalk #PangoLayout #PopplerDocument #BaselineOfRoassalMN #CMark #CMarkParser
+	#CMarkRoassalRenderer #CTArray2D #CTKeyedValuedOrderedCollection #CTCategory #PartialContinuation #DelimccPrompt
+	#MaterialIcons #MaterialSymbolsThemeIcons ).
 classes do: [ :name |
 	(Smalltalk globals includesKey: name) ifFalse: [ problems add: 'no class ' , name ] ].
 (MCWorkingCopy allWorkingCopies select: [ :copy | copy packageName beginsWith: 'RTree' ]) do: [ :copy |
@@ -81,11 +82,13 @@ IceCredentialsProvider providerType = IceNonInteractiveCredentialsProvider ifTru
 (#( 3 1 2 ) copy timSort: [ :a :b | a <= b ]) = #( 1 2 3 ) ifFalse: [ problems add: 'timSort: does not sort' ].
 #( 3 1 2 ) copy timSortDescending = #( 3 2 1 ) ifFalse: [ problems add: 'timSortDescending does not sort' ].
 (2.0 times: 3.0 plus: 1.0) = 7.0 ifFalse: [ problems add: 'Float>>times:plus: is not 7.0' ].
+((Smalltalk globals at: #SimdCSV) rowsFrom: 'a,b' , String lf , '1,"x,y"') = #( #( 'a' 'b' ) #( '1' 'x,y' ) ) ifFalse: [
+	problems add: 'SimdCSV rowsFrom: does not read' ].
 
 "3. the tests"
-suites := #( 'RTree-Tests' 'TimSort-Smalltalk-Tests' 'VM-Plugins-Primitives-Tests' 'CMark-Tests' 'CMark-Roassal-Tests'
-	'CMark-Calypso-Tests' 'Delimcc-Tests' 'Delimcc-Continuation-Tests' 'ContinuationTest' 'MaterialSymbols-Tests'
-	'MaterialSymbols-Protocols-Tests' ).
+suites := #( 'RTree-Tests' 'TimSort-Smalltalk-Tests' 'VM-Plugins-Primitives-Tests' 'SimdCSV-Tests' 'CMark-Tests'
+	'CMark-Roassal-Tests' 'CMark-Calypso-Tests' 'Delimcc-Tests' 'Delimcc-Continuation-Tests' 'ContinuationTest'
+	'MaterialSymbols-Tests' 'MaterialSymbols-Protocols-Tests' ).
 mode = 'native' ifTrue: [
 	suites := suites , #( 'SimdJSON-Tests' 'SimdJSON-FFI-Tests' 'TimSort-FFI-Tests' 'LibGLib-Tests' 'LibPangoCairo-Tests'
 		'LibPoppler-Roassal-Tests' ) ].
