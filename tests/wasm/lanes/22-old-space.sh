@@ -13,7 +13,8 @@
 #           keep its String;
 #   large   the same objects in the largest window of a 32-bit memory,
 #           [1 GB, 2 GB), with PHARO_WASM_OLD_SPACE_BASE=0x40000000, which
-#           they nearly fill;
+#           they nearly fill (skipped when WASM_MAXIMUM_MEMORY is less than
+#           2 GB);
 #   limit   in a VM with a 32-bit memory (WASM_NODE_MEMORY64=2), whose maximum
 #           is a page under 4 GB, 0x80000000 is refused when it starts, with
 #           the message that says why;
@@ -64,17 +65,30 @@ if run window window; then
     fi
 fi
 
-fresh large
-if run large large; then
-    size=$(sed -n '1s/.* //p' smoke.out)
-    if test "$status" -ne 0; then
-	fail large "exit status $status"
-    elif ! is_number "$size" || test "$size" -le 900000000 || test "$size" -gt 1073741824; then
-	fail large "expected old space of more than 900000000 and at most 1073741824 bytes, got '$(sed -n 1p smoke.out)'"
-    elif test "x$(sed -n 2p smoke.out)" != "xbad slots: 0"; then
-	fail large "expected 'bad slots: 0', got '$(sed -n 2p smoke.out)'"
-    else
-	ok large "old space of $size bytes"
+# the maximum memory of the module, in pages of 64 KB (WASM_MAXIMUM_MEMORY)
+pages=$("$NODE" -e '
+const b = require("fs").readFileSync(process.argv[1]); let p = 8;
+const u = () => { let n = 0, k = 1, x; do { x = b[p++]; n += (x & 127) * k; k *= 128; } while (x & 128); return n; };
+while (p < b.length) {
+  const id = b[p++], n = u(), q = p;
+  if (id === 5) { u(); if (b[p++] & 1) { u(); console.log(u()); } }
+  p = q + n;
+}' "$WASM_DIR/node/pharo.wasm")
+if is_number "$pages" && test "$pages" -lt 32768; then
+    skip_check large "its window ends at 2 GB, and the maximum memory is $((pages / 16)) MB (WASM_MAXIMUM_MEMORY)"
+else
+    fresh large
+    if run large large; then
+	size=$(sed -n '1s/.* //p' smoke.out)
+	if test "$status" -ne 0; then
+	    fail large "exit status $status"
+	elif ! is_number "$size" || test "$size" -le 900000000 || test "$size" -gt 1073741824; then
+	    fail large "expected old space of more than 900000000 and at most 1073741824 bytes, got '$(sed -n 1p smoke.out)'"
+	elif test "x$(sed -n 2p smoke.out)" != "xbad slots: 0"; then
+	    fail large "expected 'bad slots: 0', got '$(sed -n 2p smoke.out)'"
+	else
+	    ok large "old space of $size bytes"
+	fi
     fi
 fi
 
