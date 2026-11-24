@@ -34,7 +34,7 @@ set(WASM_SJLJ "wasm" CACHE STRING "setjmp/longjmp of the VM: wasm (WebAssembly e
 option(WASM_FAST_INTERP "Prototype: the fast interpreter of src/emscripten/fastinterp" OFF)
 set(WASM_WEB_MEMORY64 "2" CACHE STRING "Memory of pharo-web: 2 (32-bit memory, 64-bit pointers) or 1 (memory64)")
 set(WASM_NODE_MEMORY64 "1" CACHE STRING "Memory of the node VM: 1 (memory64) or 2 (32-bit memory, 64-bit pointers)")
-set(WASM_TUNE "OFF" CACHE STRING "Experiment: tune the modules with a 32-bit memory after the link: OFF, NARROW (32-bit addresses, no profile) or ON (branch hints of a profile too; packaging/emscripten/tools/wasm-tune.mjs)")
+set(WASM_TUNE "OFF" CACHE STRING "Tune the modules that have a 32-bit memory after the link: NARROW (32-bit address arithmetic, packaging/emscripten/tools/wasm-narrow.mjs) or OFF")
 set(WASM_STACK_SIZE "8MB" CACHE STRING "Size of the C stack")
 set(WASM_INITIAL_MEMORY "32MB" CACHE STRING "Initial size of the memory; it must hold the stack and the data")
 set(WASM_MAXIMUM_MEMORY "4GB" CACHE STRING "Maximum size of the memory")
@@ -60,8 +60,8 @@ endif()
 if(NOT WASM_WEB_MEMORY64 MATCHES "^[12]$")
     message(FATAL_ERROR "WASM_WEB_MEMORY64 must be 1 or 2, not '${WASM_WEB_MEMORY64}'")
 endif()
-if(NOT WASM_TUNE MATCHES "^(OFF|NARROW|ON)$")
-    message(FATAL_ERROR "WASM_TUNE must be OFF, NARROW or ON, not '${WASM_TUNE}'")
+if(NOT WASM_TUNE MATCHES "^(OFF|NARROW)$")
+    message(FATAL_ERROR "WASM_TUNE must be NARROW or OFF, not '${WASM_TUNE}'")
 endif()
 if(NOT WASM_NODE_MEMORY64 MATCHES "^[12]$")
     message(FATAL_ERROR "WASM_NODE_MEMORY64 must be 1 or 2, not '${WASM_NODE_MEMORY64}'")
@@ -361,27 +361,22 @@ if(PHARO_WASM_HAS_PANGO)
     list(APPEND PHARO_WASM_WEB_LINK_FLAGS "--embed-file=${PHARO_WASM_FONTS_DIR}@/usr/share/fonts/pharo")
 endif()
 
-# WASM_TUNE: the link folds small constants into the offsets of the loads and
-# stores (nothing is at an address under 1024: the end of the stack is there,
-# -Wl,--stack-first) and allocates the locals better, and wasm-tune.mjs then
-# narrows the address arithmetic to 32 bits and, with ON, adds the branch hints
-# of the profile.  Only for a 32-bit memory.
-set(PHARO_WASM_TUNE_TOOL ${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/tools/wasm-tune.mjs)
-set(PHARO_WASM_TUNE_PROFILE ${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/profile/wasm-tune.json)
+# WASM_TUNE=NARROW: the link folds small constants into the offsets of the
+# loads and stores (nothing is at an address under 1024: the end of the stack
+# is there, -Wl,--stack-first) and allocates the locals better, and
+# wasm-narrow.mjs then narrows the address arithmetic to 32 bits.  Only for a
+# 32-bit memory, and not in a Debug build.
+set(PHARO_WASM_NARROW_TOOL ${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/tools/wasm-narrow.mjs)
 function(pharo_wasm_tune TARGET)
-    if(WASM_TUNE STREQUAL "OFF" OR CMAKE_BUILD_TYPE MATCHES "Debug")
+    if(NOT WASM_TUNE STREQUAL "NARROW" OR CMAKE_BUILD_TYPE MATCHES "Debug")
         return()
     endif()
-    set(profile)
-    if(WASM_TUNE STREQUAL "ON")
-        set(profile "${PHARO_WASM_TUNE_PROFILE}")
-    endif()
     set_property(TARGET ${TARGET} APPEND_STRING PROPERTY LINK_FLAGS " -sBINARYEN_EXTRA_PASSES=--low-memory-unused,--coalesce-locals-learning,--vacuum")
-    set_property(TARGET ${TARGET} APPEND PROPERTY LINK_DEPENDS ${PHARO_WASM_TUNE_TOOL} ${profile})
+    set_property(TARGET ${TARGET} APPEND PROPERTY LINK_DEPENDS ${PHARO_WASM_NARROW_TOOL})
     set(wasm "$<TARGET_FILE_DIR:${TARGET}>/$<TARGET_FILE_BASE_NAME:${TARGET}>.wasm")
     add_custom_command(TARGET ${TARGET} POST_BUILD
-        COMMAND "${NODE_JS_EXECUTABLE}" "${PHARO_WASM_TUNE_TOOL}" tune "${wasm}" "${wasm}" ${profile} --narrow
-        COMMENT "Tuning ${TARGET}.wasm" VERBATIM)
+        COMMAND "${NODE_JS_EXECUTABLE}" "${PHARO_WASM_NARROW_TOOL}" "${wasm}" "${wasm}"
+        COMMENT "Narrowing the addresses of ${TARGET}.wasm" VERBATIM)
 endfunction()
 
 function(pharo_wasm_link_executable TARGET)
