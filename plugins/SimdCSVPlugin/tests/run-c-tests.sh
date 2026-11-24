@@ -464,8 +464,7 @@ symbols_lane() {
                 END { if (!avx) print "no ymm register in sc_avx2"; exit bad || !avx }' || { echo "$c: instructions"; ok=0; }
         fi
         # the stack of a call stays under 4 KiB
-        if $c -fstack-usage -x c++ -fsyntax-only /dev/null 2>/dev/null; then
-            ( cd "$dir" && $c $flags -O3 -fPIC -fstack-usage $inc $slice -c "$engine" -o stack.o )
+        if ( cd "$dir" && $c $flags -O3 -fPIC -fstack-usage $inc $slice -c "$engine" -o stack.o ) 2> /dev/null && test -s "$dir/stack.su"; then
             big=$(awk -F '\t' '$2 > 1500 { print $1 ": " $2 }' "$dir/stack.su")
             test -z "$big" || { echo "$c: the stack: $big"; ok=0; }
         fi
