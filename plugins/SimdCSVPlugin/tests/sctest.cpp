@@ -1132,6 +1132,35 @@ void four_gib() {
             fail("the cursor over 4 GiB");
         checks += 5;
     }
+    /* as many entries as an index can have: 2^32 - 2 separators, 16 GiB of slots */
+    const uint64_t most = SC_MAX_SPAN, bytes = 4 * (most + 4);
+    uint32_t *many = (uint32_t *)mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (many == MAP_FAILED)
+        fail("mmap");
+    memset(m, ',', most);
+    m[most] = '\n';
+    for (int k = 0; k < sc_kernel_count(); k++) {
+        sc_use_kernel(k);
+        now_kernel = sc_kernel();
+        sc_input in = { m, 0, 0, most };
+        sc_dialect end = d;
+        end.flags = SC_F_FINAL;
+        sc_scan s;
+        many[most + 1] = many[most + 2] = CANARY;
+        sc_index(&in, &end, 0, many, most + 1, &s);
+        if (s.status != SC_OK || s.stored != most + 1 || s.records != 1 || s.next != most || s.min_fields != most + 1
+            || s.max_fields != most + 1 || many[most + 1] != CANARY || many[most + 2] != CANARY)
+            fail("2^32 - 2 separators: stored %llu", (unsigned long long)s.stored);
+        for (uint64_t i = 0; i <= most; i++)
+            if (many[i] != i)
+                fail("2^32 - 2 separators: entry %llu", (unsigned long long)i);
+        many[most] = CANARY;            /* one slot less */
+        sc_index(&in, &end, 0, many, most, &s);
+        if (s.status != SC_MORE || s.stored != 0 || s.next != 0 || many[most] != CANARY)
+            fail("2^32 - 2 slots: status %d", s.status);
+        checks += 2;
+    }
+    munmap(many, bytes);
     munmap(m, total);
 }
 #endif

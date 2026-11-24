@@ -32,7 +32,8 @@
 #                  cortex-a72, both from --arm64-root; no pmull instruction
 #   fuzz           (opt-in) tests/fuzz.cpp: libFuzzer, ASan and UBSan, for
 #                  --seconds; without libFuzzer its own random inputs
-#   4gib           (opt-in) the positions over 4 GiB (5 GiB of address space)
+#   4gib           (opt-in) the positions over 4 GiB, and an index of 2^32 - 1
+#                  entries (about 21 GiB of memory)
 #   glue           tests/glue.sh (its own rules R1, R5 and R7); needs
 #                  --vm-build
 #
