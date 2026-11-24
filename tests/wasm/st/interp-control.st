@@ -84,6 +84,15 @@ say value: 'bytecodes' value: [ { s value: #[232 65 92]. s value: #[232 200 92].
 	(s value: #[76 119 92]) name. (s value: #[80 119 92]) name. s value: #[80 77 184 81 92]. s value: #[80 78 184 81 92]. s value: #[79 119 92] } ].
 say value: 'the nil of a block' value: [ | z b m | z := 3. b := [ :x | z + x ]. m := b compiledBlock. m at: m initialPC put: 93. [ b value: 1 ] value ].
 
+say value: 'closures with a receiver from the stack, and without an outer context' value: [
+	#( 129 1 65 193 ) collect: [ :flags | | m lit blk |
+		m := (c compile: 'made | z | z := 5. z := 6. ^ [ { self name. z } ]'; yourself) >> #made.
+		lit := m at: (m initialPC to: m endPC) first + ((m initialPC to: m endPC) asArray findFirst: [ :pc | (m at: pc) = 249 ]).
+		(flags >= 128 ifTrue: [ #[77 80 249] ] ifFalse: [ #[216 80 249] ]) withIndexDo: [ :b :i | m at: m initialPC + i - 1 put: b ].
+		flags < 128 ifTrue: [ m at: m initialPC put: 80; at: m initialPC + 1 put: 81 ].
+		m at: m initialPC + 3 put: lit; at: m initialPC + 4 put: flags; at: m initialPC + 5 put: 92. Object flushCache.
+		blk := c new made. { blk class = [ c ] class. blk numArgs. blk outerContext isNil. blk receiver class name. blk size. blk at: 1 } ] ].
+
 "---- contexts"
 c compile: 'context | t | t := 5. ^ { thisContext tempNamed: #t. thisContext receiver == self. thisContext selector. thisContext method numArgs. [ self. thisContext outerContext selector ] value }'.
 say value: 'thisContext' value: [ c new context ].

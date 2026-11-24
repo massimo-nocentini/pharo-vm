@@ -36,6 +36,7 @@ closures of many variables and temporaries: #(8 9 11 7)
 closures and recursion: 30000
 bytecodes: {65. 200. -56. $A. 200. #InterpC. #SmallInteger. 0. 1. UndefinedObject}
 the nil of a block: nil
+closures with a receiver from the stack, and without an outer context: #(#(true 0 false #True 1 0) #(true 0 false #InterpC 1 1) #(true 0 true #InterpC 1 1) #(true 0 true #True 1 0))
 thisContext: #(5 true #context 0 #context)
 a context in a block: #(#Context #UndefinedObject #CompiledBlock #SmallInteger #SmallInteger 1)
 a temporary of a context: #(6 6)
