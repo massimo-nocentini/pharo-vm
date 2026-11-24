@@ -103,7 +103,7 @@ code() {
 allowed="instantiateClassindexableSize integerObjectOf floatObjectOf storePointerofObjectwithValue
  firstIndexableField methodReturnValue primitiveFailFor primitiveFailureCode stackValue methodArgumentCount
  fetchClassOf fetchPointerofObject isBytes isWords isArray isPointers isIntegerObject isOopImmutable
- integerValueOf slotSizeOf byteSizeOf classArray classByteArray classFloat classString nilObject
+ isYoung integerValueOf slotSizeOf byteSizeOf classArray classByteArray classFloat classString nilObject
  majorVersion minorVersion"
 rule=ok
 for f in $(code "$glue" | grep -o 'interpreterProxy->[A-Za-z0-9_]*' | sed 's/.*->//' | sort -u); do

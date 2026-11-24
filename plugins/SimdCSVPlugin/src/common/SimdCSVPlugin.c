@@ -38,7 +38,11 @@
  * then, and only then.  When a row does not fit in object memory, the failure
  * is taken back, and the answer is MORE (with the rows made before it) or
  * NO_ROOM (with the bytes that this record needs); any other failure of an
- * allocation is the primitive's.  There is no C heap.
+ * allocation is the primitive's.  A record that fails leaves old space full
+ * of what was made of it: where old space cannot grow, SimdCSVBackend asks
+ * for the need of a record first (the budget MEASURE_ONLY).  Rows stay in new
+ * space: primitiveRows answers MORE after a row whose Array was made in old
+ * space (isYoung).  There is no C heap.
  *
  * Natively it is the shared library libSimdCSVPlugin.so, whose module
  * functions, primitives and primitiveXAccessorDepth variables the VM finds
@@ -83,6 +87,11 @@ _Static_assert(sizeof(sqInt) == 8, "SimdCSVPlugin: the answers hold SmallInteger
 
 /* The type codes of a column of primitiveRows */
 enum { IGNORED, STRING, INTEGER, FLOAT, FLOAT_COMMA, TYPE_CODES };
+
+/* A budget of primitiveRows: measure the first record, make nothing */
+#define MEASURE_ONLY (-2)
+/* A record of which no more than this can be made begins within any budget */
+#define LARGE_RECORD 65536
 
 /* Spur's instance specification of 32-bit words */
 #define WORDS_INST_SPEC 10
@@ -738,6 +747,15 @@ makeRow(Rows *rows, sc_cursor cursor, uint64_t count, sqInt *row, uint64_t *need
 	return MADE;
 }
 
+/* At most the bytes of the objects that makeRow makes of a record of count
+ * fields in units units: an Array, and for each field a header, an overflow
+ * header and the rounding, or a boxed Float, and 4 bytes a unit */
+static uint64_t
+rowBound(const Rows *rows, uint64_t count, uint64_t units)
+{
+	return spurPointers(rows->fieldCount ? rows->width : count) + 24 * count + 4 * units;
+}
+
 /*	SimdCSVPrimitives class>>rows: source base: base to: stop dialect: word
 		index: index from: indexStart to: indexStop types: types
 		fieldCount: n into: dest from: destStart wideStringClass: wideClass
@@ -746,7 +764,12 @@ makeRow(Rows *rows, sc_cursor cursor, uint64_t count, sqInt *row, uint64_t *need
 	Make the rows of the records whose fields are the entries
 	indexStart..indexStop of the index, and store them in the Array dest from
 	its slot destStart on.  Answer { status. rows. nextIndex. odd. code.
-	position. row. field. need }. */
+	position. row. field. need }.
+	A call ends early (MORE) so that its garbage stays in new space: when an
+	Array of a row had to be made in old space, for which new space is full
+	(the VM scavenges once the primitive has returned), and before a record,
+	not the first, that may take more than the budget.  A budget of
+	MEASURE_ONLY makes nothing: NO_ROOM, and the need of the first record. */
 EXPORT(sqInt)
 primitiveRows(void)
 {
@@ -755,7 +778,7 @@ primitiveRows(void)
 	Rows rows;
 	sqInt base, stop, indexStart, indexStop, fieldCount, destStart, budget;
 	sqInt types, dest, answer, destSize = 0;
-	int indexIsWords, destIsArray, i, status = SC_OK, code = SC_E_NONE;
+	int indexIsWords, destIsArray, i, isFull = 0, status = SC_OK, code = SC_E_NONE;
 	uint64_t capacity, stored = 0, next, position = 0, badRow = 0, badField = 0, need = 0;
 	sc_cursor cursor;
 
@@ -841,7 +864,7 @@ primitiveRows(void)
 		sqInt row;
 		int outcome;
 
-		if (stored == capacity || (stored && budget >= 0 && rows.made >= (uint64_t)budget)) {
+		if (stored == capacity || isFull || (stored && budget >= 0 && rows.made >= (uint64_t)budget)) {
 			status = SC_MORE;
 			break;
 		}
@@ -868,8 +891,21 @@ primitiveRows(void)
 			badRow = stored + 1;
 			break;
 		}
+		if (stored && budget >= 0) {
+			uint64_t bound = rowBound(&rows, count, field.end - start);
+
+			if (bound > LARGE_RECORD && bound > (uint64_t)budget) {
+				status = SC_MORE;
+				break;
+			}
+		}
 		/* pass 2: the row and its cells */
-		outcome = makeRow(&rows, record, count, &row, NULL, &column);
+		if (budget == MEASURE_ONLY) {
+			status = SC_NO_ROOM;
+			outcome = makeRow(&rows, record, count, NULL, &need, &column);
+		} else {
+			outcome = makeRow(&rows, record, count, &row, NULL, &column);
+		}
 		if (outcome == NO_OBJECT) {
 			sqInt failure = interpreterProxy->primitiveFailureCode();
 
@@ -896,6 +932,7 @@ primitiveRows(void)
 			break;
 		}
 		put(dest, destStart - 1 + (sqInt)stored, row);
+		isFull = !interpreterProxy->isYoung(row);
 		stored++;
 		rows.odd += rows.rowOdd;
 		next = cursor.slot;

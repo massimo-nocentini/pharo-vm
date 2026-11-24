@@ -21,6 +21,7 @@ typedef struct {
 	int immutable;
 	size_t pretended;	/* what byteSizeOf answers, when not 0 */
 	int madeInCall;		/* by instantiateClassindexableSize in this call */
+	int old;		/* in old space */
 	sqInt cls;
 	size_t size;		/* slots (formats 1, 2, 4), elements (9, 10, 12), bytes (16, 24) */
 	sqInt *slots;
@@ -56,6 +57,7 @@ static sqInt storeTarget;
 
 /* The allocator */
 static long budget = -1;
+static long eden = -1;
 static sqInt budgetCode = PrimErrNoMemory;
 
 static void
@@ -451,6 +453,12 @@ fake_set_budget(long allowed, sqInt failCode)
 }
 
 void
+fake_set_eden(long allowed)
+{
+	eden = allowed;
+}
+
+void
 fake_allow_store(sqInt oop)
 {
 	storeTarget = oop;
@@ -626,6 +634,12 @@ fIsOopImmutable(sqInt oop)
 }
 
 static sqInt
+fIsYoung(sqInt oop)
+{
+	return !isImmediateOop(oop) && objectOf(oop, "isYoung") && !((Obj *)oop)->old;
+}
+
+static sqInt
 fIntegerObjectOf(sqInt value)
 {
 	if (value < SMALLINTEGER_MIN || value > SMALLINTEGER_MAX) {
@@ -687,6 +701,7 @@ fInstantiateClassindexableSize(sqInt aClass, sqInt size)
 		budget--;
 	}
 	o->madeInCall = 1;
+	o->old = eden >= 0 && current.allocated >= eden;
 	current.allocated++;
 	current.bytes += fake_spur_bytes((sqInt)o);
 	if (current.allocated == 1) {
@@ -851,6 +866,7 @@ fake_init(void)
 	proxy.methodReturnValue = fMethodReturnValue;
 	proxy.primitiveFailureCode = fPrimitiveFailureCode;
 	proxy.isImmediate = fIsImmediate;
+	proxy.isYoung = fIsYoung;
 	return &proxy;
 }
 

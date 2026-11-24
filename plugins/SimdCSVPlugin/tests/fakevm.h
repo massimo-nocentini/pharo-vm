@@ -116,6 +116,10 @@ void fake_pretend_bytes(sqInt oop, size_t bytes);
    instantiateClassindexableSize fails with failCode */
 void fake_set_budget(long allowed, sqInt failCode);
 
+/* The allocations of a call that fit in eden (-1: no limit): the objects made
+   after them are in old space, and isYoung is false of them */
+void fake_set_eden(long allowed);
+
 /* The one object, not made by the call, that a call may store into (0: none) */
 void fake_allow_store(sqInt oop);
 

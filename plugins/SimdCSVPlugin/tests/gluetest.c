@@ -1174,6 +1174,92 @@ checkRows(void)
 			CHECK(r.bytes - r.firstBytes == 32u * (unsigned)rowsMade[i], "budget %d: %llu bytes", budgets[i], (unsigned long long)r.bytes);
 		}
 	}
+	/* new space is full: no row begins after one whose Array is old (the
+	   answer is the first allocation, then an Array and a cell a row) */
+	for (i = 0; i <= 8; i++) {
+		static const int rowsMade[] = { 1, 1, 2, 2, 3, 3, 3, 3, 3 };
+		FakeAnswer r;
+
+		dest = fake_new(fakeArray, 4);
+		rowsArgs(a, source, comma(0), index, entries, fakeNil, 0, dest);
+		fake_set_eden(i);
+		r = callRows(a);
+		fake_set_eden(-1);
+		checkInts(r.value, "eden", 9, rowsMade[i] < 3 ? SC_MORE : SC_OK, rowsMade[i], rowsMade[i] + 1, 0, 0, 0, 0, 0, 0);
+		CHECK(cellIs(fake_slot(dest, (size_t)rowsMade[i] - 1), 0, i < 2 ? "a" : i < 4 ? "b" : "c")
+			&& fake_slot(dest, (size_t)rowsMade[i]) == fakeNil, "eden %d: the rows", i);
+	}
+	/* a record that may take more than the budget begins a call, if more
+	   than 64 KiB can be made of it: with its Array (16), 24 a field and 4 a
+	   unit, 40 and 4 * 16374 are 65,536 */
+	for (i = 0; i < 12; i++) {
+		static const struct { int units; sqInt budget; int rowsMade; } cases[] = {
+			{ 16374, 1000, 2 }, { 16375, 1000, 1 }, { 16375, 65539, 1 }, { 16375, 65540, 3 }, { 16375, -1, 3 }, { 16375, 1, 1 },
+			{ 25000, 100039, 1 }, { 25000, 100040, 3 }, { 25000, 100041, 3 }, { 25000, -1, 3 }, { 25000, 0, 1 }, { 1000, 4000, 3 },
+		};
+		static char text[30000];
+		FakeAnswer r;
+		int again;
+
+		strcpy(text, "a\n");
+		memset(text + 2, 'x', (size_t)cases[i].units);
+		strcpy(text + 2 + cases[i].units, "\nb\n");
+		source = bytesOop(fakeByteArray, text);
+		index = indexed(source, comma(0), &entries);
+		dest = fake_new(fakeArray, 4);
+		rowsArgs(a, source, comma(0), index, entries, fakeNil, 0, dest);
+		a[R_BUDGET] = fake_int(cases[i].budget);
+		r = callRows(a);
+		checkInts(r.value, "large", 9, cases[i].rowsMade < 3 ? SC_MORE : SC_OK, cases[i].rowsMade, cases[i].rowsMade + 1, 0, 0, 0, 0, 0, 0);
+		for (again = 1; intSlot(r.value, 0) == SC_MORE && again < 4; again++) {
+			a[R_FROM] = fake_int(intSlot(r.value, 2));
+			r = callRows(a);
+			CHECK(r.returned && intSlot(r.value, 1) >= 1, "large %d: the rest", i);
+		}
+		CHECK(intSlot(r.value, 0) == SC_OK && cellIs(fake_slot(dest, (size_t)intSlot(r.value, 1) - 1), 0, "b"), "large %d: the rest", i);
+	}
+	/* the bound counts the fields, and the width of the row: 80,016 bytes of
+	   an Array of 10,000, 24 and 4 of a field of one unit */
+	for (i = 0; i < 4; i++) {
+		static const struct { const char *text; int columns; sqInt budget; int rowsMade; } cases[] = {
+			{ "a\nb\n", 10000, 80043, 1 }, { "a\nb\n", 10000, 80044, 2 }, { "a\n,b\n", 10000, 80071, 1 }, { "a\n,b\n", 10000, 80072, 2 },
+		};
+
+		source = bytesOop(fakeByteArray, cases[i].text);
+		index = indexed(source, comma(0), &entries);
+		dest = fake_new(fakeArray, 4);
+		rowsArgs(a, source, comma(0), index, entries, fakeNil, cases[i].columns, dest);
+		a[R_BUDGET] = fake_int(cases[i].budget);
+		CHECK(intSlot(rowsOf(a), 1) == cases[i].rowsMade, "width %d", i);
+	}
+	/* the need of the first record, and nothing made */
+	for (i = 0; i < 6; i++) {
+		static const struct { const char *text; sqInt flags; int columns; } cases[] = {
+			{ "a,bb,ccccccccc\nd\n", 0, 0 }, { "\xE2\x82\xAC,x\n", 0, 0 }, { "\"\",b\n", SC_F_KEEP_QUOTED_EMPTY, 0 }, { "a\n", 0, 300 },
+			{ "\"a\"\"b\"\nq\n", 0, 0 }, { ",,\n", 0, 0 },
+		};
+		FakeAnswer one, r;
+
+		source = bytesOop(fakeByteArray, cases[i].text);
+		index = indexed(source, comma(cases[i].flags), &entries);
+		dest = fake_new(fakeArray, 4);
+		rowsArgs(a, source, comma(cases[i].flags), index, entries, fakeNil, cases[i].columns, dest);
+		a[R_BUDGET] = fake_int(0);
+		one = callRows(a);
+		dest = fake_new(fakeArray, 4);
+		a[R_DEST] = dest;
+		a[R_BUDGET] = fake_int(-2);
+		r = callRows(a);
+		checkInts(r.value, "measured", 9, SC_NO_ROOM, 0, 1, 0, 0, 0, 0, 0, (int)(one.bytes - one.firstBytes));
+		CHECK(r.allocated == 1 && fake_slot(dest, 0) == fakeNil, "measured %d: made", i);
+	}
+	source = bytesOop(fakeByteArray, "a,\xC3\n");
+	index = indexed(source, comma(0), &entries);
+	rowsArgs(a, source, comma(0), index, entries, fakeNil, 0, fake_new(fakeArray, 4));
+	a[R_BUDGET] = fake_int(-2);
+	checkInts(rowsOf(a), "measured, invalid", 9, SC_ERROR, 0, 1, 0, SC_E_INVALID_UTF8, 3, 1, 2, 0);
+	a[R_LAST] = fake_int(0);
+	checkInts(rowsOf(a), "measured, empty", 9, SC_OK, 0, 1, 0, 0, 0, 0, 0, 0);
 	/* what a budget counts, byte by byte, of wide strings, Floats and rows
 	   and strings around the 255 slots of an overflow header */
 	for (i = 0; i < 8; i++) {
