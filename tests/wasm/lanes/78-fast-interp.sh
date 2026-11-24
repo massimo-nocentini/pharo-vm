@@ -21,7 +21,10 @@
 #            it), and nothing of the fast interpreter; the node VM is linked
 #            with memory64, and neither VM is tuned.  And a bad value of a
 #            setting, a python3 that is none, or an interpreter that the
-#            fast one does not fit, stops.
+#            fast one does not fit, stops;
+#   python   the python3 that makes the fast interpreter is EMSDK_PYTHON, or
+#            the one of the PATH, as it is at each configure, or the one of
+#            PHARO_WASM_PYTHON3.
 #
 # Environment (from make wasm-check): NODE, WASM_DIR, GEN, SRCDIR, TEST_DIR.
 # Compiles with emcc (from PATH or EMSDK, or WASM_CC); guards needs python3
@@ -201,7 +204,34 @@ else
     }
     refused off-tune "WASM_TUNE must be NARROW or OFF, not 'ON'" -DWASM_TUNE=ON
     refused off-memory "WASM_NODE_MEMORY64 must be 1 or 2, not '3'" -DWASM_NODE_MEMORY64=3
-    refused off-python "WASM_FAST_INTERP=ON needs python3" -DWASM_FAST_INTERP=ON -DPHARO_WASM_PYTHON3=/bin/false
+
+    # a python of EMSDK_PYTHON that is gone at the next configure (an emsdk
+    # that was updated), then one by its name, then none
+    if "$python" -I -c 'import sys; sys.exit(sys.version_info < (3, 6))' 2>/dev/null; then
+	checks=$((checks + 1))
+	name=python
+	real=$(command -v "$python")
+	with_fast() { configure -DWASM_FAST_INTERP=ON -DWASM_TUNE=OFF -DWASM_NODE_MEMORY64=1 "$@"; }
+	made_by() { grep -rqs "$1 -I .*fastInterpreter\.py" off/CMakeFiles/PharoVMCore.dir off/build.ninja; }
+	# (links: emcmake sets EMSDK_PYTHON to what Python says that it is)
+	for d in python-1 python-2; do
+	    mkdir -p $d && ln -sf "$real" $d/python3
+	done
+	if ! ( EMSDK_PYTHON=$TEST_DIR/python-1/python3; export EMSDK_PYTHON; with_fast ) || ! made_by "$TEST_DIR/python-1/python3"; then
+	    fail python "EMSDK_PYTHON does not make the fast interpreter: $(tail -n 5 configure.out | tr '\n' ' ' | cut -c 1-300)"
+	elif rm -r python-1; ! ( EMSDK_PYTHON=$TEST_DIR/python-2/python3; export EMSDK_PYTHON; with_fast ) || ! made_by "$TEST_DIR/python-2/python3"; then
+	    fail python "the python3 of the configure before is gone, and EMSDK_PYTHON not taken: $(tail -n 5 configure.out | tr '\n' ' ' | cut -c 1-300)"
+	elif rm -r python-2; ! ( EMSDK_PYTHON=; unset EMSDK_PYTHON; PATH=$(dirname "$real"):$PATH; with_fast ) || made_by "$TEST_DIR/python-2/python3"; then
+	    fail python "the python3 of the configure before is gone, and the one of the PATH not taken: $(tail -n 5 configure.out | tr '\n' ' ' | cut -c 1-300)"
+	elif ! ( PATH=$(dirname "$real"):$PATH; with_fast "-DPHARO_WASM_PYTHON3=$(basename "$real")" ) || ! made_by "$(basename "$real")"; then
+	    fail python "PHARO_WASM_PYTHON3 is not taken by its name: $(tail -n 5 configure.out | tr '\n' ' ' | cut -c 1-300)"
+	else
+	    ok python
+	fi
+    else
+	skip_check python "no python3 ($python)"
+    fi
+    refused off-python "WASM_FAST_INTERP=ON needs python3 .* /bin/false is none" -DWASM_FAST_INTERP=ON -DPHARO_WASM_PYTHON3=/bin/false
 fi
-rm -rf off off.c links.txt configure.out smoke.out smoke.err
+rm -rf off off.c python-1 python-2 links.txt configure.out smoke.out smoke.err
 finish 78-fast-interp

@@ -211,24 +211,29 @@ pharo_wasm_check_markers(${VMSOURCEFILES})
 # 32-bit memory, it has its own object of it, with 32-bit addresses.
 if(WASM_FAST_INTERP)
     set(PHARO_WASM_FAST_INTERP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/emscripten/fastinterp)
-    # (the python of emcc, which needs one: EMSDK_PYTHON, or python3)
-    if(NOT PHARO_WASM_PYTHON3)
-        if(DEFINED ENV{EMSDK_PYTHON} AND EXISTS "$ENV{EMSDK_PYTHON}")
-            set(PHARO_WASM_PYTHON3 "$ENV{EMSDK_PYTHON}" CACHE FILEPATH "The python3 that makes the fast interpreter")
-        else()
-            find_program(PHARO_WASM_PYTHON3 NAMES python3 python DOC "The python3 that makes the fast interpreter")
-        endif()
+    # (the python of emcc, which needs one: EMSDK_PYTHON, or python3, looked up
+    # at each configure, since the one of an emsdk goes with its version)
+    set(PHARO_WASM_PYTHON3 "" CACHE STRING "The python3 that makes the fast interpreter, when not EMSDK_PYTHON or the python3 of the PATH")
+    if(PHARO_WASM_PYTHON3)
+        set(PHARO_WASM_FAST_INTERP_PYTHON "${PHARO_WASM_PYTHON3}")
+    elseif(DEFINED ENV{EMSDK_PYTHON} AND EXISTS "$ENV{EMSDK_PYTHON}")
+        set(PHARO_WASM_FAST_INTERP_PYTHON "$ENV{EMSDK_PYTHON}")
+    else()
+        unset(PHARO_WASM_FOUND_PYTHON3 CACHE)
+        find_program(PHARO_WASM_FOUND_PYTHON3 NAMES python3 python DOC "The python3 of the PATH")
+        set(PHARO_WASM_FAST_INTERP_PYTHON "${PHARO_WASM_FOUND_PYTHON3}")
     endif()
-    execute_process(COMMAND "${PHARO_WASM_PYTHON3}" -I -c "import sys; sys.exit(sys.version_info < (3, 6))"
+    execute_process(COMMAND "${PHARO_WASM_FAST_INTERP_PYTHON}" -I -c "import sys; sys.exit(sys.version_info < (3, 6))"
         RESULT_VARIABLE PHARO_WASM_PYTHON3_STATUS OUTPUT_QUIET ERROR_QUIET)
     if(NOT PHARO_WASM_PYTHON3_STATUS STREQUAL "0")
-        message(FATAL_ERROR "WASM_FAST_INTERP=ON needs python3 (3.6 or later): set PHARO_WASM_PYTHON3 (${PHARO_WASM_PYTHON3}), or WASM_FAST_INTERP=OFF")
+        message(FATAL_ERROR "WASM_FAST_INTERP=ON needs python3 (3.6 or later), and ${PHARO_WASM_FAST_INTERP_PYTHON} is none: "
+            "give it in the environment as EMSDK_PYTHON, or to CMake as PHARO_WASM_PYTHON3, or set WASM_FAST_INTERP=OFF")
     endif()
     set(PHARO_WASM_FAST_INTERP_SOURCE ${CMAKE_BINARY_DIR}/wasm/fastinterp/interp.c)
     file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/wasm/fastinterp)
     add_custom_command(
         OUTPUT ${PHARO_WASM_FAST_INTERP_SOURCE}
-        COMMAND ${PHARO_WASM_PYTHON3} -I ${CMAKE_CURRENT_SOURCE_DIR}/cmake/emscripten/fastInterpreter.py
+        COMMAND ${PHARO_WASM_FAST_INTERP_PYTHON} -I ${CMAKE_CURRENT_SOURCE_DIR}/cmake/emscripten/fastInterpreter.py
                 ${VMSOURCEFILES} ${PHARO_WASM_FAST_INTERP_SOURCE} ${PHARO_WASM_FAST_INTERP_DIR}
         COMMAND ${CMAKE_COMMAND} -E touch_nocreate ${PHARO_WASM_FAST_INTERP_SOURCE}
         DEPENDS ${VMSOURCEFILES} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/emscripten/fastInterpreter.py
