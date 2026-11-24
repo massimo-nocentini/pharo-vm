@@ -219,6 +219,7 @@ if(WASM_FAST_INTERP)
         COMMAND ${CMAKE_COMMAND} -E touch_nocreate ${PHARO_WASM_FAST_INTERP_SOURCE}
         DEPENDS ${VMSOURCEFILES} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/emscripten/fastInterpreter.py
                 ${PHARO_WASM_FAST_INTERP_DIR}/interpret.inc ${PHARO_WASM_FAST_INTERP_DIR}/handlers.inc
+                ${PHARO_WASM_FAST_INTERP_DIR}/checks.inc ${PHARO_WASM_FAST_INTERP_DIR}/generated.txt
         COMMENT "Generating the fast interpreter"
         VERBATIM)
     set(VMSOURCEFILES ${PHARO_WASM_FAST_INTERP_SOURCE})
@@ -227,7 +228,7 @@ pharo_wasm_primitive_table(PHARO_WASM_VM_PRIMITIVES SOURCE ${VMSOURCEFILES} TABL
 set(VMSOURCEFILES ${PHARO_WASM_VM_PRIMITIVES})
 if(WASM_FAST_INTERP AND WASM_WEB_MEMORY64 STREQUAL "2" AND WASM_NODE_MEMORY64 STREQUAL "2")
     # both VMs have a 32-bit memory: one object, with 32-bit addresses
-    set_property(SOURCE ${PHARO_WASM_VM_PRIMITIVES} APPEND PROPERTY COMPILE_DEFINITIONS IA32=1)
+    set_property(SOURCE ${PHARO_WASM_VM_PRIMITIVES} APPEND PROPERTY COMPILE_DEFINITIONS PHARO_WASM_ADDRESS32=1)
 endif()
 # The callouts of the interpreter go through emscriptenFFICall()
 # (emscriptenSupport.c), which turns what ffi_call throws in JavaScript (a
@@ -420,7 +421,7 @@ macro(add_third_party_dependencies_per_platform)
     if(WASM_FAST_INTERP AND WASM_WEB_MEMORY64 STREQUAL "2" AND NOT WASM_NODE_MEMORY64 STREQUAL "2")
         # before the library, whose object of the same source is then not needed
         add_library(pharo_web_interpreter OBJECT ${PHARO_WASM_VM_PRIMITIVES})
-        target_compile_definitions(pharo_web_interpreter PRIVATE IA32=1
+        target_compile_definitions(pharo_web_interpreter PRIVATE PHARO_WASM_ADDRESS32=1
             $<TARGET_PROPERTY:${VM_LIBRARY_NAME},COMPILE_DEFINITIONS>)
         target_include_directories(pharo_web_interpreter PRIVATE $<TARGET_PROPERTY:${VM_LIBRARY_NAME},INCLUDE_DIRECTORIES>)
         target_sources(pharo-web PRIVATE $<TARGET_OBJECTS:pharo_web_interpreter>)

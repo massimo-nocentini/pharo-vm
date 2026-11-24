@@ -4,7 +4,7 @@
  * interpret() to interpretGeneric(): it runs one bytecode (with its extensions) or finishes one send, and returns.
  *
  * The state of the interpreter here is
- *	IP, SP, lfpb	the instruction, stack and (less BIAS) frame pointers: 32-bit in the web VM (IA32), so that the
+ *	IP, SP, lfpb	the instruction, stack and (less BIAS) frame pointers: 32-bit in the web VM (PHARO_WASM_ADDRESS32), so that the
  *			engine folds constant offsets into its addressing modes; lfpb is biased so that they are not negative
  *	tos		in state 1, the top of the stack, which is not in memory
  *	BC		the next bytecode, plus 256 in state 1
@@ -14,12 +14,13 @@
  * paths without calls.  NOS1B leaves out hotS1b, the second dispatch of state 1, reached by forward jumps only: it is
  * faster with it in Chromium 156 and Firefox, and without it in node 24 and 25.  */
 #ifndef NOS1B
-# ifdef IA32
+# ifdef PHARO_WASM_ADDRESS32
 #  define NOS1B 0
 # else
 #  define NOS1B 1
 # endif
 #endif
+#include "checks.inc"
 #define IP local_instructionPointer
 #define SP local_stackPointer
 #define BC currentBytecode
@@ -43,7 +44,7 @@ enum { HE_DISPATCH, HE_SEND, HE_EXECUTE, HE_ACTIVATE, HE_RETURN, HE_CALLERRETURN
 #define SPLSEL(i) ((sqInt)LDQ(LDA(GIV(specialObjectsOop), 8 + SpecialSelectors*8) + (i) * 16, 8))
 #define SPLARGC(i) (((sqInt)LDQ(LDA(GIV(specialObjectsOop), 8 + SpecialSelectors*8) + (i) * 16, 16)) >> 3)
 #define ATC(r) (&GIV(atCache)[ATIX(r)])
-#ifdef IA32
+#ifdef PHARO_WASM_ADDRESS32
 # define PERMSTORE(r) 0
 #else
 # define PERMSTORE(r) ((r) >= 0x20000000000LL)
