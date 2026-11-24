@@ -11,7 +11,8 @@
 #      R7  src/common holds exactly one .c file, SimdCSVPlugin.c, and it
 #          includes no file but the VM's, scEngine.h, stdint.h and string.h
 #   2. it compiles with -Wall -Werror against the VM's headers, as C99 (GNU)
-#      and as C11, for a shared library and as a builtin plugin, and
+#      and as C11, for a shared library and as a builtin plugin, each also
+#      after the names that windows.h defines (windowsNames.h), and
 #      cmake/emscripten/genPrimitiveTable.cmake reads its table
 #   3. tests/gluetest.c and tests/fakevm.c with the glue and the engine, clang
 #      -O1 -g, AddressSanitizer and UndefinedBehaviorSanitizer, once as the
@@ -165,6 +166,12 @@ for std in gnu99 gnu11; do
     for mode in "" -DSQUEAK_BUILTIN_PLUGIN; do
         what="$cc -std=$std -fsyntax-only -Wall -Werror ${mode:-(shared library)}"
         if $cc -std=$std -fsyntax-only -Wall -Werror $vmdefs $mode $glueinc $vminc "$glue"; then
+            echo "-- $what: ok"
+        else
+            failed "$what"
+        fi
+        what="$what, after windowsNames.h"
+        if $cc -std=$std -fsyntax-only -Wall -Werror $vmdefs $mode -include "$SRCDIR/tests/windowsNames.h" $glueinc $vminc "$glue"; then
             echo "-- $what: ok"
         else
             failed "$what"

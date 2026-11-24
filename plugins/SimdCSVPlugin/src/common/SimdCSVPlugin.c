@@ -86,7 +86,7 @@ _Static_assert(sizeof(sqInt) == 8, "SimdCSVPlugin: the answers hold SmallInteger
 #define FLAG_SHIFT (SEPARATOR_BITS + QUOTE_BITS)
 
 /* The type codes of a column of primitiveRows */
-enum { IGNORED, STRING, INTEGER, FLOAT, FLOAT_COMMA, TYPE_CODES };
+enum { COLUMN_IGNORED, COLUMN_STRING, COLUMN_INTEGER, COLUMN_FLOAT, COLUMN_FLOAT_COMMA, COLUMN_TYPE_CODES };
 
 /* A budget of primitiveRows: measure the first record, make nothing */
 #define MEASURE_ONLY (-2)
@@ -567,13 +567,13 @@ typedef struct {
 } Rows;
 
 /* What became of a cell or of a row */
-enum { MADE, NO_OBJECT, INVALID };
+enum { CELL_MADE, CELL_NO_OBJECT, CELL_INVALID };
 
 /* The type code of the column, 0-based */
 static int
 typeOf(const Rows *rows, uint64_t column)
 {
-	return column < rows->typeCount ? rows->types[column] : STRING;
+	return column < rows->typeCount ? rows->types[column] : COLUMN_STRING;
 }
 
 /* The columns among the first count ones that are not ignored */
@@ -583,7 +583,7 @@ columnsKept(const Rows *rows, uint64_t count)
 	uint64_t i, kept = count;
 
 	for (i = 0; i < count && i < rows->typeCount; i++) {	/* (typeCount is 0 without types) */
-		if (rows->types[i] == IGNORED) {
+		if (rows->types[i] == COLUMN_IGNORED) {
 			kept--;
 		}
 	}
@@ -594,10 +594,10 @@ columnsKept(const Rows *rows, uint64_t count)
 static int
 isNumber(const Rows *rows, const sc_field *field, int type, int64_t *integer, double *number)
 {
-	if (type == INTEGER) {
+	if (type == COLUMN_INTEGER) {
 		return sc_to_integer(&rows->in, &rows->dialect, field, integer);
 	}
-	return sc_to_float(&rows->in, &rows->dialect, field, type == FLOAT_COMMA, number);
+	return sc_to_float(&rows->in, &rows->dialect, field, type == COLUMN_FLOAT_COMMA, number);
 }
 
 /* The oop of the String text, or 0 */
@@ -617,8 +617,8 @@ textObject(Rows *rows, const sc_text *text)
 	return oop;
 }
 
-/* Makes the cell of a field of the type given (not IGNORED) into *cell.
- * INVALID: rows->position is where its UTF-8 is invalid. */
+/* Makes the cell of a field of the type given (not COLUMN_IGNORED) into *cell.
+ * CELL_INVALID: rows->position is where its UTF-8 is invalid. */
 static int
 makeCell(Rows *rows, const sc_field *field, int type, sqInt *cell)
 {
@@ -628,41 +628,41 @@ makeCell(Rows *rows, const sc_field *field, int type, sqInt *cell)
 
 	if (field->start == field->end) {
 		*cell = rows->emptyValue;
-		return MADE;
+		return CELL_MADE;
 	}
-	if (type != STRING && isNumber(rows, field, type, &integer, &number)) {
-		if (type == INTEGER) {
+	if (type != COLUMN_STRING && isNumber(rows, field, type, &integer, &number)) {
+		if (type == COLUMN_INTEGER) {
 			*cell = interpreterProxy->integerObjectOf((sqInt)integer);
 		} else if (isSmallFloat(number)) {
 			*cell = interpreterProxy->floatObjectOf(number);	/* an immediate: no allocation */
 		} else {
 			/* classFloat() is BoxedFloat64, two 32-bit slots */
 			if (!(*cell = instantiate(interpreterProxy->classFloat(), 2))) {
-				return NO_OBJECT;
+				return CELL_NO_OBJECT;
 			}
 			memcpy(interpreterProxy->firstIndexableField(*cell), &number, sizeof number);
 			rows->made += spurWords32(2);
 		}
-		return MADE;
+		return CELL_MADE;
 	}
 	sc_text_measure(&rows->in, &rows->dialect, field, &text);
 	if (text.code != SC_E_NONE) {
 		rows->position = text.position;
-		return INVALID;
+		return CELL_INVALID;
 	}
 	if (text.kind == SC_EMPTY
 	 || (text.kind == SC_EMPTY_QUOTED
-	     && !(type == STRING && (rows->dialect.flags & SC_F_KEEP_QUOTED_EMPTY)))) {
+	     && !(type == COLUMN_STRING && (rows->dialect.flags & SC_F_KEEP_QUOTED_EMPTY)))) {
 		*cell = rows->emptyValue;
-		return MADE;
+		return CELL_MADE;
 	}
 	if (!(*cell = textObject(rows, &text))) {
-		return NO_OBJECT;
+		return CELL_NO_OBJECT;
 	}
-	if (type != STRING) {
+	if (type != COLUMN_STRING) {
 		rows->rowOdd++;
 	}
-	return MADE;
+	return CELL_MADE;
 }
 
 /* The bytes of the object that makeCell makes of the field, added to *need */
@@ -674,33 +674,33 @@ measureCell(Rows *rows, const sc_field *field, int type, uint64_t *need)
 	double number;
 
 	if (field->start == field->end) {
-		return MADE;
+		return CELL_MADE;
 	}
-	if (type != STRING && isNumber(rows, field, type, &integer, &number)) {
-		if (type != INTEGER && !isSmallFloat(number)) {
+	if (type != COLUMN_STRING && isNumber(rows, field, type, &integer, &number)) {
+		if (type != COLUMN_INTEGER && !isSmallFloat(number)) {
 			*need += spurWords32(2);
 		}
-		return MADE;
+		return CELL_MADE;
 	}
 	sc_text_measure(&rows->in, &rows->dialect, field, &text);
 	if (text.code != SC_E_NONE) {
 		rows->position = text.position;
-		return INVALID;
+		return CELL_INVALID;
 	}
 	if (text.kind == SC_WIDE) {
 		*need += spurWords32(text.units);
 	} else if (text.kind == SC_BYTES) {
 		*need += spurBytes(text.units);
-	} else if (text.kind == SC_EMPTY_QUOTED && type == STRING
+	} else if (text.kind == SC_EMPTY_QUOTED && type == COLUMN_STRING
 		&& (rows->dialect.flags & SC_F_KEEP_QUOTED_EMPTY)) {
 		*need += spurBytes(0);
 	}
-	return MADE;
+	return CELL_MADE;
 }
 
 /* Makes the row of the record of count fields at the cursor, whose fields
  * the caller walked already, into *row; or, when row is NULL, adds the bytes
- * of its objects to *need.  *column: the column, 0-based, of an INVALID
+ * of its objects to *need.  *column: the column, 0-based, of an CELL_INVALID
  * cell. */
 static int
 makeRow(Rows *rows, sc_cursor cursor, uint64_t count, sqInt *row, uint64_t *need, uint64_t *column)
@@ -712,7 +712,7 @@ makeRow(Rows *rows, sc_cursor cursor, uint64_t count, sqInt *row, uint64_t *need
 
 	if (row) {
 		if (!(*row = instantiate(interpreterProxy->classArray(), width))) {
-			return NO_OBJECT;
+			return CELL_NO_OBJECT;
 		}
 		rows->made += spurPointers(width);
 	} else {
@@ -726,12 +726,12 @@ makeRow(Rows *rows, sc_cursor cursor, uint64_t count, sqInt *row, uint64_t *need
 		if (sc_cursor_next(&cursor, &field)) {
 			break;	/* (never: the caller walked the record) */
 		}
-		if (type == IGNORED) {
+		if (type == COLUMN_IGNORED) {
 			continue;
 		}
 		*column = i;
 		outcome = row ? makeCell(rows, &field, type, &cell) : measureCell(rows, &field, type, need);
-		if (outcome != MADE) {
+		if (outcome != CELL_MADE) {
 			return outcome;
 		}
 		if (row) {
@@ -744,7 +744,7 @@ makeRow(Rows *rows, sc_cursor cursor, uint64_t count, sqInt *row, uint64_t *need
 			put(*row, (sqInt)slot, rows->emptyValue);
 		}
 	}
-	return MADE;
+	return CELL_MADE;
 }
 
 /* At most the bytes of the objects that makeRow makes of a record of count
@@ -825,7 +825,7 @@ primitiveRows(void)
 			return fail(PrimErrBadArgument);
 		}
 		for (k = 0; k < rows.typeCount; k++) {
-			if (rows.types[k] >= TYPE_CODES) {
+			if (rows.types[k] >= COLUMN_TYPE_CODES) {
 				return fail(PrimErrBadArgument);
 			}
 		}
@@ -906,7 +906,7 @@ primitiveRows(void)
 		} else {
 			outcome = makeRow(&rows, record, count, &row, NULL, &column);
 		}
-		if (outcome == NO_OBJECT) {
+		if (outcome == CELL_NO_OBJECT) {
 			sqInt failure = interpreterProxy->primitiveFailureCode();
 
 			if (failure && failure != PrimErrNoMemory) {
@@ -920,7 +920,7 @@ primitiveRows(void)
 			status = SC_NO_ROOM;
 			outcome = makeRow(&rows, record, count, NULL, &need, &column);
 		}
-		if (outcome == INVALID) {
+		if (outcome == CELL_INVALID) {
 			status = SC_ERROR;
 			code = SC_E_INVALID_UTF8;
 			position = rows.position + 1;
