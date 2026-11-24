@@ -38,10 +38,6 @@ uint32_t rnd() {
 }
 uint32_t rnd(uint32_t n) { return rnd() % n; }
 
-struct Failure {
-    const char *what;
-};
-
 /* what was being checked, for the report */
 const uint8_t *now_bytes;
 uint64_t now_count;
@@ -328,6 +324,9 @@ void check_text(const sc_input &in, const sc_dialect &d, const sc_field &f) {
     if (t.code != 0 || t.kind != kind || t.units != count)
         fail("text [%llu,%llu) code %d kind %d units %llu, expected kind %d units %llu", (unsigned long long)f.start,
              (unsigned long long)f.end, t.code, t.kind, (unsigned long long)t.units, kind, (unsigned long long)count);
+    if (plain && n && (t.start != text_positions[0] || t.end != text_positions[n - 1] + 1))
+        fail("text [%llu,%llu) is said to be [%llu,%llu)", (unsigned long long)f.start, (unsigned long long)f.end,
+             (unsigned long long)t.start, (unsigned long long)t.end);
     const uint64_t unit = kind == SC_WIDE ? 4 : 1;
     uint8_t *dest = (uint8_t *)malloc(count * unit + 8);        /* 4 guard bytes before and after */
     memset(dest, 0xC3, count * unit + 8);
@@ -426,7 +425,7 @@ void check_cursor(const sc_input &from, const sc_dialect &d, const uint32_t *ind
     checks++;
 }
 
-enum { DEEP = 1, NO_WIDE = 2 };
+enum { DEEP = 1, NO_WIDE = 2, EXACT = 4 };
 
 /* bytes[from, to) on every kernel and on words, against the reference */
 void check(const uint8_t *bytes, uint64_t from, uint64_t to, const sc_dialect &d, uint64_t base, uint64_t capacity, int how) {
@@ -452,6 +451,23 @@ void check(const uint8_t *bytes, uint64_t from, uint64_t to, const sc_dialect &d
         now_kernel = sc_kernel();
         check_index(in, d, base, capacity, ref);
         check_measure(in, d, ref2);
+    }
+    if (how & EXACT) {          /* nothing else around it: for ASan */
+        uint8_t *copy = (uint8_t *)malloc(to - from ? to - from : 1);
+        memcpy(copy, bytes + from, to - from);
+        sc_input alone = { copy, 0, 0, to - from };
+        uint32_t *their = (uint32_t *)malloc(capacity ? 4 * capacity : 1);
+        sc_scan s, m;
+        for (int k = 0; k < kernels; k++) {
+            sc_use_kernel(k);
+            now_kernel = sc_kernel();
+            sc_index(&alone, &d, 0, their, capacity, &s);
+            sc_measure(&alone, &d, &m);
+            if (s.stored != ref.scan.stored || s.next + from != ref.scan.next || m.stored != ref2.scan.stored)
+                fail("alone: stored %llu", (unsigned long long)s.stored);
+        }
+        free(their);
+        free(copy);
     }
     if (how & DEEP) {
         now_kernel = "cursor";
@@ -534,8 +550,8 @@ void exhaustive_skip() {
  * the texts */
 void exhaustive_dialects() {
     for (uint32_t f = 0; f < 32; f++) {
-        const uint32_t flags = (f & 1 ? SC_F_STRICT : 0u) | (f & 2 ? SC_F_LF_ONLY : 0u) | (f & 4 ? SC_F_NO_QUOTE : 0u)
-            | (f & 8 ? SC_F_SKIP_BLANK : 0u) | (f & 16 ? SC_F_FINAL : 0u) | SC_F_LINES;
+        const uint32_t flags = (f & 1 ? (uint32_t)(SC_F_STRICT) : 0u) | (f & 2 ? (uint32_t)(SC_F_LF_ONLY) : 0u) | (f & 4 ? (uint32_t)(SC_F_NO_QUOTE) : 0u)
+            | (f & 8 ? (uint32_t)(SC_F_SKIP_BLANK) : 0u) | (f & 16 ? (uint32_t)(SC_F_FINAL) : 0u) | SC_F_LINES;
         const sc_dialect d = dialect(',', '"', flags);
         exhaustive(small ? 4 : 6, ALPHABET, &d, 1, DEEP);
     }
@@ -628,7 +644,7 @@ void nul_quote() {
                     b[size - 2] = 0, b[size - 1] = 0;
                 for (uint32_t f = 0; f < 4; f++)
                     check_all(b, (uint64_t)size,
-                              dialect(',', 0, (f & 1 ? SC_F_STRICT : 0u) | (f & 2 ? SC_F_FINAL : 0u) | SC_F_LATIN1), DEEP);
+                              dialect(',', 0, (f & 1 ? (uint32_t)(SC_F_STRICT) : 0u) | (f & 2 ? (uint32_t)(SC_F_FINAL) : 0u) | SC_F_LATIN1), DEEP);
             }
 }
 
@@ -645,7 +661,7 @@ void pairs() {
                     memset(b, 'x', sizeof b);
                     b[offset] = (uint8_t)x;
                     b[offset + 1] = (uint8_t)y;
-                    check_all(b, 16, dialect(needles[k].separator, needles[k].quote, SC_F_FINAL | SC_F_LATIN1 | (offset & 1 ? SC_F_STRICT : 0u)),
+                    check_all(b, 16, dialect(needles[k].separator, needles[k].quote, SC_F_FINAL | SC_F_LATIN1 | (offset & 1 ? (uint32_t)(SC_F_STRICT) : 0u)),
                               NO_WIDE);
                 }
     /* a needle followed by needle^1 all along a block, at every place */
@@ -753,7 +769,7 @@ void random_ranges() {
                 b[i] = random_unit(style, d);
         const uint64_t base = rnd(4) ? 0 : rnd((uint32_t)n + 1), from = rnd(2) ? base : base + rnd((uint32_t)(n - base) + 1);
         const uint64_t capacity = rnd(3) ? n + 1 : rnd((uint32_t)n + 2);
-        check(b, from, n, d, base, capacity, n < 800 ? DEEP : NO_WIDE);
+        check(b, from, n, d, base, capacity, EXACT | (n < 800 ? DEEP : NO_WIDE));
     }
 }
 
@@ -840,7 +856,7 @@ void capacities() {
     for (int round = 0; round < rounds; round++) {
         sc_dialect d = random_dialect();
         if (round % 3 == 0)
-            d = dialect(',', '"', round % 2 ? SC_F_FINAL : 0u);
+            d = dialect(',', '"', round % 2 ? (uint32_t)(SC_F_FINAL) : 0u);
         uint64_t n = 300 + rnd(900);
         if (round % 4 == 3)
             n = random_regular(b, n, d, 0);
@@ -884,7 +900,7 @@ void event_order() {
                     for (int capacity = at - 6; capacity <= at + 3; capacity++)
                         for (uint32_t f = 0; f < 4; f++)
                             check(b, 0, (uint64_t)size,
-                                  dialect(',', '"', (f & 1 ? SC_F_STRICT : 0u) | (f & 2 ? SC_F_FINAL : 0u)), 0, (uint64_t)capacity, NO_WIDE);
+                                  dialect(',', '"', (f & 1 ? (uint32_t)(SC_F_STRICT) : 0u) | (f & 2 ? (uint32_t)(SC_F_FINAL) : 0u)), 0, (uint64_t)capacity, NO_WIDE);
                 }
     /* line ends at the end of a chunk */
     static const char *const ends[] = { "\r", "\n\r", "\r\r", "\r\n", "\r\n\r", "\n\n", "\r\r\n", "\"\r", "\"\r\r", ",\r", "a\r", "\"\"\r", "a\r\r", "a\r\n\r" };
@@ -896,8 +912,8 @@ void event_order() {
                 for (int i = 4; i < prefix; i += 5)
                     b[i] = i % 10 == 9 ? '\n' : ',';
                 memcpy(b + prefix, ends[e], length);
-                const uint32_t flags = (f & 1 ? SC_F_STRICT : 0u) | (f & 2 ? SC_F_LF_ONLY : 0u) | (f & 4 ? SC_F_SKIP_BLANK : 0u)
-                    | (f & 8 ? SC_F_FINAL : 0u) | (f & 16 ? SC_F_LINES : 0u);
+                const uint32_t flags = (f & 1 ? (uint32_t)(SC_F_STRICT) : 0u) | (f & 2 ? (uint32_t)(SC_F_LF_ONLY) : 0u) | (f & 4 ? (uint32_t)(SC_F_SKIP_BLANK) : 0u)
+                    | (f & 8 ? (uint32_t)(SC_F_FINAL) : 0u) | (f & 16 ? (uint32_t)(SC_F_LINES) : 0u);
                 const uint64_t n = (uint64_t)prefix + length;
                 for (uint64_t capacity = 0; capacity < (prefix < 30 ? n + 1 : 3); capacity++)
                     check(b, 0, n, dialect(',', '"', flags), 0, capacity, NO_WIDE);
@@ -985,16 +1001,16 @@ void irregular() {
         for (uint64_t i = 3; i < n; i += (uint64_t)k)
             b[i] = '"';
         for (uint32_t f = 0; f < 4; f++)
-            check_all(b, n, dialect(',', '"', (f & 1 ? SC_F_FINAL : 0u) | (f & 2 ? SC_F_SKIP_BLANK : 0u)), NO_WIDE);
+            check_all(b, n, dialect(',', '"', (f & 1 ? (uint32_t)(SC_F_FINAL) : 0u) | (f & 2 ? (uint32_t)(SC_F_SKIP_BLANK) : 0u)), NO_WIDE);
     }
     /* blank lines (no entries) longer than the largest window before an irregular unit */
     for (uint32_t f = 0; f < 4; f++) {
         static uint8_t blank[MAX_UNITS];
         memset(blank, f & 2 ? '\r' : '\n', sizeof blank);
         memcpy(blank + sizeof blank - 20, "a\"b,c\nd,e\nf\"\"\ng\n\n\nh", 20);
-        check_all(blank, sizeof blank, dialect(',', '"', SC_F_SKIP_BLANK | SC_F_LINES | (f & 1 ? SC_F_FINAL : 0u)), NO_WIDE);
+        check_all(blank, sizeof blank, dialect(',', '"', SC_F_SKIP_BLANK | SC_F_LINES | (f & 1 ? (uint32_t)(SC_F_FINAL) : 0u)), NO_WIDE);
         memcpy(blank, "a\n\n", 3);
-        check_all(blank, sizeof blank, dialect(',', '"', SC_F_SKIP_BLANK | SC_F_LINES | (f & 1 ? SC_F_FINAL : 0u)), NO_WIDE);
+        check_all(blank, sizeof blank, dialect(',', '"', SC_F_SKIP_BLANK | SC_F_LINES | (f & 1 ? (uint32_t)(SC_F_FINAL) : 0u)), NO_WIDE);
     }
     /* one irregular unit in 50,000: one resume; with one in every 8 KB: one each */
     for (int k = 0; k < sc_kernel_count(); k++) {
@@ -1017,9 +1033,31 @@ void irregular() {
             if (sc_test_resumes() - before != (uint64_t)each)
                 fail("%d irregular units, %llu resumes (sc_measure)", each, (unsigned long long)(sc_test_resumes() - before));
         }
+        /* the windows: 1 KiB for the first hit (0 to 1025), 2 KiB for one 165
+         * units later (1189 to 3239), then for one 2,051 units later 1 KiB
+         * again (5289 to 6314, and 6355 is another hit), for one 2,010 units
+         * later 4 KiB (5248 to 9348) */
+        for (int late = 0; late < 2; late++) {
+            const int places[] = { 1, 1190, late ? 5290 : 5249, 6356 };
+            for (int i = 0; i < 50000; i++)
+                b[i] = i % 41 == 40 ? '\n' : i % 8 == 7 ? ',' : 'a';
+            for (int i = 0; i < 4; i++) {
+                b[places[i] - 1] = 'a';
+                b[places[i]] = '"';
+            }
+            const sc_input windows = { b, 0, 0, 50000 };
+            const sc_dialect lenient = dialect(',', '"', 0);
+            sc_scan got;
+            const uint64_t resumes = sc_test_resumes();
+            sc_index(&windows, &lenient, 0, dest, 50000, &got);
+            if (sc_test_resumes() - resumes != 3u + (unsigned)late)
+                fail("the window after a stretch: %llu resumes", (unsigned long long)(sc_test_resumes() - resumes));
+        }
         /* an irregular unit in every record of 41: the windows 1, 2, 4, ... 64 KiB */
-        for (uint64_t i = 1; i < 50000; i += 41)
+        for (uint64_t i = 1; i < 50000; i += 41) {
+            b[i - 1] = 'a';
             b[i] = '"';
+        }
         const sc_input in = { b, 0, 0, 50000 };
         const sc_dialect d = dialect(',', '"', 0);
         sc_scan s;
@@ -1094,8 +1132,6 @@ void four_gib() {
             fail("the cursor over 4 GiB");
         checks += 5;
     }
-    /* as many entries as 2^32 - 2 slots hold, without the memory: more than
-     * 2^28 of them on one 1 GiB of separators */
     munmap(m, total);
 }
 #endif
@@ -1488,6 +1524,35 @@ void numbers() {
     if (converted_floats < (uint64_t)rounds || converted_integers < (uint64_t)rounds / 2)
         fail("only %llu floats and %llu integers were converted", (unsigned long long)converted_floats,
              (unsigned long long)converted_integers);
+    /* a quote that is a unit of numbers: a lone one inside is odd all the same */
+    static const struct { const char *text; char quote; int odd; } quotes[] = { { "5125", '5', 0 }, { "51256", '5', 1 }, { "5 5 5", '5', 1 },
+        { " 12 3", ' ', 1 }, { " 12 ", ' ', 0 }, { " 12  ", ' ', 1 }, { " 12", ' ', 0 }, { "-12-", '-', 0 }, { "-12-3", '-', 1 },
+        { "51255", '5', 1 }, { "512", '5', 0 }, { "5555", '5', 1 } };
+    for (unsigned i = 0; i < sizeof quotes / sizeof quotes[0]; i++) {
+        const sc_input in = { quotes[i].text, 0, 0, strlen(quotes[i].text) };
+        const sc_dialect d = dialect(',', quotes[i].quote, 0);
+        const sc_field f = { 0, in.to, 1 };
+        int64_t integer = 0;
+        double number = 0;
+        const int a = sc_to_integer(&in, &d, &f, &integer), b = sc_to_float(&in, &d, &f, 0, &number);
+        if (a != !quotes[i].odd || b != !quotes[i].odd || (a && (integer != 12 || number != 12)))
+            fail("the quoted number %s: %d %d", quotes[i].text, a, b);
+        checks++;
+    }
+    /* the exponent saturates at 99999, whatever the digits after the point */
+    static char far[100100];
+    for (int e = 99990; e <= 100000; e++) {
+        memset(far, '0', sizeof far);
+        far[1] = '.';
+        const int length = snprintf(far + 2 + e - 1, 32, "1e%d", e);
+        const sc_input in = { far, 0, 0, (uint64_t)(2 + e - 1 + length) };
+        const sc_dialect d = dialect(',', '"', 0);
+        const sc_field f = { 0, in.to, 1 };
+        double number = 0;
+        if (sc_to_float(&in, &d, &f, 0, &number) != (e < 99999) || (e < 99999 && number != 1.0))
+            fail("the exponent %d after %d digits", e, e);
+        checks++;
+    }
     /* words whose low bytes are digits are not digits */
     for (int bit = 8; bit < 32; bit++) {
         uint32_t w[3] = { '1', '2', '3' };
@@ -1612,7 +1677,7 @@ void utf8() {
             }
         if (rnd(2))
             text[n++] = '"';
-        check_text_bytes(text, n, rnd(5) ? 0u : rnd(2) ? SC_F_LATIN1 : SC_F_NO_QUOTE);
+        check_text_bytes(text, n, rnd(5) ? 0u : rnd(2) ? (uint32_t)SC_F_LATIN1 : (uint32_t)SC_F_NO_QUOTE);
         if (rnd(8) == 0) {
             static uint32_t words[300];
             for (uint64_t i = 0; i < n; i++)
@@ -1664,7 +1729,28 @@ void interface() {
     sc_init();
     if (getenv("SIMDCSV_FORCE_IMPLEMENTATION") == NULL && (strcmp(sc_kernel(), sc_kernel_name(0)) != 0 || *sc_forced_note()))
         fail("sc_init chose %s (%s)", sc_kernel(), sc_forced_note());
-    checks += 4;
+#if defined(__unix__) || defined(__APPLE__)
+    const char *was = getenv("SIMDCSV_FORCE_IMPLEMENTATION");
+    char kept[200] = "";
+    if (was)
+        strncpy(kept, was, sizeof kept - 1);
+    setenv("SIMDCSV_FORCE_IMPLEMENTATION", "bogus", 1);
+    sc_init();
+    if (strcmp(sc_forced_note(), "refused bogus") != 0 || strcmp(sc_kernel(), sc_kernel_name(0)) != 0)
+        fail("bogus: %s (%s)", sc_kernel(), sc_forced_note());
+    setenv("SIMDCSV_FORCE_IMPLEMENTATION", "fallback", 1);
+    sc_init();
+    if (strcmp(sc_forced_note(), "fallback") != 0 || strcmp(sc_kernel(), "fallback") != 0)
+        fail("fallback: %s (%s)", sc_kernel(), sc_forced_note());
+    unsetenv("SIMDCSV_FORCE_IMPLEMENTATION");
+    sc_init();
+    if (*sc_forced_note() || strcmp(sc_kernel(), sc_kernel_name(0)) != 0)
+        fail("unset: %s (%s)", sc_kernel(), sc_forced_note());
+    if (was)
+        setenv("SIMDCSV_FORCE_IMPLEMENTATION", kept, 1);
+    sc_init();
+#endif
+    checks += 7;
 }
 
 #ifdef SC_UPSTREAM
@@ -1730,7 +1816,7 @@ void upstream_indexes() {
 }
 #endif
 
-const struct Section {
+[[maybe_unused]] const struct Section {
     const char *name;
     void (*run)();
     bool asked;         /* only when it is named */

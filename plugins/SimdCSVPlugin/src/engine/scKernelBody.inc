@@ -51,14 +51,39 @@ sc_inline masks block(const uint8_t *p, const sc_needles &n, uint64_t keep, carr
     return m;
 }
 
+/* The records that end in a block; `fields' are the fields before it */
+sc_inline void tally_lines(sc_tally &t, const masks &m, uint64_t p, uint64_t fields, const bool widths) {
+    if (m.lines == 0)
+        return;
+    const unsigned last = 63 - (unsigned)__builtin_clzll(m.lines);
+
+    t.done = p + last + 1;
+    if (!widths) {
+        t.records += (uint64_t)hamming(m.lines);
+        t.fields = fields + (uint64_t)hamming(m.fields & ~(uint64_t)0 >> (63 - last));
+        return;
+    }
+    if (m.lines == m.fields) {          /* all but the first are records of one field */
+        const uint64_t n = (uint64_t)hamming(m.lines);
+        t.ended(fields + 1);
+        if (n > 1)
+            t.ended(fields + 2);
+        t.fields = fields + n;
+        t.records += n - 1 - (n > 1);
+        return;
+    }
+    for (uint64_t lines = m.lines; lines; lines &= lines - 1)
+        t.ended(fields + (uint64_t)hamming(m.fields & (lines ^ (lines - 1))));
+}
+
 sc_inline void scan(sc_job *j, const bool store) {
     const uint8_t *u = (const uint8_t *)j->units;
     const uint64_t limit = j->limit, base = j->base, capacity = j->capacity;
     const uint64_t start = j->pos;
     const sc_needles n = j->needles;
     uint32_t *dest = j->dest;
-    uint64_t p = start, fields = j->fields;
-    uint64_t records = j->records, done_fields = fields, done = start;
+    uint64_t p = start, fields = j->tally.fields;
+    sc_tally tally = j->tally;
     carries c;
 
     j->event = SC_AT_END;
@@ -75,15 +100,17 @@ sc_inline void scan(sc_job *j, const bool store) {
                 break;
             }
             for (int i = 0; i < 4; i++) {
+                const uint64_t at = p + 64 * (uint64_t)i;
                 uint32_t count = 0;
-                flatten_bits(dest + fields, count, (uint32_t)(p + 64 * (uint64_t)i - base), m[i].fields);
+                tally_lines(tally, m[i], at, fields, true);
+                flatten_bits(dest + fields, count, (uint32_t)(at - base), m[i].fields);
                 fields += count;
             }
             p += 256;
             j->inside = (m[3].quoted >> 63) != 0;
         }
     while (p < limit) {
-        const uint64_t rest = limit - p;
+        const uint64_t rest = limit - p, room = capacity - fields;
         const unsigned size = rest < 64 ? (unsigned)rest : 64;
         const uint64_t keep = ~(uint64_t)0 >> (64 - size);
         uint8_t tail[64];
@@ -96,50 +123,41 @@ sc_inline void scan(sc_job *j, const bool store) {
         }
         masks m = block(q, n, keep, c);
         if (m.bad) {            /* what is before its first bit */
+            j->event = SC_IRREGULAR;
+            j->at = p + (uint64_t)trailingzeroes(m.bad);
             m.fields &= (m.bad & (0 - m.bad)) - 1;
             m.lines &= m.fields;
         }
-        if (!store) {
-            if (m.lines) {
-                const unsigned last = 63 - (unsigned)__builtin_clzll(m.lines);
-                records += (uint64_t)hamming(m.lines);
-                done_fields = fields + (uint64_t)hamming(m.fields & ~(uint64_t)0 >> (63 - last));
-                done = p + last + 1;
-            }
+        if (store && room < 64 && (uint64_t)hamming(m.fields) > room) {
+            uint64_t beyond = m.fields;         /* what is before the first field without a slot */
+            for (uint64_t i = 0; i < room; i++)
+                beyond &= beyond - 1;
+            j->event = SC_NO_SLOT;
+            m.fields ^= beyond;
+            m.lines &= m.fields;
+        }
+        tally_lines(tally, m, p, fields, store);
+        if (!store)
             fields += (uint64_t)hamming(m.fields);
-        } else if (capacity - fields >= 80) {
+        else if (room >= 80) {
             uint32_t count = 0;
             flatten_bits(dest + fields, count, (uint32_t)(p - base), m.fields);
             fields += count;
         } else
-            for (uint64_t bits = m.fields; bits; bits &= bits - 1) {
-                if (fields == capacity) {
-                    j->event = SC_NO_SLOT;
-                    j->fields = fields;
-                    j->pos = p;
-                    return;
-                }
+            for (uint64_t bits = m.fields; bits; bits &= bits - 1)
                 dest[fields++] = (uint32_t)(p + (uint64_t)trailingzeroes(bits) - base);
-            }
-        if (m.bad) {
-            j->event = SC_IRREGULAR;
-            j->at = p + (uint64_t)trailingzeroes(m.bad);
+        if (j->event != SC_AT_END)
             break;
-        }
         p += size;
         /* the state after the last real byte: with the quote NUL the zeros
          * after it are quotes */
         j->inside = (m.quoted >> (size - 1) & 1) != 0;
     }
+    if (tally.done > start && tally.done < limit && u[tally.done - 1] == CR && u[tally.done] == LF)
+        tally.done++;           /* the LF of the last record's CRLF */
     j->pos = p;
     j->fields = fields;
-    if (!store) {
-        if (n.cr_ends && done > start && done < limit && u[done - 1] == CR && u[done] == LF)
-            done++;             /* the LF of the last record's CRLF */
-        j->records = records;
-        j->done_fields = done_fields;
-        j->done = done;
-    }
+    j->tally = tally;
 }
 
 static void scan_index(sc_job *j) { scan(j, true); }

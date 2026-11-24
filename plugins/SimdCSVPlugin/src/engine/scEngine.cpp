@@ -66,6 +66,21 @@ struct sc_needles {
 /* How a scan stopped */
 enum { SC_AT_END, SC_NO_SLOT, SC_IRREGULAR };
 
+/* The complete records */
+struct sc_tally {
+    uint64_t done;              /* where the last one ends: the open record's start */
+    uint64_t fields, records, least, most;
+
+    /* A record ended; `count' fields with its own */
+    void ended(uint64_t count) {
+        const uint64_t width = count - fields;
+        fields = count;
+        records++;
+        least = width < least ? width : least;
+        most = width > most ? width : most;
+    }
+};
+
 /* One call of sc_index (dest) or sc_measure (no dest, fields are counted) */
 struct sc_job {
     const void *units;
@@ -77,11 +92,8 @@ struct sc_job {
     uint32_t flags;
     /* progress */
     uint64_t pos;               /* in: the start of a record */
-    uint64_t fields;            /* entries stored, or fields counted */
-    /* the complete records: always right after the automaton; after a kernel
-     * only sc_measure's (sc_index finds them in dest) */
-    uint64_t done;              /* where the last one ends: the open record's start */
-    uint64_t done_fields, records;
+    uint64_t fields;            /* out: entries stored, or fields counted; in: the tally's */
+    sc_tally tally;
     /* how it stopped */
     int event;
     uint64_t at;                /* SC_IRREGULAR: the unit */
@@ -149,10 +161,10 @@ template <class U> void sc_automaton(sc_job *j, const sc_classes &k, uint64_t st
     const U *u = (const U *)j->units;
     const uint64_t limit = j->limit;
     const bool skip_blank = (j->flags & SC_F_SKIP_BLANK) != 0;
-    uint64_t i = j->pos, fields = j->fields;
+    sc_tally &tally = j->tally;
+    uint64_t i = j->pos, fields = tally.fields;
 
-    j->done = i;
-    j->done_fields = fields;
+    tally.done = i;
     j->event = SC_AT_END;
     while (i < limit) {
         const uint32_t c = u[i];
@@ -193,7 +205,7 @@ template <class U> void sc_automaton(sc_job *j, const sc_classes &k, uint64_t st
             i++;
             continue;
         }
-        if (!(ends && skip_blank && i == j->done)) {
+        if (!(ends && skip_blank && i == tally.done)) {
             if (fields == j->capacity) {
                 j->event = SC_NO_SLOT;
                 break;
@@ -206,28 +218,15 @@ template <class U> void sc_automaton(sc_job *j, const sc_classes &k, uint64_t st
                 i++;
                 continue;
             }
-            j->records++;
-            j->done_fields = fields;
+            tally.ended(fields);
         }
-        i = j->done = k.after(u, i, limit);
+        i = tally.done = k.after(u, i, limit);
         if (i >= stop)
             break;
     }
     j->pos = i;
     j->fields = fields;
     j->inside = state == QUOTED;
-}
-
-/* After a kernel's scan from the record start `start', when `fields' entries
- * were stored: where the open record starts */
-void sc_find_done(sc_job *j, const sc_classes &k, uint64_t start, uint64_t fields) {
-    const uint8_t *u = (const uint8_t *)j->units;
-    uint64_t n = j->fields;
-
-    while (n > fields && k.is_separator(u[j->base + j->dest[n - 1]]))
-        n--;
-    j->done_fields = n;
-    j->done = n == fields ? start : k.after(u, j->base + j->dest[n - 1], j->limit);
 }
 
 /* The window of the automaton around an irregular unit, in units */
@@ -240,21 +239,19 @@ void sc_scan_bytes(sc_job *j, const sc_classes &k) {
     uint64_t window = 0;
 
     for (;;) {
-        const uint64_t start = j->pos, fields = j->fields;
-        if (j->dest) {
+        const uint64_t start = j->pos;
+        if (j->dest)
             sc_chosen->index(j);
-            sc_find_done(j, k, start, fields);
-        } else
+        else
             sc_chosen->measure(j);
         if (j->event != SC_IRREGULAR || strict)
             return;
-        if (window == 0 || j->at - start >= window)
+        if (j->at - start >= window)            /* the first hit, or a clean stretch */
             window = SC_WINDOW_MIN;
         else if (window < SC_WINDOW_MAX)
             window *= 2;
-        j->pos = j->done;
-        j->fields = j->done_fields;
-        sc_automaton<uint8_t>(j, k, j->done + window, false);
+        j->pos = j->tally.done;
+        sc_automaton<uint8_t>(j, k, j->pos + window, false);
         /* at the end inside or after the window, or no slot: that is the answer */
         if (j->event != SC_AT_END || j->pos >= j->limit)
             return;
@@ -270,26 +267,6 @@ template <class U> uint64_t sc_count_lines(const U *u, uint64_t from, uint64_t t
     for (uint64_t i = from; i < to; i++)
         n += (u[i] == LF && !(i > from && !lf_only && u[i - 1] == CR)) || (u[i] == CR && !lf_only);
     return n;
-}
-
-/* records, min_fields and max_fields: one walk over the stored entries */
-template <class U> void sc_count_records(const sc_job *j, const sc_classes &k, uint64_t stored, uint64_t to, sc_scan *out) {
-    const U *u = (const U *)j->units;
-    uint64_t records = 0, least = UINT64_MAX, most = 0, first = 0;
-
-    for (uint64_t i = 0; i < stored; i++) {
-        const uint64_t e = j->base + j->dest[i];
-        if (e < to && k.is_separator(u[e]))
-            continue;
-        const uint64_t width = i + 1 - first;
-        first = i + 1;
-        records++;
-        least = width < least ? width : least;
-        most = width > most ? width : most;
-    }
-    out->records = records;
-    out->min_fields = records ? least : 0;
-    out->max_fields = most;
 }
 
 template <class U> void sc_run(const sc_input *in, const sc_dialect *d, sc_job *j, sc_scan *out) {
@@ -308,10 +285,8 @@ template <class U> void sc_run(const sc_input *in, const sc_dialect *d, sc_job *
     j->units = u;
     j->limit = to - held;
     j->flags = d->flags;
-    j->pos = j->done = in->from;
-    j->fields = j->done_fields = j->records = 0;
-    j->at = j->opening = 0;
-    j->inside = false;
+    j->pos = j->tally.done = in->from;
+    j->tally.least = UINT64_MAX;
     if (simd) {
         const uint8_t flip = (uint8_t)(d->quote ^ '"');
         const uint64_t ones = ~(uint64_t)0;
@@ -328,16 +303,16 @@ template <class U> void sc_run(const sc_input *in, const sc_dialect *d, sc_job *
 
     /* the blank lines before the open record */
     if (skip_blank)
-        while (j->done < j->limit && k.is_line_end(u[j->done]))
-            j->done++;
+        while (j->tally.done < j->limit && k.is_line_end(u[j->tally.done]))
+            j->tally.done++;
     if (j->event == SC_AT_END) {
-        if (final && j->done < to) {
+        if (final && j->tally.done < to) {
             if (j->inside && strict) {
                 /* where the quote opened: the automaton on the open record */
                 sc_job open = *j;
                 open.dest = NULL;
                 open.capacity = UINT64_MAX;
-                open.pos = j->done;
+                open.pos = j->tally.done;
                 sc_automaton<U>(&open, k, UINT64_MAX, true);
                 out->code = SC_E_UNTERMINATED_QUOTE;
                 j->event = SC_IRREGULAR;
@@ -347,12 +322,10 @@ template <class U> void sc_run(const sc_input *in, const sc_dialect *d, sc_job *
             else {
                 if (j->dest)
                     j->dest[j->fields] = (uint32_t)(to - j->base);
-                j->fields++;
-                j->records++;
-                j->done_fields = j->fields;
-                j->done = to;
+                j->tally.ended(j->fields + 1);
+                j->tally.done = to;
             }
-        } else if (held && !j->inside && !(skip_blank && j->done == j->limit) && j->fields == j->capacity)
+        } else if (held && !j->inside && !(skip_blank && j->tally.done == j->limit) && j->fields == j->capacity)
             j->event = SC_NO_SLOT;      /* the CR ends a field */
     }
     switch (j->event) {
@@ -369,12 +342,13 @@ template <class U> void sc_run(const sc_input *in, const sc_dialect *d, sc_job *
         out->status = SC_OK;
         break;
     }
-    out->stored = j->done_fields;
-    out->next = j->done;
-    if (j->dest)
-        sc_count_records<U>(j, k, out->stored, to, out);
-    else
-        out->records = j->records;
+    out->stored = j->tally.fields;
+    out->next = j->tally.done;
+    out->records = j->tally.records;
+    if (j->dest && out->records) {
+        out->min_fields = j->tally.least;
+        out->max_fields = j->tally.most;
+    }
     if (d->flags & SC_F_LINES)
         out->lines = sizeof(U) == 1
             ? sc_chosen->lines((const uint8_t *)in->units, in->from, out->next, k.lf_only)
@@ -528,8 +502,8 @@ template <class D> sc_inline D *sc_copy_segment(const uint8_t *u, uint64_t a, ui
             if (a == b)
                 break;
         }
-        const unsigned n = latin1 ? 0 : sc_decode(u + a, u + b, &point);
-        if (n == 0) {           /* LATIN1 (or not what was measured) */
+        const unsigned n = sc_decode(u + a, u + b, &point);
+        if (n == 0) {           /* not what was measured */
             *dest++ = (D)u[a++];
             continue;
         }

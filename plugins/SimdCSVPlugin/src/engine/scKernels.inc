@@ -17,9 +17,9 @@ sc_inline uint64_t sc_prefix_xor(uint64_t x) {
     return x ^ x << 32;
 }
 
-/* What the slice needs, per namespace (the target of a function must be its
- * callers'), and our flatten_bits: as the slice's, it writes up to 15 slots
- * beyond the bits */
+/* What the slice needs, per namespace (a function is inlined into callers of
+ * its own target only), and our flatten_bits, which writes the bits' slots
+ * only (the slice's writes up to 15 more) */
 #define really_inline sc_inline
 #define SC_BIT_FUNCTIONS \
     sc_inline int trailingzeroes(uint64_t x) { return x ? __builtin_ctzll(x) : 64; } \
