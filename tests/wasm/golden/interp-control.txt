@@ -1,0 +1,61 @@
+many temporaries: 4675
+temporaries one by one: #(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 20 2 20 2)
+many literals: 120->602001
+shared variables: #(3 40 'x')
+many global variables: #(6 6 5 17 10 3 3 5 7 8 6 9 7 4 5 15 5 9 5 9 4 4 8 11 5)
+long jumps: 717
+far conditional jumps: #(100 90 #NonBooleanReceiver)
+not a Boolean: #(#(#NonBooleanReceiver #NonBooleanReceiver #NonBooleanReceiver) #(#NonBooleanReceiver #NonBooleanReceiver #NonBooleanReceiver) #(#NonBooleanReceiver #NonBooleanReceiver #NonBooleanReceiver) #(#NonBooleanReceiver #NonBooleanReceiver #NonBooleanReceiver))
+cases: #(#one #few #other #round #round #even #odd #other #other #many #huge)
+nil or not: {#(#nil nil true true true false 1 4). {false. false->false. false. false. false. true. 2. 3}. {3. 3->3. false. false. false. true. 2. 3}}
+loops: #(1 4 7 10 10 6 2 1.5 2.5 2 1 0 0 0 0 0 0)
+many arguments: #(2 1 2 3 4 5 6 7 8 9 10 11 12 13)
+arguments: #(true 1 #(1 2) #(1 2 3) #(1 2 3 4) #(#(1 2) 3))
+perform:: {7. 2. #foo. InterpC. InterpC. #error. #(5 6)}
+not understood: #(#foo #(1 2) 7 8)
+doesNotUnderstand:: {#zork->#(). #zork:->#(1). #zork:with:->#(1 2). #zork:->#(5)}
+super: {#d->#c. #d->#c. #c. #(2 1). #none. 5. true}
+class side: #(3 4 #InterpD)
+blocks: #(nil 3 4 2 16 #(1 2 3 4) nil nil)
+wrong numbers of arguments: #(#error #error 2 #error #error #error)
+wrong numbers of arguments, sent: #(#error #error #error)
+cull:: #(1 2 2)
+value of others: #(3 3 nil 'a' 7)
+copied and written variables: #(15 #(11 23 36 50 65))
+nested: 57
+counter: #(2 6 14 14)
+non-local return: #(3 3 nil 4)
+return to a dead context: #cannotReturn
+returns: #(1 2 nil)
+recursion: 6765
+deep recursion: #(10 1000 50000 200000)
+deep sends: #(#bottom 5000050000)
+thisContext: #(5 true #context 0 #context)
+a context in a block: #(#Context #UndefinedObject #CompiledBlock #SmallInteger #SmallInteger 1)
+a temporary of a context: #(6 6)
+tempAt:: #(1 2 3 4 5)
+return through a context: #(2 7 11)
+a stack of contexts: true
+contexts kept: 500500
+pc of a context: #(true true false)
+another sender: 3
+exceptions: #(5 7 1 9 3 1)
+exceptions in a loop: 2666
+retry: 5
+ensure: runs: #(1 3 2 4)
+outer and signal in a handler: 11
+a queue of processes: 301500
+a loop that is preempted: true
+a loop of sends that is preempted: #ok
+a recursion that is preempted: #ok
+an empty loop that is preempted: #ok
+semaphores: 5000
+mutexes: true
+a process that is suspended: #(1 2)
+process variables and termination: #(1 2)
+sorts: false
+strings: 3893
+dictionaries: #(500 16 8000)
+symbols: 2000
+compiled in a loop: #(6 8 10 12 14 16 18 20 22 24 26 28 30 32 34 36 38 40 42 44 46 48 50 52 54 56 58 60 62 64)
+end

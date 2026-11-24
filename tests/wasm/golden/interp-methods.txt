@@ -1,0 +1,5 @@
+two-way become: of methods: #(#(3 nil #bar) #(3 4 5) #(3 4 5) #(3 4 5))
+become: of methods with more temporaries: #(#(3 3 3) #less #(3 3 3) #less #(3 3 3) #less #(3 3 3) #less #(3 3 3) #less #(3 3 3) #less)
+the header of a method stored: #(#(true true) #(true true))
+a header with more temporaries stored: #(0 0 0 4 4 4 4)
+end

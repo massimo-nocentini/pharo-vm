@@ -1,0 +1,67 @@
+at: 23486339122
+at: 23486339122
+at: 23486339122
+bounds: {0->#(#out #out #out). 1->#(#out #out #out). 3->#(#out #out #out). 32385->#(#out #out #out). 32640->#(#out #out #out). 32896->#(#out #out #out). 500500->#(#out #out #out)}
+bounds of bytes: {0->#(#out #out #out). 1->#(#out #out #out). 28->#(#out #out #out). 36->#(#out #out #out). 45->#(#out #out #out). 136->#(#out #out #out). 259356->#(#out #out #out). 259605->#(#out #out #out)}
+bounds of strings: {0->#(#out #out #out). 1->#(#out #out #out). 28->#(#out #out #out). 36->#(#out #out #out). 45->#(#out #out #out). 136->#(#out #out #out). 259356->#(#out #out #out). 259605->#(#out #out #out)}
+super: #(#InterpA true false #(#hello) #(#hello) #(#hello) false #no true #(1 1 1 1 1 1 1 1 1 1 1 1) 12 9 9 2 4 5 true 1 nil 2 0 -1 false)
+variable: {#(3). #over->#(3). 4. #MessageNotUnderstood. 8. 8. #(3)}
+array: {4. #array->4. 104. 4}
+plain: #(3 3 4 3 #out)
+both: #(7 3 4 2 2 #out #out #out)
+string: {#string->$q. 2}
+read-only: #(#mf #mf #mf #mf nil nil)
+read-only at:put:: #(7 $z 7)
+super: #(#InterpA true false #(#hello) #(#hello) #(#hello) false #no true #(1 1 1 1 1 1 1 1 1 1 1 1) 12 9 9 2 4 5 true 1 nil 2 0 -1 false)
+variable: {#(3). #over->#(3). 4. #MessageNotUnderstood. 8. 8. #(3)}
+array: {4. #array->4. 104. 4}
+plain: #(3 3 4 3 #out)
+both: #(7 3 4 2 2 #out #out #out)
+string: {#string->$q. 2}
+read-only: #(#mf #mf #mf #mf nil nil)
+read-only at:put:: #(7 $z 7)
+super: #(#InterpA true false #(#hello) #(#hello) #(#hello) false #no true #(1 1 1 1 1 1 1 1 1 1 1 1) 12 9 9 2 4 5 true 1 nil 2 0 -1 false)
+variable: {#(3). #over->#(3). 4. #MessageNotUnderstood. 8. 8. #(3)}
+array: {4. #array->4. 104. 4}
+plain: #(3 3 4 3 #out)
+both: #(7 3 4 2 2 #out #out #out)
+string: {#string->$q. 2}
+read-only: #(#mf #mf #mf #mf nil nil)
+read-only at:put:: #(7 $z 7)
+new: an Array(#(nil nil nil) Object '' #() #error #error #error Class nil>>nil 0 2 nil 0)
+many new: 300000
+barrier at:put:: 0
+barrier at:put: that the cache has: 0
+barrier at:put: of a big array: 0
+barrier at:put: of a class with fields: 0
+barrier basicAt:put:: 0
+barrier super at:put:: 0
+barrier a slot: 0
+barrier the last short slot: 0
+barrier a far slot: 0
+barrier a far slot, kept on the stack: 0
+barrier an association: 0
+barrier a temporary of a block: 0
+barrier a temporary of a block, kept on the stack: 0
+barrier instVarAt:put:: 0
+barrier replaceFrom:to:with:: 0
+barrier, slots of every kind: true
+barrier, stored again and again: 0
+compiled again and again: 80885
+a class that gets at:: #(7 7 7 #late #late #late #lateput 7 9 9)
+a class that gets size, class and ==: #(3 #late 1 2 3)
+another superclass: #(1 1 2 2)
+one selector, many classes: 1098000
+many selectors: 903000
+an object as a method: #error
+quick methods that change: #(1 nil #self 10 true 20 3 #s)
+become:: #(3 2 false 2)
+becomeForward:: {'str'. true. true. false. 3. $s. ByteString}
+becomeForward: of many: #(110 120 130 140 150 160 170 180 190 200 210 220 230 240 250 260 270 280 290 300 310 320 330 340 350 360 370 380 390 400 410 420 430 440 450 460 470 480 490 500 510 520 530 540 550 560 570 580 590 600)
+become: of a block: #(2 3 3 2)
+another class: {InterpPlain. 1. 2}
+classes: {SmallInteger. SmallFloat64. BoxedFloat64. Character. UndefinedObject. True. ByteString. ByteSymbol. Object class. Metaclass. LargePositiveInteger. Context. Association}
+a class with another slot: #(0 1 nil 4 nil)
+weak: #(nil 3 #out)
+garbage collections: 44845212510
+end
