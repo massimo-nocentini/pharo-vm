@@ -1183,6 +1183,11 @@ checkRows(void)
 		dest = fake_new(fakeArray, 4);
 		rowsArgs(a, source, comma(0), index, entries, fakeNil, 0, dest);
 		fake_set_eden(i);
+		r = callRows(a);	/* without a budget, all of them */
+		checkInts(r.value, "eden, no budget", 9, SC_OK, 3, 4, 0, 0, 0, 0, 0, 0);
+		dest = fake_new(fakeArray, 4);
+		a[R_DEST] = dest;
+		a[R_BUDGET] = fake_int(100000);
 		r = callRows(a);
 		fake_set_eden(-1);
 		checkInts(r.value, "eden", 9, rowsMade[i] < 3 ? SC_MORE : SC_OK, rowsMade[i], rowsMade[i] + 1, 0, 0, 0, 0, 0, 0);

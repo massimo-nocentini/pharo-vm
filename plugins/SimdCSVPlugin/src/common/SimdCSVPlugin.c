@@ -765,10 +765,10 @@ rowBound(const Rows *rows, uint64_t count, uint64_t units)
 	indexStart..indexStop of the index, and store them in the Array dest from
 	its slot destStart on.  Answer { status. rows. nextIndex. odd. code.
 	position. row. field. need }.
-	A call ends early (MORE) so that its garbage stays in new space: when an
-	Array of a row had to be made in old space, for which new space is full
-	(the VM scavenges once the primitive has returned), and before a record,
-	not the first, that may take more than the budget.  A budget of
+	A call with a budget ends early (MORE) so that its garbage stays in new
+	space: when an Array of a row had to be made in old space, as new space
+	is full (the VM scavenges once the primitive has returned), and before a
+	record, not the first, that may take more than the budget.  A budget of
 	MEASURE_ONLY makes nothing: NO_ROOM, and the need of the first record. */
 EXPORT(sqInt)
 primitiveRows(void)
@@ -932,7 +932,7 @@ primitiveRows(void)
 			break;
 		}
 		put(dest, destStart - 1 + (sqInt)stored, row);
-		isFull = !interpreterProxy->isYoung(row);
+		isFull = budget >= 0 && !interpreterProxy->isYoung(row);
 		stored++;
 		rows.odd += rows.rowOdd;
 		next = cursor.slot;
