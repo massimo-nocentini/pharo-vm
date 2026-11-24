@@ -277,9 +277,17 @@ binding() {   # binding <name> <dir> <summary regex>
 # Emscripten, as on macOS and Windows).
 # PangoMicrodownCompatTest>>testHttpInputFileIsFetchedAsBefore serves the
 # file of an inputFile from a ZnServer on 127.0.0.1: the VMs have no
-# sockets (NameLookupFailure).
+# sockets (NameLookupFailure).  So do three tests of PangoMicInputFileTest,
+# testAnHttpResponseIsLimited, testHttpRequestsAreTimed and
+# testHttpResponsesCountAsFiles.  Its testOnlyRegularFilesAreRead expects a
+# dangling symbolic link to be a missing file: FileReference>>exists answers
+# true for one in these VMs (false natively), so the reason shown differs.
 inapplicable='GLibTest>>testInstanceCheckMismatchOnCopiedCairo
-PangoMicrodownCompatTest>>testHttpInputFileIsFetchedAsBefore'
+PangoMicrodownCompatTest>>testHttpInputFileIsFetchedAsBefore
+PangoMicInputFileTest>>testAnHttpResponseIsLimited
+PangoMicInputFileTest>>testHttpRequestsAreTimed
+PangoMicInputFileTest>>testHttpResponsesCountAsFiles
+PangoMicInputFileTest>>testOnlyRegularFilesAreRead'
 if test -z "$LIBPANGOCAIRO_DIR"; then
     skip_check libpangocairo "no LIBPANGOCAIRO_DIR (a checkout of libpangocairo.st)"
 elif ! test -f "$LIBPANGOCAIRO_DIR/ci/run.sh"; then
