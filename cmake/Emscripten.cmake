@@ -32,6 +32,8 @@
 
 set(WASM_SJLJ "wasm" CACHE STRING "setjmp/longjmp of the VM: wasm (WebAssembly exception handling), wasm-legacy (its legacy instructions) or emscripten (JavaScript)")
 set(WASM_WEB_MEMORY64 "2" CACHE STRING "Memory of pharo-web: 2 (32-bit memory, 64-bit pointers) or 1 (memory64)")
+set(WASM_NODE_MEMORY64 "1" CACHE STRING "Memory of the node VM: 1 (memory64) or 2 (32-bit memory, 64-bit pointers)")
+set(WASM_TUNE "OFF" CACHE STRING "Experiment: tune the modules with a 32-bit memory after the link: OFF, NARROW (32-bit addresses, no profile) or ON (branch hints of a profile too; packaging/emscripten/tools/wasm-tune.mjs)")
 set(WASM_STACK_SIZE "8MB" CACHE STRING "Size of the C stack")
 set(WASM_INITIAL_MEMORY "32MB" CACHE STRING "Initial size of the memory; it must hold the stack and the data")
 set(WASM_MAXIMUM_MEMORY "4GB" CACHE STRING "Maximum size of the memory")
@@ -56,6 +58,12 @@ if(NOT FLAVOUR STREQUAL "StackVM" OR NOT SIZEOF_VOID_P EQUAL 8 OR FEATURE_THREAD
 endif()
 if(NOT WASM_WEB_MEMORY64 MATCHES "^[12]$")
     message(FATAL_ERROR "WASM_WEB_MEMORY64 must be 1 or 2, not '${WASM_WEB_MEMORY64}'")
+endif()
+if(NOT WASM_TUNE MATCHES "^(OFF|NARROW|ON)$")
+    message(FATAL_ERROR "WASM_TUNE must be OFF, NARROW or ON, not '${WASM_TUNE}'")
+endif()
+if(NOT WASM_NODE_MEMORY64 MATCHES "^[12]$")
+    message(FATAL_ERROR "WASM_NODE_MEMORY64 must be 1 or 2, not '${WASM_NODE_MEMORY64}'")
 endif()
 
 # setjmp/longjmp, the same for the objects and the links: wasm uses the
@@ -293,8 +301,12 @@ endif()
 # The node command line VM: memory64, the host file system and environment,
 # and node-pump.js running the slices from node's event loop.  The name
 # section (--profiling-funcs) names the frames of a trap.
-set(PHARO_WASM_NODE_LINK_FLAGS
-    -m64
+if(WASM_NODE_MEMORY64 STREQUAL "2")
+    set(PHARO_WASM_NODE_LINK_FLAGS -sMEMORY64=2)
+else()
+    set(PHARO_WASM_NODE_LINK_FLAGS -m64)
+endif()
+list(APPEND PHARO_WASM_NODE_LINK_FLAGS
     -sENVIRONMENT=node
     -sNODERAWFS=1
     -sNODE_HOST_ENV=1
@@ -326,6 +338,29 @@ if(PHARO_WASM_HAS_PANGO)
     list(APPEND PHARO_WASM_WEB_LINK_FLAGS "--embed-file=${PHARO_WASM_FONTS_DIR}@/usr/share/fonts/pharo")
 endif()
 
+# WASM_TUNE: the link folds small constants into the offsets of the loads and
+# stores (nothing is at an address under 1024: the end of the stack is there,
+# -Wl,--stack-first) and allocates the locals better, and wasm-tune.mjs then
+# narrows the address arithmetic to 32 bits and, with ON, adds the branch hints
+# of the profile.  Only for a 32-bit memory.
+set(PHARO_WASM_TUNE_TOOL ${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/tools/wasm-tune.mjs)
+set(PHARO_WASM_TUNE_PROFILE ${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/profile/wasm-tune.json)
+function(pharo_wasm_tune TARGET)
+    if(WASM_TUNE STREQUAL "OFF" OR CMAKE_BUILD_TYPE MATCHES "Debug")
+        return()
+    endif()
+    set(profile)
+    if(WASM_TUNE STREQUAL "ON")
+        set(profile "${PHARO_WASM_TUNE_PROFILE}")
+    endif()
+    set_property(TARGET ${TARGET} APPEND_STRING PROPERTY LINK_FLAGS " -sBINARYEN_EXTRA_PASSES=--low-memory-unused,--coalesce-locals-learning,--vacuum")
+    set_property(TARGET ${TARGET} APPEND PROPERTY LINK_DEPENDS ${PHARO_WASM_TUNE_TOOL} ${profile})
+    set(wasm "$<TARGET_FILE_DIR:${TARGET}>/$<TARGET_FILE_BASE_NAME:${TARGET}>.wasm")
+    add_custom_command(TARGET ${TARGET} POST_BUILD
+        COMMAND "${NODE_JS_EXECUTABLE}" "${PHARO_WASM_TUNE_TOOL}" tune "${wasm}" "${wasm}" ${profile} --narrow
+        COMMENT "Tuning ${TARGET}.wasm" VERBATIM)
+endfunction()
+
 function(pharo_wasm_link_executable TARGET)
     target_compile_definitions(${TARGET} PRIVATE PHARO_WASM_SLICE_MS=${WASM_SLICE_MS})
     string(REPLACE ";" " " flags "${PHARO_WASM_LINK_FLAGS};${ARGN}")
@@ -340,6 +375,9 @@ macro(add_required_libs_per_platform)
         PROPERTIES COMPILE_DEFINITIONS PHARO_WASM_OLD_SPACE_BASE=${WASM_OLD_SPACE_BASE})
     pharo_wasm_link_executable(${VM_EXECUTABLE_NAME} ${PHARO_WASM_NODE_LINK_FLAGS})
     set_target_properties(${VM_EXECUTABLE_NAME} PROPERTIES LINK_DEPENDS "${PHARO_WASM_NODE_LINK_DEPENDS}")
+    if(WASM_NODE_MEMORY64 STREQUAL "2")
+        pharo_wasm_tune(${VM_EXECUTABLE_NAME})
+    endif()
 endmacro()
 
 # Called once every plugin of cmake/plugins.cmake is defined
@@ -374,6 +412,9 @@ macro(add_third_party_dependencies_per_platform)
     if(PHARO_WASM_HAS_PANGO)
         file(GLOB PHARO_WASM_FONT_FILES "${PHARO_WASM_FONTS_DIR}/*")
         set_target_properties(pharo-web PROPERTIES LINK_DEPENDS "${PHARO_WASM_FONT_FILES}")
+    endif()
+    if(WASM_WEB_MEMORY64 STREQUAL "2")
+        pharo_wasm_tune(pharo-web)
     endif()
 
     # The stock image, the image of the world (needs WASM_HOST_PHARO), then
