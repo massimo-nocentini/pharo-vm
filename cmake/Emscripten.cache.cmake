@@ -52,7 +52,9 @@ set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build.")
 # Attribute 1003 (Smalltalk vm architectureName)
 set(EMSCRIPTEN_SYSTEM_PROCESSOR "wasm64" CACHE STRING "CMAKE_SYSTEM_PROCESSOR of the Emscripten toolchain" FORCE)
 
-# Every object is compiled for 64-bit pointers once, and serves both links:
-# memory64 for node, and -sMEMORY64=2 (32-bit memory) for the web.  (The
-# flags of setjmp/longjmp, WASM_SJLJ, are added by cmake/Emscripten.cmake.)
+# Every object is compiled for 64-bit pointers once, and serves both links,
+# each with -sMEMORY64=2 (a 32-bit memory) or memory64 (WASM_NODE_MEMORY64,
+# WASM_WEB_MEMORY64; only the interpreter is compiled for one of them, by
+# WASM_FAST_INTERP=ON).  (The flags of setjmp/longjmp, WASM_SJLJ, are added
+# by cmake/Emscripten.cmake.)
 set(CMAKE_C_FLAGS "-m64" CACHE STRING "Flags used by the C compiler" FORCE)

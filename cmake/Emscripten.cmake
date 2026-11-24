@@ -22,19 +22,19 @@
 # linked from the same objects:
 #
 #     pharo      - build/vm/pharo.js and pharo.wasm: the command line VM for
-#                  node, on the host file system (memory64)
+#                  node, on the host file system
 #     pharo-web  - build/vm/pharo-web.js and pharo-web.wasm: the factory
-#                  createPharoVM, for a Web Worker (and node), with a 32-bit
-#                  memory by default (WASM_WEB_MEMORY64)
+#                  createPharoVM, for a Web Worker (and node)
 #
-# and staged in WASM_STAGE_DIR: node/, and the static site web/
+# each with a 32-bit memory by default (WASM_NODE_MEMORY64 and
+# WASM_WEB_MEMORY64), and staged in WASM_STAGE_DIR: node/, and the static site web/
 # (cmake/emscripten/stage.cmake).
 
 set(WASM_SJLJ "wasm" CACHE STRING "setjmp/longjmp of the VM: wasm (WebAssembly exception handling), wasm-legacy (its legacy instructions) or emscripten (JavaScript)")
-option(WASM_FAST_INTERP "Prototype: the fast interpreter of src/emscripten/fastinterp" OFF)
 set(WASM_WEB_MEMORY64 "2" CACHE STRING "Memory of pharo-web: 2 (32-bit memory, 64-bit pointers) or 1 (memory64)")
-set(WASM_NODE_MEMORY64 "1" CACHE STRING "Memory of the node VM: 1 (memory64) or 2 (32-bit memory, 64-bit pointers)")
-set(WASM_TUNE "OFF" CACHE STRING "Tune the modules that have a 32-bit memory after the link: NARROW (32-bit address arithmetic, packaging/emscripten/tools/wasm-narrow.mjs) or OFF")
+set(WASM_NODE_MEMORY64 "2" CACHE STRING "Memory of the node VM: 2 (32-bit memory, 64-bit pointers) or 1 (memory64)")
+option(WASM_FAST_INTERP "The fast interpreter of src/emscripten/fastinterp in front of the generated one (needs python3)" ON)
+set(WASM_TUNE "NARROW" CACHE STRING "Tune the modules that have a 32-bit memory after the link: NARROW (32-bit address arithmetic, packaging/emscripten/tools/wasm-narrow.mjs) or OFF")
 set(WASM_STACK_SIZE "8MB" CACHE STRING "Size of the C stack")
 set(WASM_INITIAL_MEMORY "32MB" CACHE STRING "Initial size of the memory; it must hold the stack and the data")
 set(WASM_MAXIMUM_MEMORY "4GB" CACHE STRING "Maximum size of the memory")
@@ -205,11 +205,25 @@ if(NOT PHARO_WASM_VM_SOURCE_COUNT EQUAL 1 OR NOT EXISTS "${VMSOURCEFILES}")
         "set GENERATED_SOURCE_DIR to the directory holding generated/64")
 endif()
 pharo_wasm_check_markers(${VMSOURCEFILES})
-# WASM_FAST_INTERP: the prototype of src/emscripten/fastinterp in front of the generated interpreter, which
-# fastInterpreter.py rewrites.  The web VM with a 32-bit memory has its own object of it, with 32-bit addresses.
+# WASM_FAST_INTERP: src/emscripten/fastinterp in front of the generated
+# interpreter, which fastInterpreter.py rewrites (it stops the build when the
+# generated code is not the one that it repeats).  When only the web VM has a
+# 32-bit memory, it has its own object of it, with 32-bit addresses.
 if(WASM_FAST_INTERP)
     set(PHARO_WASM_FAST_INTERP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/emscripten/fastinterp)
-    find_program(PHARO_WASM_PYTHON3 python3 REQUIRED)
+    # (the python of emcc, which needs one: EMSDK_PYTHON, or python3)
+    if(NOT PHARO_WASM_PYTHON3)
+        if(DEFINED ENV{EMSDK_PYTHON} AND EXISTS "$ENV{EMSDK_PYTHON}")
+            set(PHARO_WASM_PYTHON3 "$ENV{EMSDK_PYTHON}" CACHE FILEPATH "The python3 that makes the fast interpreter")
+        else()
+            find_program(PHARO_WASM_PYTHON3 NAMES python3 python DOC "The python3 that makes the fast interpreter")
+        endif()
+    endif()
+    execute_process(COMMAND "${PHARO_WASM_PYTHON3}" -I -c "import sys; sys.exit(sys.version_info < (3, 6))"
+        RESULT_VARIABLE PHARO_WASM_PYTHON3_STATUS OUTPUT_QUIET ERROR_QUIET)
+    if(NOT PHARO_WASM_PYTHON3_STATUS STREQUAL "0")
+        message(FATAL_ERROR "WASM_FAST_INTERP=ON needs python3 (3.6 or later): set PHARO_WASM_PYTHON3 (${PHARO_WASM_PYTHON3}), or WASM_FAST_INTERP=OFF")
+    endif()
     set(PHARO_WASM_FAST_INTERP_SOURCE ${CMAKE_BINARY_DIR}/wasm/fastinterp/interp.c)
     file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/wasm/fastinterp)
     add_custom_command(
@@ -322,7 +336,7 @@ else()
     list(INSERT PHARO_WASM_LINK_FLAGS 0 -O2 -g0)
 endif()
 
-# The node command line VM: memory64, the host file system and environment,
+# The node command line VM: its memory, the host file system and environment,
 # and node-pump.js running the slices from node's event loop.  The name
 # section (--profiling-funcs) names the frames of a trap.
 if(WASM_NODE_MEMORY64 STREQUAL "2")

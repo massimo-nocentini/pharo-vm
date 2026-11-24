@@ -9,9 +9,9 @@
 # static library pharo_libffi, with the flags of the deps directory: no
 # autotools, ffi.h is made from include/ffi.h.in and fficonfig.h is written
 # here.  Every object is compiled for 64-bit pointers once and serves both
-# links, the memory64 node VM and the -sMEMORY64=2 web VM: the JavaScript half
-# of src/wasm/ffi.c is the same for both, and asks the table for its index
-# type at run time.
+# links, the node VM and the web VM, with -sMEMORY64=2 or memory64: the
+# JavaScript half of src/wasm/ffi.c is the same for both, and asks the table
+# for its index type at run time.
 #
 # libffi 3.8.0 needs $stackAlloc, $stackSave and $stackRestore in the
 # JavaScript library: src/emscripten/emscriptenSupport.c adds them with

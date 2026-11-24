@@ -1220,10 +1220,13 @@ jobs:
           git fetch --no-tags --force https://github.com/pharo-project/pharo-vm.git '+refs/tags/v*:refs/tags/v*'
           git describe --tags --match 'v[0-9]*'
 
-      - name: Install clang
+      # (python3, 3.6 or later, makes the fast interpreter: WASM_FAST_INTERP
+      # of docs/WebAssembly.md; emcc needs one too)
+      - name: Install clang and python3
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang
+          sudo apt-get install -y --no-install-recommends clang python3
+          python3 --version
 
       - name: Install Emscripten
         run: |
@@ -1282,7 +1285,7 @@ jobs:
       # with Poppler, under the GPL, the modules are distributed under the GPL 3
       # make wasm records its settings but does not remember them: give
       # wasm-check the same ones, or it builds the defaults again.  The node
-      # VM (wasm64, a 64-bit table) needs node 24.15 or later: the node of
+      # VM (exnref) needs node 24.15 or later: the node of
       # emsdk (EMSDK_NODE), which emsdk_env.sh leaves off the PATH, and not
       # the node 22 of the runner
       - name: Build
