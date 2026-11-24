@@ -13,6 +13,7 @@ The projects, loaded in this order by `packaging/batteries/load.st`:
 | The UtilsPlugin's image side (fma, strtok, de Casteljau, Knuth's and Vigna's generators; [UtilsPlugin.md](UtilsPlugin.md)) | `VMPluginsPrimitives`, `default` (Core and Tests: not the opt-in Cairo groups, whose package patches Athens at every start) | `github://massimo-nocentini/vm-plugins-primitives.st:master/src` |
 | SimdJSON, with NeoJSON and the generated NeoJSON tests ([SimdJSON.md](SimdJSON.md)) | `SimdJSON`, `default` | `github://massimo-nocentini/simdjson.st:master/src` |
 | SimdUTF ([SimdUTF.md](SimdUTF.md)) | `SimdUTF`, `default` | `github://massimo-nocentini/simdutf.st:master/src` |
+| SimdCSV: CSV read and written ([SimdCSV.md](SimdCSV.md)) | `SimdCSV`, `default` (Core and Tests: not the opt-in NeoTests group, which loads NeoCSV) | `github://massimo-nocentini/simdcsv.st:master/src` |
 | TimSort ([TimSort.md](TimSort.md)) | `TimSort`, `default` | `github://massimo-nocentini/timsort.st:master/src` |
 | GLib, Pango and PangoCairo by uFFI ([PangoPoppler.md](PangoPoppler.md)) | `LibPangoCairo`, `default` | `github://massimo-nocentini/libpangocairo.st:master/src` |
 | poppler-glib by uFFI | `LibPoppler`, `default` | `github://massimo-nocentini/libpoppler.st:master/src` |
@@ -40,7 +41,7 @@ Any error stops `load.st` with exit status 1 before the image is saved, and so d
 It prints a line per project and per repository that Iceberg cloned, with its commit:
 
     Batteries repository RTree https://github.com/massimo-nocentini/RTree.git master a875929baa2b562d1b4d1b6bdf55882b31678034
-    Batteries loaded 12 projects on Pharo 15.0 (0 warnings) ok
+    Batteries loaded 13 projects on Pharo 15.0 (0 warnings) ok
 
 The repositories of Iceberg stay registered in the image, without their clones (the zip has none): Iceberg shows them as missing, and clones them again on demand.
 
@@ -57,7 +58,7 @@ It needs network access to GitHub (git over HTTPS) and `unzip`, and `zip` or `py
 
 The settings, all environment variables:
 
-- `BATTERIES_<KEY>`: the repository of a project instead of its `master` (or `Pharo15`) on GitHub, any Metacello repository; for a local checkout `tonel://<checkout>/src`, whose commit `build.sh` prints. The keys are `ROASSAL`, `VMPLUGINSPRIMITIVES`, `SIMDJSON`, `SIMDUTF`, `TIMSORT`, `LIBPANGOCAIRO`, `LIBPOPPLER`, `CMARK`, `CONTAINERSESSENTIALS`, `CONTAINERSCATEGORY`, `DELIMCC` (`filetree://<checkout>` for a local checkout) and `MATERIALICONS`.
+- `BATTERIES_<KEY>`: the repository of a project instead of its `master` (or `Pharo15`) on GitHub, any Metacello repository; for a local checkout `tonel://<checkout>/src`, whose commit `build.sh` prints. The keys are `ROASSAL`, `VMPLUGINSPRIMITIVES`, `SIMDJSON`, `SIMDUTF`, `SIMDCSV`, `TIMSORT`, `LIBPANGOCAIRO`, `LIBPOPPLER`, `CMARK`, `CONTAINERSESSENTIALS`, `CONTAINERSCATEGORY`, `DELIMCC` (`filetree://<checkout>` for a local checkout) and `MATERIALICONS`.
 - `BATTERIES_<KEY>_GROUPS`: its groups, separated by blanks.
 - `BATTERIES_SMOKE`: `basic` (the default) or `native`, below.
 - `BATTERIES_NAME` (the name of the image, `Pharo15-batteries`), `BATTERIES_TIMEOUT` (seconds per run of the VM, 1800), `BATTERIES_ICEBERG_REMOTE` (`httpsUrl`, or `scpUrl` to clone with SSH).
@@ -69,7 +70,7 @@ For example, with the checkouts of libpangocairo.st and libpoppler.st next to th
     BATTERIES_SMOKE=native \
         sh packaging/batteries/build.sh build/build/vm Pharo15.0-SNAPSHOT.build.117.sha.053a562682.arch.64bit.zip PharoBatteries.zip
 
-`smoke.st` checks that the image starts again, that a class or two of every project are there, the RTree of the fork (its collections, its packages not modified, its repository), the settings of Iceberg, that the icons of the UI are `MaterialSymbolsThemeIcons` in gray and monochrome (five of its keys and five of its status keys drawn in `Color gray` only), `timSort:`, `timSortDescending` and `Float>>#times:plus:`, and runs the tests of RTree-Tests, TimSort-Smalltalk-Tests, VM-Plugins-Primitives-Tests, CMark-Tests, CMark-Roassal-Tests, CMark-Calypso-Tests, Delimcc-Tests, Delimcc-Continuation-Tests, Pharo's `ContinuationTest` (with the fixes of Delimcc-Continuation), MaterialSymbols-Tests, which put the gray pack back after each test, and MaterialSymbols-Protocols-Tests, which open headless Calypso browsers, each unless `BATTERIES_CMARK_GROUPS` (for CMark-Calypso-Tests: `CalypsoTests`) or `BATTERIES_MATERIALICONS_GROUPS` (for the last two: `SymbolsTests`, `SymbolsProtocolsTests`) leaves out its group and the package is not there (about 2 min, 80 s of them for MaterialSymbols-Tests; without the CMarkPlugin, the CMark tests that parse skip themselves).
+`smoke.st` checks that the image starts again, that a class or two of every project are there, the RTree of the fork (its collections, its packages not modified, its repository), the settings of Iceberg, that the icons of the UI are `MaterialSymbolsThemeIcons` in gray and monochrome (five of its keys and five of its status keys drawn in `Color gray` only), `timSort:`, `timSortDescending`, `Float>>#times:plus:` and `SimdCSV rowsFrom:`, and runs the tests of RTree-Tests, TimSort-Smalltalk-Tests, VM-Plugins-Primitives-Tests, SimdCSV-Tests, CMark-Tests, CMark-Roassal-Tests, CMark-Calypso-Tests, Delimcc-Tests, Delimcc-Continuation-Tests, Pharo's `ContinuationTest` (with the fixes of Delimcc-Continuation), MaterialSymbols-Tests, which put the gray pack back after each test, and MaterialSymbols-Protocols-Tests, which open headless Calypso browsers, each unless `BATTERIES_CMARK_GROUPS` (for CMark-Calypso-Tests: `CalypsoTests`) or `BATTERIES_MATERIALICONS_GROUPS` (for the last two: `SymbolsTests`, `SymbolsProtocolsTests`) leaves out its group and the package is not there (about 2 min, 80 s of them for MaterialSymbols-Tests, and about 10 s for SimdCSV-Tests, whose limit is 60 s, on the VM of files.pharo.org, without the SimdCSVPlugin, where only its tests of the Smalltalk backend run: 294 run and 275 skip; without the CMarkPlugin, the CMark tests that parse skip themselves).
 It runs in the work directory of `build.sh`, where Iceberg has its clones: on an image unzipped elsewhere the check of the repository of RTree fails, since the zip has none.
 With `BATTERIES_SMOKE=native`, on a VM of this repository, it also runs SimdJSON-Tests, SimdJSON-FFI-Tests, TimSort-FFI-Tests, LibGLib-Tests, LibPangoCairo-Tests and LibPoppler-Roassal-Tests, each of which must run tests, not only skip them (about 50 s more).
 Its last line is `Batteries smoke <mode> classes <n> tests <run> passed <p> skipped <s> failed <f> errors <e> ok`, or `FAILED`.

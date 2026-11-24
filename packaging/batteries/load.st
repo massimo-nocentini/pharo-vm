@@ -8,6 +8,7 @@
 	VMPluginsPrimitives  github://massimo-nocentini/vm-plugins-primitives.st:master/src  default
 	SimdJSON             github://massimo-nocentini/simdjson.st:master/src       default (NeoJSON of svenvc too)
 	SimdUTF              github://massimo-nocentini/simdutf.st:master/src        default
+	SimdCSV              github://massimo-nocentini/simdcsv.st:master/src        default
 	TimSort              github://massimo-nocentini/timsort.st:master/src        default
 	LibPangoCairo        github://massimo-nocentini/libpangocairo.st:master/src  default
 	LibPoppler           github://massimo-nocentini/libpoppler.st:master/src     default
@@ -36,8 +37,8 @@ the status keys of tests, errors and warnings too (monochrome): the image is sav
 Environment:
 	BATTERIES_<KEY>          the repository of a project instead of the one above, any Metacello repository
 	                         (github://..., gitlocal://..., tonel:///<checkout>/src for a local checkout); the keys
-	                         are ROASSAL, VMPLUGINSPRIMITIVES, SIMDJSON, SIMDUTF, TIMSORT, LIBPANGOCAIRO, LIBPOPPLER, CMARK,
-	                         CONTAINERSESSENTIALS, CONTAINERSCATEGORY, DELIMCC, MATERIALICONS
+	                         are ROASSAL, VMPLUGINSPRIMITIVES, SIMDJSON, SIMDUTF, SIMDCSV, TIMSORT, LIBPANGOCAIRO, LIBPOPPLER,
+	                         CMARK, CONTAINERSESSENTIALS, CONTAINERSCATEGORY, DELIMCC, MATERIALICONS
 	BATTERIES_<KEY>_GROUPS   its groups, separated by blanks, instead of the ones above
 	BATTERIES_ICEBERG_REMOTE the protocol of the clones of github:// repositories, httpsUrl by default (no SSH key
 	                         needed) or scpUrl
@@ -69,6 +70,7 @@ projects := {
 	{ 'VMPLUGINSPRIMITIVES'. 'VMPluginsPrimitives'. 'github://massimo-nocentini/vm-plugins-primitives.st:master/src'. #( 'default' ) }.
 	{ 'SIMDJSON'. 'SimdJSON'. 'github://massimo-nocentini/simdjson.st:master/src'. #( 'default' ) }.
 	{ 'SIMDUTF'. 'SimdUTF'. 'github://massimo-nocentini/simdutf.st:master/src'. #( 'default' ) }.
+	{ 'SIMDCSV'. 'SimdCSV'. 'github://massimo-nocentini/simdcsv.st:master/src'. #( 'default' ) }.
 	{ 'TIMSORT'. 'TimSort'. 'github://massimo-nocentini/timsort.st:master/src'. #( 'default' ) }.
 	{ 'LIBPANGOCAIRO'. 'LibPangoCairo'. 'github://massimo-nocentini/libpangocairo.st:master/src'. #( 'default' ) }.
 	{ 'LIBPOPPLER'. 'LibPoppler'. 'github://massimo-nocentini/libpoppler.st:master/src'. #( 'default' ) }.

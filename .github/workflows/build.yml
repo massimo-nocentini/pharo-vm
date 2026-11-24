@@ -76,9 +76,9 @@
 #
 # The batteries image (docs/Batteries.md) is the stock Pharo 15 image of
 # the site with the Smalltalk projects of this VM's plugins and libraries
-# (vm-plugins-primitives.st, simdjson.st, simdutf.st, timsort.st,
-# libpangocairo.st, libpoppler.st, cmark-gfm.st, from their master
-# branches) and the forks of Roassal and RTree, loaded by
+# (vm-plugins-primitives.st, simdjson.st, simdutf.st, simdcsv.st,
+# timsort.st, libpangocairo.st, libpoppler.st, cmark-gfm.st, from their
+# master branches) and the forks of Roassal and RTree, loaded by
 # packaging/batteries/build.sh.  Its job needs no other one: it runs the VM
 # of files.pharo.org, not one of this workflow, and so starts with the
 # generate job; the WebAssembly job, which offers it on the site, waits for
@@ -1279,9 +1279,10 @@ jobs:
     steps:
       # (with the submodules plugins/SimdJSONPlugin/simdjson.st,
       # plugins/SimdUTFPlugin/simdutf.st, plugins/TimSortPlugin/timsort.st,
-      # plugins/UtilsPlugin/vm-plugins-primitives.st and
-      # plugins/CMarkPlugin/cmark-gfm.st, the Smalltalk code that lanes 68,
-      # 69, 71, 73, 74 and 75 of wasm-check load; 74 the packages of the
+      # plugins/UtilsPlugin/vm-plugins-primitives.st,
+      # plugins/CMarkPlugin/cmark-gfm.st and
+      # plugins/SimdCSVPlugin/simdcsv.st, the Smalltalk code that lanes 68,
+      # 69, 71, 73, 74, 75 and 77 of wasm-check load; 74 the packages of the
       # CairoPlugin, from vm-plugins-primitives.st too)
       - uses: actions/checkout@v7
         with:
