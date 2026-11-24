@@ -17,6 +17,10 @@
  *   C  data  <kernel>   batches       ...          calls of 1 MiB, SC_F_LINES: the reader's
  *   C  data  <kernel>   measure       ...          sc_measure, with SC_F_LINES: count:
  *
+ *   C  data  ratio      index/find_indexes  the best and the median, in percent, of the
+ *                                     repetitions: simdcsv and the index are timed in
+ *                                     turn, so that what disturbs a moment is in both
+ *
  * On regular text (no quote inside a field) the index must be upstream's; on
  * another the line of upstream says "different".  run-bench.sh builds it with
  * the flags of the VM build (clang++ -O3) and the engine without SC_TESTING
@@ -53,24 +57,37 @@ ascending(const void *a, const void *b)
 
 static int repeat = 9;
 
-/* Calls f repeat times after one untimed call, and prints a line */
-template <typename F> static void
-series(const char *data, const char *who, const char *what, uint64_t bytes, uint64_t fields, const char *note, F f)
+template <typename F> static double
+timed(F f)
 {
-    double times[101];
-    int i;
+    double t = now();
 
     f();
-    for (i = 0; i < repeat; i++) {
-        double t = now();
-        f();
-        times[i] = now() - t;
-    }
+    return now() - t;
+}
+
+/* Prints the line of the repetitions */
+static void
+report(const char *data, const char *who, const char *what, uint64_t bytes, uint64_t fields, const char *note, double *times)
+{
     qsort(times, (size_t)repeat, sizeof times[0], ascending);
     printf("C\t%s\t%s\t%s\t%.2f\t%.2f\tfields=%llu\tbytes=%llu%s\n", data, who, what,
         (double)bytes / times[0] / 1e9, (double)bytes / times[repeat / 2] / 1e9,
         (unsigned long long)fields, (unsigned long long)bytes, note);
     fflush(stdout);
+}
+
+/* Calls f repeat times after one untimed call, and prints a line */
+template <typename F> static void
+series(const char *data, const char *who, const char *what, uint64_t bytes, uint64_t fields, const char *note, F f)
+{
+    double times[101];
+
+    f();
+    for (int i = 0; i < repeat; i++) {
+        times[i] = timed(f);
+    }
+    report(data, who, what, bytes, fields, note, times);
 }
 
 static void
@@ -124,10 +141,20 @@ run(const char *path, uint64_t size)
             count--;
         }
         int same = count == fields && memcmp(theirs, dest, 4 * count) == 0;
-        series(name, "upstream", "find_indexes", n, count, same ? "\tsame" : "\tdifferent",
-            [&] { upstream_find_indexes(b, n + 64, theirs); });
+        double upstream[101], index[101], ratio[101];
+        sc_index(&in, &d, 0, dest, capacity, &s);
+        for (int i = 0; i < repeat; i++) {
+            upstream[i] = timed([&] { upstream_find_indexes(b, n + 64, theirs); });
+            index[i] = timed([&] { sc_index(&in, &d, 0, dest, capacity, &s); });
+            ratio[i] = upstream[i] / index[i];
+        }
+        report(name, "upstream", "find_indexes", n, count, same ? "\tsame" : "\tdifferent", upstream);
+        report(name, sc_kernel(), "index", n, fields, "", index);
+        qsort(ratio, (size_t)repeat, sizeof ratio[0], ascending);
+        printf("C\t%s\tratio\tindex/find_indexes\t%.1f\t%.1f\tleast=%.1f\n", name, ratio[repeat - 1] * 100,
+            ratio[repeat / 2] * 100, ratio[0] * 100);
         free(theirs);
-    }
+    } else
 #else
     (void)theirs;
 #endif

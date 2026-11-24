@@ -13,10 +13,14 @@
 # not there).  Everywhere:
 #   - every CHECK is equal, and no ERROR line;
 # native-cog, at 1 and at 10 MB:
-#   - rows from bytes >= 8x NeoCSV from a String (mixed, ints, quoted, utf8);
+#   - rows from bytes >= 8x NeoCSV from a String (mixed, ints, quoted, utf8), a
+#     sample being a call after a full garbage collection, and the same when
+#     a sample is at least 3 calls (rowsKept), where the collections that the
+#     calls cause are in the time;
 #   - typed rows of mixed >= 12x; do: on a file >= 10x (the same four data);
-#   - gtfs with cached converters >= 6x, from a FileReference and from a
-#     stream (without a cache: reported);
+#   - gtfs with cached converters >= 6x NeoCSV without a cache, from a
+#     FileReference and from a stream (without a cache, and NeoCSV with one:
+#     reported);
 #   - count: >= 1 GB/s (regular data);
 #   - rows of inches >= 3x;
 # native-cog: no full garbage collection in a do: over 100 MB, and less than
@@ -26,9 +30,9 @@ import statistics
 import sys
 
 VMS = ('engine', 'native-cog', 'native-stack', 'wasm-node')
-OPS = ('count', 'index', 'indexLines', 'rows', 'rowsString', 'rowsDo', 'columns3', 'typed', 'floats3',
+OPS = ('count', 'index', 'indexLines', 'rows', 'rowsKept', 'rowsString', 'rowsDo', 'columns3', 'typed', 'floats3',
        'floats3build', 'floats3rows', 'float64', 'table', 'fileDo', 'writer', 'writerOptional',
-       'gtfsFile', 'gtfsFileCached', 'gtfsStream', 'gtfsStreamCached')
+       'gtfsFile', 'gtfsFileCached', 'gtfsNeoCached', 'gtfsStream', 'gtfsStreamCached')
 DATA = ('mixed', 'ints', 'quoted', 'utf8', 'floats17', 'inches', 'gtfs')
 REGULAR = tuple(d for d in DATA if d != 'inches')
 FOUR = ('mixed', 'ints', 'quoted', 'utf8')
@@ -63,7 +67,7 @@ def ms_text(ns):
 
 
 def main(paths):
-    infos, checks, results, engine, large, errors = [], [], {}, {}, [], []
+    infos, checks, results, engine, large, errors, small = [], [], {}, {}, [], [], {}
     for path in paths:
         run = None
         for line in open(path, encoding='utf-8', errors='replace'):
@@ -83,6 +87,8 @@ def main(paths):
             elif kind == 'LARGE' and len(f) >= 8:
                 large.append({'label': f[1], 'run': run, 'bytes': int(f[2]), 'backend': f[3], 'ms': float(f[4]),
                               'mbs': float(f[5]), 'gcs': int(f[6]), 'scavenges': int(f[7]), **fields(f[8:])})
+            elif kind == 'SMALL' and len(f) >= 6:
+                small.setdefault((f[1], f[2], f[3]), []).append((float(f[4]), int(f[5])))
             elif kind == 'ERROR':
                 errors.append(' '.join(f[1:]))
     labels = sorted({i[0] for i in infos}, key=lambda l: (VMS.index(l) if l in VMS else len(VMS), l))
@@ -112,8 +118,13 @@ def main(paths):
         return statistics.median(l[0] for l in lines) if lines else None
 
     def of_upstream(data):
-        ours, theirs = gbs(data, best, 'index'), gbs(data, 'upstream', 'find_indexes')
-        return ours / theirs if ours and theirs else None
+        """the median of the ratios of the repetitions, then over the runs"""
+        lines = engine.get((data, 'ratio', 'index/find_indexes'))
+        return statistics.median(l[0] for l in lines) / 100 if lines else None
+
+    def spread_of_upstream(data):
+        lines = engine.get((data, 'ratio', 'index/find_indexes'))
+        return f'{min(l[0] for l in lines) / 100:.2f} to {max(l[0] for l in lines) / 100:.2f}' if lines else '-'
 
     best = next((k for k in KERNELS[1:] if any(e[1] == k for e in engine)), None)
     failed, rows = [], []
@@ -143,6 +154,7 @@ def main(paths):
     for size in (10, 1):
         mb = f'{size} MB: '
         gate(mb + 'rows >= 8x', [(d, speedup(cog, 'rows', d, size, 'plugin')) for d in FOUR], 8)
+        gate(mb + 'rows >= 8x, 3 calls a sample', [(d, speedup(cog, 'rowsKept', d, size, 'plugin')) for d in FOUR], 8)
         gate(mb + 'typed rows >= 12x', [('mixed', speedup(cog, 'typed', 'mixed', size, 'plugin'))], 12)
         gate(mb + 'do: on a file >= 10x', [(d, speedup(cog, 'fileDo', d, size, 'plugin')) for d in FOUR], 10)
         gate(mb + 'gtfs cached >= 6x', [(o, speedup(cog, o, 'gtfs', size, 'plugin'))
@@ -150,7 +162,7 @@ def main(paths):
         gate(mb + 'count >= 1 GB/s', [(d, mbs(cog, 'count', d, size, 'plugin')) for d in REGULAR], 1000,
              lambda v: f'{v / 1000:.2f}')
         gate(mb + 'rows of inches >= 3x', [('inches', speedup(cog, 'rows', 'inches', size, 'plugin'))], 3)
-    gate('engine: index >= 0.6x upstream', [(d, of_upstream(d)) for d in REGULAR], 0.6)
+    gate('engine: index >= 0.6x upstream', [(d, of_upstream(d)) for d in REGULAR], 0.6, lambda v: f'{v:.3f}x')
     gate('wasm-node, 1 MB: rows >= 8x', [(d, speedup('wasm-node', 'rows', d, 1, 'plugin')) for d in FOUR], 8)
     for line in large:
         if line['label'] == cog and line['backend'] == 'plugin':
@@ -173,9 +185,9 @@ def main(paths):
                 line = [d] + [f'{gbs(d, k, call):.2f}' for k in kernels]
                 if call == 'index' and gbs(d, 'upstream', 'find_indexes'):
                     same = engine[(d, 'upstream', 'find_indexes')][0][1][-1] == 'same'
-                    line += [f"{gbs(d, 'upstream', 'find_indexes'):.2f}" + ('' if same else ' (another index)'), f'{of_upstream(d):.2f}']
+                    line += [f"{gbs(d, 'upstream', 'find_indexes'):.2f}" + ('' if same else ' (another index)'), f'{of_upstream(d):.2f}', spread_of_upstream(d)]
                 lines.append(line)
-            table(['data'] + kernels + (['upstream', f'{best} / upstream'] if len(lines[0]) > 1 + len(kernels) else []), lines)
+            table(['data'] + kernels + (['upstream', f'{best} / upstream', 'of the runs'] if len(lines[0]) > 1 + len(kernels) else []), lines)
 
     for size in sizes:
         print(f'## Speedup over NeoCSV at {size} MB\n')
@@ -200,6 +212,25 @@ def main(paths):
                 rest = whole - build - builder
                 parts.append((label, size, ms_text(whole), ms_text(build), ms_text(builder), ms_text(rest), f'{rest / whole * 100:.0f}%'))
     table(['VM', 'MB', 'whole', 'table', 'rows of the builder', 'the rest: transposition', 'share'], parts)
+
+    if small:
+        print('## Small sources, microseconds each\n')
+        cols = [(l, b) for l in vms for b in ('neo', 'plugin', 'smalltalk') if any(k[0] == l and k[2] == b for k in small)]
+        table(['source'] + [f'{l} {b}' for l, b in cols], [
+            [w] + ['-' if (l, w, b) not in small else f'{statistics.median(v[0] for v in small[l, w, b]) / 1000:.1f}'
+                   f" ({'/'.join(str(v[1]) for v in small[l, w, b])} full GCs)" for l, b in cols]
+            for w in ('string1', 'string3', 'string100', 'file2', 'zinc2') if any(k[1] == w for k in small)])
+
+    lines = []
+    for label in vms:
+        for size in sizes:
+            plain, cached, own = ns(label, 'gtfsFile', 'gtfs', size, 'neo'), ns(label, 'gtfsNeoCached', 'gtfs', size, 'neo'), ns(
+                label, 'gtfsFileCached', 'gtfs', size, 'plugin')
+            if plain and cached and own:
+                lines.append((label, size, ms_text(plain), ms_text(cached), ms_text(own), times(plain / own), times(cached / own)))
+    if lines:
+        print('## gtfs with cached converters\n')
+        table(['VM', 'MB', 'NeoCSV', 'NeoCSV, its converters cached', 'plugin, cached: true', 'over the first', 'over the second'], lines)
 
     if large:
         print('## The large file\n')

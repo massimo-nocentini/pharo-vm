@@ -41,6 +41,9 @@
      index       the index of bytes in one call, into a WordArray that is there (plugin only)
      indexLines  the same with the count of the lines, as the reader asks for it (plugin only)
      rows        bytes to Arrays of Strings                 string to Arrays of Strings
+     rowsKept    the same as rows, at least 3 calls a sample: the Strings of one call are garbage
+                 for the next, and their collections are in the time (of a single call, after a full
+                 collection, they may come later)
      rowsString  string to Arrays of Strings                the same series of NeoCSV as rows
      rowsDo      each row of bytes to an empty block        do: of string
      columns3    3 columns of mixed by name, as Strings     the 7 others ignored, of string
@@ -52,12 +55,16 @@
      float64     one column of the table as a Float64Array (the table is there)
      table       the table of bytes
      fileDo      each row of file to an empty block         do: of file readStream
-     writer      rows to a String, quoted (mixed)           NeoCSVWriter, the same
+     writer      rows to a String, quoted (mixed, utf8)     NeoCSVWriter, the same
      writerOptional  the same, quoted where it is needed
      gtfsFile    gtfs records, instances of SCBenchStopTime, from file
-     gtfsFileCached  the same with cached: true
+     gtfsFileCached  the same with cached: true             (NeoCSV: gtfsFile, not cached)
+     gtfsNeoCached   NeoCSV whose converters look the texts up in a Dictionary (neo only)
      gtfsStream  the same as gtfsFile from file readStream (NeoCSV: the series of all four)
      gtfsStreamCached
+     small       (after the others, 1,000 calls a sample, SMALL lines) rowsFrom: and upToEnd of
+                 sources of 1, 3 and 100 records of 3 short fields: string1, string3, string100, and
+                 of 2 records: file2, zinc2 (a ZnCharacterReadStream on bytes)
      large       each row of a file of SC_LARGE MB (mixed) to an empty block: the time, the full
                  garbage collections, what old space grew by, and what is retained (a LARGE line)
  Backends: neo (NeoCSV, the baseline), lines (aString lines, each split at the separator: rows of
@@ -78,6 +85,7 @@
      INFO     label run=R interpreter architecture version plugin=... settings
      CHECK    label op data bytes backend equal|DIFFERENT
      RESULT   label op data bytes backend ns MBps fullGCs min=NS max=NS n=N k=K
+     SMALL    label source backend ns-of-one fullGCs
      LARGE    label bytes backend ms MBps fullGCs scavenges grown=BYTES retained=BYTES
      SKIP     label op data bytes backend reason
      ERROR    label op data bytes backend what
@@ -168,7 +176,7 @@ dump: aDirectory size: bytes
 !SCBench class methodsFor: 'defaults'!
 allOps
 
-	^ #( 'count' 'index' 'indexLines' 'rows' 'rowsString' 'rowsDo' 'columns3' 'typed' 'floats3' 'floats3build' 'floats3rows' 'float64' 'table' 'fileDo' 'writer' 'writerOptional' 'gtfsFile' 'gtfsFileCached' 'gtfsStream' 'gtfsStreamCached' )! !
+	^ #( 'count' 'index' 'indexLines' 'rows' 'rowsKept' 'rowsString' 'rowsDo' 'columns3' 'typed' 'floats3' 'floats3build' 'floats3rows' 'float64' 'table' 'fileDo' 'writer' 'writerOptional' 'gtfsFile' 'gtfsFileCached' 'gtfsNeoCached' 'gtfsStream' 'gtfsStreamCached' 'small' )! !
 
 !SCBench class methodsFor: 'defaults'!
 allData
@@ -187,7 +195,9 @@ dataOf: anOp
 	(#( 'count' 'index' 'indexLines' 'rows' ) includes: anOp) ifTrue: [ ^ self allData ].
 	(#( 'rowsString' 'rowsDo' ) includes: anOp) ifTrue: [ ^ #( 'mixed' 'utf8' ) ].
 	anOp = 'typed' ifTrue: [ ^ #( 'mixed' 'ints' 'floats17' ) ].
-	anOp = 'fileDo' ifTrue: [ ^ #( 'mixed' 'ints' 'quoted' 'utf8' ) ].
+	(anOp beginsWith: 'writer') ifTrue: [ ^ #( 'mixed' 'utf8' ) ].
+	anOp = 'small' ifTrue: [ ^ #(  ) ].
+	(#( 'fileDo' 'rowsKept' ) includes: anOp) ifTrue: [ ^ #( 'mixed' 'ints' 'quoted' 'utf8' ) ].
 	(anOp beginsWith: 'gtfs') ifTrue: [ ^ #( 'gtfs' ) ].
 	^ #( 'mixed' )! !
 
@@ -461,6 +471,27 @@ converter
 	  Time hour: parts first asInteger minute: parts second asInteger second: parts third asInteger nanoSecond: 0 ]! !
 
 !SCBench methodsFor: 'blocks'!
+cachedConverter
+	"A converter as an application of NeoCSV may write it"
+
+	| converter cache |
+	converter := self converter.
+	cache := Dictionary new.
+	^ [ :text | cache at: text ifAbsentPut: [ converter value: text ] ]! !
+
+!SCBench methodsFor: 'blocks'!
+gtfsNeoCached: aReader
+
+	aReader skipHeader; recordClass: SCBenchStopTime; addField: #tripId:;
+		addField: #arrivalTime: converter: self cachedConverter;
+		addField: #departureTime: converter: self cachedConverter.
+	^ aReader
+		addField: #stopId:;
+		addIntegerField: #sequence:;
+		addField: #traveledDistance:;
+		upToEnd! !
+
+!SCBench methodsFor: 'blocks'!
 gtfs: aReader cached: aBoolean
 	"The reader of an application, in which only the class of the reader is another; aBoolean: with cached: true"
 
@@ -498,7 +529,7 @@ neoBlockOf: anOp data: aName
 	string := inputs at: #string.
 	file := inputs at: #file.
 	anOp = 'count' ifTrue: [ ^ [ | count | count := 0. (NeoCSVReader on: string readStream) do: [ :row | count := count + 1 ]. count ] ].
-	(#( 'rows' 'rowsString' ) includes: anOp) ifTrue: [ ^ [ (NeoCSVReader on: string readStream) upToEnd ] ].
+	(#( 'rows' 'rowsKept' 'rowsString' ) includes: anOp) ifTrue: [ ^ [ (NeoCSVReader on: string readStream) upToEnd ] ].
 	anOp = 'rowsDo' ifTrue: [ ^ [ (NeoCSVReader on: string readStream) do: [ :row | ]. nil ] ].
 	anOp = 'columns3' ifTrue: [ ^ [ self neoColumns3: (NeoCSVReader on: string readStream) type: #string ] ].
 	anOp = 'typed' ifTrue: [ ^ [ self typed: (NeoCSVReader on: string readStream) of: aName ] ].
@@ -506,6 +537,7 @@ neoBlockOf: anOp data: aName
 	anOp = 'fileDo' ifTrue: [ ^ [ | stream | stream := file readStream. [ (NeoCSVReader on: stream) do: [ :row | ] ] ensure: [ stream close ]. nil ] ].
 	anOp = 'writer' ifTrue: [ ^ [ self write: (inputs at: #rows) with: NeoCSVWriter optional: false ] ].
 	anOp = 'writerOptional' ifTrue: [ ^ [ self write: (inputs at: #rows) with: NeoCSVWriter optional: true ] ].
+	anOp = 'gtfsNeoCached' ifTrue: [ ^ [ | stream | stream := file readStream. [ self gtfsNeoCached: (NeoCSVReader on: stream) ] ensure: [ stream close ] ] ].
 	(anOp beginsWith: 'gtfs') ifTrue: [ ^ [ | stream | stream := file readStream. [ self gtfs: (NeoCSVReader on: stream) cached: false ] ensure: [ stream close ] ] ].
 	^ nil! !
 
@@ -548,7 +580,8 @@ simdBlockOf: anOp data: aName plugin: isPlugin
 	anOp = 'count' ifTrue: [ ^ [ SimdCSV count: bytes ] ].
 	anOp = 'index' ifTrue: [ ^ isPlugin ifTrue: [ self indexBlock: bytes lines: false ] ].
 	anOp = 'indexLines' ifTrue: [ ^ isPlugin ifTrue: [ self indexBlock: bytes lines: true ] ].
-	anOp = 'rows' ifTrue: [ ^ [ SimdCSV rowsFrom: bytes ] ].
+	(#( 'rows' 'rowsKept' ) includes: anOp) ifTrue: [ ^ [ SimdCSV rowsFrom: bytes ] ].
+	anOp = 'gtfsNeoCached' ifTrue: [ ^ nil ].
 	anOp = 'rowsString' ifTrue: [ ^ [ SimdCSV rowsFrom: string ] ].
 	anOp = 'rowsDo' ifTrue: [ ^ [ SimdCSV rowsFrom: bytes do: [ :row | ]. nil ] ].
 	anOp = 'columns3' ifTrue: [ ^ [ (SimdCSVReader on: bytes) readHeader; selectColumns: #( name amount quantity ); upToEnd ] ].
@@ -619,14 +652,14 @@ usedBytes
 	^ (Smalltalk vm parameterAt: 1) - (Smalltalk vm parameterAt: 54)! !
 
 !SCBench methodsFor: 'measuring'!
-measure: aBlock
-	"Answer { the median ms of one call. the least. the largest. the full GCs during the samples.
+measure: aBlock least: calls
+	"At least that many calls a sample. Answer { the median ms of one call. the least. the largest. the full GCs during the samples.
 	 samples. calls per sample }"
 
 	| repeat times total gcs t |
 	Smalltalk garbageCollect.
 	warmup timesRepeat: [ aBlock value ].
-	repeat := 1.
+	repeat := calls.
 	[ Smalltalk garbageCollect.
 	  (self time: aBlock repeat: repeat) < minSampleMs and: [ repeat < 1000000 ] ] whileTrue: [ repeat := repeat * 2 ].
 	times := OrderedCollection new.
@@ -663,7 +696,7 @@ runOp: anOp data: aName backend: aBackend
 			ifFalse: [
 				errors := errors + 1.
 				^ self line: { 'CHECK'. label } , key , #( 'DIFFERENT' ) ] ].
-	answer := self measure: block.
+	answer := self measure: block least: (anOp = 'rowsKept' ifTrue: [ 3 ] ifFalse: [ 1 ]).
 	self line: { 'RESULT'. label } , key , {
 		((answer at: 1) * 1000000) rounded printString.
 		(bytes / 1000.0 / (answer at: 1)) printShowingDecimalPlaces: 2.
@@ -687,6 +720,36 @@ runData: aName size: aSize
 	SimdCSVBackend clearTestHooks.
 	(inputs at: #file) ensureDelete.
 	inputs := nil! !
+
+!SCBench methodsFor: 'running'!
+runSmall: aBackend
+	"The reading of small sources"
+
+	| lines file bytes sources |
+	lines := [ :count | String streamContents: [ :s | count timesRepeat: [ s nextPutAll: 'a,b,c'; nextPut: Character lf ] ] ].
+	file := directory / 'scbench-small.csv'.
+	file ensureDelete.
+	bytes := (lines value: 2) utf8Encoded.
+	file binaryWriteStreamDo: [ :stream | stream nextPutAll: bytes ].
+	SimdCSVBackend testHook: #pluginMissing value: (aBackend = 'smalltalk' ifTrue: [ true ]).
+	sources := aBackend = 'neo'
+		ifTrue: [
+			(#( 1 3 100 ) collect: [ :count | | string | string := lines value: count. ('string' , count printString) -> [ (NeoCSVReader on: string readStream) upToEnd ] ])
+				, { 'file2' -> [ file readStreamDo: [ :stream | (NeoCSVReader on: stream) upToEnd ] ].
+					'zinc2' -> [ (NeoCSVReader on: (ZnCharacterReadStream on: bytes readStream)) upToEnd ] } ]
+		ifFalse: [
+			(#( 1 3 100 ) collect: [ :count | | string | string := lines value: count. ('string' , count printString) -> [ SimdCSV rowsFrom: string ] ])
+				, { 'file2' -> [ SimdCSV rowsFrom: file ].
+					'zinc2' -> [ (SimdCSVReader on: (ZnCharacterReadStream on: bytes readStream)) upToEnd ] } ].
+	sources do: [ :each |
+		| times gcs |
+		Smalltalk garbageCollect.
+		self time: each value repeat: 1000.
+		gcs := self fullGCs.
+		times := ((1 to: iterations) collect: [ :i | self time: each value repeat: 1000 ]) asArray sorted.
+		self line: { 'SMALL'. label. each key. aBackend. ((times at: times size + 1 // 2) * 1000) rounded printString. self fullGCs - gcs } ].
+	file ensureDelete.
+	SimdCSVBackend clearTestHooks! !
 
 !SCBench methodsFor: 'running'!
 runLarge: aBackend
@@ -733,6 +796,8 @@ runAll
 
 	self info.
 	sizes do: [ :size | data do: [ :each | self runData: each size: size ] ].
+	(ops includes: 'small') ifTrue: [
+		(backends reject: [ :each | each = 'lines' or: [ each = 'plugin' and: [ pluginInfo isNil ] ] ]) do: [ :each | self runSmall: each ] ].
 	largeMB > 0 ifTrue: [
 		(backends includes: 'plugin') ifTrue: [ pluginInfo ifNotNil: [ self runLarge: 'plugin' ] ].
 		(backends includes: 'neo') ifTrue: [ self runLarge: 'neo' ] ].
