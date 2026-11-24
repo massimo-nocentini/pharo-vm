@@ -19,6 +19,7 @@ typedef struct {
 	uint32_t magic;
 	int format;		/* Spur's: 0, 1, 2, 4, 7, 9, 10, 12, 16, 24 */
 	int immutable;
+	size_t pretended;	/* what byteSizeOf answers, when not 0 */
 	int madeInCall;		/* by instantiateClassindexableSize in this call */
 	sqInt cls;
 	size_t size;		/* slots (formats 1, 2, 4), elements (9, 10, 12), bytes (16, 24) */
@@ -437,6 +438,12 @@ fake_set_immutable(sqInt oop, int immutable)
 }
 
 void
+fake_pretend_bytes(sqInt oop, size_t bytes)
+{
+	((Obj *)oop)->pretended = bytes;
+}
+
+void
 fake_set_budget(long allowed, sqInt failCode)
 {
 	budget = allowed;
@@ -493,7 +500,7 @@ fByteSizeOf(sqInt oop)
 	if (isImmediateOop(oop) || !(o = bodyOf(oop, "byteSizeOf"))) {
 		return 0;
 	}
-	return (sqInt)bytesOf(o->format, o->size);
+	return (sqInt)(o->pretended ? o->pretended : bytesOf(o->format, o->size));
 }
 
 static sqInt

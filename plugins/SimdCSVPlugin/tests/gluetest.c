@@ -1,5 +1,5 @@
 /* gluetest.c -- the glue SimdCSVPlugin.c against the fake VM of fakevm.c,
- * linked with the engine (or with scstub.c).
+ * linked with the engine.
  *
  * Built twice by glue.sh: with the glue as the shared library compiles it
  * (its primitives and *AccessorDepth variables are globals), and with
@@ -80,6 +80,22 @@ fail(const char *format, ...)
 }
 
 #define CHECK(condition, ...) do { checks++; if (!(condition)) fail(__VA_ARGS__); } while (0)
+
+/* The glue is compiled with -Dsc_to_float=test_to_float: the engine's, or the
+ * double of a test (no text that the engine converts makes a BoxedFloat64) */
+int test_to_float(const sc_input *, const sc_dialect *, const sc_field *, int, double *);
+static int forcingFloat;
+static double forcedFloat;
+
+int
+test_to_float(const sc_input *in, const sc_dialect *d, const sc_field *f, int commaPoint, double *value)
+{
+	if (forcingFloat) {
+		*value = forcedFloat;
+		return 1;
+	}
+	return sc_to_float(in, d, f, commaPoint, value);
+}
 
 static Primitive pInfo, pMeasure, pIndex, pRows;
 static sqInt (*shutdown)(void);
@@ -572,6 +588,9 @@ checkFailures(void)
 	a[2] = fake_int(12);
 	a[3] = comma(0);
 	checkInts(answerOf(pMeasure, 4, a), "the good measure", 7, SC_OK, 2, 4, 13, 0, 0, 0);
+	a[3] = word(',', ',', SC_F_FINAL | SC_F_NO_QUOTE);
+	checkInts(answerOf(pMeasure, 4, a), "separator = quote, no quote", 7, SC_OK, 2, 5, 13, 0, 0, 0);
+	a[3] = comma(0);
 	checkBads(pMeasure, "measure", 4, a, -1);
 
 	/* index */
@@ -910,6 +929,75 @@ checkScans(void)
 
 /*** G7 rows ***/
 
+/* Every allocation of a call fails in its turn */
+static void
+checkEveryAllocation(const char *text, sqInt dialect, sqInt types, sqInt fieldCount, sqInt emptyValue)
+{
+	sqInt a[R_ARGS], source = bytesOop(fakeByteArray, text), dest, index, entries;
+	int total, k, rowCount;
+	FakeAnswer r, one;
+	uint64_t need;
+
+	index = indexed(source, dialect, &entries);
+	dest = fake_new(fakeArray, 16);
+	rowsArgs(a, source, dialect, index, entries, types, fieldCount, dest);
+	a[R_EMPTY] = emptyValue;
+	r = callRows(a);
+	CHECK(r.returned && intSlot(r.value, 0) == SC_OK, "%s", text);
+	total = r.allocations;
+	rowCount = (int)intSlot(r.value, 1);
+	a[R_BUDGET] = fake_int(0);	/* the first record alone */
+	one = callRows(a);
+	CHECK(one.returned && intSlot(one.value, 1) == 1, "%s: one record", text);
+	need = one.bytes - one.firstBytes;
+	a[R_BUDGET] = fake_int(-1);
+	for (k = 0; k <= total; k++) {
+		size_t i;
+
+		dest = fake_new(fakeArray, 16);
+		a[R_DEST] = dest;
+		fake_set_budget(k, PrimErrUnsupported);
+		r = callRows(a);
+		CHECK(k == total ? r.returned : !r.returned && r.code == PrimErrUnsupported, "%s, Unsupported at %d: code %lld", text, k,
+			(long long)r.code);
+		dest = fake_new(fakeArray, 16);
+		a[R_DEST] = dest;
+		fake_set_budget(k, PrimErrNoMemory);
+		r = callRows(a);
+		fake_set_budget(-1, PrimErrNoMemory);
+		if (k == 0) {
+			CHECK(!r.returned && r.code == PrimErrNoMemory && r.stores == 0, "%s: no answer Array", text);
+			continue;
+		}
+		CHECK(r.returned && r.code == 0, "%s, no memory at %d: code %lld", text, k, (long long)r.code);
+		if (!r.returned) {
+			continue;
+		}
+		if (k == total) {
+			CHECK(intSlot(r.value, 0) == SC_OK && intSlot(r.value, 1) == rowCount, "%s: all", text);
+		} else if (k < one.allocations) {
+			checkInts(r.value, "no room", 9, SC_NO_ROOM, 0, 1, 0, 0, 0, 0, 0, (int)need);
+			CHECK(need > 0, "%s: need", text);
+		} else {
+			sqInt made = intSlot(r.value, 1);
+
+			CHECK(intSlot(r.value, 0) == SC_MORE && made >= 1 && made < rowCount, "%s, no memory at %d", text, k);
+			CHECK(intSlot(r.value, 8) == 0 && intSlot(r.value, 4) == 0, "%s, no memory at %d: need and code", text, k);
+			/* the rest, from there, with memory */
+			a[R_FROM] = fake_int(intSlot(r.value, 2));
+			a[R_DESTFROM] = fake_int(made + 1);
+			r = callRows(a);
+			CHECK(r.returned && intSlot(r.value, 0) == SC_OK && intSlot(r.value, 1) == rowCount - made, "%s, the rest after %d", text, k);
+			a[R_FROM] = a[R_DESTFROM] = fake_int(1);
+		}
+		for (i = 0; i < 16; i++) {
+			int full = k >= one.allocations && i < (size_t)rowCount;
+
+			CHECK((fake_slot(dest, i) != fakeNil) == full, "%s, no memory at %d: dest %zu", text, k, i);
+		}
+	}
+}
+
 static void
 checkRows(void)
 {
@@ -965,6 +1053,36 @@ checkRows(void)
 	CHECK(floatIs(fake_slot(row, 2), 1e-15) && floatIs(fake_slot(row, 3), 0.0) && floatIs(fake_slot(row, 4), -0.0), "floats");
 	/* (a converted Float is at most 2^53 * 10^22 and at least 10^-22: always a
 	   SmallFloat64 or a zero) */
+	/* the limits of the SmallFloat64s, and the BoxedFloat64s beyond them */
+	{
+		static const double doubles[] = { 0x1p-126, 0x1.8p-127, 0x1.0000000000001p-127, 0x1p-127, 0x1.fffffffffffffp-128, 0x1p-1074,
+			0x1.fffffffffffffp128, 0x1p129, 0x1p128, 1e300, -1e300, -0x1p129, -0x1p-127, 1.0, 0.0, -0.0 };
+		size_t k;
+
+		for (k = 0; k < sizeof doubles / sizeof doubles[0]; k++) {
+			int small = fake_is_small_float_value(doubles[k]);
+
+			forcingFloat = 1;
+			forcedFloat = doubles[k];
+			source = bytesOop(fakeByteArray, "1,2\n");
+			index = indexed(source, comma(0), &entries);
+			dest = fake_new(fakeArray, 1);
+			rowsArgs(a, source, comma(0), index, entries, fake_bytes(fakeByteArray, "\3\4", 2), 2, dest);
+			for (i = 0; i < 2; i++) {
+				FakeAnswer r;
+
+				/* the row without its second cell, and the need */
+				fake_set_budget(small ? 1 : 3 - i, PrimErrNoMemory);
+				r = callRows(a);
+				fake_set_budget(-1, PrimErrNoMemory);
+				checkInts(r.value, "floats without memory", 9, SC_NO_ROOM, 0, 1, 0, 0, 0, 0, 0, small ? 24 : 24 + 2 * 16);
+			}
+			checkInts(rowsOf(a), "floats", 9, SC_OK, 1, 3, 0, 0, 0, 0, 0, 0);
+			CHECK(floatIs(fake_slot(fake_slot(dest, 0), 0), doubles[k]) && floatIs(fake_slot(fake_slot(dest, 0), 1), doubles[k]), "%a",
+				doubles[k]);
+			forcingFloat = 0;
+		}
+	}
 	/* fieldCount: 0 (types shorter than the record; longer), 1, short and
 	   long records, all ignored */
 	types = fake_bytes(fakeByteArray, "\0\2", 2);
@@ -1056,79 +1174,67 @@ checkRows(void)
 			CHECK(r.bytes - r.firstBytes == 32u * (unsigned)rowsMade[i], "budget %d: %llu bytes", budgets[i], (unsigned long long)r.bytes);
 		}
 	}
+	/* what a budget counts, byte by byte, of wide strings, Floats and rows
+	   and strings around the 255 slots of an overflow header */
+	for (i = 0; i < 8; i++) {
+		static const int sizes[] = { 0, 1, 2032, 2033, 2040, 254, 255, 256 };
+		char text[4200];
+		FakeAnswer one, r;
+		sqInt made;
+		int k, columns = i < 5 ? 0 : sizes[i];
+
+		types = fakeNil;
+		if (i == 0) {
+			types = fake_bytes(fakeByteArray, "\3", 1);
+			forcingFloat = 1;
+			forcedFloat = 1e300;
+			strcpy(text, "1\n2\n");
+		} else if (i == 1) {
+			strcpy(text, "\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC\nz\n");
+		} else if (i < 5) {
+			memset(text, 'x', (size_t)sizes[i]);
+			strcpy(text + sizes[i], "\nz\n");
+		} else {
+			strcpy(text, "x\nz\n");
+		}
+		source = bytesOop(fakeByteArray, text);
+		index = indexed(source, comma(0), &entries);
+		dest = fake_new(fakeArray, 2);
+		rowsArgs(a, source, comma(0), index, entries, types, columns, dest);
+		a[R_BUDGET] = fake_int(0);
+		one = callRows(a);
+		made = (sqInt)(one.bytes - one.firstBytes);
+		CHECK(one.returned && intSlot(one.value, 1) == 1, "counted %d", i);
+		for (k = -1; k <= 1; k++) {
+			a[R_BUDGET] = fake_int(made + k);
+			r = callRows(a);
+			CHECK(r.returned && intSlot(r.value, 1) == (k > 0 ? 2 : 1), "counted %d: a budget of %lld", i, (long long)(made + k));
+		}
+		forcingFloat = 0;
+		checkEveryAllocation(text, comma(0), types, columns, fakeNil);
+		section = "G7 rows";
+	}
+	/* ranges over 2^32 - 2 units */
+	source = bytesOop(fakeByteArray, "\n");
+	fake_pretend_bytes(source, (size_t)1 << 33);
+	index = fake_new(fakeWordArray, 4);
+	dest = fake_new(fakeArray, 4);
+	rowsArgs(a, source, comma(0), index, 1, fakeNil, 0, dest);
+	a[R_TO] = fake_int(4294967295LL);
+	checkInts(rowsOf(a), "too large", 9, SC_TOO_LARGE, 0, 1, 0, 0, 0, 0, 0, 0);
+	a[R_TO] = fake_int(4294967294LL);
+	checkInts(rowsOf(a), "just small enough", 9, SC_OK, 1, 2, 0, 0, 0, 0, 0, 0);
+	a[R_BASE] = fake_int(3);
+	a[R_TO] = fake_int(4294967297LL);
+	checkInts(rowsOf(a), "too large from 3", 9, SC_TOO_LARGE, 0, 1, 0, 0, 0, 0, 0, 0);
+	index = marked(fakeWordArray, 4);
+	checkInts(indexOf(source, 1, 1, 4294967295LL, comma(0), index, 1), "index too large", 9, SC_TOO_LARGE, 0, 0, 1, 0, 0, 0, 0, 0);
+	checkInts(indexOf(source, 3, 7, 4294967297LL, comma(0), index, 1), "index too large", 9, SC_TOO_LARGE, 0, 0, 7, 0, 0, 0, 0, 0);
+	CHECK(((uint32_t *)fake_body(index))[0] == 0xA5A5A5A5u, "index too large: written");
 }
 
 
 /*** G8 memory ***/
-
-/* Every allocation of a call fails in its turn */
-static void
-checkEveryAllocation(const char *text, sqInt dialect, sqInt types, sqInt fieldCount, sqInt emptyValue)
-{
-	sqInt a[R_ARGS], source = bytesOop(fakeByteArray, text), dest, index, entries;
-	int total, k, rowCount;
-	FakeAnswer r, one;
-	uint64_t need;
-
-	index = indexed(source, dialect, &entries);
-	dest = fake_new(fakeArray, 16);
-	rowsArgs(a, source, dialect, index, entries, types, fieldCount, dest);
-	a[R_EMPTY] = emptyValue;
-	r = callRows(a);
-	CHECK(r.returned && intSlot(r.value, 0) == SC_OK, "%s", text);
-	total = r.allocations;
-	rowCount = (int)intSlot(r.value, 1);
-	a[R_BUDGET] = fake_int(0);	/* the first record alone */
-	one = callRows(a);
-	CHECK(one.returned && intSlot(one.value, 1) == 1, "%s: one record", text);
-	need = one.bytes - one.firstBytes;
-	a[R_BUDGET] = fake_int(-1);
-	for (k = 0; k <= total; k++) {
-		size_t i;
-
-		dest = fake_new(fakeArray, 16);
-		a[R_DEST] = dest;
-		fake_set_budget(k, PrimErrUnsupported);
-		r = callRows(a);
-		CHECK(k == total ? r.returned : !r.returned && r.code == PrimErrUnsupported, "%s, Unsupported at %d: code %lld", text, k,
-			(long long)r.code);
-		dest = fake_new(fakeArray, 16);
-		a[R_DEST] = dest;
-		fake_set_budget(k, PrimErrNoMemory);
-		r = callRows(a);
-		fake_set_budget(-1, PrimErrNoMemory);
-		if (k == 0) {
-			CHECK(!r.returned && r.code == PrimErrNoMemory && r.stores == 0, "%s: no answer Array", text);
-			continue;
-		}
-		CHECK(r.returned && r.code == 0, "%s, no memory at %d: code %lld", text, k, (long long)r.code);
-		if (!r.returned) {
-			continue;
-		}
-		if (k == total) {
-			CHECK(intSlot(r.value, 0) == SC_OK && intSlot(r.value, 1) == rowCount, "%s: all", text);
-		} else if (k < one.allocations) {
-			checkInts(r.value, "no room", 9, SC_NO_ROOM, 0, 1, 0, 0, 0, 0, 0, (int)need);
-			CHECK(need > 0, "%s: need", text);
-		} else {
-			sqInt made = intSlot(r.value, 1);
-
-			CHECK(intSlot(r.value, 0) == SC_MORE && made >= 1 && made < rowCount, "%s, no memory at %d", text, k);
-			CHECK(intSlot(r.value, 8) == 0 && intSlot(r.value, 4) == 0, "%s, no memory at %d: need and code", text, k);
-			/* the rest, from there, with memory */
-			a[R_FROM] = fake_int(intSlot(r.value, 2));
-			a[R_DESTFROM] = fake_int(made + 1);
-			r = callRows(a);
-			CHECK(r.returned && intSlot(r.value, 0) == SC_OK && intSlot(r.value, 1) == rowCount - made, "%s, the rest after %d", text, k);
-			a[R_FROM] = a[R_DESTFROM] = fake_int(1);
-		}
-		for (i = 0; i < 16; i++) {
-			int full = k >= one.allocations && i < (size_t)rowCount;
-
-			CHECK((fake_slot(dest, i) != fakeNil) == full, "%s, no memory at %d: dest %zu", text, k, i);
-		}
-	}
-}
 
 static void
 checkMemory(void)

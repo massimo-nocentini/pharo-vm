@@ -76,10 +76,9 @@ _Static_assert(sizeof(sqInt) == 8, "SimdCSVPlugin: the answers hold SmallInteger
 # define PLATFORM "native"
 #endif
 
-/* The dialect word */
+/* The dialect word: the separator, the quote, the flags */
 #define SEPARATOR_BITS 21
 #define QUOTE_BITS 8
-#define FLAG_BITS 16
 #define FLAG_SHIFT (SEPARATOR_BITS + QUOTE_BITS)
 
 /* The type codes of a column of primitiveRows */
@@ -214,12 +213,8 @@ dialectOf(sqInt word, const Units *source, sc_dialect *d)
 {
 	sqInt separator = word & (((sqInt)1 << SEPARATOR_BITS) - 1);
 	sqInt quote = (word >> SEPARATOR_BITS) & (((sqInt)1 << QUOTE_BITS) - 1);
-	sqInt flags;
+	sqInt flags = word >> FLAG_SHIFT;	/* with every bit above, the sign too */
 
-	if (word < 0 || (word >> (FLAG_SHIFT + FLAG_BITS)) != 0) {
-		return 0;
-	}
-	flags = word >> FLAG_SHIFT;
 	if ((flags & ~(sqInt)SC_F_ALL) != 0
 	 || isLineEnd(separator)
 	 || isLineEnd(quote)
@@ -812,7 +807,7 @@ primitiveRows(void)
 			}
 		}
 	}
-	if (!destIsArray || dest == source.oop) {
+	if (!destIsArray) {	/* (an Array is not the source, bytes or words) */
 		return fail(PrimErrBadArgument);
 	}
 	if (interpreterProxy->isOopImmutable(dest)) {

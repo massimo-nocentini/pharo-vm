@@ -195,7 +195,10 @@ else
         objects="$build/scEngine.o"
         for f in src/common/SimdCSVPlugin.c tests/fakevm.c tests/gluetest.c; do
             o=$build/$mode-$(basename "$f" .c).o
-            if ! $cc -std=gnu11 $asan $warn $vmdefs $modedefs $glueinc -I"$SRCDIR/tests" $vminc -c "$SRCDIR/$f" -o "$o"; then
+            # (the glue converts its Floats through gluetest.c)
+            hook=
+            test "$f" = src/common/SimdCSVPlugin.c && hook=-Dsc_to_float=test_to_float
+            if ! $cc -std=gnu11 $asan $warn $vmdefs $modedefs $hook $glueinc -I"$SRCDIR/tests" $vminc -c "$SRCDIR/$f" -o "$o"; then
                 failed "gluetest ($mode), $f"
             fi
             objects="$objects $o"

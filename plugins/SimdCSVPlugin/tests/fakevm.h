@@ -109,6 +109,8 @@ void *fake_body(sqInt oop);
 sqInt fake_slot(sqInt oop, size_t index0);
 void fake_set_slot(sqInt oop, size_t index0, sqInt value);
 void fake_set_immutable(sqInt oop, int immutable);
+/* Makes byteSizeOf answer bytes for oop, whose body keeps its own size */
+void fake_pretend_bytes(sqInt oop, size_t bytes);
 
 /* The allocator: allowed allocations (-1: no limit) before
    instantiateClassindexableSize fails with failCode */
