@@ -71,6 +71,14 @@ IceCredentialsProvider providerType = IceNonInteractiveCredentialsProvider ifTru
 	(canvas shapes isEmpty or: [ (CMark isAvailable and: [ canvas shapes first allChildren size < 200 ]) ])
 		ifTrue: [ problems add: 'the welcome page is empty' ] ].
 
+"no class of the session but ExternalObject runs its startUp:, which nulls every external address of the image: run
+ again after the world is drawn, it breaks what cairo made for it (an image saved with a Roassal canvas open)"
+(Smalltalk at: #ExternalObject) in: [ :externalObject |
+	externalObject withAllSubclassesDo: [ :each |
+		((each ~~ externalObject and: [ SessionManager default hasRegistered: each name ]) and: [
+			 (each class lookupSelector: #startUp:) methodClass == externalObject class ]) ifTrue: [
+				problems add: each name , ' inherits startUp: of ExternalObject' ] ] ].
+
 "the icons of the UI, as load.st left them: the Material Symbols in gray, monochrome (five keys that take the colour of
  the pack, and five status keys, which have fixed colours unless the pack is monochrome)"
 ((ThemeIcons classVarNamed: #Current) ifNil: [ nil ] ifNotNil: [ :pack | pack class name ]) = #MaterialSymbolsThemeIcons
