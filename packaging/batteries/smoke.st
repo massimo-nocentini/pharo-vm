@@ -3,7 +3,7 @@
 	[BATTERIES_SMOKE=native] pharo --headless Pharo15-batteries.image --no-default-preferences st --no-source packaging/batteries/smoke.st
 
 The image starts again (so the save of load.st left nothing running), has the classes of every project and the RTree
-of the fork, the icons of its UI are the Material Symbols in gray, its facades answer in Smalltalk, and the tests of a
+of the fork, the page of the first opening still to show (PharoBatteriesWelcome), the icons of its UI are the Material Symbols in gray, its facades answer in Smalltalk, and the tests of a
 few packages pass:
 
 	basic (any VM, the default): RTree-Tests, TimSort-Smalltalk-Tests, VM-Plugins-Primitives-Tests (the
@@ -44,7 +44,7 @@ classes := #( #RSCanvas #RSPangoText #RSPdfPage #RTNaryTreeCollection #RTPackedT
 	#RTLooseQuadtreeCollection #UtilsPlugin #KnuthRandom #SplitMix64 #SimdJSONReader #NeoJSONReader #SimdUTF #SimdCSV
 	#SimdCSVReader #TimSort #TimSortSmalltalk #PangoLayout #PopplerDocument #BaselineOfRoassalMN #CMark #CMarkParser
 	#CMarkRoassalRenderer #CTArray2D #CTKeyedValuedOrderedCollection #CTCategory #PartialContinuation #DelimccPrompt
-	#MaterialIcons #MaterialSymbolsThemeIcons ).
+	#MaterialIcons #MaterialSymbolsThemeIcons #PharoBatteriesWelcome ).
 classes do: [ :name |
 	(Smalltalk globals includesKey: name) ifFalse: [ problems add: 'no class ' , name ] ].
 (MCWorkingCopy allWorkingCopies select: [ :copy | copy packageName beginsWith: 'RTree' ]) do: [ :copy |
@@ -56,6 +56,20 @@ classes do: [ :name |
 "(load.st gives Iceberg back the settings of the stock image)"
 IceCredentialsProvider providerType = IceNonInteractiveCredentialsProvider ifTrue: [
 	problems add: 'Iceberg keeps the non-interactive credentials of load.st' ].
+
+"the page of the first opening: still to show (this session has no display), it names every project and draws"
+(Smalltalk at: #PharoBatteriesWelcome ifAbsent: [ nil ]) ifNotNil: [ :welcome |
+	| canvas |
+	welcome isPending ifFalse: [ problems add: 'the welcome page is not pending' ].
+	#( 'Roassal' 'RTree' 'RoassalLayouts' 'cmark-gfm.st' 'libpangocairo.st' 'libpoppler.st' 'material-icons.st' 'simdjson.st'
+		'simdcsv.st' 'simdutf.st' 'timsort.st' 'vm-plugins-primitives.st' 'delimcc.st' 'Containers-Essentials'
+		'Containers-Category' ) do: [ :name |
+			(welcome contents includesSubstring: 'github.com/massimo-nocentini/' , name , ')') ifFalse: [
+				problems add: 'the welcome page does not name ' , name ] ].
+	canvas := RSCanvas new extent: 760 @ 620; yourself.
+	[ welcome new drawOn: canvas ] on: Error do: [ :error | problems add: 'the welcome page: ' , error description ].
+	(canvas shapes isEmpty or: [ (CMark isAvailable and: [ canvas shapes first allChildren size < 200 ]) ])
+		ifTrue: [ problems add: 'the welcome page is empty' ] ].
 
 "the icons of the UI, as load.st left them: the Material Symbols in gray, monochrome (five keys that take the colour of
  the pack, and five status keys, which have fixed colours unless the pack is monochrome)"

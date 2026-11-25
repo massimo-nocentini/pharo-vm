@@ -1,5 +1,6 @@
 "load.st - load the batteries into a stock Pharo 15 image (docs/Batteries.md)
 
+	BATTERIES_HOME=packaging/batteries \
 	pharo --headless X.image --no-default-preferences st --save --quit packaging/batteries/load.st
 
 (build.sh runs it on a copy of the image, then smoke.st on the image saved.)  The projects, in this order:
@@ -34,7 +35,11 @@ and 32 pixels, their pack of Pharo's icons, the symbols of the common method pro
 symbols), and the expression after it makes the pack the icons of the UI, every key in gray,
 the status keys of tests, errors and warnings too (monochrome): the image is saved with it.
 
+After the projects, the package PharoBatteries-Welcome of welcome/ is installed, with the text welcome/welcome.md: the
+page that the image shows the first time that it is opened with a display (PharoBatteriesWelcome).
+
 Environment:
+	BATTERIES_HOME           the directory of this script, which the script cannot find by itself
 	BATTERIES_<KEY>          the repository of a project instead of the one above, any Metacello repository
 	                         (github://..., gitlocal://..., tonel:///<checkout>/src for a local checkout); the keys
 	                         are ROASSAL, VMPLUGINSPRIMITIVES, SIMDJSON, SIMDUTF, SIMDCSV, TIMSORT, LIBPANGOCAIRO, LIBPOPPLER,
@@ -54,7 +59,7 @@ Undeclared variable, and one line per repository gives what was loaded:
 	Batteries repository <name> <remote> <branch> <commit>     (the clones of Iceberg: github:// repositories)
 	Batteries loaded <n> projects on Pharo <version> ok"
 
-| environment out lineEnd line fail projects remoteType remoteTypeBefore providerBefore repositoriesBefore
+| environment out lineEnd line fail home projects remoteType remoteTypeBefore providerBefore repositoriesBefore
   undeclaredBefore newUndeclared warnings loaded |
 environment := OSEnvironment current.
 out := Stdio stdout.
@@ -63,6 +68,10 @@ line := [ :string | out nextPutAll: string; nextPutAll: lineEnd; flush ].
 fail := [ :message |
 	line value: 'Batteries FAILED: ' , message.
 	Smalltalk exitFailure ].
+
+home := ((environment at: 'BATTERIES_HOME' ifAbsent: [ '' ]) trimBoth
+	ifEmpty: [ fail value: 'BATTERIES_HOME, the directory of load.st, is not set' ]) asFileReference / 'welcome'.
+(home / 'welcome.md') exists ifFalse: [ fail value: 'no welcome.md in ' , home pathString ].
 
 "{ key. baseline. default repository. default groups }"
 projects := {
@@ -141,6 +150,14 @@ projects do: [ :project |
 		error signalerContext ifNotNil: [ :context |
 			(context stack first: (context stack size min: 25)) do: [ :each | line value: '    ' , each printString ] ].
 		Smalltalk exitFailure ].
+
+"The page of the first opening (a snapshot, as prepare-web-image.st installs OSWindow-Web)"
+[
+(TonelReader on: home fileName: 'PharoBatteries-Welcome') snapshot install.
+(Smalltalk at: #PharoBatteriesWelcome) install: (home / 'welcome.md') contents.
+line value: 'Batteries: installed PharoBatteries-Welcome' ]
+	on: Error
+	do: [ :error | fail value: 'PharoBatteries-Welcome: ' , error class name , ': ' , (error messageText ifNil: [ '' ]) asString ].
 
 "The fork's RTree: its classes, and no RTree package left modified (the stock methods kept)"
 #( #RTNaryTreeCollection #RTPackedTreeCollection #RTGridCollection #RTLooseQuadtreeCollection ) do: [ :name |

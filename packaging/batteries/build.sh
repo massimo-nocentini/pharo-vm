@@ -119,6 +119,8 @@ for key in ROASSAL VMPLUGINSPRIMITIVES SIMDJSON SIMDUTF SIMDCSV TIMSORT LIBPANGO
 done
 
 # 1. the load, saved by st --save --quit
+BATTERIES_HOME=$(native "$HERE")
+export BATTERIES_HOME
 (cd "$WORK/image" && $limit "$vm" --headless "$NAME.image" --no-default-preferences \
     st --save --quit "$(native "$HERE/load.st")") > "$WORK/load.log" 2>&1
 status=$?
