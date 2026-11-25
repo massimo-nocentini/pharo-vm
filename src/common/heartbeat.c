@@ -38,6 +38,7 @@
 #if defined(__EMSCRIPTEN__)
 # include <emscripten.h>
 static void heartbeat();
+int isPendingSemaphores();
 #endif
 
 #define SecondsFrom1901To1970      2177452800LL
@@ -335,9 +336,12 @@ ioRelinquishProcessorForMicroseconds(sqInt microSeconds)
 #if defined(__EMSCRIPTEN__)
 	/* Never block the host: deliver the i/o that is ready now and, unless that
 	 * woke something up, have the next event check return to the host until
-	 * the wakeup time.
+	 * the wakeup time.  Nor when an external semaphore has a signal that is
+	 * not delivered yet, from a host event between the slices: the sleep's
+	 * longjmp comes before doSignalExternalSemaphores() in that event check,
+	 * so the signal would wait for the end of the sleep.
 	 */
-	if (!aioPoll(0))
+	if (!aioPoll(0) && !isPendingSemaphores())
 		emscriptenRequestSleep(realTimeToWait);
 	heartbeat();
 #else
