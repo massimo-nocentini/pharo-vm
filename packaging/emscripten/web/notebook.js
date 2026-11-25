@@ -7,8 +7,8 @@
 // No dependencies but the scripts that index.html loads before it.
 //
 // - page.js provides window.PharoPage (storage, the compiled .wasm, the
-//   worker's URL, the git proxy, the image of the Console, the theme, the
-//   tabs and the pharo:* events);
+//   worker's URL, the git proxy, whether the network is on, the image of
+//   the Console, the theme, the tabs and the pharo:* events);
 //   notebook-lib.js (NotebookLib) the Markdown renderer, the markup sanitizer
 //   and the .json format; notebook-st.js (NotebookSt) what is Smalltalk: the
 //   bracket balance, the highlighter, the .st format, quote straightening
@@ -19,8 +19,9 @@
 //   of the site it runs fresh, or, with neither, the slot saved last, else
 //   the site's default), as each start of the kernel asks it again, and
 //   never saves; when the Console's image changes (a save, a delete,
-//   another image chosen), a notice offers Restart.  The git proxy is the
-//   Console's (null for the site's default), also when Settings change it.
+//   another image chosen), a notice offers Restart.  The git proxy (null for
+//   the site's default) and whether the network is on are the Console's,
+//   also when Settings change them.
 // - Kernel output is queued per cell and rendered once per animation frame,
 //   or soon while the page is hidden (no frames come then); while a cell
 //   runs, its outputs keep their first and last 512 KB of streams and 500
@@ -159,7 +160,8 @@
       createWorker: () => new Worker(P.workerUrl),
       getModule: () => P.wasmModule(),  // the Console's: compiled once
       // (asked at each start: the Console may run another image by then)
-      init: () => Object.assign({ manifestUrl: 'manifest.json' + P.Q, build: P.BUILD, persist: true, gitProxy: P.gitProxy() },
+      init: () => Object.assign({ manifestUrl: 'manifest.json' + P.Q, build: P.BUILD, persist: true, gitProxy: P.gitProxy(),
+                                  network: P.network() },
                                 P.bootChoice ? P.bootChoice() : {}),
       files: () => [...uploads].map(([n, d]) => ({ path: HOME + n, data: d })),
       watchdogMs: 3000,
@@ -1371,12 +1373,9 @@
 
   const menu = $('nb-menu'), moreBtn = $('nb-more');
   const menuItem = act => menu.querySelector('[data-act="' + act + '"]');
-  // the items shown: Settings only with git's HTTP transport (the
-  // Console's #settings too), as the theme is named on its item
+  // the items shown; the theme is named on its item
   const items = () => [...menu.querySelectorAll('[role="menuitem"]')].filter(b => !b.hidden);
   function updateMenu() {
-    const s = menuItem('settings');
-    if (s) s.hidden = !P.gitHttp();
     const t = menuItem('theme');
     if (t) t.textContent = 'Theme: ' + P.themeLabel();
   }
@@ -1652,9 +1651,13 @@
     upload([...e.dataTransfer.files], true);
   });
 
-  // the git proxy goes to a running kernel at once
+  // the git proxy and the network go to a running kernel at once
   addEventListener('pharo:settings', e => {
-    if (kernel) kernel.setGitProxy(e.detail && e.detail.gitProxy !== undefined ? e.detail.gitProxy : P.gitProxy());
+    const d = e.detail || {};
+    if (kernel) {
+      kernel.setGitProxy(d.gitProxy !== undefined ? d.gitProxy : P.gitProxy());
+      kernel.setNetwork(d.network !== undefined ? d.network : P.network());
+    }
     updateMenu();
   });
   addEventListener('pharo:theme', updateMenu);

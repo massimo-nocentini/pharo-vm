@@ -10,8 +10,9 @@
   one of the images saved in this browser (vm-storage.js), or one that
   Open gives (open-image.js), which the worker prepares for the world when
   it lacks OSWindow-Web.  Images (images.js) lists them all, Save as keeps
-  a copy under another name, and Settings (git-proxy.js) holds the CORS
-  proxy of git's requests, as the Console's does.  On a first visit to a
+  a copy under another name, and Settings (network-setting.js,
+  git-proxy.js) says whether Smalltalk code may use the network and holds
+  the CORS proxy of git's requests, as the Console's does.  On a first visit to a
   site of several images, the Images dialog opens as the launcher, and no
   VM starts until an image is chosen.  The URL says which image runs, as
   ?slot= or ?fresh= (nothing else of it is read).  The build (stage.mjs)
@@ -353,8 +354,8 @@ button { font: inherit; color: inherit; }
 .drop-card p { margin: 0; }
 .drop-card strong { display: block; color: var(--text); font-size: 15px; font-weight: 600; }
 
-/* the Settings dialog (git-proxy.js): the proxy of git's HTTP requests, as
-   in the Console */
+/* the Settings dialog (git-proxy.js): the network and the proxy of git's HTTP
+   requests, as in the Console */
 .dialog {
   width: min(480px, calc(100vw - 32px));
   max-height: calc(100dvh - 32px);
@@ -368,6 +369,7 @@ button { font: inherit; color: inherit; }
 }
 .dialog::backdrop { background: var(--scrim); }
 .dialog form { display: flex; flex-direction: column; gap: 6px; padding: 18px 18px 14px; }
+.dialog .group { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
 .dialog h2 { margin: 0 0 8px; font-size: 16px; font-weight: 650; }
 .dialog fieldset { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; border: 0; min-width: 0; }
 .dialog legend { margin-bottom: 4px; padding: 0; font-size: 13.5px; font-weight: 600; }
@@ -440,7 +442,7 @@ button { font: inherit; color: inherit; }
       <button class="btn ghost" id="images" type="button" aria-label="Images" aria-haspopup="dialog" title="The images to start: those of this site, fresh, and those saved in this browser">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="label">Images</span>
       </button>
-      <button class="btn ghost" id="settings" type="button" aria-label="Settings" aria-haspopup="dialog" title="Settings: the proxy of git's HTTP requests" hidden>
+      <button class="btn ghost" id="settings" type="button" aria-label="Settings" aria-haspopup="dialog" title="Settings: the network, and the proxy of git's HTTP requests">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span class="label">Settings</span>
       </button>
     </div>
@@ -487,6 +489,12 @@ button { font: inherit; color: inherit; }
   <form id="settings-form" method="dialog" novalidate>
     <h2 id="settings-title">Settings</h2>
     <fieldset>
+      <legend>Network</legend>
+      <label class="choice"><input type="checkbox" id="network-enabled" aria-describedby="network-about" checked><span>Smalltalk code may use the network</span></label>
+      <p class="about" id="network-about">Fetch, Iceberg's git and the sockets of the image. While on, the code of an image can read any site that lets web pages in (CORS), and send data anywhere. A change holds at once: off, the requests that are open fail. This browser keeps your choice; a link cannot set it.</p>
+    </fieldset>
+    <div class="group" id="git-settings" hidden>
+    <fieldset>
       <legend>Git HTTP proxy</legend>
       <label class="choice"><input type="radio" name="git-proxy-mode" id="git-proxy-mode-default" value="default"><span>Site default<span id="git-proxy-default-named">: <span id="git-proxy-default-url"></span></span><span id="git-proxy-default-none" hidden> (none)</span></span></label>
       <label class="choice"><input type="radio" name="git-proxy-mode" id="git-proxy-mode-none" value="none"><span>None: requests go straight to the git host (works only for hosts that let this page in)</span></label>
@@ -495,6 +503,7 @@ button { font: inherit; color: inherit; }
     </fieldset>
     <p class="state" id="git-proxy-state" aria-live="polite"></p>
     <p class="about" id="git-proxy-about">Iceberg's https:// clones, fetches, pulls and pushes, and Metacello's github:// loads, go to this CORS proxy: each request goes to the proxy's URL followed by the host and the path of the repository, such as github.com/pharo-project/pharo.git. The proxy sees the code and any credentials that pass through it, so choose only one that you run or trust: the user name and token that a push asks for go only through My proxy, or straight to the host with None, never through the site's default. With None, the requests go to the repository itself, which works only for a server that lets this page in (CORS). <span id="git-proxy-about-default"></span>This browser keeps your choice; a link cannot set it.</p>
+    </div>
     <div class="actions">
       <button class="btn" id="settings-cancel" type="button">Cancel</button>
       <button class="btn primary" id="settings-save" type="submit">Save</button>
@@ -508,6 +517,7 @@ button { font: inherit; color: inherit; }
 <script src="vm-storage.js?v=@BUILD@"></script>
 <script src="catalog.js?v=@BUILD@"></script>
 <script src="git-proxy.js?v=@BUILD@"></script>
+<script src="network-setting.js?v=@BUILD@"></script>
 <script src="images.js?v=@BUILD@"></script>
 <script src="world.js?v=@BUILD@"></script>
 </body>

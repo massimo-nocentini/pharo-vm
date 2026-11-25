@@ -9,7 +9,7 @@
 //                     onerror) of vm-worker.js
 //     getModule,      () => Promise<WebAssembly.Module> (optional)
 //     init,           the fields of the worker's init (manifestUrl, build,
-//                     sliceMs, persist, gitProxy, slot, fresh), or () => them,
+//                     sliceMs, persist, gitProxy, network, slot, fresh), or () => them,
 //                     asked again at every spawn
 //     files,          () => [{path, data}] written into the kernel's MEMFS
 //                     after every spawn, before the first cell; data is a
@@ -32,7 +32,8 @@
 // files at paths in, or of the error; it never rejects, and Stop interrupts
 // it as it does a cell), writeFile(path, data) (a promise of null once
 // written, or of why not; it never rejects), setGitProxy(p) (a URL, '' for
-// none, null for the site's default) and dispose(); k.state, k.info, k.count
+// none, null for the site's default), setNetwork(on) (whether the image may
+// use the network) and dispose(); k.state, k.info, k.count
 // (the last cell's), k.current (the cellId of the cell in flight),
 // k.queueLength and k.filingIn (a file-in is in flight).  The module also exports FrameReader,
 // bgraToPng and pngOf (below), with crc32 and base64.
@@ -94,7 +95,7 @@
 // sense).
 //
 // onGit(m) (optional): the worker's git {event, method, host, proxy, status,
-// error}, its first request of git and those that failed, which the page
+// error, ...}, its first request of git and those that failed, which the page
 // tells as it does for its own VM (git-proxy.js describe).
 //
 // Stop is the worker's "interrupt" (the kernel's watcher stops the cell,
@@ -401,6 +402,7 @@
     // stopBackground()'s, fileIn()'s and writeFile()'s answers to come
     let stopWaiters = [], fileInWaiters = new Map(), fileInRid = 0x20000000, fsWaiters = new Map(), fsId = 0;
     let gitProxy;                       // setGitProxy()'s, else init's
+    let network;                        // setNetwork()'s, else init's
     let disposed = false;
 
     function emitState() {
@@ -496,6 +498,7 @@
           worker.onmessageerror = () => { if (g === gen) log('protocol', 'a message of the worker could not be decoded'); };
           const init = Object.assign({}, get(o.init, {}));
           if (gitProxy !== undefined) init.gitProxy = gitProxy;
+          if (network !== undefined) init.network = network;
           worker.postMessage(Object.assign(init, { type: 'init', mode: 'notebook', wasmModule }));
           // (the worker keeps them until it is ready, and the first run
           // comes after hello)
@@ -915,6 +918,10 @@
       setGitProxy(p) {
         gitProxy = p === null ? null : typeof p === 'string' ? p : '';
         post({ type: 'gitProxy', gitProxy });
+      },
+      setNetwork(on) {
+        network = on !== false;
+        post({ type: 'network', network });
       },
       dispose() {
         if (disposed) return;

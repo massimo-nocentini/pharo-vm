@@ -1247,7 +1247,7 @@ await run(async t => {
     await page.click('#nb-notice-close');
   });
 
-  await check('the theme of More re-themes the notebook without a restart; Settings only where git has HTTP', async () => {
+  await check('the theme of More re-themes the notebook without a restart; Settings is there', async () => {
     await nb.eval('nbTheme := 5');
     const inits = await notebookInits();
     const bg = () => page.$eval('.nb-editor', e => getComputedStyle(e).backgroundColor);
@@ -1262,7 +1262,7 @@ await run(async t => {
     const i = await nb.eval('nbTheme');
     assert((await nb.values(i)).join() === '5' && await notebookInits() === inits, 'the kernel was restarted: ' + await nb.out(i));
     const settings = await page.$eval('#nb-menu [data-act="settings"]', e => !e.hidden);
-    if (!manifest.gitHttp) assert(!settings, 'Settings shown by a build without git over HTTP');
+    assert(settings, 'Settings hidden');
   });
 
   await check('Settings of a build with git over HTTP give the proxy to the kernel, without a restart', async () => {

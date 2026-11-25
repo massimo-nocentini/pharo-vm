@@ -7,18 +7,19 @@
 //
 //   page -> worker   init {wasmModule, manifestUrl, build, mode, sliceMs,
 //                          persist, upload: {name, image, changes, sources},
-//                          slot, fresh, name, prepare, display, gitProxy},
+//                          slot, fresh, name, prepare, display, gitProxy,
+//                          network},
 //                    input {text}, eof, interrupt, save, saveAs {name},
 //                    ack {chars}, fs {id, op, path, ...}, download {id},
 //                    resetStorage {id, slot, all}, flush, display {...},
-//                    gitProxy {gitProxy}
+//                    gitProxy {gitProxy}, network {network}
 //   worker -> page   progress {phase, loaded, total},
 //                    ready {image, source, persisted, savedAt, world,
 //                           prepared, webPackage, preparing, sources,
 //                           storageError, fonts, git, gitHttp, mode,
 //                           slot, imageId, pharo, slotMissing, freshMissing,
 //                           sourcesMissing, gitProxy, gitProxyDefault,
-//                           gitCredentials},
+//                           gitCredentials, network},
 //                    output {fd, text}, output {fd: 3, bytes},
 //                    state {state, waiting}, tick,
 //                    interrupted {registered}, edited {edited},
@@ -31,7 +32,8 @@
 //                    fs-result {id, ...}, file {id, name, data, count},
 //                    error {id, message}, display {...},
 //                    git {event, method, host, proxy, status, error,
-//                         credentials, redirectedTo, proxyRefused}
+//                         credentials, redirectedTo, proxyRefused,
+//                         networkOff}
 //
 // Messages that arrive before "ready" are queued and replayed after it;
 // "ready" always precedes the first "state".  When the VM cannot start, or
@@ -218,6 +220,16 @@
 // message {kind: 'attach'} (which asks for nothing else), and then the
 // "display" messages of the page, with PharoDisplay.onMessage.
 //
+// Network.  Whether the code of the image may use the network, as the user
+// chose it in Settings (network-setting.js keeps it): init.network, off only
+// when it is false, and later "network", which holds at once, also while the
+// VM runs.  Off, fetch fails (Module.pharoHost: the requests that are open
+// too), git's transport makes no request (Module.hostNetwork), and the
+// WebSocket that Emscripten's sockets use is one that cannot be made
+// (guardWebSocket); those that are open are closed.  The worker's own
+// fetches, of the files of the site, are not concerned.  ready.network says
+// what holds when the VM starts.
+//
 // Git.  init.gitProxy, and later "gitProxy", is the CORS proxy of git's
 // HTTP requests, as the user chose it in Settings (git-proxy.js keeps it):
 // an http: or https: URL prefix, '' for none, and null (or undefined) for
@@ -238,7 +250,8 @@
 // site's default, chosen there) or none (TLS goes to the host itself).
 // ready.gitCredentials says which.
 // The transport calls Module.onGitHttp ({method, host, proxy, status,
-// error, authorization, retried, credentials, redirectedTo, proxyRefused})
+// error, authorization, retried, credentials, redirectedTo, proxyRefused,
+// networkOff})
 // after every request, and the worker posts "git {event: 'request'}" at the
 // first one of its VM, "git {event: 'credentials'}" at the first one that
 // carried credentials through a proxy, and "git {event: 'failed'}" when one
@@ -250,7 +263,8 @@
 // with credentials to another host, redirectedTo, through the proxy, which
 // sent them there (credentials 'redirected', whatever the status: the
 // transport stopped the request).  None of these says what the credentials
-// are.
+// are.  A request that the transport refused because the network is off
+// (networkOff) is no first request: none was made.
 // ready.git says whether the VM has libgit2 (manifest.git, WASM_LIBGIT2),
 // ready.gitHttp whether it has that transport (manifest.gitHttp,
 // WASM_LIBGIT2_HTTP), which is what the proxy is for.
@@ -336,6 +350,8 @@ let sourcesName = null, pharo = null, imageId = null;
 // git's requests: whether one was made, whether one carried credentials
 // through a proxy, and when one last failed
 let gitRequested = false, gitCredentialed = false, gitFailedAt = -Infinity;
+// whether the image may use the network (see Network)
+let network = true;
 // the meta of the slot that this VM booted from or saved, while it is the
 // stored one
 let owned = null, syncTimer = 0, syncedKey = '', syncedAt = 0, settleTimer = 0;
@@ -1116,6 +1132,8 @@ async function boot(m) {
   if (gitProxy) config.gitHttpProxy = gitProxy;
   config.gitHttpCredentials = gitCredentialsOf(m.gitProxy);
   config.onGitHttp = gitHttp;
+  config.hostNetwork = network;
+  guardWebSocket();
   const image = DIR + '/' + manifest.image;
   const env = mode === 'console' ? { PHARO_WEB_WORLD_FILE: WORLD_FILE } : {};
   if (loaded.home) env.HOME = loaded.home;
@@ -1169,24 +1187,50 @@ async function boot(m) {
                   webPackage, preparing: !!preparing, sources, storageError, fonts: manifest.fonts || null,
                   git: !!manifest.git, gitHttp: !!(manifest.git && manifest.gitHttp),
                   slot: loaded.slot, imageId, pharo, gitProxy, gitProxyDefault: defaultProxy(),
-                  gitCredentials: config.gitHttpCredentials };
+                  gitCredentials: config.gitHttpCredentials, network };
   for (const k of ['slotMissing', 'freshMissing', 'sourcesMissing']) if (loaded[k]) ready[k] = loaded[k];
   if (mode === 'notebook') ready.mode = mode;
   post(ready);
   drv.begin();
 }
 
+// ---- the network of the image
+
+// In place of WebSocket, before Emscripten's sockets make any: one that
+// cannot be made while the network is off (they fail with EHOSTUNREACH then).
+// Those open are kept, for setNetwork
+const sockets = new Set();
+function guardWebSocket() {
+  if (typeof self.WebSocket !== 'function') return;
+  self.WebSocket = class extends self.WebSocket {
+    constructor(...args) {
+      if (!network) throw new DOMException('network access is off in Settings', 'SecurityError');
+      super(...args);
+      sockets.add(this);
+      this.addEventListener('close', () => sockets.delete(this));
+    }
+  };
+}
+
+function setNetwork(on) {
+  network = on;
+  if (!on) for (const s of [...sockets]) { try { s.close(); } catch (e) { /* closing */ } }
+  const M = drv && drv.module;
+  if (!M) return;
+  if (M.pharoHost) M.pharoHost.setNetwork(on); else M.hostNetwork = on;
+}
+
 // Module.onGitHttp (gitSupport.c): git's smart-HTTP transport made a
 // request, {method, host, proxy, status, error, authorization, retried,
-// credentials, proxyRefused}.  Called inside a slice: it only posts.
+// credentials, proxyRefused, networkOff}.  Called inside a slice: it only posts.
 function gitHttp(r) {
   const status = Number(r && r.status);
   const said = { type: 'git', method: String((r && r.method) || ''), host: String((r && r.host) || ''),
                  proxy: String((r && r.proxy) || ''), status, error: String((r && r.error) || ''),
                  credentials: r && (r.credentials === 'refused' || r.credentials === 'redirected') ? r.credentials : '',
                  redirectedTo: r && r.credentials === 'redirected' ? String(r.redirectedTo || '') : '',
-                 proxyRefused: !!(r && r.proxyRefused) };
-  if (!gitRequested) {
+                 proxyRefused: !!(r && r.proxyRefused), networkOff: !!(r && r.networkOff) };
+  if (!gitRequested && !said.networkOff) {
     gitRequested = true;
     post(Object.assign({ event: 'request' }, said));
   }
@@ -1338,6 +1382,9 @@ function handle(m) {
       drv.module.gitHttpCredentials = gitCredentialsOf(m.gitProxy);
     }
     break;
+  case 'network':
+    setNetwork(m.network !== false);
+    break;
   }
 }
 
@@ -1355,6 +1402,7 @@ onmessage = ({ data: m }) => {
   }
   if (mode) return;                     // one VM per worker
   mode = m.mode === 'world' || m.mode === 'notebook' ? m.mode : 'console';
+  network = m.network !== false;
   boot(m).catch(e => {
     flushOut();
     post({ type: 'crash', message: 'the VM could not be loaded: ' + errorText(e), stack: String((e && e.stack) || '') });

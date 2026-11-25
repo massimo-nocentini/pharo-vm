@@ -63,7 +63,7 @@
 //                                      (storage events)
 //   PharoGitProxy.describe(m)          what a page tells of the worker's message
 //                                      git {event, host, proxy, status, credentials,
-//                                      redirectedTo, proxyRefused}, or '': the first request
+//                                      redirectedTo, proxyRefused, networkOff}, or '': the first request
 //                                      through the site's default, once per proxy
 //                                      (then noted), the first one that carried
 //                                      credentials through a proxy, once per proxy
@@ -72,8 +72,9 @@
 //                                      for credentials, which would go through the
 //                                      site's public proxy; with 'redirected', that a
 //                                      host redirected a request with credentials to
-//                                      another host, which the proxy sent them to
-//   PharoGitProxy.wireDialog({defaultProxy, onSaved, refocus})
+//                                      another host, which the proxy sent them to; or that
+//                                      it was not made, the network being off
+//   PharoGitProxy.wireDialog({defaultProxy, onSaved, refocus, onOpen, onSave})
 //                                      -> {open()}: the Settings dialog of the
 //                                      document, which has the ids below
 //
@@ -90,7 +91,9 @@
 // (#git-proxy-about-default names the site's default), and
 // #settings-cancel and #settings-save.  A save that
 // changed the choice keeps it (write) and calls onSaved(initValue(), read(),
-// kept); the page then gives it to its VMs.  A click on the backdrop, Cancel
+// kept); the page then gives it to its VMs.  The dialog has more than the
+// proxy (network-setting.js): onOpen() is called when it opens, and onSave()
+// when Save closes it, before the proxy is looked at.  A click on the backdrop, Cancel
 // and Escape close the dialog without a change, and refocus() is called
 // once it closed.
 
@@ -231,6 +234,7 @@
         ', which can read them.';
     }
     if (m.event !== 'failed') return '';
+    if (m.networkOff) return "Git's request to " + m.host + ' was not made: network access is off.';
     if (m.credentials === 'redirected')
       return m.host + ' redirected a request with your user name and token to ' + (m.redirectedTo || 'another host') +
         ', and the git proxy ' + proxy + ' sent them there: the request was stopped. Revoke that token if ' +
@@ -305,6 +309,7 @@
       input.value = r.mode === 'custom' ? r.value : '';
       showDefault();
       showState();
+      if (o.onOpen) o.onOpen();
       dialog.showModal();
       (radios[r.mode] || radios.default).focus();
     }
@@ -313,6 +318,7 @@
       const m = mode(), p = showState();
       if (p && p.error) { input.focus(); return; }
       dialog.close();
+      if (o.onSave) o.onSave();
       const before = read();
       const after = m === 'custom' && p && p.value ? { mode: 'custom', value: p.value }
         : m === 'custom' ? { mode: 'none', value: '' } : { mode: m, value: '' };

@@ -15,9 +15,10 @@
   every script, worker and .wasm URL.  No external resources, which the
   Content-Security-Policy below holds to: it must be served over plain HTTP
   (make wasm-serve), not from file://.  Settings
-  (shown when the VM has libgit2's smart-HTTP transport) holds the CORS
-  proxy of git's requests: the site's default, none or the user's, which
-  git-proxy.js keeps in this browser; world.html has the same dialog. -->
+  says whether Smalltalk code may use the network (network-setting.js) and,
+  when the VM has libgit2's smart-HTTP transport, holds the CORS proxy of
+  git's requests: the site's default, none or the user's (git-proxy.js).
+  This browser keeps both; world.html has the same dialog. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -448,8 +449,8 @@ details > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; margin
 .drop-card p { margin: 0; }
 .drop-card strong { display: block; color: var(--text); font-size: 15px; font-weight: 600; }
 
-/* the dialogs: Settings (the proxy of git's HTTP requests, git-proxy.js),
-   and the shortcuts of the notebook (images.js styles its own) */
+/* the dialogs: Settings (the network, network-setting.js, and the proxy of
+   git's HTTP requests, git-proxy.js), and the shortcuts of the notebook (images.js styles its own) */
 .dialog {
   width: min(480px, calc(100vw - 32px));
   max-height: calc(100dvh - 32px);
@@ -463,6 +464,7 @@ details > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; margin
 }
 .dialog::backdrop { background: var(--scrim); }
 .dialog form { display: flex; flex-direction: column; gap: 6px; padding: 18px 18px 14px; }
+.dialog .group { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
 .dialog h2 { margin: 0 0 8px; font-size: 16px; font-weight: 650; }
 .dialog label { font-size: 13.5px; font-weight: 600; }
 .dialog fieldset { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; border: 0; min-width: 0; }
@@ -997,7 +999,7 @@ details > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; margin
       <button class="btn ghost" id="theme" type="button" aria-label="Theme: System" title="Theme: follow the system">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg><span class="label" id="theme-label">System</span>
       </button>
-      <button class="btn ghost" id="settings" type="button" aria-label="Settings" aria-haspopup="dialog" title="Settings: the proxy of git's HTTP requests" hidden>
+      <button class="btn ghost" id="settings" type="button" aria-label="Settings" aria-haspopup="dialog" title="Settings: the network, and the proxy of git's HTTP requests">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span class="label">Settings</span>
       </button>
     </div>
@@ -1036,7 +1038,7 @@ details > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; margin
         <button type="button" role="menuitem" tabindex="-1" data-act="stop-background">Stop background processes</button>
         <div role="separator"></div>
         <button type="button" role="menuitem" tabindex="-1" data-act="theme">Theme: System</button>
-        <button type="button" role="menuitem" tabindex="-1" data-act="settings" hidden>Settings</button>
+        <button type="button" role="menuitem" tabindex="-1" data-act="settings">Settings</button>
         <button type="button" role="menuitem" tabindex="-1" data-act="keys">Keyboard shortcuts <kbd>?</kbd></button>
       </div>
       <input type="file" id="nb-file" accept=".st,.json,.txt" hidden>
@@ -1118,6 +1120,12 @@ details > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; margin
   <form id="settings-form" method="dialog" novalidate>
     <h2 id="settings-title">Settings</h2>
     <fieldset>
+      <legend>Network</legend>
+      <label class="choice"><input type="checkbox" id="network-enabled" aria-describedby="network-about" checked><span>Smalltalk code may use the network</span></label>
+      <p class="about" id="network-about">Fetch, Iceberg's git and the sockets of the image. While on, the code of an image can read any site that lets web pages in (CORS), and send data anywhere. A change holds at once: off, the requests that are open fail. This browser keeps your choice; a link cannot set it.</p>
+    </fieldset>
+    <div class="group" id="git-settings" hidden>
+    <fieldset>
       <legend>Git HTTP proxy</legend>
       <label class="choice"><input type="radio" name="git-proxy-mode" id="git-proxy-mode-default" value="default"><span>Site default<span id="git-proxy-default-named">: <span id="git-proxy-default-url"></span></span><span id="git-proxy-default-none" hidden> (none)</span></span></label>
       <label class="choice"><input type="radio" name="git-proxy-mode" id="git-proxy-mode-none" value="none"><span>None: requests go straight to the git host (works only for hosts that let this page in)</span></label>
@@ -1126,6 +1134,7 @@ details > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; margin
     </fieldset>
     <p class="state" id="git-proxy-state" aria-live="polite"></p>
     <p class="about" id="git-proxy-about">Iceberg's https:// clones, fetches, pulls and pushes, and Metacello's github:// loads, go to this CORS proxy: each request goes to the proxy's URL followed by the host and the path of the repository, such as github.com/pharo-project/pharo.git. The proxy sees the code and any credentials that pass through it, so choose only one that you run or trust: the user name and token that a push asks for go only through My proxy, or straight to the host with None, never through the site's default. With None, the requests go to the repository itself, which works only for a server that lets this page in (CORS). <span id="git-proxy-about-default"></span>This browser keeps your choice; a link cannot set it.</p>
+    </div>
     <div class="actions">
       <button class="btn" id="settings-cancel" type="button">Cancel</button>
       <button class="btn primary" id="settings-save" type="submit">Save</button>
@@ -1183,6 +1192,7 @@ details > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; margin
 <script src="vm-storage.js?v=@BUILD@"></script>
 <script src="catalog.js?v=@BUILD@"></script>
 <script src="git-proxy.js?v=@BUILD@"></script>
+<script src="network-setting.js?v=@BUILD@"></script>
 <script src="images.js?v=@BUILD@"></script>
 <script src="page.js?v=@BUILD@"></script>
 <script src="notebook-lib.js?v=@BUILD@"></script>

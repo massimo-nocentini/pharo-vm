@@ -241,8 +241,8 @@ await run(async t => {
     assert(/default-src 'self'/.test(meta) && /script-src 'self' 'wasm-unsafe-eval'/.test(meta) && /object-src 'none'/.test(meta) &&
            /form-action 'none'/.test(meta), 'the policy: ' + meta);
     const vm = await page.$$eval('script[src]', l => l.map(e => e.getAttribute('src').replace(/\?.*/, '')));
-    assert(JSON.stringify(vm) === JSON.stringify(['open-image.js', 'vm-storage.js', 'catalog.js', 'git-proxy.js', 'images.js', 'page.js',
-                                                  'notebook-lib.js', 'notebook-st.js', 'nb-kernel.js', 'notebook.js']),
+    assert(JSON.stringify(vm) === JSON.stringify(['open-image.js', 'vm-storage.js', 'catalog.js', 'git-proxy.js', 'network-setting.js', 'images.js',
+                                                  'page.js', 'notebook-lib.js', 'notebook-st.js', 'nb-kernel.js', 'notebook.js']),
            'the scripts: ' + vm);
   });
 

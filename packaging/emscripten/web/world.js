@@ -7,7 +7,7 @@
 // size of the canvas and its input, as the event records of the image's
 // OSWebDriver (packaging/emscripten/st/OSWindow-Web), and shows what the
 // display asks for.  No dependencies but keymap.js, open-image.js,
-// vm-storage.js, catalog.js, git-proxy.js and images.js.
+// vm-storage.js, catalog.js, git-proxy.js, network-setting.js and images.js.
 //
 // - pharo-web.wasm is compiled once here and handed to every worker, so a
 //   restart only instantiates it.  A canvas can be transferred only once:
@@ -87,6 +87,9 @@
 //   points to the Console, on that image, which can run it, or delete it.
 // - The status pill is no live region: the one next to it says how the VM
 //   goes (loading, starting, running, ended), not how far the loading got.
+// - Settings says whether Smalltalk code may use the network
+//   (network-setting.js), as in the Console, which shares the choice: it is
+//   given in init.network, and to the running VM when it changes.
 // - The CORS proxy of git's HTTP requests (git-proxy.js): the site's
 //   default (manifest.gitProxyDefault), or the one, or none, that the user
 //   chose in Settings, here or in the Console, which this browser keeps.
@@ -142,10 +145,13 @@
     if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
   } catch (e) { /* no storage: follow the system */ }
 
-  const GitProxy = window.PharoGitProxy, Catalog = window.PharoCatalog, Storage = window.PharoStorage;
+  const GitProxy = window.PharoGitProxy, Network = window.PharoNetwork, Catalog = window.PharoCatalog, Storage = window.PharoStorage;
   // The proxy of git's HTTP requests, as another page changes it (Settings
   // of the Console, or of another world)
   GitProxy.onChange(value => { if (worker) worker.postMessage({ type: 'gitProxy', gitProxy: value }); });
+  // and whether Smalltalk code may use the network
+  const networkChanged = on => { if (worker) worker.postMessage({ type: 'network', network: on }); };
+  Network.onChange(networkChanged);
 
   // ---- status, overlay and notice
 
@@ -411,6 +417,7 @@
       prepare: true,
       display: { canvas: offscreen, width, height },
       gitProxy: GitProxy.initValue(),
+      network: Network.read(),
     }, [offscreen]);
     // queued by the worker until it is ready, so before the image boots,
     // which then opens the world at the size of the canvas
@@ -1232,7 +1239,7 @@
     images.open(text || null, true);
   }
 
-  // ---- the git proxy: Settings, and what the worker says of git's requests
+  // ---- Settings (the network, the git proxy), and what the worker says of git's requests
 
   const gitSettings = GitProxy.wireDialog({
     defaultProxy: () => (manifest && manifest.gitProxyDefault) || '',
@@ -1246,6 +1253,18 @@
                  (kept ? '' : ' This browser cannot keep the setting: it holds for this page only.'), null, null, 8000);
     },
     refocus: () => refocus(),
+    onOpen: () => {
+      $('network-enabled').checked = Network.read();
+      $('git-settings').hidden = !(manifest && manifest.git && manifest.gitHttp);
+    },
+    onSave: () => {
+      const on = $('network-enabled').checked;
+      if (on === Network.read()) return;
+      const kept = Network.write(on);
+      networkChanged(on);
+      showNotice('Network access is now ' + (on ? 'on' : 'off') + ' for Smalltalk code.' +
+                 (kept ? '' : ' This browser cannot keep the setting: it holds for this page only.'), null, null, 8000);
+    },
   });
   const SETTINGS = 'Settings';
   function onGit(m) {
@@ -1332,7 +1351,6 @@
       store ? store.list().catch(() => { storageUnavailable = true; return []; }) : Promise.resolve([]),
     ]);
     manifest = m;
-    $('settings').hidden = !(manifest && manifest.git && manifest.gitHttp);
     images = PharoImages.create({
       store: storageUnavailable ? null : store,
       manifest: () => manifest,

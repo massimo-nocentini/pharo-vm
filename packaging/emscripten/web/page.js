@@ -4,7 +4,7 @@
 // for the message protocol), renders its output, and handles input,
 // history, Stop, Save, Save as, Download, Open, Images, Delete and the
 // theme.  No dependencies but open-image.js, vm-storage.js, catalog.js,
-// git-proxy.js and images.js.
+// git-proxy.js, network-setting.js and images.js.
 //
 // - pharo-web.wasm is compiled once here and handed to every worker, so
 //   Restart only instantiates it.  A generation number per worker drops
@@ -55,9 +55,13 @@
 // - The status pill is no live region: the one next to it says how the VM
 //   goes (loading, starting, ready, ended), not how far the loading got, nor
 //   the state of every evaluation, which the terminal, a log, tells.
-// - Settings, shown when the VM has the smart-HTTP transport of libgit2
-//   (ready.gitHttp), holds the CORS proxy of git's requests (git-proxy.js,
-//   whose dialog it is): a URL prefix that the requests of Iceberg's
+// - Settings (the dialog of git-proxy.js) says whether Smalltalk code may use
+//   the network (network-setting.js; pharo-wasm.network, which world.js reads
+//   too): fetch, git and the WebSockets of the image's sockets.  It goes to
+//   the worker in init.network, and to a running VM at once ("network"), also
+//   when another tab changes it.  When the VM has the smart-HTTP transport of
+//   libgit2 (ready.gitHttp), Settings holds the CORS proxy of git's requests
+//   too (git-proxy.js): a URL prefix that the requests of Iceberg's
 //   https:// remotes go to, followed by the host and the path of the
 //   repository (src/emscripten/gitSupport.c); the site's default
 //   (manifest.gitProxyDefault), none, or one of the user's.  This browser
@@ -75,19 +79,20 @@
 //   to make that proxy My proxy (PharoGitProxy.useForCredentials), after
 //   which the push is tried again; the first credentials through a proxy are
 //   told once, per proxy.
-// - History, the theme and the proxy live in localStorage when available;
-//   everything works without it (the proxy then only for this session).
+// - History, the theme, the proxy and the network setting live in
+//   localStorage when available; everything works without it (the proxy and
+//   the network setting then only for this session).
 // - The Notebook tab (notebook.js) runs a second VM, in a worker of its own
 //   (vm-worker.js in its notebook mode), which boots the image of the
 //   Console without ever storing one.  window.PharoPage gives it what the
-//   page shares: the storage, the compiled .wasm, the proxy, the image
-//   (bootChoice), Settings and the theme; the page sends it "pharo:tab",
-//   "pharo:settings", "pharo:theme" and "pharo:image-changed" (the image
-//   was saved, deleted, replaced by another tab, is an opened one now, or
-//   another one was chosen: {reason, slot}) as CustomEvents on window.  The
-//   tab shown is kept (pharo-wasm.tab, as the theme for every site); the
-//   Console's keys (Esc, Ctrl+C, Ctrl+L) and the drops that open an image
-//   act only while its tab shows.
+//   page shares: the storage, the compiled .wasm, the proxy, the network
+//   setting, the image (bootChoice), Settings and the theme; the page sends
+//   it "pharo:tab", "pharo:settings", "pharo:theme" and "pharo:image-changed"
+//   (the image was saved, deleted, replaced by another tab, is an opened one
+//   now, or another one was chosen: {reason, slot}) as CustomEvents on
+//   window.  The tab shown is kept (pharo-wasm.tab, as the theme for every
+//   site); the Console's keys (Esc, Ctrl+C, Ctrl+L) and the drops that open
+//   an image act only while its tab shows.
 
 (function () {
   'use strict';
@@ -156,7 +161,7 @@
     return theme;
   }
 
-  const GitProxy = window.PharoGitProxy, Catalog = window.PharoCatalog, Storage = window.PharoStorage;
+  const GitProxy = window.PharoGitProxy, Network = window.PharoNetwork, Catalog = window.PharoCatalog, Storage = window.PharoStorage;
 
   // The image of the VM: {slot}, {fresh: id} or {} (the worker's choice),
   // the name of its slot, and the site's manifest (for Images; null until
@@ -407,9 +412,6 @@
     $('open').disabled = !!unavailable || opening;
     $('restart').disabled = !!unavailable;
     $('world').hidden = !(world && prepared);
-    $('settings').hidden = !gitHttp;
-    const nbSettings = document.querySelector('#nb-menu [data-act="settings"]');
-    if (nbSettings) nbSettings.hidden = !gitHttp;
   }
 
   // The notice under the terminal: text, a button doing action, if any, and
@@ -544,6 +546,7 @@
       fresh: current.fresh,
       name: upload ? upload.name : undefined,
       gitProxy: GitProxy.initValue(),
+      network: Network.read(),
     });
   }
 
@@ -608,7 +611,9 @@
     if (m.storageError) note('Note: ' + m.storageError + '.');
     gitHttp = !!m.gitHttp;
     gitProxyDefault = m.gitProxyDefault || '';
-    if (gitHttp && m.gitProxy)
+    if (m.network === false)
+      note('Network access is off for Smalltalk code (Settings).');
+    else if (gitHttp && m.gitProxy)
       note('Git requests go through the proxy at ' + GitProxy.originOf(m.gitProxy) +
            (GitProxy.read().mode === 'default' ? " (this site's default)" : '') + ' (Settings).');
     if (world && !prepared)
@@ -999,7 +1004,8 @@
     e.returnValue = '';                 // older browsers ask for it
   });
 
-  // ---- Settings: the proxy of git's HTTP requests (git-proxy.js)
+  // ---- Settings: the network, and the proxy of git's HTTP requests
+  // (git-proxy.js)
 
   const gitSettings = GitProxy.wireDialog({
     defaultProxy: () => gitProxyDefault || (manifest && manifest.gitProxyDefault) || '',
@@ -1014,6 +1020,18 @@
       if (!kept) showNotice('This browser cannot keep the setting: it holds for this session only.', null, null, 8000);
     },
     refocus: () => refocus(),
+    onOpen: () => {
+      $('network-enabled').checked = Network.read();
+      $('git-settings').hidden = !gitHttp;
+    },
+    onSave: () => {
+      const on = $('network-enabled').checked;
+      if (on === Network.read()) return;
+      const kept = Network.write(on);
+      networkChanged(on);
+      note('Network access is now ' + (on ? 'on' : 'off') + ' for Smalltalk code.');
+      if (!kept) showNotice('This browser cannot keep the setting: it holds for this session only.', null, null, 8000);
+    },
   });
   const openSettings = () => gitSettings.open();
   $('settings').addEventListener('click', openSettings);
@@ -1022,9 +1040,14 @@
     if (worker) worker.postMessage({ type: 'gitProxy', gitProxy: value });
     settingsChanged();
   });
-  // (the notebook's VM gets it too)
+  Network.onChange(networkChanged);
+  function networkChanged(on) {
+    if (worker) worker.postMessage({ type: 'network', network: on });
+    settingsChanged();
+  }
+  // (the notebook's VM gets them too)
   function settingsChanged() {
-    dispatchEvent(new CustomEvent('pharo:settings', { detail: { gitProxy: GitProxy.initValue() } }));
+    dispatchEvent(new CustomEvent('pharo:settings', { detail: { gitProxy: GitProxy.initValue(), network: Network.read() } }));
   }
 
   // What the worker says of git's requests: the first one through the
@@ -1295,7 +1318,7 @@
     workerUrl: 'vm-worker.js' + Q,
     gitProxy: () => GitProxy.initValue(),   // null for the site's default, '' for none, or the URL
     bootChoice: () => Object.assign({}, current),   // the image of the Console: {slot}, {fresh} or {}
-    gitHttp: () => gitHttp,             // the VM has libgit2's smart-HTTP transport (ready)
+    network: () => Network.read(),      // whether Smalltalk code may use the network
     openSettings, cycleTheme,
     themeLabel: () => THEMES[theme],    // System, Light or Dark
     activeTab,                          // 'console' or 'notebook'
