@@ -97,7 +97,8 @@ export async function startFetchHttp({ host = '127.0.0.1', port = 0, cors = true
     switch (pathname) {
       case '/hello': {
         writeHead(200, { 'Content-Type': 'text/plain', 'Content-Length': 5, 'X-A': 'caf\xe9' });
-        res.end(req.method === 'HEAD' ? undefined : 'hello');
+        // a Buffer: node writes the head in the encoding of a string body, and X-A is Latin-1
+        res.end(req.method === 'HEAD' ? undefined : Buffer.from('hello'));
         return;
       }
       case '/gzip': {
