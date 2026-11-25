@@ -131,7 +131,10 @@
  * proxy, check it, as GIT_ERROR_NET, which Iceberg retries (a proxy may be
  * down for a while; a request with credentials that fails so through a proxy
  * says too that the proxy may not allow their Authorization header).
- * gitHttpRequest answers -1 and -2 for these.  A
+ * gitHttpRequest answers -1 and -2 for these.  While the network of the
+ * image is off (Module.hostNetwork false: Settings, or PHARO_WASM_NETWORK=0
+ * in node) no request is made: each fails as GIT_ERROR_HTTP with 'git http:
+ * network access is off in Settings'.  A
  * response other than 200 fails as GIT_ERROR_HTTP, with a message that
  * names the host that answered (the one a redirect went to, if any), or the
  * proxy, or the URL, and the first line of what the host said (a text/plain
@@ -154,15 +157,16 @@
  *
  * Module.onGitHttp, when the page's worker set it, is called at the end of
  * every request with {method, host, proxy, status, error, authorization,
- * retried, credentials, redirectedTo, proxyRefused}: the remote's host (and
+ * retried, credentials, redirectedTo, proxyRefused, networkOff}: the remote's host (and
  * port), the proxy's origin (new URL(proxy).origin, as the pages write it)
  * or '', the status (-1 or -2 without a response), the error ('' with a
  * response), whether the request carried credentials, whether it was a 401
  * that the transport answers with credentials (the same request follows),
  * 'refused' when credentials were asked for and may not go through the
  * proxy, 'redirected' when a request with credentials went on to another
- * host through the proxy (redirectedTo, that host), else '', and whether a
- * 403 came from the proxy itself.  The worker turns it into its 'git'
+ * host through the proxy (redirectedTo, that host), else '', whether a
+ * 403 came from the proxy itself, and whether the request was not made
+ * because the network is off.  The worker turns it into its 'git'
  * messages, which the pages show as notices; what it throws is ignored.
  */
 
@@ -198,7 +202,7 @@ __wrap_getaddrinfo(const char *restrict node, const char *restrict service,
 #if PHARO_WASM_GIT_HTTP
 
 /* Make the request, synchronously, and answer the HTTP status, or else -1
- * (no proxy, or one that is no http(s) URL) or -2 (through a proxy) when
+ * (no proxy, or one that is no http(s) URL, or the network is off) or -2 (through a proxy) when
  * there is no response; the error is then in Module.pharoGitHttp.error.
  * The response, its body and its content type, waits in Module.pharoGitHttp
  * for gitHttpResponse(), gitHttpFinalUrl(), gitHttpDescribe(),
@@ -250,7 +254,7 @@ EM_JS(int, gitHttpRequest, (const char *method, const char *url, const char *con
 	var bare = url.replace(/^(https?:[/][/])[^/?#]*@/i, "$1");
 	var state = Module['pharoGitHttp'] = { body: null, type: "", error: "", url: bare, finalUrl: "",
 		host: remote ? remote.host : "", finalHost: "", proxyOrigin: "", method: method, status: 0,
-		authorization: false, credentials: "", redirectedTo: "", refusal: "", reported: false };
+		authorization: false, credentials: "", redirectedTo: "", refusal: "", reported: false, networkOff: false };
 	var status = (function () {
 		var prefix = "", requested = bare;
 		/* no response: -1 without a proxy, -2 through one, and what to do */
@@ -295,6 +299,12 @@ EM_JS(int, gitHttpRequest, (const char *method, const char *url, const char *con
 			var r = final ? remoteOf(final) : null;
 			return r || bare;
 		};
+		/* (Module.hostNetwork: host-events.js) */
+		if (Module['hostNetwork'] === false) {
+			state.networkOff = true;
+			state.error = "git http: network access is off in Settings";
+			return -1;
+		}
 		if (proxy) {
 			var normal = null;
 			try {
@@ -567,7 +577,8 @@ EM_JS(void, gitHttpReport, (int retried), {
 			Module['onGitHttp']({ method: state.method, host: state.host, proxy: state.proxyOrigin,
 				status: state.status, error: state.error, authorization: state.authorization,
 				retried: !!retried, credentials: state.credentials, redirectedTo: state.redirectedTo,
-				proxyRefused: state.status == 403 && !!state.proxyOrigin && !(state.body && state.body.length) });
+				proxyRefused: state.status == 403 && !!state.proxyOrigin && !(state.body && state.body.length),
+				networkOff: state.networkOff });
 		} catch (e) {
 		}
 });
@@ -1115,8 +1126,8 @@ gitHttpPerform(GitHttpStream *stream)
 			return error;
 		}
 	}
-	/* No response: without a proxy (-1) the browser's CORS refused it, and
-	 * would again, so GIT_ERROR_HTTP, which Iceberg does not retry; through
+	/* No response: without a proxy (-1) the browser's CORS refused it (or the
+	 * network is off), and would again, so GIT_ERROR_HTTP, which Iceberg does not retry; through
 	 * a proxy (-2), which may be down for a while, GIT_ERROR_NET, which it
 	 * retries */
 	if (status < 0) {
