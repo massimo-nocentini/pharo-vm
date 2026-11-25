@@ -310,8 +310,7 @@
       showDefault();
       showState();
       if (o.onOpen) o.onOpen();
-      dialog.showModal();
-      (radios[r.mode] || radios.default).focus();
+      dialog.showModal();               // (focuses its first control)
     }
     function save() {
       unfocus();

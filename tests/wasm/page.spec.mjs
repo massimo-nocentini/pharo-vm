@@ -1094,6 +1094,8 @@ await run(async t => {
       // the default, then a proxy typed in: rejected, then accepted
       await p.click('#settings');
       assert(await p.$eval('#settings-dialog', d => d.open), 'the dialog opens');
+      assert(await p.evaluate(() => document.activeElement.id) === 'network-enabled', 'on its first control');
+      await p.keyboard.press('Tab');
       assert(await mode(p) === 'default' && await p.inputValue('#git-proxy') === '', 'the default, and an empty field');
       assert(JSON.stringify(await proxyState(p)) === JSON.stringify(['default', DEFAULT_ORIGIN ? 'Default: git requests go to ' + DEFAULT_ORIGIN + '.'
                                                                                : 'Default: no proxy, git requests go to the repository itself.']),

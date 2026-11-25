@@ -1022,7 +1022,8 @@
     refocus: () => refocus(),
     onOpen: () => {
       $('network-enabled').checked = Network.read();
-      $('git-settings').hidden = !gitHttp;
+      // (before ready the manifest knows)
+      $('git-settings').hidden = !(gitHttp || (manifest && manifest.git && manifest.gitHttp));
     },
     onSave: () => {
       const on = $('network-enabled').checked;

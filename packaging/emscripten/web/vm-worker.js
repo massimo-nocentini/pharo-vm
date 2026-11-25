@@ -35,11 +35,12 @@
 //                         credentials, redirectedTo, proxyRefused,
 //                         networkOff}
 //
-// Messages that arrive before "ready" are queued and replayed after it;
-// "ready" always precedes the first "state".  When the VM cannot start, or
-// the boot fails, the worker says "crash" instead, and still answers what
-// needs no VM (resetStorage, whose storage is opened first of all, so that it
-// deletes a slot even when the manifest could not be fetched).  After
+// Messages that arrive before "ready" are queued and replayed after it (but
+// "network", which holds at once); "ready" always precedes the first
+// "state".  When the VM cannot start, or the boot fails, the worker says
+// "crash" instead, and still answers what needs no VM (resetStorage, whose
+// storage is opened first of all, so that it deletes a slot even when the
+// manifest could not be fetched).  After
 // "exit" and "crash" it stays, so that the files of the VM can still be read
 // and downloaded, until the page terminates it.  "fs" ops: readFile,
 // writeFile {data, mode, mtime} (with the directories it needs), listDir,
@@ -222,8 +223,8 @@
 //
 // Network.  Whether the code of the image may use the network, as the user
 // chose it in Settings (network-setting.js keeps it): init.network, off only
-// when it is false, and later "network", which holds at once, also while the
-// VM runs.  Off, fetch fails (Module.pharoHost: the requests that are open
+// when it is false, and later "network", which holds at once, also before
+// "ready" (it is not queued).  Off, fetch fails (Module.pharoHost: the requests that are open
 // too), git's transport makes no request (Module.hostNetwork), and the
 // WebSocket that Emscripten's sockets use is one that cannot be made
 // (guardWebSocket); those that are open are closed.  The worker's own
@@ -1168,6 +1169,7 @@ async function boot(m) {
   drv = await PharoVMDriver.start(createPharoVM, options);
   options.files = null;                 // in MEMFS now
   if (!drv) return;                     // the crash is reported
+  setNetwork(network);                  // ("network" may have come meanwhile)
   // the display paints from the VM's memory: let it know the VM before any
   // slice, whatever the page sends first
   if (display && display.handle) display.handle({ kind: 'attach' }, drv);
@@ -1397,7 +1399,7 @@ function replay() {
 
 onmessage = ({ data: m }) => {
   if (m.type !== 'init') {
-    if (settled) handle(m); else queue.push(m);
+    if (settled || (m.type === 'network' && mode)) handle(m); else queue.push(m);
     return;
   }
   if (mode) return;                     // one VM per worker
