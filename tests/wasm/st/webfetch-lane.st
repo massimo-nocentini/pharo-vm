@@ -11,7 +11,7 @@
 	callback     a request started, looked at and closed inside an FFI callback, where primitiveMayWait
 	             answers false
 	memory       60 MB in one object, the old space that it costs, and 150 MB, which grows the memory
-	nomemory     a request body that JavaScript cannot copy (nomemory.cjs of the lane)
+	nomemory     a request body that JavaScript cannot copy (before.cjs of the lane)
 	unavailable  a JavaScript without fetch
 	off          PHARO_WASM_NETWORK=0, for fetch and, when the VM has libgit2, for git
 	missing      a VM without the plugin (a native one)

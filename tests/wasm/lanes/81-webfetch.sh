@@ -43,6 +43,9 @@
 #   suite off  the same with PHARO_WASM_NETWORK=0: no failure, no error, and
 #            the live tests skipped;
 #   suite web  the suite in pharo-web;
+#   suite callback  tests/callback-webfetch.st: requests of the callback and
+#            of other processes while a real FFI callback runs (skipped
+#            without the FFI);
 #   snapshot  tests/snapshot-webfetch.st, twice: an image saved while processes
 #            wait for requests goes on, and restarted it signals
 #            WebFetchSessionEnded to each of them, and fetches again.
@@ -178,11 +181,14 @@ fresh unavailable
 echo 'delete globalThis.fetch;' >before.cjs
 if run unavailable with_js unavailable; then probed unavailable unavailable 3; fi
 
-# git's request, had it been made, would be in the log of the server
+# git's request, had it been made, would be in the log of the server; with
+# git there are 3 checks
+off_checks=2
+if cached WASM_LIBGIT2_HTTP && cached FEATURE_FFI; then off_checks=3; fi
 fresh off
 if run off probe_off; then
     if "$NODE" -e 'fetch(process.argv[1] + "/_stats").then(r => r.json()).then(s => process.exit(s.requests.some(r => /^\/git/.test(r.url)) ? 1 : 0))' "$url"; then
-	probed off off 2
+	probed off off $off_checks
     else
 	fail off "git made a request"
     fi
@@ -305,6 +311,10 @@ suite_off() (
     PHARO_WASM_NETWORK=0; export PHARO_WASM_NETWORK
     suite
 )
+callback() {
+    echo "$url" >webfetch.lane
+    vm st --quit "$WEB_FETCH_DIR/tests/callback-webfetch.st"
+}
 snapshot() {
     echo "$url" >webfetch.lane
     vm st "$WEB_FETCH_DIR/tests/snapshot-webfetch.st"
@@ -354,6 +364,12 @@ if test -f "$loaded/Pharo.image"; then
     fresh suite-web "$loaded"
     if run 'suite web' web_run "$(pwd)" "$WEB_FETCH_DIR/tests/run-webfetch.st" suite; then
 	suites_passed 'suite web' ready 'NativeTest'
+    fi
+    if cached FEATURE_FFI; then
+	fresh suite-callback "$loaded"
+	expect 'suite callback' 'callback: 9 of 9' callback
+    else
+	skip_check 'suite callback' "no FFI: the build has none (WASM_FFI=OFF)"
     fi
     fresh snapshot "$loaded"
     expect 'snapshot, saved' 'saved, the slow request: tick0tick1tick2tick3tick4' snapshot

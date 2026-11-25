@@ -75,7 +75,7 @@ Module `WebFetchPlugin`, built into both VMs. None of them waits, so they work i
 | primitiveFetchClose | id | true when it was open, else false | `bad argument` |
 
 A CompiledMethod, which is a kind of ByteArray in Pharo, counts as none.
-`primitiveMayWait` of the WebHostPlugin answers false inside an FFI callback, where a wait would never end (the VM cannot return to its host there): the package signals `WebFetchInCallback` instead of waiting.
+`primitiveMayWait` of the WebHostPlugin answers false inside an FFI callback, where a wait would never end (the VM cannot return to its host there): the package signals `WebFetchInCallback` instead of waiting, in the process that evaluates the callback. Another process may wait: the event comes after the callback.
 
 ## Memory
 
@@ -113,8 +113,8 @@ In the node VM `PHARO_WASM_NETWORK=0` in the environment turns fetch and git off
 
 ## Tests
 
-- `tests/wasm/web-fetch.test.mjs`: `host-events.js` and `web-fetch.js` in node with a fake fetch, 21 checks.
-- Lane 81-webfetch (`tests/wasm/lanes/81-webfetch.sh`, with `tests/wasm/st/webfetch-lane.st`): that test; the primitives and every failure code above in the node VM and in the web VM (80 checks each), an FFI callback, the memory, an exit and a trap with open requests, the network off, a node without fetch, a VM without the plugin. With `WEB_FETCH_DIR`, a checkout of `web-fetch.st`, it loads the packages with Metacello and runs their tests, also the live ones, in the node VM, there with the network off, and in the web VM, and an image saved while processes wait; without it that part is a skipped check.
+- `tests/wasm/web-fetch.test.mjs`: `host-events.js` and `web-fetch.js` in node with a fake fetch, and `node-pump.js` with a fake module, 24 checks.
+- Lane 81-webfetch (`tests/wasm/lanes/81-webfetch.sh`, with `tests/wasm/st/webfetch-lane.st`): that test; the primitives and every failure code above in the node VM and in the web VM (80 checks each), an FFI callback, the memory, an exit and a trap with open requests, the network off, a node without fetch, a VM without the plugin. With `WEB_FETCH_DIR`, a checkout of `web-fetch.st`, it loads the packages with Metacello and runs their tests, also the live ones, in the node VM, there with the network off, and in the web VM, requests while a real FFI callback runs (the node VM), and an image saved while processes wait; without it that part is a skipped check.
 - `tests/wasm/vm-harness.js` (lane 60), cases 28 to 30: how soon a signal wakes a process, the pause of the output, the services at an exit and at a crash. `tests/wasm/worker-harness.js` (lane 70), case 31: the network of the worker.
 - `tests/wasm/webfetch.spec.mjs` (`make wasm-check-browser`): the pages in a browser, 17 checks, 19 with `WEB_FETCH_DIR`, where both suites run in the Console too.
 - `tests/wasm/lib/fetch-http.mjs` is the server of all of them; `node tests/wasm/lib/fetch-http.mjs` runs it and prints its URL, for `WEB_FETCH_SERVER` of the live tests.
