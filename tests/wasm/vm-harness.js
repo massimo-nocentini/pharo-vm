@@ -638,6 +638,97 @@ const blockClass = clean => (clean && newer ? 'CleanBlockClosure' : 'FullBlockCl
     assert(!Object.values(X.throwNext).some(n => n > 0), 'every injected throw happened: ' + JSON.stringify(X.throwNext));
   });
 
+  // the events of the host (packaging/emscripten/host/host-events.js)
+  await check('28 host events: 20 signals reach a process above the idle one, the VM asleep, in a median of under 5 ms', async () => {
+    const X = await session();
+    await X.prompt();
+    const host = X.drv.module.pharoHost;
+    X.send('Smalltalk registerExternalObject: (Smalltalk at: #HostSemaphore put: Semaphore new)\n');
+    await X.prompt();
+    const index = parseInt(X.since(), 10);
+    assert(index > 0, 'index ' + JSON.stringify(X.since()));
+    for (const bad of [0, -1, 1e9, 2 ** 31]) assert(host.signal(bad) === false, 'index ' + bad);
+    const medians = [];
+    for (const priority of [20, 35]) {
+      X.send(`Smalltalk at: #HostWaiter put: ([ [ (Smalltalk at: #HostSemaphore) wait. ` +
+             `Stdio stdout nextPutAll: 'woke'; lf; flush ] repeat ] forkAt: ${priority}). 0\n`);
+      await X.prompt();
+      const times = [];
+      for (let i = 0; i < 20; i++) {
+        await sleep(40 + 3 * i);
+        const t = now();
+        X.mark();
+        assert(host.signal(index) === true, 'signal');
+        await X.expectOut(/woke\n$/, 2000);
+        times.push(now() - t);
+      }
+      times.sort((a, b) => a - b);
+      medians.push((times[9] + times[10]) / 2);
+      X.send('(Smalltalk at: #HostWaiter) terminate. 0\n');
+      await X.prompt();
+    }
+    console.log('#   medians ' + medians.map(m => m.toFixed(2)).join(' and ') + ' ms');
+    assert(medians.every(m => m < 5), 'medians ' + medians.join(' '));
+    X.drv.eof();
+    await X.ended();
+  });
+
+  await check('29 host events: a signal while the output is paused runs no slice; resumeOutput() delivers it', async () => {
+    const X = await session();
+    await X.prompt();
+    const host = X.drv.module.pharoHost;
+    X.send('Smalltalk registerExternalObject: (Smalltalk at: #HostSemaphore put: Semaphore new)\n');
+    await X.prompt();
+    const index = parseInt(X.since(), 10);
+    X.high = 4096;
+    X.unacked = 0;
+    X.send('| done | done := false. [ (Smalltalk at: #HostSemaphore) wait. done := true ] forkAt: 60. ' +
+           '[ done ] whileFalse: [ Stdio stdout nextPutAll: (String new: 99 withAll: $x); lf ]. #woke\n');
+    await waitFor('blocked on unacked output', () => X.unacked >= X.high && X.drv.state() === BUSY);
+    await sleep(50);
+    const n = X.pumps.length;
+    for (let i = 0; i < 5; i++) { assert(host.signal(index) === true, 'signal'); await sleep(10); }
+    assert(X.pumps.length === n, `${X.pumps.length - n} slice(s) while paused`);
+    X.high = Infinity;
+    X.drv.resumeOutput();
+    await X.expectOut(/#woke\nst> $/, 10000);
+    X.drv.eof();
+    await X.ended();
+  });
+
+  await check('30 host events: at an exit and at a crash the services shut down once, and nothing signals any more', async () => {
+    for (const how of ['exit', 'crash']) {
+      const X = await session();
+      await X.prompt();
+      const host = X.drv.module.pharoHost;
+      X.send('Smalltalk registerExternalObject: (Smalltalk at: #HostSemaphore put: Semaphore new)\n');
+      await X.prompt();
+      const index = parseInt(X.since(), 10), seen = [];
+      // (one that throws hides neither the exit nor the services after it)
+      host.add({ networkOff() { seen.push('off 1'); throw new Error('injected off'); },
+                 shutdown() { seen.push('down 1'); throw new Error('injected down'); } });
+      host.add({ networkOff() { seen.push('off 2'); }, shutdown() { seen.push('down 2'); } });
+      host.setNetwork(false);
+      assert(host.network === false && X.drv.module.webFetch.availability() === 2, 'off');
+      host.setNetwork(true);
+      assert(host.network === true && X.drv.module.webFetch.availability() === 1, 'on');
+      if (how === 'exit') X.send('Smalltalk exit: 5\n');
+      else {
+        X.crashExpected = true;
+        const ops = X.drv.FS.getStream(2).stream_ops, write = ops.write;
+        ops.write = () => { ops.write = write; throw new TypeError('injected'); };
+        X.send('1/0\n');
+      }
+      await X.ended();
+      assert(how === 'exit' ? X.exit && X.exit.code === 5 : X.crash && X.crash.message === 'injected',
+             how + ': ' + JSON.stringify([X.exit, X.crash]));
+      assert(seen.join() === 'off 1,off 2,down 1,down 2', 'services ' + seen.join());
+      assert(host.signal(index) === false, 'no signal after it');
+      host.shutdown();
+      assert(seen.length === 4, 'once');
+    }
+  });
+
   // the crashes asked for excepted
   sessions.forEach((s, i) => {
     const text = s.all + s.diag + (s.crash ? s.crash.message : '');

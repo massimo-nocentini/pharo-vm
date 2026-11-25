@@ -25,7 +25,8 @@
 # merge in a world, where the web-libgit.st of before 8 made it call
 # itself), and, when
 # manifest.libraries has some, the placeholders of the libraries of the FFI
-# (24); a case whose build lacks what it needs says '# skip' and why.  On
+# (24); the network of the image, on and off (31); a case whose build lacks
+# what it needs says '# skip' and why.  On
 # sites of its own with a catalog of two images (C1-C11) it checks
 # init.fresh, init.slot and the slots: main if free, a slot per fresh image,
 # saveAs, two workers on two slots, resetStorage of a slot, a meta of

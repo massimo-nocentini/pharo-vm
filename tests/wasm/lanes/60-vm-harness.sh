@@ -6,8 +6,10 @@
 # stock image in MEMFS and the REPL of packaging/emscripten/st/web-repl.st on
 # the driver's stdin device: prompts, results and errors (also of other
 # processes), Stop, sleeping, stdin reads, output backpressure, the save
-# notification and a boot of the saved image, exits and crashes, and host
-# callbacks that throw.  It runs once with node's default engine, then once
+# notification and a boot of the saved image, exits and crashes, host
+# callbacks that throw, and the events of the host (host-events.js): how soon
+# a signal wakes a process, the pause of the output, and the services at an
+# exit and at a crash.  It runs once with node's default engine, then once
 # with Liftoff only and a 900 KB stack: --liftoff-only, as --liftoff
 # --no-wasm-tier-up still lets V8's dynamic tiering move hot functions to
 # TurboFan.  An engine-level failure on its stderr fails the lane too.

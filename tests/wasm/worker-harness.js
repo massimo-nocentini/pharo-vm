@@ -64,7 +64,10 @@
 // world, is prepared to version 8 on its world boot, as the page boots it
 // (web-libgit.st at the boot as the Console, then the set up), and then has
 // Iceberg's own again, found through the .changes, which neither evaluation
-// compiles again (case 30).
+// compiles again (case 30).  Whether the image may use the network (31):
+// init.network, the message "network", before ready and while a request is
+// open, and ready.network, with the primitives of the WebFetchPlugin and the
+// server of lib/fetch-http.mjs.
 // The notebook mode (W-NB1..4, init.mode 'notebook'): the kernel of
 // st/web-notebook.st, its events (output {fd: 3, bytes}), a request posted
 // before ready, Stop, the credit of the events, and a worker that boots the
@@ -1779,6 +1782,75 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
       await R.expectOut(val('#(true true)'));
       await R.prompt();
     } finally { await R.close(); current = S; }
+  });
+
+  // ---- the network of the image (init.network, "network", ready.network)
+
+  // The primitives of the WebFetchPlugin, without its package: WFP, whose
+  // fetch: answers the state, the kind of the error or the status, and the
+  // body of a request
+  const wfp = "((Object << #WFP slots: { }) package: 'WebFetchLane') install. " +
+    "{ 'availability' -> 'primitiveFetchAvailability'. 'start: s head: h body: b window: w timeout: t flags: f' -> 'primitiveFetchStart'. " +
+    "'state: i' -> 'primitiveFetchState'. 'head: i' -> 'primitiveFetchHead'. 'read: i into: b at: s count: n' -> 'primitiveFetchRead'. " +
+    "'close: i' -> 'primitiveFetchClose' } do: [ :a | (Smalltalk at: #WFP) class compile: a key , ' <primitive: #' , a value , " +
+    "' module: #WebFetchPlugin error: ec> ^ { ec }' ]. " +
+    "(Smalltalk at: #WFP) class compile: 'fetch: url on: sem ^ self start: (Smalltalk registerExternalObject: sem) " +
+    "head: (''GET'' , String lf , url) utf8Encoded body: nil window: 1000 timeout: 0 flags: 0'. " +
+    "(Smalltalk at: #WFP) class compile: 'end: id on: sem | b r | [ ((self state: id) bitAnd: 7) >= 3 ] whileFalse: [ sem wait ]. " +
+    "b := ByteArray new: (self state: id) >> 3. self read: id into: b at: 1 count: b size. " +
+    "r := { (self state: id) bitAnd: 7. (self head: id) utf8Decoded lines first. b asString }. self close: id. ^ r'. " +
+    "(Smalltalk at: #WFP) class compile: 'fetch: url | sem | sem := Semaphore new. ^ self end: (self fetch: url on: sem) on: sem'. 0\n";
+  await check('31 the network: on and off from init, off and on at once, an open request fails, a message before ready', async () => {
+    const { startFetchHttp } = await import('./lib/fetch-http.mjs');
+    const server = await startFetchHttp();
+    memory.map.clear();
+    const answer = async (X, text, want) => {
+      X.send(text + '\n');
+      await X.prompt();
+      assert(X.since() === want + '\nst> ', text + ': ' + JSON.stringify(X.since()) + ', want ' + want);
+    };
+    const hello = `WFP fetch: '${server.url}/hello'`;
+    let X = session();
+    try {
+      await X.started();
+      assert(X.ready.network === true, 'ready ' + JSON.stringify(X.ready));
+      X.send(wfp);
+      await X.prompt();
+      await answer(X, 'WFP availability', '1');
+      await answer(X, hello, "#(3 '200' 'hello')");
+      await answer(X, `Smalltalk at: #HangSem put: Semaphore new. Smalltalk at: #Hang put: (WFP fetch: '${server.url}/hang' on: (Smalltalk at: #HangSem)). 0`, '0');
+      await waitFor('the request', () => server.requests.some(r => r.path === '/hang'));
+      X.post({ type: 'network', network: false });
+      await waitFor('its end', () => server.requests.find(r => r.path === '/hang').closed);
+      await answer(X, 'WFP end: (Smalltalk at: #Hang) on: (Smalltalk at: #HangSem)', "#(4 'off' '')");
+      await answer(X, 'WFP availability', '2');
+      const n = server.requests.length;
+      await answer(X, `WFP fetch: '${server.url}/hello' on: Semaphore new`, "#(#'unsupported operation')");
+      X.post({ type: 'network', network: true });
+      await answer(X, hello, "#(3 '200' 'hello')");
+      assert(server.requests.length === n + 1, 'one request');
+      // an exit with a request open
+      await answer(X, `(WFP fetch: '${server.url}/hang?2' on: Semaphore new) isInteger`, 'true');
+      await waitFor('the request', () => server.requests.some(r => r.url === '/hang?2'));
+      X.send('Smalltalk exit: 3\n');
+      await waitFor('exit', () => X.exit !== null);
+      assert(X.exit === 3, 'exit ' + X.exit);
+      await waitFor('its end', () => server.requests.find(r => r.url === '/hang?2').closed);
+    } finally { await X.close(); }
+    for (const [init, early] of [[false, null], [true, false], [false, true], ['no', null]]) {
+      X = session({ network: init });
+      try {
+        if (early !== null) X.post({ type: 'network', network: early });
+        await X.started();
+        const on = early !== null ? early : init !== false;
+        assert(X.ready.network === on, `init ${init}, then ${early}: ready ` + X.ready.network);
+        X.send(wfp);
+        await X.prompt();
+        await answer(X, 'WFP availability', on ? '1' : '2');
+      } finally { await X.close(); }
+    }
+    await server.close();
+    current = S;
   });
 
   // ---- the catalog and the slots (catalog.js, vm-storage.js)
