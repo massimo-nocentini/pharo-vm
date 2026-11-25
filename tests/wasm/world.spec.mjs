@@ -134,7 +134,11 @@ await run(async t => {
   // launcher shows, so gotoWorld names the default image (?fresh=), unless
   // told the choice ({slot} or {fresh}) or that the launcher is wanted (null)
   const catalog = manifest.images && manifest.images.length ? manifest.images : [{ id: manifest.imageId || 'default', default: true }];
-  const defaultId = manifest.worldImageId || catalog.find(e => e.default).id;
+  const defaultId = catalog.find(e => e.default).id;
+  // (the launcher's own default, which may be another: WASM_WORLD_DEFAULT.  The other checks start the
+  // default image of the site, which is smaller: Chromium closes on a drop of a much larger one, whose
+  // bytes go through one message of DevTools, dropFiles)
+  const worldId = manifest.worldImageId || defaultId;
   const multi = catalog.length >= 2;
   const worldUrl = choice => t.base + 'world.html' +
     (choice === null ? '' : choice && choice.slot ? '?slot=' + choice.slot : choice && choice.fresh ? '?fresh=' + choice.fresh
@@ -1183,7 +1187,7 @@ await run(async t => {
       const fresh = await f.$$eval('#images-fresh [data-fresh]', l => l.map(b => b.dataset.fresh));
       assert(JSON.stringify(fresh) === JSON.stringify(catalog.map(e => e.id)), 'the images of the site: ' + JSON.stringify(fresh));
       assert(await f.isHidden('#images-close'), 'no Close');
-      assert(await f.evaluate(() => document.activeElement && document.activeElement.dataset.fresh) === defaultId, 'the default has the focus');
+      assert(await f.evaluate(() => document.activeElement && document.activeElement.dataset.fresh) === worldId, 'the default has the focus');
       assert(!f.workers().length && (await f.evaluate(() => window.PharoWorld.stats.starts)) === 0, 'no VM');
       assert(/^Choose a Pharo image/.test(await f.textContent('#overlay-text')), 'the overlay: ' + await f.textContent('#overlay-text'));
       if (t.shots) await f.screenshot({ path: t.shot('world-launcher.png') });
@@ -1193,14 +1197,14 @@ await run(async t => {
         await f.waitForTimeout(200);
         assert(await f.$eval('#images-dialog', d => d.open), 'Escape ' + i + ' closed the launcher');
       }
-      assert(await f.evaluate(() => document.activeElement && document.activeElement.dataset.fresh) === defaultId,
+      assert(await f.evaluate(() => document.activeElement && document.activeElement.dataset.fresh) === worldId,
              'the default has the focus again');
       await f.keyboard.press('Enter');
       await f.waitForFunction(() => window.PharoWorld.stats.frames > 0, null, { timeout: 120000 });
-      assert(f.url().endsWith('/world.html?fresh=' + defaultId), 'the default, fresh: ' + f.url());
+      assert(f.url().endsWith('/world.html?fresh=' + worldId), 'the default, fresh: ' + f.url());
       assert(/^Started a fresh /.test(await f.textContent('#notice-text')), 'the note ' + await f.textContent('#notice-text'));
       // every other image of the site starts fresh, from its own files
-      for (const e of catalog.filter(e => e.id !== defaultId)) {
+      for (const e of catalog.filter(e => e.id !== worldId)) {
         const n = fetched.length, starts = await f.evaluate(() => window.PharoWorld.stats.starts);
         await f.click('#images');
         await f.waitForSelector('#images-dialog[open]');
