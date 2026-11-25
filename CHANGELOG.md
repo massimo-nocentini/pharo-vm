@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+* The batteries image is the default of the world page of the site (`WASM_WORLD_DEFAULT`, the Console's stays the stock Pharo 15), and shows, the first time that it is opened, a Roassal page of what it and the VM add to those of pharo-project, in Markdown drawn by CMark (docs/Batteries.md, The welcome page)
 * WebAssembly: a fast interpreter, written by hand, runs in front of the generated one, which keeps the rare bytecodes (`WASM_FAST_INTERP`), the modules compute their addresses in 32 bits (`WASM_TUNE=NARROW`), and the node VM has a 32-bit memory as the web VM (`WASM_NODE_MEMORY64=2`), all by default: the web VM is 1.2 to 1.4 times as fast in Chromium and 1.6 to 1.8 in Firefox, and the node VM 1.4 to 1.7; `make wasm WASM_FAST_INTERP=OFF WASM_TUNE=OFF WASM_NODE_MEMORY64=1` builds the VMs of before, whose node VM traps on a stray pointer. Needs python3 (docs/WebAssembly.md, Faster interpreters)
 * Pango 1.58.2 with PangoCairo (GLib 2.90.1, FriBidi 1.0.18, HarfBuzz 15.2.0) and Poppler 26.11.0 with poppler-glib in the cairo stack of the native VMs, for the image's uFFI bindings libpangocairo.st and libpoppler.st: options `FEATURE_LIB_PANGO` and `FEATURE_LIB_POPPLER` (both on; Poppler is GPL, distributed under GPL-3.0, and `-DFEATURE_LIB_POPPLER=OFF` builds a VM without it), checked by `scripts/cairo-stack/check.sh` and `tests/cairo-stack/ci-text.st` (docs/PangoPoppler.md, docs/CairoStack.md)
 

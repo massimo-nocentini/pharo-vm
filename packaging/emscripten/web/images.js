@@ -29,6 +29,10 @@
 //                       the other page of the site (the Console from the
 //                       world, the world from the Console), with a link per
 //                       saved image
+//     defaultEntry(manifest),
+//                       optional: the entry that is the default of the page
+//                       (default PharoCatalog.defaultEntry; the world page
+//                       gives worldEntry)
 //     launcher })       true: the dialog opens as the launcher by default
 //   images.open(note, launcher)   shows it (note: a line above, or null)
 //   images.close(), images.refresh()
@@ -209,6 +213,7 @@
     function renderFresh() {
       const m = manifest();
       const all = m && Catalog ? Catalog.images(m) : [];
+      const def = all.length ? (o.defaultEntry || Catalog.defaultEntry)(m) : null;
       const f = doc.activeElement, had = f && freshList.contains(f) ? f.closest('[data-fresh]') : null;
       const hadId = had ? had.dataset.fresh : null;
       freshList.textContent = '';
@@ -216,10 +221,10 @@
       for (const e of all) {
         const size = Catalog.downloadSize(e);
         const sub = (e.pharoBuild ? 'build ' + e.pharoBuild + ' · ' : '') + mb(size) + ' download' +
-          (e.default && all.length > 1 ? ' (default)' : '');
+          (e === def && all.length > 1 ? ' (default)' : '');
         const b = el('button', { type: 'button', 'data-fresh': e.id },
                      el('span', { class: 'label', text: e.label || e.id }), el('span', { class: 'sub', text: sub }));
-        if (e.default) b.setAttribute('data-default', '');
+        if (e === def) b.setAttribute('data-default', '');
         b.addEventListener('click', () => choose({ fresh: e.id }));
         freshList.appendChild(b);
         if (e.id === hadId) b.focus();

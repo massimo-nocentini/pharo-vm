@@ -8,7 +8,7 @@
 //        [--world-image <dir> [--world-st <file>]...]
 //        [--image-id <id>] [--extra-image <id>=<dir>]...
 //        [--extra-world-image <id>=<dir>]... [--extra-sources <file>]...
-//        [--git-proxy-default <url>]
+//        [--world-default <id>] [--git-proxy-default <url>]
 //   node stage.mjs --check-git-proxy <url>
 //
 // The second form only checks a default proxy of git as the first takes it,
@@ -115,6 +115,9 @@
 //          #OSWindowWebPackage<version>).  The source is the single place
 //          where the version is written
 //   world  true when the default image is the image of the world
+//   worldImageId  the id of the image that the world page starts, or offers
+//          first, when there is none to continue: --world-default, else
+//          imageId
 //
 // The checks: the ids are unique, differ from the default one, and none is
 // sources, the directory of the --extra-sources files (an extra image may be
@@ -181,13 +184,13 @@ const idAndDir = (name, value) => {
 
 const parseArguments = (argv) => {
   const options = { st: [], worldSt: [], libraries: [], memory64: '2', git: '', ffi: '0', fonts: 'bitmap',
-                    libgit2: '0', libgit2Http: '0', imageId: '', gitProxyDefault: '',
+                    libgit2: '0', libgit2Http: '0', imageId: '', worldDefault: '', gitProxyDefault: '',
                     extraImages: [], extraWorldImages: [], extraSources: [] };
   const single = { '--out': 'out', '--web': 'web', '--module': 'module', '--memory64': 'memory64',
                    '--git': 'git', '--ffi': 'ffi', '--fonts': 'fonts', '--notices': 'notices',
                    '--libgit2': 'libgit2', '--libgit2-http': 'libgit2Http',
                    '--stock-image': 'stockImage', '--web-package': 'webPackage', '--world-image': 'worldImage',
-                   '--image-id': 'imageId', '--git-proxy-default': 'gitProxyDefault' };
+                   '--image-id': 'imageId', '--world-default': 'worldDefault', '--git-proxy-default': 'gitProxyDefault' };
   const many = { '--st': 'st', '--world-st': 'worldSt', '--library-file': 'libraries',
                  '--extra-image': 'extraImages', '--extra-world-image': 'extraWorldImages',
                  '--extra-sources': 'extraSources' };
@@ -221,6 +224,8 @@ const parseArguments = (argv) => {
   options.libraries = [...new Set(options.libraries)].sort();
   if (options.imageId && !ID.test(options.imageId))
     fail(`--image-id ${options.imageId} is not 1 to 16 lower-case letters, digits and dashes (not first)`);
+  if (options.worldDefault && !ID.test(options.worldDefault))
+    fail(`--world-default ${options.worldDefault} is not 1 to 16 lower-case letters, digits and dashes (not first)`);
   options.gitProxyDefault = gitProxyOf(options.gitProxyDefault);
   // The extra images, in their order, each with its world image or null
   const extras = new Map();
@@ -390,6 +395,12 @@ const main = async () => {
     if (labels.has(image.label)) image.label = `${image.label} (${image.id})`;
     labels.add(image.label);
   }
+  // The default image of the world page: --world-default, else the default
+  // image
+  const worldId = options.worldDefault || first.id;
+  const worldImage = catalog.find((image) => image.id == worldId);
+  if (!worldImage) fail(`--world-default ${worldId} is not the id of an image`);
+  if (options.worldDefault && !worldImage.world) fail(`--world-default ${worldId} is not prepared for the world`);
   // Two .sources of one name are the same file
   const sourcesByName = new Map();
   for (const image of catalog) {
@@ -450,7 +461,7 @@ const main = async () => {
   // (the transport is a part of libgit2)
   const git = options.libgit2 == '1', gitHttp = git && options.libgit2Http == '1';
   const digest = sha256([`ffi ${ffi}`, `fonts ${options.fonts}`, `git ${git}`, `gitHttp ${gitHttp}`,
-                         `gitProxyDefault ${options.gitProxyDefault}`, `imageId ${first.id}`,
+                         `gitProxyDefault ${options.gitProxyDefault}`, `imageId ${first.id}`, `worldImageId ${worldId}`,
                          ...catalog.map((image) => `image ${image.id} ${image.label} ${image.pharo} ` +
                                         `${image.pharoBuild} ${image.world}`),
                          `extraSources ${[...extraSources.keys()].sort().join(' ')}`,
@@ -536,6 +547,7 @@ const main = async () => {
     st: entries.filter(([rel]) => rel.startsWith('st/')).map(([rel]) => rel).sort(),
     webPackage,
     world,
+    worldImageId: worldId,
   });
   write('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2) + '\n', 'utf8'));
 

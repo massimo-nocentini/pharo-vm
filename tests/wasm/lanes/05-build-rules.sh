@@ -16,7 +16,7 @@
 #   - an edit of cmake/Emscripten.cache.cmake configures the wasm build again,
 #     and so does a change of WASM_FAST_INTERP, WASM_TUNE, WASM_NODE_MEMORY64
 #     (by default ON, NARROW and 2), WASM_FFI, WASM_FREETYPE, WASM_LIBGIT2,
-#     WASM_LIBGIT2_HTTP, WASM_DEPS_DIR, WASM_IMAGE_ID,
+#     WASM_LIBGIT2_HTTP, WASM_DEPS_DIR, WASM_IMAGE_ID, WASM_WORLD_DEFAULT,
 #     WASM_EXTRA_IMAGES, WASM_EXTRA_SOURCES or WASM_GIT_PROXY, which
 #     config.make records (a WASM_DEPS_DIR that does not exist is refused, and
 #     so are an extra image that is not <id>=<zip>, of a bad id, of the id
@@ -431,6 +431,7 @@ wmake "$W/cmake/.configured" "WASM_EXTRA_IMAGES=p99=$T/zips/p99.zip" WASM_IMAGE_
 calls "emcmake" "configure cmake"
 recorded WASM_EXTRA_IMAGES "p99=$T/zips/p99.zip"
 recorded WASM_IMAGE_ID p15
+recorded WASM_WORLD_DEFAULT ""
 recorded WASM_EXTRA_SOURCES "$T/zips/Old.sources"
 given "WASM_EXTRA_IMAGES=p99=$T/zips/p99.zip"
 given WASM_IMAGE_ID=p15
@@ -445,6 +446,11 @@ wmake "$W/cmake/.configured" "WASM_EXTRA_IMAGES=p99=$T/zips/p99.zip p98=../zips/
 calls "emcmake" "configure cmake"
 recorded WASM_EXTRA_IMAGES "p99=$T/zips/p99.zip p98=$T/zips/p98.zip"
 given "WASM_EXTRA_IMAGES=p99=$T/zips/p99.zip;p98=$T/zips/p98.zip"
+step="a default image of the world page"
+wmake "$W/cmake/.configured" "WASM_EXTRA_IMAGES=p99=$T/zips/p99.zip" WASM_IMAGE_ID=p15 WASM_WORLD_DEFAULT=p99
+calls "emcmake" "configure cmake"
+recorded WASM_WORLD_DEFAULT p99
+given WASM_WORLD_DEFAULT=p99
 step="another default proxy of git"
 wmake "$W/cmake/.configured" WASM_GIT_PROXY=https://proxy.example/git/
 calls "emcmake" "configure cmake"
@@ -489,6 +495,8 @@ refused "a .sources that does not exist" "'$T/zips/none.sources' does not exist"
     "WASM_EXTRA_SOURCES=$T/zips/none.sources"
 refused "no .sources" "'$T/zips/p99.zip' does not exist or is no .sources" "WASM_EXTRA_SOURCES=$T/zips/p99.zip"
 refused "a bad image id" "WASM_IMAGE_ID (P15) is not" WASM_IMAGE_ID=P15
+refused "a bad world default" "WASM_WORLD_DEFAULT (P15) is not" WASM_WORLD_DEFAULT=P15
+refused "a world default of no image" "WASM_WORLD_DEFAULT (p98) is the id of no image" WASM_IMAGE_ID=p15 WASM_WORLD_DEFAULT=p98
 refused "a proxy with a blank" "WASM_GIT_PROXY (http://a b/) is neither" "WASM_GIT_PROXY=http://a b/"
 refused "the id sources" "the id of 'sources=$T/zips/p99.zip' is sources" "WASM_EXTRA_IMAGES=sources=$T/zips/p99.zip"
 refused "a proxy of ftp" "WASM_GIT_PROXY (ftp://proxy.example/) is not an http:// or https:// URL" \
@@ -839,7 +847,7 @@ manifest() {
 
 step="stage.mjs, one image"
 stage ok --git-proxy-default=
-manifest 'm.imageId === "p15" && m.images.length === 1 && m.images[0].default === true'
+manifest 'm.imageId === "p15" && m.images.length === 1 && m.images[0].default === true && m.worldImageId === "p15"'
 manifest 'same(m.images[0].files, m.files) && m.files.every(served)'
 manifest 'same(urls(m.files), ["image/Pharo.changes.gz", "image/Pharo.image.gz", "image/Pharo15.0-64bit-b85960f.sources.gz"])'
 manifest 'same(paths(m.files), ["Pharo.changes", "Pharo.image", "Pharo15.0-64bit-b85960f.sources"])'
@@ -865,6 +873,10 @@ manifest 'same(urls(m.extraSources), ["image/sources/Pharo15.0-64bit-4e572fe.sou
 manifest 'same(paths(m.extraSources), ["Pharo15.0-64bit-4e572fe.sources"])'
 manifest 'm.gitProxyDefault === "https://proxy.example/" && m.imageId === "p15"'
 manifest 'fs.readFileSync(path.join(out, "index.html"), "utf8").includes(m.build)'
+step="stage.mjs, a default image of the world page"
+stage ok --image-id p15 --extra-image "p99=$sg/stock-p99" --extra-world-image "p99=$sg/web-p99" \
+    --world-default p99 --git-proxy-default=
+manifest 'm.imageId === "p15" && m.worldImageId === "p99" && m.images.find((i) => i.default).id === "p15"'
 step="stage.mjs, an extra image named default"
 stage ok --extra-image "default=$sg/stock-p99" --git-proxy-default=
 manifest 'm.imageId === "p15" && same(m.images.map((i) => i.id), ["p15", "default"])'
@@ -910,6 +922,9 @@ stage_refused "is not an http:// or https:// URL" --git-proxy-default ftp://prox
 stage_refused "has a user name or password" --git-proxy-default https://me:secret@proxy.example/
 stage_refused "has a #fragment" --git-proxy-default https://proxy.example/#x
 stage_refused "--image-id P15 is not" --image-id P15
+stage_refused "--world-default P15 is not" --world-default P15
+stage_refused "--world-default p98 is not the id of an image" --world-default p98
+stage_refused "--world-default p99 is not prepared for the world" --extra-image "p99=$sg/stock-p99" --world-default p99
 # (SDL2 is gone, and its page with it)
 stage_refused "bad argument --sdl2" --sdl2 1
 stage_refused "--extra-image sources: image/sources/ holds the --extra-sources files" \

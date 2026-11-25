@@ -936,6 +936,7 @@ function progress(phase, total) {
 // The files of /pharo and where the image came from: init.upload, else the
 // catalog entry init.fresh, else the slot init.slot, else (init.persist)
 // the slot booted or saved last, else the default entry of the catalog
+// (of the world page in the mode 'world')
 async function load(m) {
   // the notebook kernel takes no upload, and only reads the slot
   const notebook = mode === 'notebook', up = notebook ? null : m.upload;
@@ -1000,7 +1001,7 @@ async function load(m) {
         intended = null;
       }
     } else {
-      entry = entry || PharoCatalog.defaultEntry(manifest);
+      entry = entry || (mode === 'world' ? PharoCatalog.worldEntry(manifest) : PharoCatalog.defaultEntry(manifest));
       if (!entry) throw new Error('manifest.json lists no image');
     }
   }

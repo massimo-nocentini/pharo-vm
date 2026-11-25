@@ -134,7 +134,7 @@ await run(async t => {
   // launcher shows, so gotoWorld names the default image (?fresh=), unless
   // told the choice ({slot} or {fresh}) or that the launcher is wanted (null)
   const catalog = manifest.images && manifest.images.length ? manifest.images : [{ id: manifest.imageId || 'default', default: true }];
-  const defaultId = catalog.find(e => e.default).id;
+  const defaultId = manifest.worldImageId || catalog.find(e => e.default).id;
   const multi = catalog.length >= 2;
   const worldUrl = choice => t.base + 'world.html' +
     (choice === null ? '' : choice && choice.slot ? '?slot=' + choice.slot : choice && choice.fresh ? '?fresh=' + choice.fresh
@@ -1200,7 +1200,7 @@ await run(async t => {
       assert(f.url().endsWith('/world.html?fresh=' + defaultId), 'the default, fresh: ' + f.url());
       assert(/^Started a fresh /.test(await f.textContent('#notice-text')), 'the note ' + await f.textContent('#notice-text'));
       // every other image of the site starts fresh, from its own files
-      for (const e of catalog.filter(e => !e.default)) {
+      for (const e of catalog.filter(e => e.id !== defaultId)) {
         const n = fetched.length, starts = await f.evaluate(() => window.PharoWorld.stats.starts);
         await f.click('#images');
         await f.waitForSelector('#images-dialog[open]');

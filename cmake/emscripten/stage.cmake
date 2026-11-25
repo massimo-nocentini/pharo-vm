@@ -40,7 +40,8 @@
 # wasm-web-image-<id> exists, which web/ serves from image/<id>/.  The
 # catalog of the manifest (images) lists them all, with the default one under
 # the id WASM_IMAGE_ID (when empty, stage.mjs names it after its .sources,
-# p15 for Pharo 15).  Each file of WASM_EXTRA_SOURCES, a .sources of no
+# p15 for Pharo 15), and the id of the world page's default image,
+# WASM_WORLD_DEFAULT (when empty, the default one).  Each file of WASM_EXTRA_SOURCES, a .sources of no
 # image of the site, goes to image/sources/: a saved image that the site
 # served before finds the .sources of its methods there.  WASM_GIT_PROXY is
 # the site's default CORS proxy of git (manifest.gitProxyDefault), which the
@@ -376,6 +377,9 @@ endforeach()
 # (compared with "", since an id such as 0, n or off is false to if())
 if(NOT WASM_IMAGE_ID STREQUAL "")
     list(APPEND PHARO_WASM_STAGE_ARGUMENTS --image-id "${WASM_IMAGE_ID}")
+endif()
+if(DEFINED WASM_WORLD_DEFAULT AND NOT WASM_WORLD_DEFAULT STREQUAL "")
+    list(APPEND PHARO_WASM_STAGE_ARGUMENTS --world-default "${WASM_WORLD_DEFAULT}")
 endif()
 foreach(PHARO_WASM_EXTRA_SOURCES IN LISTS WASM_EXTRA_SOURCES)
     get_filename_component(PHARO_WASM_EXTRA_SOURCES "${PHARO_WASM_EXTRA_SOURCES}" ABSOLUTE)

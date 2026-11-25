@@ -40,7 +40,8 @@
 // - The image: the URL says which (?slot=<slot> of the images saved in this
 //   browser, ?fresh=<id> of the site's catalog; nothing else of the URL is
 //   read), else the worker boots the image saved or booted last, else the
-//   default one of the catalog.  On a first visit (nothing saved) to a site
+//   default one of the world page (PharoCatalog.worldEntry: the batteries
+//   image on the site of CI).  On a first visit (nothing saved) to a site
 //   of several images, no VM starts: the Images dialog opens as the
 //   launcher (images.js), and the user chooses which.  Once the VM is
 //   ready, and after each save, the URL says the image that runs
@@ -1335,6 +1336,7 @@
     images = PharoImages.create({
       store: storageUnavailable ? null : store,
       manifest: () => manifest,
+      defaultEntry: Catalog.worldEntry,
       current: () => current,
       // (a VM that ended is none: its slot can be opened again)
       running: () => (worker && alive && current.slot) || null,

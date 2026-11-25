@@ -30,6 +30,9 @@
 //
 //   PharoCatalog.images(manifest)         the entries
 //   PharoCatalog.defaultEntry(manifest)   the default entry
+//   PharoCatalog.worldEntry(manifest)     the default entry of the world page:
+//                                         that of manifest.worldImageId, else
+//                                         the default entry
 //   PharoCatalog.find(manifest, id)       the entry of that id, or null
 //   PharoCatalog.sourcesOf(entry)         the file object of its .sources, or null
 //   PharoCatalog.sourcesFile(manifest, name)
@@ -89,6 +92,11 @@
     return images(manifest).find(e => e.id === id) || null;
   }
 
+  function worldEntry(manifest) {
+    const id = manifest && manifest.worldImageId;
+    return (typeof id === 'string' && find(manifest, id)) || defaultEntry(manifest);
+  }
+
   function sourcesOf(entry) {
     return (entry && Array.isArray(entry.files) && entry.files.find(isSources)) || null;
   }
@@ -111,5 +119,5 @@
 
   const downloadSize = entry => ((entry && entry.files) || []).reduce((n, f) => n + (f.gzSize || f.size || 0), 0);
 
-  return { images, defaultEntry, find, sourcesOf, sourcesFile, entryOfFile, pharoOf, labelOf, downloadSize, ID };
+  return { images, defaultEntry, worldEntry, find, sourcesOf, sourcesFile, entryOfFile, pharoOf, labelOf, downloadSize, ID };
 });

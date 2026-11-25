@@ -278,7 +278,7 @@ It fetches the `.sources` once per boot, and the image only when the Console run
 ## The world page
 
 `world.html` boots an image with `--interactive`, and the world draws itself in the canvas.
-The image is the one its URL names (`?slot=<id>` of a saved image, `?fresh=<id>` of an image of the site, as in the Console), else the image saved or booted last, else the site's default image.
+The image is the one its URL names (`?slot=<id>` of a saved image, `?fresh=<id>` of an image of the site, as in the Console), else the image saved or booted last, else the default image of the world page (`WASM_WORLD_DEFAULT`: the batteries image on the site of CI; the Console's default is the site's).
 On a first visit (nothing saved in this browser) to a site of several images, no VM starts: the Images dialog opens as the launcher, "Choose a Pharo image", with a button for each image of the site, its build and the size of its download, and the default one has the focus, so that Enter starts it; Escape does not close it.
 A site of one image starts it at once, as before.
 The canvas follows the size of the page, and the world has its size in CSS pixels.
@@ -302,7 +302,7 @@ With cairo, Athens draws too: Roassal, the Canvas view of the Inspector, Epicea'
   Save as asks for a name, and saves into a new saved image of that name.
   Download gives the image and its `.changes`.
 - Images, as in the Console: start an image of the site fresh, or a saved one, rename or delete one, or open it in the Console; the page asks first when the world has input that is not saved.
-  Deleting the saved image that runs starts the saved image used last of those left, else the site's default image (the launcher, on a site of several images).
+  Deleting the saved image that runs starts the saved image used last of those left, else the default image of the page (the launcher, on a site of several images).
 - The canvas shows one OSWindow at a time: the newest one that has an event handler, such as the window of the Emergency Debugger of Pharo 12, takes the canvas and the input, and the world comes back when it closes.
 - The status pill says Busy while the VM has not slept for a second, or while it does not answer at all (a long primitive).
 - Open, or a drop of files on the page, starts an image of your own, as in the Console, after asking when the world has input that is not saved ("Open <name> as a new image?"); it becomes a new saved image once it has started.
@@ -397,6 +397,7 @@ To keep two builds, give each its own `WASM_BUILDDIR`:
   Each id is an id as above, given once, not the default's, and not `sources`; each zip must exist, and is accepted as given, without a pinned SHA256 (the workflow checks those it downloads).
   Paths with blanks are not supported.
   Each image is prepared for the world with `WASM_HOST_PHARO` as the default one is; two images whose `.sources` have the same name must have the same file.
+- `WASM_WORLD_DEFAULT`: the id of the default image of the world page, the default image of the site or one of `WASM_EXTRA_IMAGES` that is prepared for the world (default: the default image of the site; `worldImageId` in the manifest).
 - `WASM_EXTRA_SOURCES`: `.sources` files, separated by blanks, that the site serves under `web/image/sources/` for the images saved in a browser from an image that it served before (default none); one that an image of the site has already is not staged twice, and one of the name of an image's `.sources` but another content is refused.
 - `WASM_GIT_PROXY`: the site's default CORS proxy of git's HTTP requests, which the pages use unless the user chose another or none in Settings (default `https://cors.isomorphic-git.org/`, the public proxy of isomorphic-git); `WASM_GIT_PROXY=` gives the site none.
   It must be an http:// or https:// URL without a user name, password or `#fragment`; a bare origin gets its `/`, and the manifest has it as the browser writes it.

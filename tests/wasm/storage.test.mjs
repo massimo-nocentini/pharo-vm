@@ -409,6 +409,9 @@ const catalog = {
 await check('PharoCatalog: images, defaultEntry, find, sourcesOf, sourcesFile, entryOfFile, downloadSize', async () => {
   eq(PharoCatalog.images(catalog).map(e => e.id), ['p13', 'p15'], 'images');
   eq(PharoCatalog.defaultEntry(catalog).id, 'p15', 'default');
+  eq(PharoCatalog.worldEntry(catalog).id, 'p15', 'the world\'s default is the default');
+  eq(PharoCatalog.worldEntry({ ...catalog, worldImageId: 'p13' }).id, 'p13', 'the world\'s own default');
+  eq(PharoCatalog.worldEntry({ ...catalog, worldImageId: 'p99' }).id, 'p15', 'an unknown one');
   eq(PharoCatalog.find(catalog, 'p13').label, 'Pharo 13.1', 'find');
   eq(PharoCatalog.find(catalog, 'p99'), null, 'not found');
   eq(PharoCatalog.sourcesOf(PharoCatalog.find(catalog, 'p13')).url, 'image/p13/Pharo13.1-64bit-d7c6f76.sources.gz', 'sourcesOf');

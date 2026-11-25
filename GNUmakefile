@@ -29,6 +29,8 @@
 # <id>=<zip> (p13=Pharo13.zip p14=Pharo14.zip), each prepared for the world
 # as the default one and staged under web/image/<id>/; WASM_IMAGE_ID is the
 # id of the default one (empty: p<major> of its .sources, p15 for Pharo 15).
+# WASM_WORLD_DEFAULT is the id of the image that the world page has for its
+# default, the default one or an extra one (empty: the default one).
 # WASM_EXTRA_SOURCES names .sources files that no image of the site has,
 # staged for the images saved in a browser from an image the site served
 # before.  WASM_GIT_PROXY is the site's default CORS proxy of git, which the
@@ -118,9 +120,10 @@ WASM_GENERATED ?=
 WASM_VMMAKER_IMAGE ?=
 WASM_VMMAKER_VM ?=
 # the images of the site (above): the id of the default image, the extra
-# images (<id>=<zip> ...), the extra .sources files, and the default proxy of
-# git
+# images (<id>=<zip> ...), the id of the world page's default image, the
+# extra .sources files, and the default proxy of git
 WASM_IMAGE_ID ?=
+WASM_WORLD_DEFAULT ?=
 WASM_EXTRA_IMAGES ?=
 WASM_EXTRA_SOURCES ?=
 WASM_GIT_PROXY ?= https://cors.isomorphic-git.org/
@@ -300,6 +303,20 @@ ifeq ($(call wasm_id,$(WASM_IMAGE_ID)),)
 $(error WASM_IMAGE_ID ($(WASM_IMAGE_ID)) is not $(WASM_ID_RULE))
 endif
 endif
+ifneq ($(WASM_WORLD_DEFAULT),)
+ifneq ($(words $(WASM_WORLD_DEFAULT))$(call special,$(WASM_WORLD_DEFAULT)),1)
+$(error WASM_WORLD_DEFAULT ($(WASM_WORLD_DEFAULT)) is not $(WASM_ID_RULE))
+endif
+ifeq ($(call wasm_id,$(WASM_WORLD_DEFAULT)),)
+$(error WASM_WORLD_DEFAULT ($(WASM_WORLD_DEFAULT)) is not $(WASM_ID_RULE))
+endif
+# (the id of the default image is known here only when WASM_IMAGE_ID gives it)
+ifneq ($(WASM_IMAGE_ID),)
+ifeq ($(filter $(WASM_WORLD_DEFAULT),$(WASM_IMAGE_ID) $(EXTRA_IMAGE_IDS)),)
+$(error WASM_WORLD_DEFAULT ($(WASM_WORLD_DEFAULT)) is the id of no image ($(WASM_IMAGE_ID) $(EXTRA_IMAGE_IDS)))
+endif
+endif
+endif
 # (the shell must take it literally; and stage.mjs, which parses the URL,
 # would refuse the rest only after the VM and the images are built: an
 # http:// or https:// URL with a host, without a user name or password in it
@@ -393,6 +410,7 @@ WASM_CMAKE_FLAGS = \
   -UWASM_SDL2 \
   "-DWASM_IMAGE_ZIP=$(IMAGE_ZIP)" \
   "-DWASM_IMAGE_ID=$(WASM_IMAGE_ID)" \
+  "-DWASM_WORLD_DEFAULT=$(WASM_WORLD_DEFAULT)" \
   "-DWASM_EXTRA_IMAGES=$(subst $(WASM_SPACE),;,$(EXTRA_IMAGES))" \
   "-DWASM_EXTRA_SOURCES=$(subst $(WASM_SPACE),;,$(EXTRA_SOURCES))" \
   "-DWASM_GIT_PROXY=$(WASM_GIT_PROXY)" \
@@ -450,6 +468,7 @@ $(W)/config.make: FORCE | $(W)/.make-wasm
 	  echo "WASM_POPPLER = $(WASM_POPPLER)"; \
 	  echo "WASM_IMAGE_ZIP = $(IMAGE_ZIP)"; \
 	  echo "WASM_IMAGE_ID = $(WASM_IMAGE_ID)"; \
+	  echo "WASM_WORLD_DEFAULT = $(WASM_WORLD_DEFAULT)"; \
 	  echo "WASM_EXTRA_IMAGES = $(EXTRA_IMAGES)"; \
 	  echo "WASM_EXTRA_SOURCES = $(EXTRA_SOURCES)"; \
 	  echo "WASM_GIT_PROXY = $(WASM_GIT_PROXY)"; \
