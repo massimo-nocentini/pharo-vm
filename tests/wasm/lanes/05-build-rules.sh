@@ -31,8 +31,9 @@
 #     WASM_SDL2=OFF changes nothing; cmake is given -U WASM_SDL2, which drops
 #     it from the cache of a tree configured with it;
 #   - wasm-check-browser fails without Playwright, runs page.spec.mjs and
-#     then notebook.spec.mjs on every build, world.spec.mjs only for a build
-#     with the image of the world, ffi.spec.mjs only for one with the FFI,
+#     then notebook.spec.mjs and webfetch.spec.mjs on every build,
+#     world.spec.mjs only for a build with the image of the world,
+#     ffi.spec.mjs only for one with the FFI,
 #     git.spec.mjs only for one with libgit2, and pango.spec.mjs only for
 #     one with Pango (the placeholder libpango-1.0.so.0 in its manifest);
 #   - a class of OSWindow-Web that comes, goes or changes prepares the image
@@ -214,6 +215,7 @@ echo '"B"' >"$src/smalltalksrc/VMMaker/B.class.st"
 echo 'set(FLAVOUR "StackVM" CACHE STRING "" FORCE)' >"$src/cmake/Emscripten.cache.cmake"
 echo 'console.log("page.spec.mjs " + process.argv[2])' >"$src/tests/wasm/page.spec.mjs"
 echo 'console.log("notebook.spec.mjs " + process.argv[2])' >"$src/tests/wasm/notebook.spec.mjs"
+echo 'console.log("webfetch.spec.mjs " + process.argv[2])' >"$src/tests/wasm/webfetch.spec.mjs"
 echo 'console.log("world.spec.mjs " + process.argv[2])' >"$src/tests/wasm/world.spec.mjs"
 echo 'console.log("ffi.spec.mjs " + process.argv[2])' >"$src/tests/wasm/ffi.spec.mjs"
 echo 'console.log("git.spec.mjs " + process.argv[2])' >"$src/tests/wasm/git.spec.mjs"
@@ -540,8 +542,9 @@ step="wasm-check-browser, no image of the world, no FFI, no libgit2"
 PLAYWRIGHT_MODULE=$T/playwright wmake -o wasm wasm-check-browser
 grep -q "^page.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: page.spec.mjs did not run"; }
 grep -q "^notebook.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: notebook.spec.mjs did not run"; }
-test "$(grep -E -o '^(page|notebook)\.spec\.mjs' "$T/make.out" | tr '\n' ' ')" = "page.spec.mjs notebook.spec.mjs " ||
-    { cat "$T/make.out"; fail "$step: notebook.spec.mjs did not run after page.spec.mjs"; }
+grep -q "^webfetch.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: webfetch.spec.mjs did not run"; }
+test "$(grep -E -o '^(page|notebook|webfetch)\.spec\.mjs' "$T/make.out" | tr '\n' ' ')" = "page.spec.mjs notebook.spec.mjs webfetch.spec.mjs " ||
+    { cat "$T/make.out"; fail "$step: the specs did not run in their order"; }
 if grep -q "^world.spec.mjs" "$T/make.out" || ! grep -q "^skip world.spec.mjs" "$T/make.out"; then
     cat "$T/make.out"
     fail "$step: world.spec.mjs ran, or no skip was reported"
@@ -573,7 +576,7 @@ fi
 step="wasm-check-browser, with the image of the world, the FFI, libgit2 and Pango"
 printf '{\n  "world": true,\n  "ffi": true,\n  "git": true,\n  "libraries": [\n    "libcairo.so.2",\n    "libpango-1.0.so.0"\n  ]\n}\n' >"$W/web/manifest.json"
 PLAYWRIGHT_MODULE=$T/playwright wmake -o wasm wasm-check-browser
-for spec in page notebook world ffi git pango; do
+for spec in page notebook webfetch world ffi git pango; do
     grep -q "^$spec.spec.mjs $W/web\$" "$T/make.out" || { cat "$T/make.out"; fail "$step: $spec.spec.mjs did not run"; }
 done
 if grep -q "^skip " "$T/make.out"; then cat "$T/make.out"; fail "$step: a spec was skipped"; fi
