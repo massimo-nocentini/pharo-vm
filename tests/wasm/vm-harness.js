@@ -639,7 +639,7 @@ const blockClass = clean => (clean && newer ? 'CleanBlockClosure' : 'FullBlockCl
   });
 
   // the events of the host (packaging/emscripten/host/host-events.js)
-  await check('28 host events: 20 signals reach a process above the idle one, the VM asleep, in a median of under 5 ms', async () => {
+  await check('28 host events: 20 signals reach a process above the idle one, the VM asleep, in a median of under 5 ms, and 18 of them', async () => {
     const X = await session();
     await X.prompt();
     const host = X.drv.module.pharoHost;
@@ -648,7 +648,7 @@ const blockClass = clean => (clean && newer ? 'CleanBlockClosure' : 'FullBlockCl
     const index = parseInt(X.since(), 10);
     assert(index > 0, 'index ' + JSON.stringify(X.since()));
     for (const bad of [0, -1, 1e9, 2 ** 31]) assert(host.signal(bad) === false, 'index ' + bad);
-    const medians = [];
+    const medians = [], most = [];
     // (a loaded machine slows a run down: the best of three)
     for (const priority of [20, 35]) for (let run = 1; run <= 3; run++) {
       X.send(`Smalltalk at: #HostWaiter put: ([ [ (Smalltalk at: #HostSemaphore) wait. ` +
@@ -656,7 +656,8 @@ const blockClass = clean => (clean && newer ? 'CleanBlockClosure' : 'FullBlockCl
       await X.prompt();
       const times = [];
       for (let i = 0; i < 20; i++) {
-        await sleep(40 + 3 * i);
+        // (at random: some phases of the VM's own wakeups hide a lost one)
+        await sleep(60 + 60 * Math.random());
         const t = now();
         X.mark();
         assert(host.signal(index) === true, 'signal');
@@ -667,12 +668,14 @@ const blockClass = clean => (clean && newer ? 'CleanBlockClosure' : 'FullBlockCl
       X.send('(Smalltalk at: #HostWaiter) terminate. 0\n');
       await X.prompt();
       const median = (times[9] + times[10]) / 2;
-      if (median >= 5 && run < 3) continue;
+      if (times[17] >= 5 && run < 3) continue;
       medians.push(median);
+      most.push(times[17]);
       break;
     }
-    console.log('#   medians ' + medians.map(m => m.toFixed(2)).join(' and ') + ' ms');
-    assert(medians.every(m => m < 5), 'medians ' + medians.join(' '));
+    const said = `medians ${medians.map(m => m.toFixed(2)).join(' and ')} ms, 18 in ${most.map(m => m.toFixed(2)).join(' and ')} ms`;
+    console.log('#   ' + said);
+    assert(medians.concat(most).every(m => m < 5), said);
     X.drv.eof();
     await X.ended();
   });
