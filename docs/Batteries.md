@@ -15,6 +15,7 @@ The projects, loaded in this order by `packaging/batteries/load.st`:
 | SimdUTF ([SimdUTF.md](SimdUTF.md)) | `SimdUTF`, `default` | `github://massimo-nocentini/simdutf.st:master/src` |
 | SimdCSV: CSV read and written ([SimdCSV.md](SimdCSV.md)) | `SimdCSV`, `default` (Core and Tests: not the opt-in NeoTests group, which loads NeoCSV) | `github://massimo-nocentini/simdcsv.st:master/src` |
 | TimSort ([TimSort.md](TimSort.md)) | `TimSort`, `default` | `github://massimo-nocentini/timsort.st:master/src` |
+| WebFetch: HTTP and HTTPS by the `fetch` of the browser or of node ([WebFetch.md](WebFetch.md)), and its Zinc adapter, which is not installed (`WebFetchZinc install` does) | `WebFetch`, `default`, `Zinc` and `ZincTests` | `github://massimo-nocentini/web-fetch.st:master/src` |
 | GLib, Pango and PangoCairo by uFFI ([PangoPoppler.md](PangoPoppler.md)) | `LibPangoCairo`, `default` | `github://massimo-nocentini/libpangocairo.st:master/src` |
 | poppler-glib by uFFI | `LibPoppler`, `default` | `github://massimo-nocentini/libpoppler.st:master/src` |
 | CMark: Markdown parse trees of the CMarkPlugin (cmark-gfm), their Roassal view, and a Markdown tab of class comments in Calypso ([CMark.md](CMark.md)) | `CMark`, `default` (Core, Tests, Roassal, RoassalTests, Calypso and CalypsoTests: not the opt-in RoassalFork group, since the fork is loaded first anyway) | `github://massimo-nocentini/cmark-gfm.st:master/src` |
@@ -41,11 +42,11 @@ Any error stops `load.st` with exit status 1 before the image is saved, and so d
 It prints a line per project and per repository that Iceberg cloned, with its commit:
 
     Batteries repository RTree https://github.com/massimo-nocentini/RTree.git master a875929baa2b562d1b4d1b6bdf55882b31678034
-    Batteries loaded 13 projects on Pharo 15.0 (0 warnings) ok
+    Batteries loaded 14 projects on Pharo 15.0 (0 warnings) ok
 
 The repositories of Iceberg stay registered in the image, without their clones (the zip has none): Iceberg shows them as missing, and clones them again on demand.
 
-On a VM of this repository every project uses its plugin or library; on another VM SimdJSON (which needs the SimdJSONPlugin or libSimdJSONFFI), Pango and Poppler do not work, and the others fall back to Smalltalk.
+On a VM of this repository every project uses its plugin or library; on another VM SimdJSON (which needs the SimdJSONPlugin or libSimdJSONFFI), Pango and Poppler do not work, WebFetch answers that it is unavailable (natively too: its plugin is of the WebAssembly VM), and the others fall back to Smalltalk.
 In the browser, the WebAssembly VM has the plugins, and Pango and Poppler when it is built with `WASM_PANGO=ON` and `WASM_POPPLER=ON` ([WebAssembly.md](WebAssembly.md), The libraries), as the site of GitHub Actions is: there LibPangoCairo and LibPoppler work as natively, with the fonts of the VM (DejaVu).
 
 ## The welcome page
@@ -67,7 +68,7 @@ It needs network access to GitHub (git over HTTPS) and `unzip`, and `zip` or `py
 
 The settings, all environment variables:
 
-- `BATTERIES_<KEY>`: the repository of a project instead of its `master` (or `Pharo15`) on GitHub, any Metacello repository; for a local checkout `tonel://<checkout>/src`, whose commit `build.sh` prints. The keys are `ROASSAL`, `VMPLUGINSPRIMITIVES`, `SIMDJSON`, `SIMDUTF`, `SIMDCSV`, `TIMSORT`, `LIBPANGOCAIRO`, `LIBPOPPLER`, `CMARK`, `CONTAINERSESSENTIALS`, `CONTAINERSCATEGORY`, `DELIMCC` (`filetree://<checkout>` for a local checkout) and `MATERIALICONS`.
+- `BATTERIES_<KEY>`: the repository of a project instead of its `master` (or `Pharo15`) on GitHub, any Metacello repository; for a local checkout `tonel://<checkout>/src`, whose commit `build.sh` prints. The keys are `ROASSAL`, `VMPLUGINSPRIMITIVES`, `SIMDJSON`, `SIMDUTF`, `SIMDCSV`, `TIMSORT`, `WEBFETCH`, `LIBPANGOCAIRO`, `LIBPOPPLER`, `CMARK`, `CONTAINERSESSENTIALS`, `CONTAINERSCATEGORY`, `DELIMCC` (`filetree://<checkout>` for a local checkout) and `MATERIALICONS`.
 - `BATTERIES_<KEY>_GROUPS`: its groups, separated by blanks.
 - `BATTERIES_SMOKE`: `basic` (the default) or `native`, below.
 - `BATTERIES_NAME` (the name of the image, `Pharo15-batteries`), `BATTERIES_TIMEOUT` (seconds per run of the VM, 1800), `BATTERIES_ICEBERG_REMOTE` (`httpsUrl`, or `scpUrl` to clone with SSH).

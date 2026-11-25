@@ -78,8 +78,8 @@
 # The batteries image (docs/Batteries.md) is the stock Pharo 15 image of
 # the site with the Smalltalk projects of this VM's plugins and libraries
 # (vm-plugins-primitives.st, simdjson.st, simdutf.st, simdcsv.st,
-# timsort.st, libpangocairo.st, libpoppler.st, cmark-gfm.st, from their
-# master branches) and the forks of Roassal and RTree, loaded by
+# timsort.st, web-fetch.st, libpangocairo.st, libpoppler.st, cmark-gfm.st,
+# from their master branches) and the forks of Roassal and RTree, loaded by
 # packaging/batteries/build.sh.  Its job needs no other one: it runs the VM
 # of files.pharo.org, not one of this workflow, and so starts with the
 # generate job; the WebAssembly job, which offers it on the site, waits for
@@ -1363,6 +1363,14 @@ jobs:
           git -C "$RUNNER_TEMP/libpoppler.st" log -1 --format='libpoppler.st %h %s'
           echo "LIBPANGOCAIRO_DIR=$RUNNER_TEMP/libpangocairo.st" >> "$GITHUB_ENV"
           echo "LIBPOPPLER_DIR=$RUNNER_TEMP/libpoppler.st" >> "$GITHUB_ENV"
+
+      # The Smalltalk side of the WebFetchPlugin (master), whose suites lane 81
+      # of wasm-check runs on the node VM and on pharo-web (WEB_FETCH_DIR)
+      - name: Clone web-fetch.st
+        run: |
+          git clone -q --depth 1 https://github.com/massimo-nocentini/web-fetch.st.git "$RUNNER_TEMP/web-fetch.st"
+          git -C "$RUNNER_TEMP/web-fetch.st" log -1 --format='web-fetch.st %h %s'
+          echo "WEB_FETCH_DIR=$RUNNER_TEMP/web-fetch.st" >> "$GITHUB_ENV"
 
       # Pango and Poppler (WASM_PANGO, WASM_POPPLER: docs/WebAssembly.md):
       # with Poppler, under the GPL, the modules are distributed under the GPL 3

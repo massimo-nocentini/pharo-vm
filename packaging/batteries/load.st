@@ -11,6 +11,7 @@
 	SimdUTF              github://massimo-nocentini/simdutf.st:master/src        default
 	SimdCSV              github://massimo-nocentini/simdcsv.st:master/src        default
 	TimSort              github://massimo-nocentini/timsort.st:master/src        default
+	WebFetch             github://massimo-nocentini/web-fetch.st:master/src      default Zinc ZincTests
 	LibPangoCairo        github://massimo-nocentini/libpangocairo.st:master/src  default
 	LibPoppler           github://massimo-nocentini/libpoppler.st:master/src     default
 	CMark                github://massimo-nocentini/cmark-gfm.st:master/src      default (CMark-Roassal on the fork)
@@ -38,11 +39,13 @@ the status keys of tests, errors and warnings too (monochrome): the image is sav
 After the projects, the package PharoBatteries-Welcome of welcome/ is installed, with the text welcome/welcome.md: the
 page that the image shows the first time that it is opened with a display (PharoBatteriesWelcome).
 
+WebFetch is loaded with its Zinc adapter, which is not installed: WebFetchZinc install does that.
+
 Environment:
 	BATTERIES_HOME           the directory of this script, which the script cannot find by itself
 	BATTERIES_<KEY>          the repository of a project instead of the one above, any Metacello repository
 	                         (github://..., gitlocal://..., tonel:///<checkout>/src for a local checkout); the keys
-	                         are ROASSAL, VMPLUGINSPRIMITIVES, SIMDJSON, SIMDUTF, SIMDCSV, TIMSORT, LIBPANGOCAIRO, LIBPOPPLER,
+	                         are ROASSAL, VMPLUGINSPRIMITIVES, SIMDJSON, SIMDUTF, SIMDCSV, TIMSORT, WEBFETCH, LIBPANGOCAIRO, LIBPOPPLER,
 	                         CMARK, CONTAINERSESSENTIALS, CONTAINERSCATEGORY, DELIMCC, MATERIALICONS
 	BATTERIES_<KEY>_GROUPS   its groups, separated by blanks, instead of the ones above
 	BATTERIES_ICEBERG_REMOTE the protocol of the clones of github:// repositories, httpsUrl by default (no SSH key
@@ -81,6 +84,7 @@ projects := {
 	{ 'SIMDUTF'. 'SimdUTF'. 'github://massimo-nocentini/simdutf.st:master/src'. #( 'default' ) }.
 	{ 'SIMDCSV'. 'SimdCSV'. 'github://massimo-nocentini/simdcsv.st:master/src'. #( 'default' ) }.
 	{ 'TIMSORT'. 'TimSort'. 'github://massimo-nocentini/timsort.st:master/src'. #( 'default' ) }.
+	{ 'WEBFETCH'. 'WebFetch'. 'github://massimo-nocentini/web-fetch.st:master/src'. #( 'default' 'Zinc' 'ZincTests' ) }.
 	{ 'LIBPANGOCAIRO'. 'LibPangoCairo'. 'github://massimo-nocentini/libpangocairo.st:master/src'. #( 'default' ) }.
 	{ 'LIBPOPPLER'. 'LibPoppler'. 'github://massimo-nocentini/libpoppler.st:master/src'. #( 'default' ) }.
 	{ 'CMARK'. 'CMark'. 'github://massimo-nocentini/cmark-gfm.st:master/src'. #( 'default' ) }.

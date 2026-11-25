@@ -8,7 +8,8 @@ few packages pass:
 
 	basic (any VM, the default): RTree-Tests, TimSort-Smalltalk-Tests, VM-Plugins-Primitives-Tests (the
 	        UtilsPlugin's Smalltalk twin, and the plugin too when the VM has it), SimdCSV-Tests (its Smalltalk
-	        backend, and the plugin too when the VM has it; its slow tests skip), CMark-Tests, CMark-Roassal-Tests
+	        backend, and the plugin too when the VM has it; its slow tests skip), WebFetch-Tests and
+	        WebFetch-Zinc-Tests (on a host made by the tests: those of a real fetch skip), CMark-Tests, CMark-Roassal-Tests
 	        and CMark-Calypso-Tests (whose tests that parse skip without the CMarkPlugin), Delimcc-Tests,
 	        Delimcc-Continuation-Tests and ContinuationTest (Pharo's, with the fixes of Delimcc-Continuation),
 	        MaterialSymbols-Tests (which put the gray pack back after each test) and
@@ -42,7 +43,7 @@ mode := (environment at: 'BATTERIES_SMOKE' ifAbsent: [ '' ]) trimBoth ifEmpty: [
 "1. a class or two of every project, the fork's RTree and Roassal"
 classes := #( #RSCanvas #RSPangoText #RSPdfPage #RTNaryTreeCollection #RTPackedTreeCollection #RTGridCollection
 	#RTLooseQuadtreeCollection #UtilsPlugin #KnuthRandom #SplitMix64 #SimdJSONReader #NeoJSONReader #SimdUTF #SimdCSV
-	#SimdCSVReader #TimSort #TimSortSmalltalk #PangoLayout #PopplerDocument #BaselineOfRoassalMN #CMark #CMarkParser
+	#SimdCSVReader #TimSort #TimSortSmalltalk #WebFetch #WebFetchZinc #PangoLayout #PopplerDocument #BaselineOfRoassalMN #CMark #CMarkParser
 	#CMarkRoassalRenderer #CTArray2D #CTKeyedValuedOrderedCollection #CTCategory #PartialContinuation #DelimccPrompt
 	#MaterialIcons #MaterialSymbolsThemeIcons #PharoBatteriesWelcome ).
 classes do: [ :name |
@@ -62,7 +63,7 @@ IceCredentialsProvider providerType = IceNonInteractiveCredentialsProvider ifTru
 	| canvas |
 	welcome isPending ifFalse: [ problems add: 'the welcome page is not pending' ].
 	#( 'Roassal' 'RTree' 'RoassalLayouts' 'cmark-gfm.st' 'libpangocairo.st' 'libpoppler.st' 'material-icons.st' 'simdjson.st'
-		'simdcsv.st' 'simdutf.st' 'timsort.st' 'vm-plugins-primitives.st' 'delimcc.st' 'Containers-Essentials'
+		'simdcsv.st' 'simdutf.st' 'timsort.st' 'web-fetch.st' 'vm-plugins-primitives.st' 'delimcc.st' 'Containers-Essentials'
 		'Containers-Category' ) do: [ :name |
 			(welcome contents includesSubstring: 'github.com/massimo-nocentini/' , name , ')') ifFalse: [
 				problems add: 'the welcome page does not name ' , name ] ].
@@ -107,9 +108,12 @@ IceCredentialsProvider providerType = IceNonInteractiveCredentialsProvider ifTru
 ((Smalltalk globals at: #SimdCSV) rowsFrom: 'a,b' , String lf , '1,"x,y"') = #( #( 'a' 'b' ) #( '1' 'x,y' ) ) ifFalse: [
 	problems add: 'SimdCSV rowsFrom: does not read' ].
 
+"(the Zinc adapter is loaded, not installed)"
+(ZnNetworkingUtils default class name beginsWith: 'WebFetch') ifTrue: [ problems add: 'the Zinc adapter of WebFetch is installed' ].
+
 "3. the tests"
-suites := #( 'RTree-Tests' 'TimSort-Smalltalk-Tests' 'VM-Plugins-Primitives-Tests' 'SimdCSV-Tests' 'CMark-Tests'
-	'CMark-Roassal-Tests' 'CMark-Calypso-Tests' 'Delimcc-Tests' 'Delimcc-Continuation-Tests' 'ContinuationTest'
+suites := #( 'RTree-Tests' 'TimSort-Smalltalk-Tests' 'VM-Plugins-Primitives-Tests' 'SimdCSV-Tests' 'WebFetch-Tests'
+	'WebFetch-Zinc-Tests' 'CMark-Tests' 'CMark-Roassal-Tests' 'CMark-Calypso-Tests' 'Delimcc-Tests' 'Delimcc-Continuation-Tests' 'ContinuationTest'
 	'MaterialSymbols-Tests' 'MaterialSymbols-Protocols-Tests' ).
 mode = 'native' ifTrue: [
 	suites := suites , #( 'SimdJSON-Tests' 'SimdJSON-FFI-Tests' 'TimSort-FFI-Tests' 'LibGLib-Tests' 'LibPangoCairo-Tests'

@@ -32,6 +32,12 @@ Open this page again with **Help > Batteries**.
 | [TimSort](https://github.com/massimo-nocentini/timsort.st) | CPython's stable, adaptive sort |
 | [VM plugins' primitives](https://github.com/massimo-nocentini/vm-plugins-primitives.st) | Fused multiply-add, strtok, de Casteljau, and the generators of Knuth and Vigna |
 
+### Network
+
+| Project | What it adds |
+|:---|:---|
+| [WebFetch](https://github.com/massimo-nocentini/web-fetch.st) | HTTP and HTTPS by the `fetch` of the browser or of node, on WebAssembly; `WebFetchZinc install` sends the requests of Zinc through it |
+
 ### Language
 
 | Project | What it adds |
@@ -54,7 +60,7 @@ SimdCSV rowsFrom: (String lf join: { 'a,b' . '1,2' }).
 
 - **SimdJSONPlugin**, **SimdUTFPlugin**, **SimdCSVPlugin**, **CMarkPlugin**, **TimSortPlugin** and **UtilsPlugin**, behind the projects above
 - **CairoPlugin**: Athens' calls of cairo as primitives (its image side is opt-in)
-- **WebDisplayPlugin** and **WebHostPlugin**, for the browser
+- **WebDisplayPlugin**, **WebHostPlugin** and **WebFetchPlugin**, for the browser
 
 ### Bundled libraries
 
