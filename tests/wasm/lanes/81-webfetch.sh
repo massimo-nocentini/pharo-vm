@@ -14,7 +14,7 @@
 #            kinds of error; 64 requests open and one more; 150 times a
 #            semaphore that takes the index of one that was just closed: no
 #            signal that is not its own;
-#   callback start, state, read and close inside an FFI callback, where
+#   callback start, state, head, read and close inside an FFI callback, where
 #            primitiveMayWait is false (skipped without the FFI);
 #   memory   60 MB in one object costs one copy in old space, and 150 MB more
 #            grow the memory;
@@ -42,7 +42,10 @@
 #            VMs without the plugin;
 #   suite off  the same with PHARO_WASM_NETWORK=0: no failure, no error, and
 #            the live tests skipped;
-#   suite web  the suite in pharo-web.
+#   suite web  the suite in pharo-web;
+#   snapshot  tests/snapshot-webfetch.st, twice: an image saved while processes
+#            wait for requests goes on, and restarted it signals
+#            WebFetchSessionEnded to each of them, and fetches again.
 #
 # Without it these are one skipped check.  The load and the suites are
 # stopped after 600 s each.
@@ -138,7 +141,7 @@ fresh unit
 rm -f Pharo.image Pharo.changes
 if run unit limit "$timeout" "$NODE" "$SRCDIR/tests/wasm/web-fetch.test.mjs"; then
     if test "$status" -ne 0 || grep -q '^not ok' smoke.out; then
-	fail unit "$(grep -A 1 '^not ok' smoke.out | head -n 6 | tr '\n' ' ')"
+	fail unit "$(grep -v '^ok' smoke.out | head -n 6 | tr '\n' ' ')"
     else
 	ok unit "$(tail -n 1 smoke.out)"
     fi
@@ -148,11 +151,11 @@ fresh builtin
 expect builtin true vm eval "Smalltalk vm listBuiltinModules includes: 'WebFetchPlugin (i)'"
 
 fresh codes
-if run codes probe codes; then probed codes codes 79; fi
+if run codes probe codes; then probed codes codes 80; fi
 
 if cached FEATURE_FFI; then
     fresh callback
-    if run callback probe callback; then probed callback callback 3; fi
+    if run callback probe callback; then probed callback callback 4; fi
 else
     skip_check callback "no FFI: the build has none (WASM_FFI=OFF)"
 fi
@@ -204,11 +207,12 @@ const closed = async () => (await (await fetch(url + "/_stats")).json()).closed;
 (async () => {
   const before = await closed();
   const p = spawn(process.execPath, [vm, "--headless", "Pharo.image", "--no-default-preferences", "st", "--quit", st]);
-  let out = "", at = 0;
+  let out = "", at = 0, ended = 0;
   p.stdout.on("data", d => { out += d; if (!at && /ending with true\n/.test(out)) at = performance.now(); });
   p.stderr.on("data", d => { require("fs").appendFileSync("vm.err", d); });
-  p.on("exit", async code => {
-    const ms = at ? performance.now() - at : -1;
+  p.on("exit", () => { ended = performance.now(); });
+  p.on("close", async code => {
+    const ms = at ? ended - at : -1;
     for (let i = 0; i < 20 && await closed() < before + 3; i++) await new Promise(f => setTimeout(f, 100));
     console.log(`status ${code}, ${ms >= 0 && ms < 2000 ? "in time" : ms.toFixed(0) + " ms"}, ${await closed() - before} closed`);
     if (!at || /not ok|not trapped/.test(out)) console.log(out);
@@ -280,7 +284,7 @@ const prompt = from => new Promise((resolve, reject) => {
 ' "$SRCDIR" "$WASM_DIR/web" "$1" "$2" "$url $3"
 }
 fresh web
-if run web web_run "$(pwd)" "$LANE_ST" codes; then probed web codes 79; fi
+if run web web_run "$(pwd)" "$LANE_ST" codes; then probed web codes 80; fi
 
 if test -z "$WEB_FETCH_DIR"; then
     skip_check package "no WEB_FETCH_DIR, a checkout of the package WebFetch (web-fetch.st)"
@@ -301,6 +305,10 @@ suite_off() (
     PHARO_WASM_NETWORK=0; export PHARO_WASM_NETWORK
     suite
 )
+snapshot() {
+    echo "$url" >webfetch.lane
+    vm st "$WEB_FETCH_DIR/tests/snapshot-webfetch.st"
+}
 # suites_passed NAME AVAILABILITY SKIPPED: both lines of run-webfetch.st have
 # tests, no failure, no error and the availability, and only the classes that
 # match SKIPPED have a test skipped
@@ -347,6 +355,9 @@ if test -f "$loaded/Pharo.image"; then
     if run 'suite web' web_run "$(pwd)" "$WEB_FETCH_DIR/tests/run-webfetch.st" suite; then
 	suites_passed 'suite web' ready 'NativeTest'
     fi
+    fresh snapshot "$loaded"
+    expect 'snapshot, saved' 'saved, the slow request: tick0tick1tick2tick3tick4' snapshot
+    expect 'snapshot, restarted' 'restarted: 6 of 6 WebFetchSessionEnded, open 0, then hello' snapshot
     rm -rf "$loaded"
 fi
 echo "81-webfetch: $(( $(date +%s) - started )) s"

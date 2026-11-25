@@ -218,6 +218,13 @@ probe = 'codes' ifTrue: [
 		answer := (wfp bytes: id) asString.
 		wfp close: id.
 		answer ] value: 'POST|/echo?post|a/b||mine|1000000|' , (String new: 60 withAll: $A).
+	check value: 'the headers that the server saw' value: [
+		| headers |
+		headers := ((STONJSON fromString: (wfp whole: base , '/_stats' window: 10000000 timeout: 0) utf8Decoded) at: 'requests')
+			detect: [ :each | (each at: 'url') = '/echo?post' ].
+		headers := headers at: 'headers'.
+		{ headers at: 'x-mine'. (headers includesKey: 'cookie'). (headers includesKey: 'sec-x'). (headers includesKey: 'referer') } ]
+		value: { 'caf' , (String with: (Character value: 233)). false. false. false }.
 	"the rule of the semaphores: close, unregister, and the index is another's"
 	check value: '150 reuses of an index: 0 spurious signals' value: [
 		| spurious same |
@@ -247,14 +254,21 @@ probe = 'callback' ifTrue: [
 	wfp class compile: 'qsort: base count: n size: s with: c
 	^ self ffiCall: #(void qsort(ByteArray base, size_t n, size_t s, FFICallback c)) library: WebFetchLaneLibC'.
 	ids := OrderedCollection new.
+	"one that is done, to read in the callback"
+	id := wfp get: base , '/hello' semaphore: sem window: 100 timeout: 0.
+	wfp wait: id on: sem until: [ :state :size | state >= 3 ].
 	wfp qsort: (ByteArray new: 8) count: 2 size: 4 with: (FFICallback
 		signature: #( int #( void * a #, void * b ) )
 		block: [ :a :b |
 			ids add: wfp mayWait.
 			ids add: (wfp get: base , '/hello' semaphore: sem window: 100 timeout: 0).
 			ids add: (wfp state: ids last).
+			ids add: (wfp head: id) utf8Decoded lines first.
+			ids add: (wfp bytes: id) asString.
+			ids add: (wfp close: id).
 			0 ]).
-	check value: 'in the callback' value: [ { ids first. ids second isInteger. ids third } ] value: { false. true. 1 }.
+	check value: 'in the callback: start and state' value: [ { ids first. ids second isInteger. ids third } ] value: { false. true. 1 }.
+	check value: 'in the callback: head, read and close' value: [ ids asArray copyFrom: 4 to: 6 ] value: { '200'. 'hello'. true }.
 	check value: 'after it' value: [ wfp mayWait ] value: true.
 	check value: 'the request goes on' value: [
 		wfp wait: ids second on: sem until: [ :state :size | state >= 3 ].

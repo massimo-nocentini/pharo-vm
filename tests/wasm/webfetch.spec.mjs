@@ -494,7 +494,11 @@ await run(async t => {
       is(await draws(), 0, 'frozen: frames');
       const t0 = Date.now();
       await w.click('#stop');
-      const said = await worldSay('WFP debugger', 30000);
+      // (an evaluation may come between the interrupt and the window)
+      const said = await waitFor('the debugger', async () => {
+        const s = await worldSay('WFP debugger', 30000);
+        return s !== 'debuggers 0' && s;
+      }, 15000);
       console.log(`# Stop to the debugger: ${Date.now() - t0} ms, ${said}`);
       is(said, 'debuggers 1 true');
       assert(await draws() > 0, 'it draws again');
