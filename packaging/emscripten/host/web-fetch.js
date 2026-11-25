@@ -14,10 +14,10 @@
 //   3 DONE     all of the body is here, size bytes unread
 //   4 FAILED   head is the error record; the bytes ready are dropped
 //
-// and signals its semaphore at each of these, and when size goes from 0 to
-// more, until it is closed (the rule of host-events.js).  The body waits in
-// the JavaScript heap until read(); at window bytes the stream is no longer
-// read.  Nothing signals inside start() or close().
+// and signals its semaphore at each of these, when size goes from 0 to more,
+// and when it reaches window, until it is closed (the rule of host-events.js).
+// The body waits in the JavaScript heap until read(); at window bytes the
+// stream is no longer read.  Nothing signals inside start() or close().
 //
 // The methods are synchronous, never throw and never call the VM:
 //
@@ -177,7 +177,9 @@ var PharoWebFetch = (() => {
         if (!value.length) continue;
         r.chunks.push(value);
         r.size += value.length;
-        if (r.size === value.length) tell(r);
+        // the first bytes; or all that come before a read(): the one who
+        // waits for the end of the body must know that it does not end
+        if (r.size === value.length || r.size >= r.window) tell(r);
       }
     }
 
