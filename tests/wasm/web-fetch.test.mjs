@@ -1,9 +1,10 @@
-// web-fetch.test.mjs - unit tests of host-events.js and web-fetch.js
+// web-fetch.test.mjs - unit tests of host-events.js, web-fetch.js and node-pump.js
 //
 // usage: node tests/wasm/web-fetch.test.mjs
 //
 // Evaluates packaging/emscripten/host/host-events.js and web-fetch.js in fresh
-// vm contexts with a fake fetch.  Prints every check and exits 1 on failure.
+// vm contexts with a fake fetch, and packaging/emscripten/node/node-pump.js
+// with a fake module.  Prints every check and exits 1 on failure.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -14,6 +15,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const hostDir = path.join(here, '..', '..', 'packaging', 'emscripten', 'host');
 const hostEventsSrc = fs.readFileSync(path.join(hostDir, 'host-events.js'), 'utf8');
 const webFetchSrc = fs.readFileSync(path.join(hostDir, 'web-fetch.js'), 'utf8');
+const nodePumpSrc = fs.readFileSync(path.join(hostDir, '..', 'node', 'node-pump.js'), 'utf8');
 
 const dec = new TextDecoder();
 const settle = async (turns = 10) => {
@@ -1010,6 +1012,37 @@ await check('start followed immediately by close never calls fetch', async () =>
   eq(signals, [], 'no signal');
   eq(wf.state(id), -1, 'unknown after close');
 });
+
+// node-pump.js on a Module whose first slice wakes it and then ends the VM
+for (const [how, last] of [
+  ['an ExitStatus', () => { throw Object.assign(new Error('exit'), { name: 'ExitStatus' }); }],
+  ['a trap', () => { throw new Error('trap'); }],
+  ['another state', () => 9],
+]) {
+  await check('node-pump.js: no slice after ' + how, async () => {
+    const done = { slices: 0, shutdowns: 0 };
+    const Module = {
+      pharoHost: { shutdown() { done.shutdowns++; } },
+      _vm_wakeup_ms: () => 1,
+      _vm_resume() {
+        done.slices++;
+        Module.hostWake();
+        return last();
+      },
+    };
+    const ctx = vm.createContext({
+      Module, setImmediate, clearImmediate, setTimeout, clearTimeout,
+      process: { env: {}, stderr: { write() {} } },
+    });
+    vm.runInContext(nodePumpSrc, ctx, { filename: 'node-pump.js' });
+    Module.onVMStarted();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    eq(done, { slices: 1, shutdowns: 1 });
+    Module.hostWake();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    eq(done.slices, 1, 'slices after a late hostWake');
+  });
+}
 
 console.log(`${passes} passed, ${failures} failed`);
 if (failures > 0) process.exit(1);

@@ -31,6 +31,9 @@ Module['onVMStarted'] = () => {
   };
   const end = () => {
     gone = true;
+    // the slice that ended the VM may have woken it
+    clearImmediate(immediate);
+    clearTimeout(timer);
     Module['pharoHost'].shutdown();
     if (stats) Module['_vm_stats']();
   };
