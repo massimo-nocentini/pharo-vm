@@ -6,11 +6,15 @@
 //
 // CLI mode (for shell lanes):
 //   node tests/wasm/lib/fetch-http.mjs [--no-cors] [--port PORT]
-// prints the base URL on stdout and serves /_stats and /_reset control routes.
+// prints the base URL on stdout and serves /_stats[?tag=TEXT] and /_reset control routes.
+// GET /_stats?tag=TEXT filters requests to entries whose url includes TEXT (closed stays the total).
+// The requests log keeps at most the last 5000 entries (MAX_REQUESTS), mutating the same array object.
 
 import http from 'node:http';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
+
+export const MAX_REQUESTS = 5000;
 
 const PATTERN = Buffer.alloc(1 << 20);
 for (let i = 0; i < PATTERN.length; i++) PATTERN[i] = i & 255;
@@ -21,7 +25,7 @@ export async function startFetchHttp({ host = '127.0.0.1', port = 0, cors = true
   const requests = [];
   const timers = new Set();
   let closed = 0;
-  let flakyCount = 0;
+  const flaky = new Map();     // how often /flaky was asked, per ?key=
 
   const corsHeadersFor = (enableCors, extra = {}) => (
     enableCors
@@ -38,7 +42,9 @@ export async function startFetchHttp({ host = '127.0.0.1', port = 0, cors = true
 
     // Control endpoints (not logged in requests)
     if (pathname === '/_stats' && req.method === 'GET') {
-      const body = JSON.stringify({ closed, requests });
+      const tag = parsed.searchParams.get('tag');
+      const list = tag ? requests.filter(r => r.url.includes(tag)) : requests;
+      const body = JSON.stringify({ closed, requests: list });
       res.writeHead(200, corsHeadersFor(cors, { 'Content-Type': 'application/json' }));
       res.end(body);
       return;
@@ -46,7 +52,7 @@ export async function startFetchHttp({ host = '127.0.0.1', port = 0, cors = true
     if (pathname === '/_reset' && req.method === 'POST') {
       requests.length = 0;
       closed = 0;
-      flakyCount = 0;
+      flaky.clear();
       res.writeHead(204, corsHeadersFor(cors));
       res.end();
       return;
@@ -64,6 +70,9 @@ export async function startFetchHttp({ host = '127.0.0.1', port = 0, cors = true
       closed: false,
     };
     requests.push(entry);
+    if (requests.length > MAX_REQUESTS) {
+      requests.splice(0, requests.length - MAX_REQUESTS);
+    }
 
     let finished = false;
     res.on('finish', () => { finished = true; });
@@ -142,7 +151,9 @@ export async function startFetchHttp({ host = '127.0.0.1', port = 0, cors = true
       }
       case '/flaky': {
         const failCount = parsed.searchParams.has('fail') ? Number(parsed.searchParams.get('fail')) : 2;
-        if (flakyCount++ < failCount) {
+        const key = parsed.searchParams.get('key') || '', asked = flaky.get(key) || 0;
+        flaky.set(key, asked + 1);
+        if (asked < failCount) {
           req.socket.destroy();
           return;
         }
@@ -265,7 +276,7 @@ export async function startFetchHttp({ host = '127.0.0.1', port = 0, cors = true
     reset() {
       requests.length = 0;
       closed = 0;
-      flakyCount = 0;
+      flaky.clear();
     },
     close() {
       for (const t of timers) {
