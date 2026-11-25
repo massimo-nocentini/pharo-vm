@@ -314,6 +314,14 @@ set(PHARO_WASM_LINK_FLAGS
     -Wl,--stack-first
     -Wl,--fatal-warnings
     -sFORCE_FILESYSTEM=1)
+# The JavaScript of the host services, in both VMs (packaging/emscripten/host):
+# the events that signal the image, then fetch, which signals through them.
+set(PHARO_WASM_HOST_SCRIPTS
+    ${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/host/host-events.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/host/web-fetch.js)
+foreach(script IN LISTS PHARO_WASM_HOST_SCRIPTS)
+    list(APPEND PHARO_WASM_LINK_FLAGS --pre-js ${script})
+endforeach()
 # libffi's closures grow the table, and call _malloc and _free from
 # JavaScript; its $stackSave and friends need the stack exports, which the
 # links do not add by themselves with SUPPORT_LONGJMP=wasm.
@@ -358,6 +366,7 @@ list(APPEND PHARO_WASM_NODE_LINK_FLAGS
     --pre-js ${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/node/node-pre.js
     --post-js ${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/node/node-pump.js)
 set(PHARO_WASM_NODE_LINK_DEPENDS
+    ${PHARO_WASM_HOST_SCRIPTS}
     ${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/node/node-pre.js
     ${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/node/node-pump.js)
 
@@ -455,10 +464,11 @@ macro(add_third_party_dependencies_per_platform)
         target_link_libraries(pharo-web pharo_ffi_registry_web)
     endif()
     pharo_wasm_link_executable(pharo-web ${PHARO_WASM_WEB_LINK_FLAGS})
+    set(PHARO_WASM_FONT_FILES "")
     if(PHARO_WASM_HAS_PANGO)
         file(GLOB PHARO_WASM_FONT_FILES "${PHARO_WASM_FONTS_DIR}/*")
-        set_target_properties(pharo-web PROPERTIES LINK_DEPENDS "${PHARO_WASM_FONT_FILES}")
     endif()
+    set_target_properties(pharo-web PROPERTIES LINK_DEPENDS "${PHARO_WASM_HOST_SCRIPTS};${PHARO_WASM_FONT_FILES}")
     if(WASM_WEB_MEMORY64 STREQUAL "2")
         pharo_wasm_tune(pharo-web)
     endif()

@@ -8,27 +8,51 @@
 // exit() unwinds out of _vm_resume() as an ExitStatus, whose status
 // EXIT_RUNTIME=1 already made the exit code.
 //
+// A host event that signals the image (host-events.js) wakes it: hostWake()
+// runs the next slice at once.  When the VM is gone, however it ended,
+// pharoHost.shutdown() drops what would keep node alive.
+//
 // PHARO_WASM_STATS=1 prints the slice counters (_vm_stats) at the end.
+// PHARO_WASM_NETWORK=0 turns the network of the image off (fetch and git): a
+// convenience and no boundary, the sockets, the FFI and the files of the host
+// being there.
+
+if (process.env.PHARO_WASM_NETWORK === '0') Module['hostNetwork'] = false;
 
 Module['onVMStarted'] = () => {
   const BUSY = 2, SLEEPING = 4;
   const stats = !!process.env.PHARO_WASM_STATS && process.env.PHARO_WASM_STATS != '0';
+  let timer = null, immediate = null, gone = false;     // the next slice: one of them
+  const soon = () => {
+    if (gone || immediate) return;
+    clearTimeout(timer);
+    timer = null;
+    immediate = setImmediate(pump);
+  };
+  const end = () => {
+    gone = true;
+    Module['pharoHost'].shutdown();
+    if (stats) Module['_vm_stats']();
+  };
   const pump = () => {
+    immediate = timer = null;
     let state;
     try {
       state = Module['_vm_resume']();
     } catch (e) {
-      if (stats) Module['_vm_stats']();
+      end();
       if (e && e.name == 'ExitStatus') return;
       // A trap or abort(): report it without node's echo of the minified line.
       process.stderr.write(`${(e && e.stack) || e}\n`);
       process.exitCode = 1;
       return;
     }
-    if (state == BUSY) setImmediate(pump);
-    else if (state == SLEEPING) setTimeout(pump, Math.max(1, Module['_vm_wakeup_ms']()));
-    else if (stats) Module['_vm_stats']();
+    if (state == BUSY) soon();
+    else if (state == SLEEPING) {
+      if (!immediate) timer = setTimeout(pump, Math.max(1, Module['_vm_wakeup_ms']()));
+    } else end();
   };
+  Module['hostWake'] = soon;
   // Called from inside main(): run the next slice from the event loop.
-  setImmediate(pump);
+  soon();
 };

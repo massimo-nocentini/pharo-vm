@@ -11,7 +11,8 @@
 // it ready, and every slice is a call of _vm_resume(), which answers how the
 // slice ended.  The driver runs them: soon (schedule) when the slice was
 // merely over (BUSY), after _vm_wakeup_ms() (later) when the image is idle
-// (SLEEPING).  Input, Stop and kick() cut such a sleep short.  Exports are
+// (SLEEPING).  Input, Stop, kick() and a host event that signals the image
+// (Module.hostWake, host-events.js) cut such a sleep short.  Exports are
 // called only between slices, and the driver keeps no view of the memory,
 // which a memory growth detaches: exports take and answer numbers only.
 //
@@ -209,13 +210,16 @@
       if (st === BUSY) { if (host('canRun', [], true)) runSoon(); }   // else resumeOutput()
       else runLater(Math.min(MAX_SLEEP_MS, Math.max(1, M._vm_wakeup_ms())));
     }
-    // The VM is dead; then call the host's callback name with args
+    // The VM is dead: its host services too (host-events.js; a failure there
+    // must not hide the end); then call the host's callback name with args
     function finish(name, args) {
       if (dead) return;
       dead = true;
       last = EXITED;
       if (next && next !== true) cancel(next.timer);
       next = null;
+      try { if (M.pharoHost) M.pharoHost.shutdown(); }
+      catch (e) { diag('vm-driver: shutdown: ' + ((e && e.stack) || e) + '\n'); }
       host(name, args);
     }
     function fail(e) {
@@ -236,6 +240,12 @@
       printErr: t => diag(t + '\n'),
       // called inside a slice: only queue it
       onPharoHost: (kind, text) => { notes.push([kind, text]); },
+      // host-events.js signalled the image: a slice soon, but not one that
+      // canRun() holds back (resumeOutput() then delivers the signal)
+      hostWake: () => {
+        if (last === BUSY && !host('canRun', [], true)) return;
+        runSoon();
+      },
       preRun: [mod => {
         FS = mod.FS;
         const cwd = o.cwd || '/pharo';
