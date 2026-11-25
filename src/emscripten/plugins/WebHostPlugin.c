@@ -29,6 +29,7 @@
 /*** Function Prototypes ***/
 static const char *getModuleName(void);
 static void primitiveIsAvailable(void);
+static void primitiveMayWait(void);
 static void primitiveSetInterruptSemaphore(void);
 static sqInt setInterpreter(struct VirtualMachine *anInterpreter);
 
@@ -55,6 +56,18 @@ static void
 primitiveIsAvailable(void)
 {
 	interpreterProxy->popthenPush(1, interpreterProxy->trueObject());
+}
+
+
+/*	Answer whether a process may wait for the host: false inside an FFI
+	callback, whose C frames keep the slice from ending, so that no event of
+	the host would come. */
+
+static void
+primitiveMayWait(void)
+{
+	interpreterProxy->popthenPush(1, emscriptenCallbackDepth == 0
+		? interpreterProxy->trueObject() : interpreterProxy->falseObject());
 }
 
 
@@ -108,6 +121,7 @@ static char _m[] = "WebHostPlugin";
 void* WebHostPlugin_exports[][3] = {
 	{(void*)_m, "getModuleName", (void*)getModuleName},
 	{(void*)_m, "primitiveIsAvailable\000\377", (void*)primitiveIsAvailable},
+	{(void*)_m, "primitiveMayWait\000\377", (void*)primitiveMayWait},
 	{(void*)_m, "primitiveSetInterruptSemaphore\000\377", (void*)primitiveSetInterruptSemaphore},
 	{(void*)_m, "setInterpreter", (void*)setInterpreter},
 	{NULL, NULL, NULL}

@@ -221,10 +221,18 @@ vm_set_slice_ms(double ms)
 		sliceMs = ms;
 }
 
+/* Signal an external semaphore of the image for a host event (pharoHost.signal
+ * of packaging/emscripten/host/host-events.js); answer whether the table holds
+ * its index.  It only counts a request, which the next event check of the
+ * interpreter delivers, so it may be called inside a slice too.
+ */
 EMSCRIPTEN_KEEPALIVE int
 vm_signal_semaphore(int semaphoreIndex)
 {
-	return (int)signalSemaphoreWithIndex(semaphoreIndex);
+	if (!started || state == VM_EXITED
+	 || semaphoreIndex < 1 || semaphoreIndex > ioGetMaxExtSemTableSize())
+		return 0;
+	return signalSemaphoreWithIndex(semaphoreIndex) != 0;
 }
 
 /* For a post-mortem, e.g. after a trap: print the Smalltalk stacks. */
