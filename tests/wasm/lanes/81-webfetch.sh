@@ -7,7 +7,8 @@
 # local server of tests/wasm/lib/fetch-http.mjs, on copies of the stock image:
 #
 #   unit     tests/wasm/web-fetch.test.mjs: host-events.js and web-fetch.js
-#            with a fake fetch;
+#            with a fake fetch, node-pump.js with a fake module; and
+#            tests/wasm/fetch-http.test.mjs, the server itself;
 #   builtin  Smalltalk vm listBuiltinModules has 'WebFetchPlugin (i)';
 #   codes    tests/wasm/st/webfetch-lane.st in the node VM: what the six
 #            primitives answer, and every failure code on bad arguments; the
@@ -142,11 +143,15 @@ probed() {
 # unit
 fresh unit
 rm -f Pharo.image Pharo.changes
-if run unit limit "$timeout" "$NODE" "$SRCDIR/tests/wasm/web-fetch.test.mjs"; then
+unit() {
+    limit "$timeout" "$NODE" "$SRCDIR/tests/wasm/fetch-http.test.mjs" &&
+	limit "$timeout" "$NODE" "$SRCDIR/tests/wasm/web-fetch.test.mjs"
+}
+if run unit unit; then
     if test "$status" -ne 0 || grep -q '^not ok' smoke.out; then
 	fail unit "$(grep -v '^ok' smoke.out | head -n 6 | tr '\n' ' ')"
     else
-	ok unit "$(tail -n 1 smoke.out)"
+	ok unit "$(grep 'passed, ' smoke.out | tr '\n' ' ')"
     fi
 fi
 
