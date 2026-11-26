@@ -209,6 +209,9 @@ export function attachWebSocket(server, { log = [] } = {}) {
       if (!rooms.has(room)) rooms.set(room, new Set());
       rooms.get(room).add(conn);
     }
+    // the client ended TCP: end it too (the sockets of the HTTP server are
+    // half-open ones, which would stay so), /ws/deaf included
+    socket.on('end', () => socket.end());
     socket.on('close', () => {
       gone = true;
       entry.ended = true;
