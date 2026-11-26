@@ -559,9 +559,10 @@ wasm-check: wasm
 # Playwright is no dependency of the build: the specs load PLAYWRIGHT_MODULE,
 # or the playwright package that node finds from tests/wasm/lib, and the goal
 # fails without either.  page.spec.mjs and notebook.spec.mjs, the Console page
-# and its Notebook tab, and webfetch.spec.mjs, the fetch of the image in the
+# and its Notebook tab, webfetch.spec.mjs, the fetch of the image in the
 # pages (with the suites of the package WebFetch when WEB_FETCH_DIR names a
-# checkout of it), run on every build.  world.spec.mjs needs the image of
+# checkout of it), and websocket.spec.mjs, its WebSockets (with the suite of
+# WebFetch-WebSocket), run on every build.  world.spec.mjs needs the image of
 # the world, which a build without one (WASM_WORLD=OFF, or no host Pharo)
 # skips, as lane 80 does, ffi.spec.mjs the FFI, which a build without it
 # (WASM_FFI=OFF) skips, git.spec.mjs libgit2, which only a build with
@@ -574,12 +575,13 @@ wasm-check-browser: wasm
 	    $(NODE) -e 'require.resolve("playwright")') >/dev/null 2>&1; then \
 	  echo "make wasm-check-browser: the browser specs need Playwright: set PLAYWRIGHT_MODULE (and BROWSERS), e.g." >&2; \
 	  echo "  PLAYWRIGHT_MODULE=/path/to/node_modules/playwright BROWSERS=chromium,firefox make wasm-check-browser" >&2; \
-	  echo "(the specs are tests/wasm/page.spec.mjs, notebook.spec.mjs, webfetch.spec.mjs, world.spec.mjs, ffi.spec.mjs, git.spec.mjs and pango.spec.mjs)" >&2; \
+	  echo "(the specs are tests/wasm/page.spec.mjs, notebook.spec.mjs, webfetch.spec.mjs, websocket.spec.mjs, world.spec.mjs, ffi.spec.mjs, git.spec.mjs and pango.spec.mjs)" >&2; \
 	  exit 1; \
 	fi
 	$(NODE) $(SRCDIR)/tests/wasm/page.spec.mjs $(W)/web
 	$(NODE) $(SRCDIR)/tests/wasm/notebook.spec.mjs $(W)/web
 	$(NODE) $(SRCDIR)/tests/wasm/webfetch.spec.mjs $(W)/web
+	$(NODE) $(SRCDIR)/tests/wasm/websocket.spec.mjs $(W)/web
 	@if grep -q '"world": *true' $(W)/web/manifest.json; then \
 	  echo "$(NODE) $(SRCDIR)/tests/wasm/world.spec.mjs $(W)/web"; \
 	  $(NODE) $(SRCDIR)/tests/wasm/world.spec.mjs $(W)/web; \
