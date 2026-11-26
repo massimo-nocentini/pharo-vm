@@ -15,7 +15,7 @@ The projects, loaded in this order by `packaging/batteries/load.st`:
 | SimdUTF ([SimdUTF.md](SimdUTF.md)) | `SimdUTF`, `default` | `github://massimo-nocentini/simdutf.st:master/src` |
 | SimdCSV: CSV read and written ([SimdCSV.md](SimdCSV.md)) | `SimdCSV`, `default` (Core and Tests: not the opt-in NeoTests group, which loads NeoCSV) | `github://massimo-nocentini/simdcsv.st:master/src` |
 | TimSort ([TimSort.md](TimSort.md)) | `TimSort`, `default` | `github://massimo-nocentini/timsort.st:master/src` |
-| WebFetch: HTTP and HTTPS by the `fetch` of the browser or of node ([WebFetch.md](WebFetch.md)), and its Zinc adapter, which is not installed (`WebFetchZinc install` does) | `WebFetch`, `default`, `Zinc` and `ZincTests` | `github://massimo-nocentini/web-fetch.st:master/src` |
+| WebFetch: HTTP and HTTPS by the `fetch` of the browser or of node ([WebFetch.md](WebFetch.md)), and its Zinc adapter, which is not installed (`WebFetchZinc install` does); WebSocket clients by the `WebSocket` of the browser or of node (`WebFetchWebSocket`, [WebSocket.md](WebSocket.md)) | `WebFetch`, `default`, `Zinc`, `ZincTests` and `WebSocket` (not `WebSocketTests`) | `github://massimo-nocentini/web-fetch.st:master/src` |
 | GLib, Pango and PangoCairo by uFFI ([PangoPoppler.md](PangoPoppler.md)) | `LibPangoCairo`, `default` | `github://massimo-nocentini/libpangocairo.st:master/src` |
 | poppler-glib by uFFI | `LibPoppler`, `default` | `github://massimo-nocentini/libpoppler.st:master/src` |
 | CMark: Markdown parse trees of the CMarkPlugin (cmark-gfm), their Roassal view, and a Markdown tab of class comments in Calypso ([CMark.md](CMark.md)) | `CMark`, `default` (Core, Tests, Roassal, RoassalTests, Calypso and CalypsoTests: not the opt-in RoassalFork group, since the fork is loaded first anyway) | `github://massimo-nocentini/cmark-gfm.st:master/src` |
@@ -46,7 +46,7 @@ It prints a line per project and per repository that Iceberg cloned, with its co
 
 The repositories of Iceberg stay registered in the image, without their clones (the zip has none): Iceberg shows them as missing, and clones them again on demand.
 
-On a VM of this repository every project uses its plugin or library; on another VM SimdJSON (which needs the SimdJSONPlugin or libSimdJSONFFI), Pango and Poppler do not work, WebFetch answers that it is unavailable (natively too: its plugin is of the WebAssembly VM), and the others fall back to Smalltalk.
+On a VM of this repository every project uses its plugin or library; on another VM SimdJSON (which needs the SimdJSONPlugin or libSimdJSONFFI), Pango and Poppler do not work, WebFetch and WebFetchWebSocket answer that they are unavailable (natively too: their plugins are of the WebAssembly VM), and the others fall back to Smalltalk.
 In the browser, the WebAssembly VM has the plugins, and Pango and Poppler when it is built with `WASM_PANGO=ON` and `WASM_POPPLER=ON` ([WebAssembly.md](WebAssembly.md), The libraries), as the site of GitHub Actions is: there LibPangoCairo and LibPoppler work as natively, with the fonts of the VM (DejaVu).
 
 ## The welcome page

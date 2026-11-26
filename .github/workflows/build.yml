@@ -1435,8 +1435,9 @@ jobs:
           echo "LIBPANGOCAIRO_DIR=$RUNNER_TEMP/libpangocairo.st" >> "$GITHUB_ENV"
           echo "LIBPOPPLER_DIR=$RUNNER_TEMP/libpoppler.st" >> "$GITHUB_ENV"
 
-      # The Smalltalk side of the WebFetchPlugin (master), whose suites lane 81
-      # of wasm-check runs on the node VM and on pharo-web (WEB_FETCH_DIR)
+      # The Smalltalk side of the WebFetchPlugin and of the WebSocketPlugin
+      # (master), whose suites lanes 81 and 84 of wasm-check run on the node
+      # VM and on pharo-web (WEB_FETCH_DIR)
       - name: Clone web-fetch.st
         run: |
           git clone -q --depth 1 https://github.com/massimo-nocentini/web-fetch.st.git "$RUNNER_TEMP/web-fetch.st"

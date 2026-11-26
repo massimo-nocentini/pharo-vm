@@ -43,7 +43,7 @@ mode := (environment at: 'BATTERIES_SMOKE' ifAbsent: [ '' ]) trimBoth ifEmpty: [
 "1. a class or two of every project, the fork's RTree and Roassal"
 classes := #( #RSCanvas #RSPangoText #RSPdfPage #RTNaryTreeCollection #RTPackedTreeCollection #RTGridCollection
 	#RTLooseQuadtreeCollection #UtilsPlugin #KnuthRandom #SplitMix64 #SimdJSONReader #NeoJSONReader #SimdUTF #SimdCSV
-	#SimdCSVReader #TimSort #TimSortSmalltalk #WebFetch #WebFetchZinc #PangoLayout #PopplerDocument #BaselineOfRoassalMN #CMark #CMarkParser
+	#SimdCSVReader #TimSort #TimSortSmalltalk #WebFetch #WebFetchZinc #WebFetchWebSocket #PangoLayout #PopplerDocument #BaselineOfRoassalMN #CMark #CMarkParser
 	#CMarkRoassalRenderer #CTArray2D #CTKeyedValuedOrderedCollection #CTCategory #PartialContinuation #DelimccPrompt
 	#MaterialIcons #MaterialSymbolsThemeIcons #PharoBatteriesWelcome ).
 classes do: [ :name |

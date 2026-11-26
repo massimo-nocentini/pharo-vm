@@ -11,7 +11,7 @@
 	SimdUTF              github://massimo-nocentini/simdutf.st:master/src        default
 	SimdCSV              github://massimo-nocentini/simdcsv.st:master/src        default
 	TimSort              github://massimo-nocentini/timsort.st:master/src        default
-	WebFetch             github://massimo-nocentini/web-fetch.st:master/src      default Zinc ZincTests
+	WebFetch             github://massimo-nocentini/web-fetch.st:master/src      default Zinc ZincTests WebSocket
 	LibPangoCairo        github://massimo-nocentini/libpangocairo.st:master/src  default
 	LibPoppler           github://massimo-nocentini/libpoppler.st:master/src     default
 	CMark                github://massimo-nocentini/cmark-gfm.st:master/src      default (CMark-Roassal on the fork)
@@ -39,7 +39,8 @@ the status keys of tests, errors and warnings too (monochrome): the image is sav
 After the projects, the package PharoBatteries-Welcome of welcome/ is installed, with the text welcome/welcome.md: the
 page that the image shows the first time that it is opened with a display (PharoBatteriesWelcome).
 
-WebFetch is loaded with its Zinc adapter, which is not installed: WebFetchZinc install does that.
+WebFetch is loaded with its Zinc adapter, which is not installed: WebFetchZinc install does that; and with
+WebFetch-WebSocket, the WebSocket clients of the WebSocketPlugin (WebFetchWebSocket), without its tests.
 
 Environment:
 	BATTERIES_HOME           the directory of this script, which the script cannot find by itself
@@ -84,7 +85,7 @@ projects := {
 	{ 'SIMDUTF'. 'SimdUTF'. 'github://massimo-nocentini/simdutf.st:master/src'. #( 'default' ) }.
 	{ 'SIMDCSV'. 'SimdCSV'. 'github://massimo-nocentini/simdcsv.st:master/src'. #( 'default' ) }.
 	{ 'TIMSORT'. 'TimSort'. 'github://massimo-nocentini/timsort.st:master/src'. #( 'default' ) }.
-	{ 'WEBFETCH'. 'WebFetch'. 'github://massimo-nocentini/web-fetch.st:master/src'. #( 'default' 'Zinc' 'ZincTests' ) }.
+	{ 'WEBFETCH'. 'WebFetch'. 'github://massimo-nocentini/web-fetch.st:master/src'. #( 'default' 'Zinc' 'ZincTests' 'WebSocket' ) }.
 	{ 'LIBPANGOCAIRO'. 'LibPangoCairo'. 'github://massimo-nocentini/libpangocairo.st:master/src'. #( 'default' ) }.
 	{ 'LIBPOPPLER'. 'LibPoppler'. 'github://massimo-nocentini/libpoppler.st:master/src'. #( 'default' ) }.
 	{ 'CMARK'. 'CMark'. 'github://massimo-nocentini/cmark-gfm.st:master/src'. #( 'default' ) }.
