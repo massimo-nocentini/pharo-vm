@@ -4,7 +4,9 @@
 // world.html), a CommonJS module in node.  The choice is the checkbox
 // #network-enabled of the Settings dialog (git-proxy.js wires the dialog).
 // The pages give it to their VMs: in the worker's init.network, and at once
-// when it changes ("network", vm-worker.js).
+// when it changes ("network", vm-worker.js).  It governs the four ways out
+// of the image: fetch (docs/WebFetch.md), its WebSockets (docs/WebSocket.md),
+// git's requests and the sockets of the SocketPlugin.
 //
 // It is kept in localStorage under KEY: 'off', or absent, which is on, as
 // anything else is.  Without storage (a private window, blocked site data)

@@ -4,11 +4,11 @@ The WebFetchPlugin lets the code of an image make HTTP and HTTPS requests with t
 The Smalltalk side is the repository `web-fetch.st`: the package `WebFetch`, which waits for a request as Smalltalk code does, on a semaphore, so that the VM and every other process go on meanwhile, and `WebFetch-Zinc`, an adapter that gives `ZnClient` the same fetch when it is installed. `WebFetch` also reads Server-Sent Events over streamed requests (`WebFetchEventSource`, which reconnects as the `EventSource` of a browser does). Its README is the guide of the API.
 Native VMs have no such plugin: there `WebFetch availability` answers `#unavailable`, and every request signals `WebFetchUnavailable`.
 
-Below it is a mechanism that other services can use: an event of the host, between two slices of the VM, signals any external semaphore of the image.
+Below it is a mechanism that other services can use: an event of the host, between two slices of the VM, signals any external semaphore of the image. The WebSockets of the image are the second service on it ([WebSocket.md](WebSocket.md)).
 
 Files:
 
-- `packaging/emscripten/host/host-events.js`, the events, and `packaging/emscripten/host/web-fetch.js`, the requests: `--pre-js` of both VMs;
+- `packaging/emscripten/host/host-events.js`, the events, and `packaging/emscripten/host/web-fetch.js`, the requests: `--pre-js` of both VMs (and `web-socket.js` after them, the WebSockets);
 - `src/emscripten/plugins/WebFetchPlugin.c`, the six primitives, and `primitiveMayWait` in `WebHostPlugin.c`;
 - `vm_signal_semaphore` in `src/emscripten/emscriptenMain.c`, and the sleep of an idle VM in `src/common/heartbeat.c`;
 - `packaging/emscripten/node/node-pump.js` and `packaging/emscripten/web/vm-driver.js`, the hosts;
@@ -20,7 +20,7 @@ Files:
 `Module.pharoHost` (`host-events.js`):
 
 - `signal(index)` signals the external semaphore `index` (`Smalltalk registerExternalObject:`) and wakes the VM: a sleep of the idle VM is cut short. It answers false, and does nothing, for an index that the table does not hold and once the VM is gone;
-- `add({networkOff(), shutdown()})` adds a service;
+- `add({networkOff(), shutdown()})` adds a service: `Module.webFetch`, and `Module.webSocket` of [WebSocket.md](WebSocket.md);
 - `network` is whether the image may use the network, and `setNetwork(on)` changes it: off calls `networkOff()` of every service;
 - `shutdown()`: the VM exited or crashed. It signals nothing any more, and `shutdown()` of every service is called, once. A service that throws is reported on stderr and stops no other.
 
@@ -89,19 +89,21 @@ A request body is copied once, at the start. There is no cap over all requests: 
 
 The Settings dialog of both pages has "Smalltalk code may use the network", on by default.
 Off is kept in localStorage, `pharo-wasm.network` = `off` (absent is on), for every page of the site, and other tabs follow at once; without localStorage it holds for the page. It is never taken from the URL.
-It governs the three ways out of the image:
+It governs the four ways out of the image:
 
 - fetch: `availability` answers 2, a start fails, and the open requests fail with the kind `off`;
 - git (`gitSupport.c`): "git http: network access is off in Settings", before any request, with no advice about CORS;
-- the sockets: the WebSocket that Emscripten makes for one cannot be made (`EHOSTUNREACH`), and those open are closed (`isConnected` may answer true until that closing is over, but nothing is sent).
+- the WebSockets of the image ([WebSocket.md](WebSocket.md)): `availability` answers 2, an open fails, and the open sockets fail with the kind `off`, their messages kept, and are closed with 1000 `network access is off`;
+- the sockets of the SocketPlugin: the WebSocket that Emscripten makes for one cannot be made (`EHOSTUNREACH`), and those open are closed (`isConnected` may answer true until that closing is over, but nothing is sent).
 
 A change holds at once, also while the VM boots (`init.network`, the message `network` and `ready.network` of `vm-worker.js`). The fetches of the worker itself, of the files of the site, are not concerned.
 
-In the node VM `PHARO_WASM_NETWORK=0` in the environment turns fetch and git off. It is a convenience, not a boundary: the sockets, the FFI and the files of the host are there.
+In the node VM `PHARO_WASM_NETWORK=0` in the environment turns fetch, git and the WebSockets of the image off. It is a convenience, not a boundary: the sockets, the FFI and the files of the host are there.
 
 ## Security
 
 - A request never carries credentials (cookies, HTTP authentication of the browser, client certificates) nor a referrer, and is only of http: and https:; nothing of the image is evaluated as JavaScript.
+  The WebSockets of the image are the exception: the handshake of the worker carries the cookies that the browser holds for the server's host (cross-site, `SameSite=None` ones), and may carry its HTTP authentication and client certificates, and the server sees the `Origin` of the site. The site's own hostname is refused to them. See Security of [WebSocket.md](WebSocket.md).
 - With the network on, the code of an image may read every URL that answers with CORS, and send data to any URL, also to one that answers without CORS: a request that the browser refuses to show has been made. An image that someone else made is code that runs with that right; turn the network off first.
 - The worker must be loaded from the network, as the pages do. `connect-src 'self'` in the `<meta>` of the Console is for the page and not for a worker that came by itself: a blob: worker would inherit it, and a server that sends a Content-Security-Policy header of its own with `vm-worker.js` blocks the requests that its `connect-src` does not allow (run in Chromium 156). Nothing else of the pages relies on it.
 
@@ -116,7 +118,7 @@ In the node VM `PHARO_WASM_NETWORK=0` in the environment turns fetch and git off
 
 ## Tests
 
-- `tests/wasm/web-fetch.test.mjs`: `host-events.js` and `web-fetch.js` in node with a fake fetch, the header bytes that the fetch of node refuses, and `node-pump.js` with a fake module, 28 checks; `tests/wasm/fetch-http.test.mjs`: the server of the tests, 8, five of them on its event streams, `/sse` (the comment at the top of `fetch-http.mjs` says its parameters).
+- `tests/wasm/web-fetch.test.mjs`: `host-events.js` and `web-fetch.js` in node with a fake fetch, the header bytes that the fetch of node refuses, and `node-pump.js` with a fake module, 28 checks; `tests/wasm/fetch-http.test.mjs`: the server of the tests, 9, five of them on its event streams, `/sse` (the comment at the top of `fetch-http.mjs` says its parameters), and one that it stops with a WebSocket open (its WebSocket endpoints are those of [WebSocket.md](WebSocket.md)).
 - Lane 81-webfetch (`tests/wasm/lanes/81-webfetch.sh`, with `tests/wasm/st/webfetch-lane.st`): those two; the primitives and every failure code above in the node VM and in the web VM (83 checks each), an FFI callback, the memory, an exit and a trap with open requests, the network off, a node without fetch, a VM without the plugin. With `WEB_FETCH_DIR`, a checkout of `web-fetch.st`, it loads the packages with Metacello and runs their tests, also the live ones (requests, and event sources over `/sse`), in the node VM, there with the network off, and in the web VM, requests and event sources while a real FFI callback runs (the node VM), and an image saved while processes wait for requests and an event source; without it that part is a skipped check. The event sources of `web-fetch.st` need `/sse` of the server and flag 2, which an older tree does not have; the CI runs `web-fetch.st` master, so a change of the VM that they need lands before theirs.
 - `tests/wasm/vm-harness.js` (lane 60), cases 28 to 30: how soon a signal wakes a process, the pause of the output, the services at an exit and at a crash. `tests/wasm/worker-harness.js` (lane 70), case 31: the network of the worker.
 - `tests/wasm/webfetch.spec.mjs` (`make wasm-check-browser`): the pages in a browser, 17 checks, 19 with `WEB_FETCH_DIR`, where both suites run in the Console too, the live tests of event sources among them (the preflights of `Last-Event-ID`, the HTTP cache, two sources on one URL), and Stop ends an event source.
@@ -126,5 +128,5 @@ Only Chromium was run; Firefox and Safari were not.
 
 ## Left out
 
-The DOM, JavaScript code, WebSocket, OPFS and WebCrypto for the image, and the EventSource of the host (the package reads event streams over fetch): they can be services of `pharoHost`. Credentials and cookies; streamed request bodies; the hops of a redirect; the cache modes but `default` and `no-store`; a CORS proxy for HTTP (the git proxy forwards only git).
+The DOM, JavaScript code, OPFS and WebCrypto for the image: they can be services of `pharoHost`, as WebSockets are ([WebSocket.md](WebSocket.md)). The EventSource of the host (the package reads event streams over fetch, `WebFetchEventSource`); `WebSocketStream`; WebSocket servers. Credentials and cookies; streamed request bodies; the hops of a redirect; the cache modes but `default` and `no-store`; a CORS proxy for HTTP (the git proxy forwards only git).
 A ZnServer in the node VM: `listen` ends it without the npm module `ws`, as before.

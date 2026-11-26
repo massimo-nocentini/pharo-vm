@@ -36,7 +36,7 @@ Open this page again with **Help > Batteries**.
 
 | Project | What it adds |
 |:---|:---|
-| [WebFetch](https://github.com/massimo-nocentini/web-fetch.st) | HTTP and HTTPS by the `fetch` of the browser or of node, on WebAssembly; `WebFetchZinc install` sends the requests of Zinc through it |
+| [WebFetch](https://github.com/massimo-nocentini/web-fetch.st) | HTTP and HTTPS by the `fetch` of the browser or of node, on WebAssembly; `WebFetchZinc install` sends the requests of Zinc through it; `WebFetchWebSocket` opens WebSocket clients by the `WebSocket` of the browser or of node |
 
 ### Language
 
@@ -60,7 +60,7 @@ SimdCSV rowsFrom: (String lf join: { 'a,b' . '1,2' }).
 
 - **SimdJSONPlugin**, **SimdUTFPlugin**, **SimdCSVPlugin**, **CMarkPlugin**, **TimSortPlugin** and **UtilsPlugin**, behind the projects above
 - **CairoPlugin**: Athens' calls of cairo as primitives (its image side is opt-in)
-- **WebDisplayPlugin**, **WebHostPlugin** and **WebFetchPlugin**, for the browser
+- **WebDisplayPlugin**, **WebHostPlugin**, **WebFetchPlugin** and **WebSocketPlugin**, for the browser
 
 ### Bundled libraries
 

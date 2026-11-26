@@ -57,9 +57,10 @@
 //   the state of every evaluation, which the terminal, a log, tells.
 // - Settings (the dialog of git-proxy.js) says whether Smalltalk code may use
 //   the network (network-setting.js; pharo-wasm.network, which world.js reads
-//   too): fetch, git and the WebSockets of the image's sockets.  It goes to
-//   the worker in init.network, and to a running VM at once ("network"), also
-//   when another tab changes it.  When the VM has the smart-HTTP transport of
+//   too): fetch, the WebSockets of the image (WebSocketPlugin), git and
+//   the WebSockets of Emscripten's sockets.  It goes to the worker in
+//   init.network, and to a running VM at once ("network"), also when
+//   another tab changes it.  When the VM has the smart-HTTP transport of
 //   libgit2 (ready.gitHttp), Settings holds the CORS proxy of git's requests
 //   too (git-proxy.js): a URL prefix that the requests of Iceberg's
 //   https:// remotes go to, followed by the host and the path of the
