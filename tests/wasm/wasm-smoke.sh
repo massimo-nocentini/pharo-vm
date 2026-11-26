@@ -326,7 +326,7 @@ on the host: written by Pharo' s4
     # is not OFF (WASM_CAIRO=OFF leaves the plugin out whatever the cached
     # option says) (never SurfacePlugin, which cmake/plugins.cmake leaves out
     # of the Emscripten VMs), and one for each src/emscripten/plugins/*.c
-    # (WebHostPlugin, WebDisplayPlugin and WebFetchPlugin)
+    # (WebHostPlugin, WebDisplayPlugin, WebFetchPlugin and WebSocketPlugin)
     modules=13
     if grep -Eiq '^FEATURE_PLUGIN_UUID:BOOL=(ON|TRUE|YES|Y|1)$' "$WASM_DIR/cmake/CMakeCache.txt" 2>/dev/null; then
 	modules=$((modules + 1))
