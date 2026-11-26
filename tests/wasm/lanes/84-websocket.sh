@@ -49,8 +49,37 @@
 #            'network access is off', the message queued is still read, a new
 #            open fails; on again, a socket opens.
 #
+# With WEB_FETCH_DIR, a checkout of the package (web-fetch.st):
+#
+#   load     tests/load-webfetch.st of the checkout loads the groups Core,
+#            Tests, WebSocket and WebSocketTests with Metacello, and the image
+#            is saved;
+#   suite    tests/run-websocket.st runs the package WebFetch-WebSocket-Tests
+#            in the node VM, with the live tests against the endpoints of the
+#            server: no failure, no error, and no test skipped but the class
+#            for VMs without the plugin, and WebFetchWebSocketEchoServerTest,
+#            which goes to a public server only when WEB_FETCH_ECHO_SERVER
+#            names it;
+#   suite off  the same with PHARO_WASM_NETWORK=0: no failure, no error, and
+#            the live tests skipped;
+#   suite web  the suite in pharo-web;
+#   suite callback  tests/callback-websocket.st: waits in a real FFI callback
+#            signal WebFetchInCallback, while what does not wait answers there,
+#            also while another process waits in next (skipped without the
+#            FFI);
+#   snapshot  tests/snapshot-websocket.st, twice: an image saved while
+#            processes wait in connect:, next, nextTimeout:, a send on a full
+#            buffer and whenMessage:whenClosed:, and with a socket that the
+#            server closed with two messages unread, goes on; restarted, each
+#            waiter gets WebFetchSessionEnded, the closed socket answers its
+#            two messages and its close, and a socket opens again.
+#
+# Without it these are one skipped check.  The load and the suites are
+# stopped after 600 s each.  The callback and snapshot scripts say 'N of N',
+# at least 14 and 5.
+#
 # Environment (from make wasm-check): NODE, WASM_DIR, HOST_PHARO, SRCDIR,
-# TEST_DIR, WASM_CHECK_TIMEOUT (see lib/common.sh).
+# TEST_DIR, WASM_CHECK_TIMEOUT (see lib/common.sh); and WEB_FETCH_DIR.
 
 SRCDIR=$(cd "${SRCDIR:-$(dirname "$0")/../../..}" && pwd)
 TEST_DIR=${TEST_DIR:+$TEST_DIR/84-websocket}
@@ -59,7 +88,16 @@ TEST_DIR=${TEST_DIR:+$TEST_DIR/84-websocket}
 lane=websocket
 started=$(date +%s)
 LANE_ST=$SRCDIR/tests/wasm/st/websocket-lane.st
-unset PHARO_WASM_NETWORK PHARO_WASM_STATS
+WEB_FETCH_DIR=${WEB_FETCH_DIR-}
+if test -n "$WEB_FETCH_DIR"; then
+    if ! test -d "$WEB_FETCH_DIR/src/BaselineOfWebFetch"; then
+	echo "FAIL 84-websocket: no $WEB_FETCH_DIR/src/BaselineOfWebFetch (WEB_FETCH_DIR)"
+	exit 1
+    fi
+    WEB_FETCH_DIR=$(cd "$WEB_FETCH_DIR" && pwd)
+    export WEB_FETCH_DIR
+fi
+unset PHARO_WASM_NETWORK PHARO_WASM_STATS WEB_FETCH_SERVER WEB_FETCH_HANG_PORT WEB_FETCH_GROUPS
 
 for f in "$WASM_DIR/node/pharo" "$WASM_DIR/node/pharo.js" "$WASM_DIR/web/pharo-web.js" "$WASM_DIR/web/pharo-web.wasm"; do
     if ! test -f "$f"; then
@@ -90,7 +128,7 @@ echo "84-websocket: $WASM_DIR/node/pharo, Pharo $(cat "$WASM_DIR/image/stock/pha
 
 # vm ARG ...: the node VM on the image of the check; probe PROBE:
 # websocket-lane.st in it
-vm() { limit "$timeout" "$WASM_DIR/node/pharo" --headless Pharo.image --no-default-preferences "$@"; }
+vm() { limit "${vm_limit:-$timeout}" "$WASM_DIR/node/pharo" --headless Pharo.image --no-default-preferences "$@"; }
 probe() {
     echo "$served $1" >websocket.lane
     vm st --quit "$LANE_ST"
@@ -312,5 +350,109 @@ if run web web_run "$(pwd)" "$LANE_ST" codes; then probed web codes 130; fi
 fresh web-off
 if run 'web off' web_run "$(pwd)" "$LANE_ST" weboff; then probed 'web off' weboff 7; fi
 
+if test -z "$WEB_FETCH_DIR"; then
+    skip_check package "no WEB_FETCH_DIR, a checkout of the package WebFetch (web-fetch.st)"
+    echo "84-websocket: $(( $(date +%s) - started )) s"
+    finish 84-websocket
+    exit 0
+fi
+
+# (the image with the package, which load saves)
+loaded=$TEST_DIR/websocket-image
+vm_limit=600
+load() (
+    WEB_FETCH_GROUPS='Core Tests WebSocket WebSocketTests'; export WEB_FETCH_GROUPS
+    vm st --save --quit "$WEB_FETCH_DIR/tests/load-webfetch.st"
+)
+# (websocket.lane: the URL of the server and the port of its listener that
+# never answers)
+suite() {
+    echo "$served" >websocket.lane
+    vm st --quit "$WEB_FETCH_DIR/tests/run-websocket.st"
+}
+suite_off() (
+    PHARO_WASM_NETWORK=0; export PHARO_WASM_NETWORK
+    suite
+)
+callback() {
+    echo "$served" >websocket.lane
+    vm st --quit "$WEB_FETCH_DIR/tests/callback-websocket.st"
+}
+snapshot() {
+    echo "$served" >websocket.lane
+    vm st "$WEB_FETCH_DIR/tests/snapshot-websocket.st"
+}
+# expect_all NAME PREFIX MIN SUFFIX CMD ...: the output of CMD is the one
+# line 'PREFIX<n> of <n>SUFFIX', with n at least MIN, and its status 0
+expect_all() {
+    name=$1; prefix=$2; least=$3; suffix=$4; shift 4
+    run "$name" "$@" || return 0
+    out=$(cat smoke.out)
+    all=${out#"$prefix"}
+    all=${all%%" of "*}
+    if test "$status" -ne 0; then
+	fail "$name" "exit status $status"
+    elif ! is_number "$all" || test "x$out" != "x$prefix$all of $all$suffix"; then
+	fail "$name" "expected '${prefix}N of N$suffix', got '$out'"
+    elif test "$all" -lt "$least"; then
+	fail "$name" "$all checks, expected at least $least"
+    else
+	ok "$name" "$all of $all"
+    fi
+}
+# suite_passed NAME AVAILABILITY SKIPPED: the line of run-websocket.st has
+# tests, no failure, no error and the availability, and only the classes that
+# match SKIPPED have a test skipped
+suite_passed() {
+    summary=$(grep '^WebFetch-WebSocket-Tests: ' smoke.out | tail -n 1)
+    others=$(grep '^skipped ' smoke.out | grep -Ev "$3" | head -n 3 | tr '\n' ' ')
+    set -- "$1" "$2" "$3" $summary
+    if test "$status" -ne 0; then
+	fail "$1" "exit status $status"
+    elif test -z "$summary" || ! is_number "$5" || test "$5" -eq 0; then
+	fail "$1" "no test of WebFetch-WebSocket-Tests ran: '$summary'"
+    elif test "x$7" != x0 || test "x$9" != x0; then
+	fail "$1" "$summary: $(grep -E '^(failed|error) ' smoke.out | head -n 5 | tr '\n' ' ')"
+    elif test "x${13}" != "x$2"; then
+	fail "$1" "not $2: '$summary'"
+    elif test -n "$others"; then
+	fail "$1" "skipped: $others"
+    else
+	ok "$1" "$5 tests, $(grep -c '^skipped ' smoke.out) skipped"
+    fi
+}
+
+fresh load
+if run load load; then
+    if test "$status" -ne 0; then
+	fail load "exit status $status: $(head -n 1 smoke.err)"
+    elif ! grep '^WebFetch: loaded .*, ready$' smoke.out >/dev/null; then
+	fail load "no 'WebFetch: loaded ..., ready': $(grep '^WebFetch:' smoke.out)"
+    elif ! rm -rf "$loaded" || ! mkdir -p "$loaded" || ! cp -P Pharo.image Pharo.changes ./*.sources "$loaded/"; then
+	fail load "cannot keep the image in $loaded"
+    else
+	ok load
+    fi
+fi
+if test -f "$loaded/Pharo.image"; then
+    fresh suite "$loaded"
+    if run suite suite; then suite_passed suite ready 'NativeTest|EchoServerTest'; fi
+    fresh suite-off "$loaded"
+    if run 'suite off' suite_off; then suite_passed 'suite off' off 'NativeTest|LiveTest|EchoServerTest'; fi
+    fresh suite-web "$loaded"
+    if run 'suite web' web_run "$(pwd)" "$WEB_FETCH_DIR/tests/run-websocket.st" suite; then
+	suite_passed 'suite web' ready 'NativeTest|EchoServerTest'
+    fi
+    if cached FEATURE_FFI; then
+	fresh suite-callback "$loaded"
+	expect_all 'suite callback' 'callback: ' 14 '' callback
+    else
+	skip_check 'suite callback' "no FFI: the build has none (WASM_FFI=OFF)"
+    fi
+    fresh snapshot "$loaded"
+    expect 'snapshot, saved' 'saved, then an echo: ciao' snapshot
+    expect_all 'snapshot, restarted' 'restarted: ' 5 ' WebFetchSessionEnded, the closed socket: 1 2 4000 saved, open 0, then ciao' snapshot
+    rm -rf "$loaded"
+fi
 echo "84-websocket: $(( $(date +%s) - started )) s"
 finish 84-websocket
