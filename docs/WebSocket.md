@@ -57,7 +57,7 @@ Entering 3 signals nothing: from the image it happens inside `close()`, from the
 **Lingering.** A socket that the image forgets (`release`, `shutdown`) whose `WebSocket` has had no `close` event yet lingers until that event, and counts towards the 32: a loop of opens and releases to a server that never answers a close is bounded. In node, where such a socket is never closed, its slot stays taken until the VM ends.
 A socket that ends before its handshake does (the handshake timer, a close, a release, the network turned off) does not linger: node 24 and 25 fire the `error` and `close` events of a `WebSocket` still connecting inside its `close()`, and leave `readyState` at 2 after them, so the service handles the events that come inside a `close()` of its own after a microtask (nothing signals inside a method), and never counts a `WebSocket` whose `close` event came. Node drops that TCP connection at once; its pool may open a fresh one to the same server, which ends with its keep-alive timeout of 4 s (measured).
 
-**Memory across sockets.** At most 256 MiB (`MAX_QUEUED_TOTAL`) are queued in all the sockets of a VM: a message that would cross it fails its socket with `overflow`, `the queues of all sockets are full`.
+**Memory across sockets.** At most 256 MiB (`MAX_QUEUED_TOTAL`) are queued in all the sockets of a VM: a message that would cross it fails its socket with `overflow`, `the queues of all sockets are full`. So `maxMessage` and `maxQueued` are at most 256 MiB too: a larger one could never be reached.
 
 **A message.** In `onmessage`, a string longer than `maxMessage` fails the socket with `tooLarge` before it is encoded (UTF-8 has never fewer bytes than UTF-16 units); else it is encoded with `TextEncoder`, its size checked again, and the string dropped. An `ArrayBuffer` is checked by its `byteLength` (`binaryType` is `arraybuffer`). The message that fails a socket is not queued; the ones before it are.
 
@@ -95,7 +95,7 @@ Module `WebSocketPlugin`, built into both VMs (`listBuiltinModules` says `WebSoc
 | Primitive | Arguments | Answers | Fails with |
 |---|---|---|---|
 | primitiveWebSocketAvailability | none | 0 none here, 1 ready, 2 the network is off | never |
-| primitiveWebSocketOpen | stateIndex, readIndex, writeIndex, record, maxMessage, maxQueued, timeoutMs | the id | `bad argument`: an index outside the table, two indexes alike, a record that is no ByteArray of 1 to 65536 bytes, a maxMessage or a maxQueued not in 1..2^30, a timeout not in 0..2^31-1; `unsupported operation`: availability is not 1; `resource limit exceeded`: 32 are open or lingering; `insufficient C memory`: JavaScript could not copy the record |
+| primitiveWebSocketOpen | stateIndex, readIndex, writeIndex, record, maxMessage, maxQueued, timeoutMs | the id | `bad argument`: an index outside the table, two indexes alike, a record that is no ByteArray of 1 to 65536 bytes, a maxMessage or a maxQueued not in 1..2^28 (256 MiB, `MAX_QUEUED_TOTAL`), a timeout not in 0..2^31-1; `unsupported operation`: availability is not 1; `resource limit exceeded`: 32 are open or lingering; `insufficient C memory`: JavaScript could not copy the record |
 | primitiveWebSocketState | id | state + 8 * the messages queued | `bad argument`: no SmallInteger; `not found` |
 | primitiveWebSocketInfo | id | the info record, a ByteArray, or nil in state 1 | the same; `insufficient object memory` |
 | primitiveWebSocketReceive | id | the next message as `{isText. bytes}` (a Boolean and a ByteArray), which leaves the queue; nil when none is queued | the same as State; `insufficient object memory`: the message stays queued |
@@ -122,9 +122,9 @@ When the image first sees state 4 or 5 it settles the socket: it reads every que
 | sockets per VM | 32, lingering ones counted | `MAX_OPEN` | `resource limit exceeded`, `WebFetchTooManyOpen` |
 | open record | 65536 bytes | C | `bad argument`, `WebFetchBadRequest` |
 | subprotocols | tokens, no two alike ignoring case, at most 32 | Smalltalk, then `web-socket.js` | `WebFetchBadRequest` |
-| one message received | `maximumMessageSize`, 16 MiB by default, 1..2^30 | per socket | the socket fails with `tooLarge`, closed with 4009; the queue stays readable |
-| bytes queued unread | `maximumQueuedBytes`, 16 MiB by default, 1..2^30, and 65536 messages | per socket | the socket fails with `overflow`, closed with 4008; the queue stays readable. A message of at most `maximumMessageSize` always enters an empty queue |
-| bytes queued in all sockets | 256 MiB | `MAX_QUEUED_TOTAL` | the socket whose message crosses it fails with `overflow` |
+| one message received | `maximumMessageSize`, 16 MiB by default, 1..2^28 (256 MiB) | per socket | the socket fails with `tooLarge`, closed with 4009; the queue stays readable |
+| bytes queued unread | `maximumQueuedBytes`, 16 MiB by default, 1..2^28 (256 MiB), and 65536 messages | per socket | the socket fails with `overflow`, closed with 4008; the queue stays readable. A message of at most `maximumMessageSize` always enters an empty queue, while the queues of all sockets have room for it |
+| bytes queued in all sockets | 256 MiB, which bounds the two limits above | `MAX_QUEUED_TOTAL` | the socket whose message crosses it fails with `overflow`, `the queues of all sockets are full` |
 | one message sent | 64 MiB | `MAX_SEND`, checked in Smalltalk first | `WebFetchTooLarge`, the socket stays open |
 | send buffer | 16 MiB (`HIGH_WATER`) | `web-socket.js` | a send is refused while `bufferedAmount` is above 0 and would exceed 16 MiB with it; one message of up to 64 MiB goes on an empty buffer; `write` is signalled at 1 MiB and at 0 |
 | close code, reason | 1000 or 3000..4999; at most 123 bytes of UTF-8 | Smalltalk, C and JavaScript | `bad argument`, `WebFetchBadRequest` |

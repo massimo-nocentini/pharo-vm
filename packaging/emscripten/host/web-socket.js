@@ -77,7 +77,8 @@
 //
 //   availability()   0 no WebSocket here, 1 ready, 2 the network is off
 //   open(semState, semRead, semWrite, record, maxMessage, maxQueued, timeoutMs)
-//                    the id, or 0 when the availability is not 1, after
+//                    (the plugin checks that maxMessage and maxQueued are
+//                    at most MAX_QUEUED_TOTAL) the id, or 0 when the availability is not 1, after
 //                    shutdown(), or when the sockets plus the lingering ones
 //                    are MAX_OPEN; record (a Uint8Array that becomes the
 //                    socket's) is checked, and the WebSocket made, after a

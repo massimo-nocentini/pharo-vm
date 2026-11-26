@@ -42,7 +42,7 @@
 
 #define WS_READY 1				/* of availability() */
 #define WS_MAX_RECORD 65536		/* the largest open record */
-#define WS_MAX_LIMIT (1 << 30)	/* the largest maxMessage and maxQueued */
+#define WS_MAX_LIMIT (1 << 28)	/* the largest maxMessage and maxQueued: MAX_QUEUED_TOTAL */
 #define WS_MAX_SEND (64 * 1024 * 1024)	/* the largest message sent */
 #define WS_MAX_REASON 123		/* bytes of UTF-8 in a close frame */
 
@@ -380,7 +380,7 @@ primitiveWebSocketInfo(void)
 	Open a socket: the three indexes are of distinct external semaphores,
 	record is the open record (a ByteArray: the URL, then one subprotocol
 	per line), maxMessage and maxQueued the largest message and the most
-	bytes queued unread (1..2^30), timeoutMs the time to the open (0 none).
+	bytes queued unread (1..2^28), timeoutMs the time to the open (0 none).
 	Answer the id; the socket is made, and its record checked, after the
 	primitive. */
 
@@ -450,8 +450,9 @@ primitiveWebSocketReceive(void)
 		interpreterProxy->popthenPush(2, interpreterProxy->nilObject());
 		return;
 	}
+	/* 2 * size + isText, exactly, in a double: no int conversion of it */
 	size = (int)(descriptor / 2);
-	isText = (int)descriptor & 1;
+	isText = descriptor - 2.0 * size != 0.0;
 	bytes = interpreterProxy->instantiateClassindexableSize(interpreterProxy->classByteArray(), size);
 	if (!bytes) {
 		interpreterProxy->primitiveFailFor(PrimErrNoMemory);

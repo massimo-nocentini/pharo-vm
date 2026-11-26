@@ -205,8 +205,8 @@ probe = 'codes' ifTrue: [
 		check value: 'open, the record ' , each key
 			value: [ wsp open: index read: indexes first write: indexes second record: each value maxMessage: 10 maxQueued: 10 timeout: 0 ]
 			value: { #'bad argument' } ].
-	{ 'maxMessage 0' -> #( 0 10 0 ). 'maxMessage 2^30 + 1' -> { (1 << 30) + 1. 10. 0 }. 'maxMessage nil' -> #( nil 10 0 ).
-	  'maxQueued 0' -> #( 10 0 0 ). 'maxQueued 2^30 + 1' -> { 10. (1 << 30) + 1. 0 }.
+	{ 'maxMessage 0' -> #( 0 10 0 ). 'maxMessage 2^28 + 1' -> { (1 << 28) + 1. 10. 0 }. 'maxMessage nil' -> #( nil 10 0 ).
+	  'maxQueued 0' -> #( 10 0 0 ). 'maxQueued 2^28 + 1' -> { 10. (1 << 28) + 1. 0 }.
 	  'timeout -1' -> #( 10 10 -1 ). 'timeout 2^31' -> { 10. 10. 1 << 31 }. 'timeout 1.0' -> #( 10 10 1.0 ) } do: [ :each |
 		check value: 'open, ' , each key
 			value: [ wsp open: index read: indexes first write: indexes second record: record
@@ -215,7 +215,7 @@ probe = 'codes' ifTrue: [
 	check value: 'open, the largest values' value: [
 		| id |
 		id := wsp open: index read: indexes first write: indexes second record: record
-			maxMessage: 1 << 30 maxQueued: 1 << 30 timeout: (1 << 31) - 1.
+			maxMessage: 1 << 28 maxQueued: 1 << 28 timeout: (1 << 31) - 1.
 		{ id isInteger and: [ id between: 1 and: 16r7FFFFFFF ]. wsp release: id. wsp release: id } ] value: #( true true false ).
 	other do: [ :each | Smalltalk unregisterExternalObject: each ].
 	"the ids that are none"
