@@ -54,15 +54,20 @@ pharo_wasm_ffi_library(c
 # FreeType (FT2FFILibrary, libfreetype.so.6), pharo_freetype of
 # cmake/emscripten/deps/freetype.cmake, with PHARO_WASM_HAS_FREETYPE
 # (options.cmake).  The table lists the functions the images bind; the
-# headers declare them (freetype.h and ftoutln.h), with the bitmap,
-# multiple-master and synthesis APIs of FreeType next to them.
+# headers declare them (freetype.h and ftoutln.h, and tttables.h for
+# Alexandrie's FT_Get_Sfnt_Table), with the bitmap, multiple-master and
+# synthesis APIs of FreeType next to them.  Alexandrie's AeFreeTypeLibrary
+# looks for the file libfreetype.so.6 before it loads the library
+# (FFIUnix64LibraryFinder): the staging writes it, empty.
 if(PHARO_WASM_HAS_FREETYPE)
     pharo_wasm_ffi_library(freetype
         HEADERS
             ft2build.h freetype/freetype.h freetype/ftoutln.h
             freetype/ftbitmap.h freetype/ftmm.h freetype/ftsynth.h
+            freetype/tttables.h
         SYMBOLS_FILE ${CMAKE_CURRENT_LIST_DIR}/ffi/symbols/freetype.txt
-        LINK pharo_freetype)
+        LINK pharo_freetype
+        FILES libfreetype.so.6)
 endif()
 
 # cairo (CairoLibrary, libcairo.so.2), pharo_cairo of
@@ -132,10 +137,13 @@ if(PHARO_WASM_HAS_PANGO)
         LINK pharo_gobject
         FILES libgobject-2.0.so.0
         DEPENDS glib)
+    # (hb-ft.h and hb-ot.h, and the file libharfbuzz.so.0, for Alexandrie's
+    # AeHarfbuzzLibrary, which looks for it before it loads the library)
     pharo_wasm_ffi_library(harfbuzz
-        HEADERS hb.h
+        HEADERS hb.h hb-ft.h hb-ot.h
         SYMBOLS_FILE ${CMAKE_CURRENT_LIST_DIR}/ffi/symbols/harfbuzz.txt
-        LINK pharo_harfbuzz)
+        LINK pharo_harfbuzz
+        FILES libharfbuzz.so.0)
     pharo_wasm_ffi_library(pango
         HEADERS pango/pango.h
         SYMBOLS_FILE ${CMAKE_CURRENT_LIST_DIR}/ffi/symbols/pango.txt

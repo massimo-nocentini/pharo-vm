@@ -31,3 +31,11 @@ FT_Outline_Translate
 FT_Select_Charmap
 FT_Set_Pixel_Sizes
 FT_Set_Transform
+#
+# What Alexandrie (AeFreeTypeLibrary, libfreetype.so.6) binds beyond the above,
+# so the Bloc image of the site (packaging/bloc); FT_Get_Sfnt_Table is
+# declared by freetype/tttables.h
+FT_Done_FreeType
+FT_Get_Sfnt_Table
+FT_Reference_Face
+FT_Set_Char_Size
