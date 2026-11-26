@@ -1,7 +1,7 @@
 # WebFetch: fetch for Smalltalk on WebAssembly
 
 The WebFetchPlugin lets the code of an image make HTTP and HTTPS requests with the `fetch` of the host: of the browser in the Console, the Notebook and the world (one code path, `vm-worker.js` and `vm-driver.js`), and of node in the node VM.
-The Smalltalk side is the repository `web-fetch.st`: the package `WebFetch`, which waits for a request as Smalltalk code does, on a semaphore, so that the VM and every other process go on meanwhile, and `WebFetch-Zinc`, an adapter that gives `ZnClient` the same fetch when it is installed. Its README is the guide of the API.
+The Smalltalk side is the repository `web-fetch.st`: the package `WebFetch`, which waits for a request as Smalltalk code does, on a semaphore, so that the VM and every other process go on meanwhile, and `WebFetch-Zinc`, an adapter that gives `ZnClient` the same fetch when it is installed. `WebFetch` also reads Server-Sent Events over streamed requests (`WebFetchEventSource`, which reconnects as the `EventSource` of a browser does). Its README is the guide of the API.
 Native VMs have no such plugin: there `WebFetch availability` answers `#unavailable`, and every request signals `WebFetchUnavailable`.
 
 Below it is a mechanism that other services can use: an event of the host, between two slices of the VM, signals any external semaphore of the image.
@@ -108,23 +108,23 @@ In the node VM `PHARO_WASM_NETWORK=0` in the environment turns fetch and git off
 ## In a browser
 
 - Another origin answers only with CORS: `api.github.com` and `raw.githubusercontent.com` do, the zip archives of `codeload.github.com` do not. A refusal, a name that is not there, a TLS error and a network that is down are all the same error, without a reason (the console of the browser has it).
-- `Authorization`, a `Content-Type` such as `application/json` and headers of one's own cost a preflight, an OPTIONS request before each.
+- `Authorization`, a `Content-Type` such as `application/json` and headers of one's own cost a preflight, an OPTIONS request before each. So does `Last-Event-ID`, which an event source sends once it has an id, at each reconnection: a server of event streams for other origins must answer the preflight and allow that header. The cache mode `no-store` costs none, nor does `Accept: text/event-stream`.
 - Redirects are followed by the browser: the last answer is all that is seen, and not to follow them is an error of the kind `redirect`. (Node gives the 3xx answer.)
-- Over HTTP/1.1 a browser opens six connections to a host, so a seventh request waits for one of them; and Chromium lets simultaneous GETs of one URL wait for one another until the first has its head (its cache), unless their cache mode is `no-store`.
+- Over HTTP/1.1 a browser opens six connections to a host, so a seventh request waits for one of them (an open event source holds one for as long as it is open); and Chromium lets simultaneous GETs of one URL wait for one another until the first has its head (its cache), unless their cache mode is `no-store`.
 - In the cache mode `default` a cacheable answer (`Cache-Control: max-age`, or only a `Last-Modified`) is answered from the cache of the browser the next time, also after a page load, without asking the server: what must come from the server each time uses flag 2.
 - A wait in the UI process of the world freezes it until the request ends, as a socket does natively. Stop opens a debugger on that process and the world draws again; the request stays open until the debugger is closed.
 
 ## Tests
 
 - `tests/wasm/web-fetch.test.mjs`: `host-events.js` and `web-fetch.js` in node with a fake fetch, and `node-pump.js` with a fake module, 26 checks; `tests/wasm/fetch-http.test.mjs`: the server of the tests, 8, five of them on its event streams, `/sse` (the comment at the top of `fetch-http.mjs` says its parameters).
-- Lane 81-webfetch (`tests/wasm/lanes/81-webfetch.sh`, with `tests/wasm/st/webfetch-lane.st`): those two; the primitives and every failure code above in the node VM and in the web VM (83 checks each), an FFI callback, the memory, an exit and a trap with open requests, the network off, a node without fetch, a VM without the plugin. With `WEB_FETCH_DIR`, a checkout of `web-fetch.st`, it loads the packages with Metacello and runs their tests, also the live ones, in the node VM, there with the network off, and in the web VM, requests while a real FFI callback runs (the node VM), and an image saved while processes wait; without it that part is a skipped check.
+- Lane 81-webfetch (`tests/wasm/lanes/81-webfetch.sh`, with `tests/wasm/st/webfetch-lane.st`): those two; the primitives and every failure code above in the node VM and in the web VM (83 checks each), an FFI callback, the memory, an exit and a trap with open requests, the network off, a node without fetch, a VM without the plugin. With `WEB_FETCH_DIR`, a checkout of `web-fetch.st`, it loads the packages with Metacello and runs their tests, also the live ones (requests, and event sources over `/sse`), in the node VM, there with the network off, and in the web VM, requests and event sources while a real FFI callback runs (the node VM), and an image saved while processes wait for requests and an event source; without it that part is a skipped check.
 - `tests/wasm/vm-harness.js` (lane 60), cases 28 to 30: how soon a signal wakes a process, the pause of the output, the services at an exit and at a crash. `tests/wasm/worker-harness.js` (lane 70), case 31: the network of the worker.
-- `tests/wasm/webfetch.spec.mjs` (`make wasm-check-browser`): the pages in a browser, 17 checks, 19 with `WEB_FETCH_DIR`, where both suites run in the Console too.
+- `tests/wasm/webfetch.spec.mjs` (`make wasm-check-browser`): the pages in a browser, 17 checks, 19 with `WEB_FETCH_DIR`, where both suites run in the Console too, the live tests of event sources among them (the preflights of `Last-Event-ID`, the HTTP cache, two sources on one URL), and Stop ends an event source.
 - `tests/wasm/lib/fetch-http.mjs` is the server of all of them; `node tests/wasm/lib/fetch-http.mjs` runs it and prints its URL, for `WEB_FETCH_SERVER` of the live tests.
 
 Only Chromium was run; Firefox and Safari were not.
 
 ## Left out
 
-The DOM, JavaScript code, WebSocket and EventSource, OPFS and WebCrypto for the image: they can be services of `pharoHost`. Credentials and cookies; streamed request bodies; the hops of a redirect; the cache modes but `default` and `no-store`; a CORS proxy for HTTP (the git proxy forwards only git).
+The DOM, JavaScript code, WebSocket, OPFS and WebCrypto for the image, and the EventSource of the host (the package reads event streams over fetch): they can be services of `pharoHost`. Credentials and cookies; streamed request bodies; the hops of a redirect; the cache modes but `default` and `no-store`; a CORS proxy for HTTP (the git proxy forwards only git).
 A ZnServer in the node VM: `listen` ends it without the npm module `ws`, as before.
