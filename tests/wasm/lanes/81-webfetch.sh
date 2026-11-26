@@ -57,7 +57,11 @@
 # Without it these are one skipped check.  The load and the suites are
 # stopped after 600 s each.  The callback and snapshot scripts say 'N of N'
 # with the N of the checkout, at least those of 65028db of web-fetch.st (9 and
-# 6), so that the VM and web-fetch.st may change in either order.
+# 6), so that a checkout with more checks passes too.  That frees the counts
+# only: the event sources of web-fetch.st (after 65028db) need /sse of
+# lib/fetch-http.mjs and flag 2 of the primitive, which an older tree answers
+# with 404 and a refusal.  The CI runs web-fetch.st master, so this tree lands
+# first, and web-fetch.st after it.
 #
 # Environment (from make wasm-check): NODE, WASM_DIR, HOST_PHARO, SRCDIR,
 # TEST_DIR, WASM_CHECK_TIMEOUT (see lib/common.sh); and WEB_FETCH_DIR.
