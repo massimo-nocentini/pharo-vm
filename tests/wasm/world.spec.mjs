@@ -1247,6 +1247,43 @@ await run(async t => {
     } finally { await context.close(); }
   });
 
+  // The Bloc image (packaging/bloc, docs/Bloc.md), when the site has it as
+  // the image of id bloc: its world opens the welcome window, a space of
+  // Bloc in a Morphic host, whose buffers are PharoBlocMorphicForms that
+  // cairo draws into (the VM has no SurfacePlugin); its pane is light, with
+  // text and buttons drawn by Alexandrie.  A click on its first button,
+  // Mini browser (at the same place of the window on every build: Toplo
+  // v0.12.0 lays it out with the fonts that Alexandrie embeds), opens a
+  // second space, Toplo's mini browser.
+  const bloc = catalog.find(e => e.id === 'bloc');
+  if (!bloc) console.log('# skip the Bloc image: the site has no image of id bloc');
+  else await check('the Bloc image: the welcome window, a space of Bloc, draws, and Mini browser opens another', async () => {
+    await accepting(() => gotoWorld(page, { fresh: 'bloc' }));
+    await waitState('running', 120000);
+    const welcome = p => p.windows.find(w => w.label === 'Welcome to Bloc and Toplo');
+    const p = await probe('the welcome window of Bloc', welcome, 120000);
+    const b = welcome(p).bounds;
+    // the pane, inside the frame of the window: mostly light, in more than a few colours
+    const inner = [b[0] + 10, b[1] + 40, b[2] - 10, b[3] - 10];
+    let light = 0, total = 0, colours = new Set();
+    for (const t0 = Date.now(); Date.now() - t0 < 30000; await page.waitForTimeout(500)) {
+      const shot = await shoot();
+      light = 0; total = 0; colours = new Set();
+      for (let y = inner[1]; y < inner[3]; y += 2) for (let x = inner[0]; x < inner[2]; x += 2) {
+        const i = (y * shot.width + x) * 4, [r, g, bl] = [shot.data[i], shot.data[i + 1], shot.data[i + 2]];
+        total++;
+        if (r > 230 && g > 230 && bl > 230) light++;
+        colours.add((r << 16) | (g << 8) | bl);
+      }
+      if (light > total / 2 && colours.size > 20) break;
+    }
+    assert(light > total / 2 && colours.size > 20,
+           `the pane of the welcome window: ${light} light pixels of ${total}, ${colours.size} colours`);
+    await click([b[0] + 69, b[1] + 232]);
+    await probe('the Mini browser', q => q.windows.some(w => w.label === 'Mini browser'), 60000);
+    console.log(`  # the welcome window: ${light} light pixels of ${total}, ${colours.size} colours; Mini browser opened`);
+  });
+
   await check('no worker warned of an engine error or an exception of the display', async () => {
     assert(!diag.length, diag.slice(0, 5).join(' | '));
   });

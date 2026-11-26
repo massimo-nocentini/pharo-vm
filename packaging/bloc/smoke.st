@@ -12,12 +12,14 @@
 	   of more than one colour, and a PharoBlocMorphicForm that cairo draws into;
 	3. the test packages below, each of which must run tests, with no failure and no error.
 
-The test packages are those that pass both natively and in the node VM, without a display; those left out fail
-for reasons that are not the image's: Alexandrie-Athens-Tests, Alexandrie-Cairo-Tests (4 and 1 pixel matches of
-another cairo), Alexandrie-Cairo-Tests, -CairoFreetype-Tests, -Canvas-Tests, -FontManager-Tests, -FreeType-Tests
-and -NewTools-Tests (a resource that downloads the Noto Color Emoji font from GitHub with Zinc, which the
-WebAssembly VM cannot), Bloc-Alexandrie-Tests (a pixel match) and Bloc-Tests (focus and settling tests that fail
-now and then without a display).
+The test packages are those that pass both natively and in the node VM, without a display, on the image of the
+zip; those left out fail for reasons that are not the image's: Alexandrie-Athens-Tests and Alexandrie-Cairo-Tests
+(4 and 1 pixel matches of another cairo), Alexandrie-Cairo-Tests, -CairoFreetype-Tests, -Canvas-Tests,
+-FontManager-Tests, -FreeType-Tests and -NewTools-Tests (a resource that downloads the Noto Color Emoji font from
+GitHub with Zinc, which the WebAssembly VM cannot), Alexandrie-Blur-Tests and Alexandrie-Harfbuzz-Tests (fonts and
+images of the clone of Alexandrie, pharo-local/iceberg/pharo-graphics/Alexandrie/tests, which the zip has not),
+Bloc-Alexandrie-Tests (a pixel match) and Bloc-Tests (focus and settling tests that fail now and then without a
+display).
 
 It prints one line per check that failed, then
 
@@ -93,8 +95,7 @@ problems ifEmpty: [
 				(context stack first: (context stack size min: 12)) do: [ :each | line value: '    ' , each printString ] ] ] ].
 
 "3. the tests"
-suites := #( 'Album-Tests' 'Alexandrie-Base-Tests' 'Alexandrie-Blur-Tests' 'Alexandrie-Harfbuzz-Tests'
-	'Alexandrie-ImageMatch-Tests' 'Bloc-Animation-Tests' 'Bloc-Display-Tests' 'Bloc-Infinite-Tests' 'Bloc-Layout-Tests'
+suites := #( 'Album-Tests' 'Alexandrie-Base-Tests' 'Alexandrie-ImageMatch-Tests' 'Bloc-Animation-Tests' 'Bloc-Display-Tests' 'Bloc-Infinite-Tests' 'Bloc-Layout-Tests'
 	'Bloc-SVG-Tests' 'Bloc-Spec2-Tests' 'Bloc-Text-Rope-Tests' 'Bloc-Text-Tests' 'Bloc-UnitedTests' 'Toplo-Tests'
 	'Toplo-Theme-Bee-Tests' 'Toplo-Widget-Album-Tests' 'Toplo-Widget-Button-Tests' 'Toplo-Widget-Image-Tests'
 	'Toplo-Widget-List-Tests' 'Toplo-Widget-Menu-Tests' 'Toplo-Widget-Select-Tests' 'Toplo-Widget-TabPane-Tests'
