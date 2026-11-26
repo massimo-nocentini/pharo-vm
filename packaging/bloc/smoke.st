@@ -5,8 +5,8 @@
 (build.sh runs it, natively; the lanes of the WebAssembly VM run it in the node VM too.)  It checks, in order:
 
 	1. the classes of Bloc, Alexandrie, Album, Toplo and of the two packages of src/, the welcome window pending,
-	   and the buffers of the Morphic host: PharoBloc-Web's newExternalForm, a PharoBlocMorphicForm only on a VM
-	   without SurfacePlugin;
+	   the buffers of the Morphic host: PharoBloc-Web's newExternalForm, a PharoBlocMorphicForm only on a VM
+	   without SurfacePlugin, and its cursor: of PharoBloc-Web, which leaves the hand where it points;
 	2. drawings by Alexandrie (cairo, FreeType and HarfBuzz through the FFI): an element with a border, a rounded
 	   rectangle and a text, a Toplo button, and the pane of the welcome window, each of its extent and with pixels
 	   of more than one colour, and a PharoBlocMorphicForm that cairo draws into;
@@ -43,6 +43,19 @@ problems ifEmpty: [
 	(globals at: #PharoBlocWelcome) isPending ifFalse: [ problems add: 'the welcome window is not pending' ].
 	((globals at: #BlAbstractMorphicHostSpace) >> #newExternalForm) package name = 'PharoBloc-Web'
 		ifFalse: [ problems add: 'BlAbstractMorphicHostSpace>>#newExternalForm is not the one of PharoBloc-Web' ].
+	"the hand keeps its point when a space of a Morphic host changes the cursor"
+	#( #BlMorphicWindowHostSpace #BlMorphicHostSpace ) do: [ :name |
+		| hand before |
+		hand := World activeHand.
+		before := hand position.
+		hand position: 499 @ 249.
+		(globals at: name) basicNew cursor: Cursor normal.
+		hand position = (499 @ 249) ifFalse: [
+			problems add: name , '>>#cursor: moved the hand to ' , hand position printString ].
+		(globals at: name) basicNew cursor: nil.
+		hand position: before.
+		((globals at: name) >> #cursor:) package name = 'PharoBloc-Web'
+			ifFalse: [ problems add: name , '>>#cursor: is not the one of PharoBloc-Web' ] ].
 	line value: 'Bloc smoke: ' , SystemVersion current printString , ', PharoBlocMorphicForm needed: '
 		, (globals at: #PharoBlocMorphicForm) isNeeded printString , ' (the VM '
 		, ((globals at: #PharoBlocMorphicForm) isNeeded ifTrue: [ 'has no' ] ifFalse: [ 'has' ]) , ' SurfacePlugin)' ].

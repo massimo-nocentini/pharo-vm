@@ -16,7 +16,8 @@ After the project, the two packages of src/ are installed:
 	PharoBloc-Web      the buffers of a space of Bloc in a Morphic host on a VM without SurfacePlugin, the WebAssembly
 	                   VM (PharoBlocMorphicForm: a Form with pinned bits that cairo draws into, instead of a manual
 	                   surface); it replaces BlAbstractMorphicHostSpace>>#newExternalForm, which keeps Bloc's form
-	                   where SurfacePlugin is there
+	                   where SurfacePlugin is there, and the cursor: of the two Morphic host spaces, which keep the
+	                   hand where it points (Pharo 15's showTemporaryCursor: moves it by the offset of the cursor)
 	PharoBloc-Welcome  the window that the image shows the first time that it is opened with a display, itself a
 	                   space of Bloc with Toplo's widgets (PharoBlocWelcome)
 
@@ -113,8 +114,10 @@ newUndeclared := Undeclared keys asSet reject: [ :each | undeclaredBefore includ
 newUndeclared do: [ :name |
 	(SystemNavigation default allReferencesTo: (Undeclared associationAt: name)) do: [ :method |
 		line value: 'Bloc: Undeclared ' , name , ' in ' , method printString ] ].
-((Smalltalk globals at: #BlAbstractMorphicHostSpace) >> #newExternalForm) package name = 'PharoBloc-Web'
-	ifFalse: [ fail value: 'BlAbstractMorphicHostSpace>>#newExternalForm is not the one of PharoBloc-Web' ].
+{ #BlAbstractMorphicHostSpace -> #newExternalForm. #BlMorphicWindowHostSpace -> #cursor:. #BlMorphicHostSpace -> #cursor: }
+	do: [ :each |
+		((Smalltalk globals at: each key) >> each value) package name = 'PharoBloc-Web'
+			ifFalse: [ fail value: each key , '>>#' , each value , ' is not the one of PharoBloc-Web' ] ].
 newUndeclared := newUndeclared reject: [ :each | #( #BlLazyElement ) includes: each ].
 newUndeclared ifNotEmpty: [
 	fail value: 'new Undeclared variables ' , newUndeclared asSortedCollection asArray printString ].

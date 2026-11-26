@@ -12,7 +12,7 @@ The Bloc image is the stock Pharo 15 image (build 117, the default image of the 
 
 and two packages of this repository, `packaging/bloc/src`:
 
-- `PharoBloc-Web`: a space of Bloc in a Morphic host draws into a manual surface of SurfacePlugin, which the WebAssembly VM has not; there it draws into a `PharoBlocMorphicForm` instead (see In the browser).
+- `PharoBloc-Web`: a space of Bloc in a Morphic host draws into a manual surface of SurfacePlugin, which the WebAssembly VM has not; there it draws into a `PharoBlocMorphicForm` instead (see In the browser). It also gives the two Morphic host spaces a `cursor:` that leaves the hand where it points: Bloc's sends `showTemporaryCursor:` to the hand, which in Pharo 15 moves the position of the hand by the offset of the cursor (-1@-1 for the arrow) until the next move of the mouse, so that the world saw the pointer a pixel off once a space had set its cursor.
 - `PharoBloc-Welcome`: the window that the image shows the first time that it is opened with a display, itself a space of Bloc with Toplo's widgets, whose buttons open Toplo's mini browser, workspace and login page, and a browser on `ToSandBox`, whose class side has some hundreds of examples. `PharoBlocWelcome open`, or Help > Bloc and Toplo, opens it again.
 
 The site of GitHub Actions offers it as "Pharo 15 (bloc)" (id `bloc`), and the release attaches it as `PharoBloc-<version>-Pharo15.zip`.
@@ -61,4 +61,4 @@ The load takes about 90 s, the smoke about 2 minutes.
 
 - Fonts that Alexandrie downloads with Zinc (`AeDownloadedFont`: Noto Color Emoji, Cascadia Code) are not there in the WebAssembly VM, whose sockets reach no web server (the Bloc image has no WebFetch, [WebFetch.md](WebFetch.md)); the fonts that Alexandrie embeds (Source Sans Pro, Source Code Pro) are. Inria Serif, which its tests use, is a file of the clone of Alexandrie, which the zip has not.
 - A space draws through cairo into the pinned bits of a Form and is copied by BitBlt, in the WebAssembly VM as natively; a larger space costs more of both. Bloc's own animations run in its pulse loop, a process of the image, at the pace that the VM's slices allow.
-- `PharoBloc-Web` replaces a method of Bloc's package BlocHost-Morphic: a new version of Bloc loaded over the image brings Bloc's method back, and the Morphic host fails again in the WebAssembly VM, with the primitive failure of `primCreateManualSurfaceWidth:height:rowPitch:depth:isMSB:`.
+- `PharoBloc-Web` replaces three methods of Bloc's package BlocHost-Morphic: a new version of Bloc loaded over the image brings Bloc's method back, and the Morphic host fails again in the WebAssembly VM, with the primitive failure of `primCreateManualSurfaceWidth:height:rowPitch:depth:isMSB:`.
