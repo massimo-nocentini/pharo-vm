@@ -26,7 +26,8 @@
 //                    the id, or 0 when MAX_OPEN requests are open (or the
 //                    availability is not 1).  text is the request record;
 //                    body a Uint8Array that becomes the request's, or null;
-//                    timeoutMs 0 is none; flags 1 does not follow redirects
+//                    timeoutMs 0 is none; flags 1 does not follow
+//                    redirects, flags 2 is the cache mode no-store
 //   state(id)        state + 8 * size, or -1 for an unknown id, as below
 //   headSize(id)     the size of the record of the answer, or of the error;
 //                    -1 in state 1
@@ -123,7 +124,10 @@ var PharoWebFetch = (() => {
         if (i < 1) throw new TypeError('not a header: ' + line);
         const name = line.slice(0, i), key = name.toLowerCase();
         if (DROPPED.has(key) || /^(proxy|sec)-/.test(key) || (isBrowser && key === 'user-agent')) continue;
-        headers.push([name, line.slice(i + 1).trim()]);
+        // only spaces and tabs, as fetch does: trim() also removes U+00A0,
+        // the byte A0 of a value sent as UTF-8 one character a byte (the
+        // end of an 'à' in a Last-Event-ID)
+        headers.push([name, line.slice(i + 1).replace(/^[\t ]+|[\t ]+$/g, '')]);
       }
       const init = { method: method.toUpperCase(), headers };
       new Request(url.href, Object.assign({ body: body ? new Uint8Array(1) : undefined }, init));
@@ -133,7 +137,7 @@ var PharoWebFetch = (() => {
         credentials: 'omit',
         referrerPolicy: 'no-referrer',
         redirect: flags & 1 ? 'manual' : 'follow',
-        cache: 'default' }) };
+        cache: flags & 2 ? 'no-store' : 'default' }) };
     }
 
     async function run(r, text, body, flags) {

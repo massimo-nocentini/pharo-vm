@@ -272,8 +272,9 @@ primitiveFetchRead(void)
 
 	Start a request: head is its record, a ByteArray, body nil or a
 	ByteArray, which is copied; window is the size at which the body of the
-	answer waits to be read, timeoutMs 0 is none, flags 1 does not follow
-	redirects.  Answer the id of the request. */
+	answer waits to be read, timeoutMs 0 is none; flags 1 does not follow
+	redirects, flags 2 is the cache mode no-store, and 3 is both.  Answer the
+	id of the request. */
 
 static void
 primitiveFetchStart(void)
@@ -294,7 +295,7 @@ primitiveFetchStart(void)
 	 || (body != interpreterProxy->nilObject() && !isByteArray(body))
 	 || window < 1 || window > INT_MAX
 	 || timeoutMs < 0 || timeoutMs > INT_MAX
-	 || flags < 0 || flags > 1) {
+	 || flags < 0 || flags > 3) {
 		interpreterProxy->primitiveFailFor(PrimErrBadArgument);
 		return;
 	}

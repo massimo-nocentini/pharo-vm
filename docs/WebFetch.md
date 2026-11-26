@@ -57,7 +57,9 @@ The records are UTF-8 with a LF between the lines; a CR, a LF or a NUL in a part
 
 A request fails with the kind `request` when its URL is not an absolute `http:` or `https:` one, has a user name or a password, or when `new Request()` refuses it.
 These headers of the image are dropped: accept-charset, accept-encoding, access-control-request-headers, access-control-request-method, connection, content-length, cookie, cookie2, date, dnt, expect, host, keep-alive, origin, referer, set-cookie, te, trailer, transfer-encoding, upgrade, via, `proxy-*` and `sec-*`, and in a browser user-agent.
-The request is always made with `mode: 'cors'`, `credentials: 'omit'`, `referrerPolicy: 'no-referrer'` and `cache: 'default'`, and `redirect` is `'manual'` for flags 1, else `'follow'`.
+A header value loses the spaces and tabs at both ends, and nothing else: `trim()` would also take U+00A0, the byte A0 of a value that the image sends as UTF-8, one character a byte (a `Last-Event-ID` that ends in `à`).
+The request is always made with `mode: 'cors'`, `credentials: 'omit'` and `referrerPolicy: 'no-referrer'`; `redirect` is `'manual'` with flag 1, else `'follow'`, and `cache` is `'no-store'` with flag 2, else `'default'`.
+In node, whose fetch has no HTTP cache, `no-store` sends `Cache-Control: no-cache` and `Pragma: no-cache`; a browser adds them after its CORS decision, so they cost no preflight.
 
 The methods are synchronous, never throw and never call the VM; the comment at the top of the file says them all.
 
@@ -68,7 +70,7 @@ Module `WebFetchPlugin`, built into both VMs. None of them waits, so they work i
 | Primitive | Arguments | Answers | Fails with |
 |---|---|---|---|
 | primitiveFetchAvailability | none | 0 no fetch here, 1 ready, 2 the network is off | never |
-| primitiveFetchStart | semaphoreIndex, head, body, window, timeoutMs, flags | the id | `bad argument`: an index outside the table, a head that is no ByteArray of 1 to 1048576 bytes, a body that is neither nil nor a ByteArray of at most 2^31-1 bytes, a window not in 1..2^31-1, a timeout not in 0..2^31-1, flags other than 0 and 1; `unsupported operation`: availability is not 1; `resource limit exceeded`: 64 are open; `insufficient C memory`: JavaScript could not copy the body |
+| primitiveFetchStart | semaphoreIndex, head, body, window, timeoutMs, flags | the id | `bad argument`: an index outside the table, a head that is no ByteArray of 1 to 1048576 bytes, a body that is neither nil nor a ByteArray of at most 2^31-1 bytes, a window not in 1..2^31-1, a timeout not in 0..2^31-1, flags other than 0 to 3 (1 does not follow redirects, 2 is the cache mode `no-store`); `unsupported operation`: availability is not 1; `resource limit exceeded`: 64 are open; `insufficient C memory`: JavaScript could not copy the body |
 | primitiveFetchState | id | state + 8 * the bytes ready | `bad argument`: no SmallInteger; `not found`: no such request |
 | primitiveFetchHead | id | the record, a ByteArray, or nil in state 1 | the same; `insufficient object memory` |
 | primitiveFetchRead | id, aByteArray, start, count | the bytes copied, 0 to count | the same; `bad argument`: no ByteArray; `no modification`: it is read-only; `bad index`: the range is not inside |
@@ -108,13 +110,14 @@ In the node VM `PHARO_WASM_NETWORK=0` in the environment turns fetch and git off
 - Another origin answers only with CORS: `api.github.com` and `raw.githubusercontent.com` do, the zip archives of `codeload.github.com` do not. A refusal, a name that is not there, a TLS error and a network that is down are all the same error, without a reason (the console of the browser has it).
 - `Authorization`, a `Content-Type` such as `application/json` and headers of one's own cost a preflight, an OPTIONS request before each.
 - Redirects are followed by the browser: the last answer is all that is seen, and not to follow them is an error of the kind `redirect`. (Node gives the 3xx answer.)
-- Over HTTP/1.1 a browser opens six connections to a host, so a seventh request waits for one of them; and Chromium lets simultaneous GETs of one URL wait for one another (its cache).
+- Over HTTP/1.1 a browser opens six connections to a host, so a seventh request waits for one of them; and Chromium lets simultaneous GETs of one URL wait for one another until the first has its head (its cache), unless their cache mode is `no-store`.
+- In the cache mode `default` a cacheable answer (`Cache-Control: max-age`, or only a `Last-Modified`) is answered from the cache of the browser the next time, also after a page load, without asking the server: what must come from the server each time uses flag 2.
 - A wait in the UI process of the world freezes it until the request ends, as a socket does natively. Stop opens a debugger on that process and the world draws again; the request stays open until the debugger is closed.
 
 ## Tests
 
-- `tests/wasm/web-fetch.test.mjs`: `host-events.js` and `web-fetch.js` in node with a fake fetch, and `node-pump.js` with a fake module, 24 checks; `tests/wasm/fetch-http.test.mjs`: the server of the tests, 3.
-- Lane 81-webfetch (`tests/wasm/lanes/81-webfetch.sh`, with `tests/wasm/st/webfetch-lane.st`): those two; the primitives and every failure code above in the node VM and in the web VM (80 checks each), an FFI callback, the memory, an exit and a trap with open requests, the network off, a node without fetch, a VM without the plugin. With `WEB_FETCH_DIR`, a checkout of `web-fetch.st`, it loads the packages with Metacello and runs their tests, also the live ones, in the node VM, there with the network off, and in the web VM, requests while a real FFI callback runs (the node VM), and an image saved while processes wait; without it that part is a skipped check.
+- `tests/wasm/web-fetch.test.mjs`: `host-events.js` and `web-fetch.js` in node with a fake fetch, and `node-pump.js` with a fake module, 26 checks; `tests/wasm/fetch-http.test.mjs`: the server of the tests, 3.
+- Lane 81-webfetch (`tests/wasm/lanes/81-webfetch.sh`, with `tests/wasm/st/webfetch-lane.st`): those two; the primitives and every failure code above in the node VM and in the web VM (83 checks each), an FFI callback, the memory, an exit and a trap with open requests, the network off, a node without fetch, a VM without the plugin. With `WEB_FETCH_DIR`, a checkout of `web-fetch.st`, it loads the packages with Metacello and runs their tests, also the live ones, in the node VM, there with the network off, and in the web VM, requests while a real FFI callback runs (the node VM), and an image saved while processes wait; without it that part is a skipped check.
 - `tests/wasm/vm-harness.js` (lane 60), cases 28 to 30: how soon a signal wakes a process, the pause of the output, the services at an exit and at a crash. `tests/wasm/worker-harness.js` (lane 70), case 31: the network of the worker.
 - `tests/wasm/webfetch.spec.mjs` (`make wasm-check-browser`): the pages in a browser, 17 checks, 19 with `WEB_FETCH_DIR`, where both suites run in the Console too.
 - `tests/wasm/lib/fetch-http.mjs` is the server of all of them; `node tests/wasm/lib/fetch-http.mjs` runs it and prints its URL, for `WEB_FETCH_SERVER` of the live tests.
@@ -123,5 +126,5 @@ Only Chromium was run; Firefox and Safari were not.
 
 ## Left out
 
-The DOM, JavaScript code, WebSocket and EventSource, OPFS and WebCrypto for the image: they can be services of `pharoHost`. Credentials and cookies; streamed request bodies; the hops of a redirect; another cache mode; a CORS proxy for HTTP (the git proxy forwards only git).
+The DOM, JavaScript code, WebSocket and EventSource, OPFS and WebCrypto for the image: they can be services of `pharoHost`. Credentials and cookies; streamed request bodies; the hops of a redirect; the cache modes but `default` and `no-store`; a CORS proxy for HTTP (the git proxy forwards only git).
 A ZnServer in the node VM: `listen` ends it without the npm module `ws`, as before.

@@ -12,7 +12,8 @@
 #   builtin  Smalltalk vm listBuiltinModules has 'WebFetchPlugin (i)';
 #   codes    tests/wasm/st/webfetch-lane.st in the node VM: what the six
 #            primitives answer, and every failure code on bad arguments; the
-#            kinds of error; 64 requests open and one more; 150 times a
+#            kinds of error; the flags (redirects, the cache mode no-store);
+#            64 requests open and one more; 150 times a
 #            semaphore that takes the index of one that was just closed: no
 #            signal that is not its own;
 #   callback start, state, head, read and close inside an FFI callback, where
@@ -160,7 +161,7 @@ fresh builtin
 expect builtin true vm eval "Smalltalk vm listBuiltinModules includes: 'WebFetchPlugin (i)'"
 
 fresh codes
-if run codes probe codes; then probed codes codes 80; fi
+if run codes probe codes; then probed codes codes 83; fi
 
 if cached FEATURE_FFI; then
     fresh callback
@@ -296,7 +297,7 @@ const prompt = from => new Promise((resolve, reject) => {
 ' "$SRCDIR" "$WASM_DIR/web" "$1" "$2" "$url $3"
 }
 fresh web
-if run web web_run "$(pwd)" "$LANE_ST" codes; then probed web codes 80; fi
+if run web web_run "$(pwd)" "$LANE_ST" codes; then probed web codes 83; fi
 
 if test -z "$WEB_FETCH_DIR"; then
     skip_check package "no WEB_FETCH_DIR, a checkout of the package WebFetch (web-fetch.st)"

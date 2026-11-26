@@ -666,6 +666,27 @@ await check('header filtering (browser vs node), request body, and exact init ke
   eq(seen[1].init.headers, [['User-Agent', 'Pharo/12'], ['X-Custom', 'ok'], ['Authorization', 'Bearer tok']], 'node keeps User-Agent, drops forbidden');
 });
 
+await check('header values: only spaces and tabs are trimmed', async () => {
+  const seen = [];
+  const { wf } = makeFetch({ fetch: async (url, init) => { seen.push(init.headers); return fakeResponse(); } });
+  // the UTF-8 of 'città', one character a byte, as the image sends a Last-Event-ID: it ends in U+00A0
+  const citta = 'citt\u00c3\u00a0';
+  const id = wf.start(1, ['GET', 'http://x.test/t', 'Last-Event-ID: ' + citta, 'X-Tabs: \t x\t ',
+    'X-Nbsp: \u00a0y\u00a0', 'X-Empty: '].join('\n'), null, 1024, 0, 0);
+  await settle();
+  wf.close(id);
+  eq(seen, [[['Last-Event-ID', citta], ['X-Tabs', 'x'], ['X-Nbsp', '\u00a0y\u00a0'], ['X-Empty', '']]], 'header values');
+});
+
+await check('flags 2 is the cache mode no-store', async () => {
+  const seen = [];
+  const { wf } = makeFetch({ fetch: async (url, init) => { seen.push([init.cache, init.redirect]); return fakeResponse(); } });
+  const ids = [0, 1, 2, 3].map(flags => wf.start(1, 'GET\nhttp://x.test/c' + flags, null, 1024, 0, flags));
+  await settle();
+  ids.forEach(id => wf.close(id));
+  eq(seen, [['default', 'follow'], ['default', 'manual'], ['no-store', 'follow'], ['no-store', 'manual']], 'cache and redirect');
+});
+
 // ---------------------------------------------------------------------------
 // Redirect modes, records (UTF-8, empty reason, redirected, NUL), error kinds
 // ---------------------------------------------------------------------------

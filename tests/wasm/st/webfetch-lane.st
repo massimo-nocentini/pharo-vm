@@ -7,7 +7,8 @@
 
 	codes        what each primitive answers, and the code it fails with on each bad argument,
 	             64 requests open and one more, what makes a request or an answer fail, manual
-	             redirects, the window, and 150 times the index of a semaphore that is reused
+	             redirects, the cache mode no-store, the window, and 150 times the index of a
+	             semaphore that is reused
 	callback     a request started, looked at and closed inside an FFI callback, where primitiveMayWait
 	             answers false
 	memory       60 MB in one object, the old space that it costs, and 150 MB, which grows the memory
@@ -25,7 +26,7 @@
  (nothing but the lines of a check for exit and trap, which end the VM).  The class WFP, which it
  compiles, has the primitives: a failed one answers {its error code}."
 
-| base probe out passed failed check wfp sem index head start open buffer id ids |
+| base probe out passed failed check wfp sem index head start open buffer id ids tag |
 probe := 'webfetch.lane' asFileReference contents trimBoth substrings.
 base := probe first.
 probe := probe second.
@@ -120,7 +121,7 @@ probe = 'codes' ifTrue: [
 	  'window 1.0' -> { index. head. nil. 1.0. 0. 0 }.
 	  'timeout -1' -> { index. head. nil. 100. -1. 0 }.
 	  'timeout 2^31' -> { index. head. nil. 100. 1 << 31. 0 }.
-	  'flags 2' -> { index. head. nil. 100. 0. 2 }.
+	  'flags 4' -> { index. head. nil. 100. 0. 4 }.
 	  'flags nil' -> { index. head. nil. 100. 0. nil } } do: [ :each |
 		check value: 'start, ' , each key value: [ start valueWithArguments: each value ] value: { #'bad argument' } ].
 	check value: 'start, the largest window and timeout' value: [
@@ -205,6 +206,18 @@ probe = 'codes' ifTrue: [
 		s := Semaphore new.
 		wfp end: (wfp start: (Smalltalk registerExternalObject: s) head: ('GET' , String lf , base , '/redir') utf8Encoded
 			body: nil window: 100 timeout: 0 flags: 1) on: s ] value: '302'.
+	"the node VM and the web VM ask the same server"
+	tag := 'no-store-' , UUID new asString.
+	check value: 'flags 2, the cache mode no-store' value: [
+		| s |
+		s := Semaphore new.
+		wfp end: (wfp start: (Smalltalk registerExternalObject: s) head: ('GET' , String lf , base , '/hello?' , tag) utf8Encoded
+			body: nil window: 100 timeout: 0 flags: 2) on: s ] value: '200'.
+	check value: 'flags 3, no-store and a manual redirect' value: [
+		| s |
+		s := Semaphore new.
+		wfp end: (wfp start: (Smalltalk registerExternalObject: s) head: ('GET' , String lf , base , '/redir?' , tag) utf8Encoded
+			body: nil window: 100 timeout: 0 flags: 3) on: s ] value: '302'.
 	check value: 'a POST, its body and its headers' value: [
 		| s answer |
 		s := Semaphore new.
@@ -225,6 +238,10 @@ probe = 'codes' ifTrue: [
 		headers := headers at: 'headers'.
 		{ headers at: 'x-mine'. (headers includesKey: 'cookie'). (headers includesKey: 'sec-x'). (headers includesKey: 'referer') } ]
 		value: { 'caf' , (String with: (Character value: 233)). false. false. false }.
+	check value: 'flags 2 reached fetch: node asks the server for no-cache' value: [
+		((STONJSON fromString: (wfp whole: base , '/_stats?tag=' , tag window: 10000000 timeout: 0) utf8Decoded) at: 'requests')
+			collect: [ :each | (each at: 'path') -> ((each at: 'headers') at: 'pragma' ifAbsent: [ nil ]) ] ]
+		value: { '/hello' -> 'no-cache'. '/redir' -> 'no-cache' }.
 	"the rule of the semaphores: close, unregister, and the index is another's"
 	check value: '150 reuses of an index: 0 spurious signals' value: [
 		| spurious same |
