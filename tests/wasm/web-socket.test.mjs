@@ -117,6 +117,14 @@ function fakeWebSocketClass() {
     }
     close(code, reason) {
       this.closes.push(code === undefined ? [] : [code, reason]);
+      // node 24 and 25: a close while connecting fires error and close
+      // inside it, then leaves readyState at 2 (CLOSING), not 3
+      if (FakeWebSocket.nodeLike && this.readyState === 0) {
+        this.fire('error');
+        this.fire('close', { code: 1006, reason: '', wasClean: false });
+        this.readyState = 2;
+        return;
+      }
       if (this.readyState < 2) this.readyState = 2;
     }
     fire(type, init = {}) {
@@ -128,6 +136,7 @@ function fakeWebSocketClass() {
   }
   FakeWebSocket.instances = [];
   FakeWebSocket.throwNext = null;
+  FakeWebSocket.nodeLike = false;
   return FakeWebSocket;
 }
 
@@ -763,6 +772,87 @@ await check('22 node-pump.js: the exit guard only with lingering sockets, unref\
     'the output first, then the exit with the status');
   const trapped = await run(2, { trap: true });
   eq(trapped.log.slice(-1), ['exit 1'], 'a trap: the status set after the shutdown');
+});
+
+await check('23 a WebSocket of node closed while connecting (its events inside close(), readyState left at 2): no signal inside a method, no lingering', async () => {
+  const s = make();
+  s.WS.nodeLike = true;
+  // the handshake timer, then a release, as the package does after it settles
+  const a = openOn(s, URL1, { timeout: 100 });
+  await settle();
+  await s.timers.advance(100);
+  eq([state(s.ws, a), info(s.ws, a).slice(0, 2), s.signals], [5, ['timeout', 'not open after 100 ms'], [11, 12, 13]], 'timeout');
+  eq(s.last().closes, [[1000, 'timeout']], 'closed with 1000 timeout');
+  eq([s.ws.release(a), s.ws.lingering()], [1, 0], 'released, not lingering: its close event came');
+  // a release while connecting
+  const b = openOn(s);
+  await settle();
+  s.signals.length = 0;
+  eq([s.ws.release(b), s.signals, s.ws.lingering()], [1, [], 0], 'release: nothing signalled, not lingering');
+  await settle();
+  eq(s.signals, [], 'nothing after it');
+  // a close while connecting: 4, closed before it was open, from a microtask
+  const c = openOn(s);
+  await settle();
+  s.signals.length = 0;
+  eq([s.ws.close(c, 1000, new Uint8Array(0)), s.signals, state(s.ws, c)], [1, [], 3], 'close: 1, nothing signalled inside it, state 3');
+  await settle();
+  eq([state(s.ws, c), info(s.ws, c).slice(3), s.signals], [4, ['1006', 'closed before it was open', '0'], [11, 12, 13]], 'then 4, signalled once');
+  eq(s.ws.release(c), 1, 'release');
+  // 40 timeouts and releases: never refused
+  const ids = [];
+  for (let i = 0; i < 40; i++) {
+    const id = openOn(s, URL1, { timeout: 50 });
+    ids.push(id);
+    await settle();
+    await s.timers.advance(50);
+    s.ws.release(id);
+  }
+  eq([ids.filter(id => id > 0).length, s.ws.lingering(), s.timers.count], [40, 0, 0], 'all 40 opened, none lingering, no timer');
+});
+
+await check('24 node\'s own WebSocket against a server that never answers the handshake: timeouts, releases and a close, no lingering, the TCP ends', async () => {
+  const net = await import('node:net');
+  const conns = new Set();
+  const server = net.createServer(c => { conns.add(c); c.resume(); c.on('error', () => {}); c.on('close', () => conns.delete(c)); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  try {
+    const ctx = context();
+    vm.runInContext(webSocketSrc, ctx, { filename: 'web-socket.js' });
+    const signals = [];
+    const ws = ctx.PharoWebSocket.create({ signal: i => { signals.push(i); return true; }, WebSocket: () => globalThis.WebSocket });
+    const url = `ws://127.0.0.1:${server.address().port}/ws`;
+    const until = async (what, f, ms = 5000) => {
+      const end = Date.now() + ms;
+      while (!f()) {
+        if (Date.now() > end) throw new Error('timed out waiting for ' + what);
+        await new Promise(r => setTimeout(r, 10));
+      }
+    };
+    let opened = 0;
+    for (let i = 0; i < 34; i++) {
+      const id = ws.open(1, 2, 3, rec(url), 1000, 1000, 50);
+      if (!id) break;
+      opened++;
+      await until('the timeout', () => (ws.state(id) & 7) >= 4);
+      eq(info(ws, id)[0], 'timeout', 'kind');
+      ws.release(id);
+    }
+    eq([opened, ws.lingering()], [34, 0], 'all 34 opened, none lingering');
+    const c = ws.open(1, 2, 3, rec(url), 1000, 1000, 0);
+    await until('the connection', () => conns.size > 0);
+    signals.length = 0;
+    eq([ws.close(c, 1000, new Uint8Array(0)), signals], [1, []], 'close while connecting: 1, nothing signalled inside it');
+    await until('the end', () => (ws.state(c) & 7) >= 4, 1000);
+    eq([ws.state(c) & 7, info(ws, c).slice(3)], [4, ['1006', 'closed before it was open', '0']], 'closed before it was open');
+    ws.release(c);
+    // node drops each connection at the abort; its pool may make a fresh
+    // one then, which ends with its keep-alive timeout (4 s)
+    await until('the TCP connections to end', () => conns.size === 0, 8000);
+  } finally {
+    for (const c of conns) c.destroy();
+    await new Promise(r => server.close(r));
+  }
 });
 
 console.log(`${passes} passed, ${failures} failed`);

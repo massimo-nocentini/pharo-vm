@@ -66,6 +66,12 @@
 // towards MAX_OPEN, so a loop of opens and releases to a deaf server is
 // bounded.
 //
+// Node 24 and 25 fire the error and the close events of a WebSocket that is
+// still connecting inside its close(), and leave readyState at 2 after them.
+// So the events that come inside a close() of the service wait for a
+// microtask (nothing signals inside a method), and a WebSocket whose close
+// event came never lingers, whatever its readyState says.
+//
 // The methods are synchronous, never throw and never call the VM:
 //
 //   availability()   0 no WebSocket here, 1 ready, 2 the network is off
@@ -170,6 +176,8 @@ var PharoWebSocket = (() => {
     let last = 1 + Math.floor(Math.random() * 0x7ffffffe);
     let queuedTotal = 0, gone = false;
     let ticker = null, tickerDelay = 0;
+    // > 0 inside a close() of a WebSocket, where node fires its events
+    let inside = 0;
 
     const later = (f, ms) => {
       const t = setTimer(f, ms);
@@ -196,11 +204,19 @@ var PharoWebSocket = (() => {
         if (r.state === CLOSING) closed(r, 1006, 'closing handshake timed out', false);
       }, CLOSE_TIMEOUT);
     }
+    function closeWs(ws, code, reason) {
+      inside++;
+      try { ws.close(code, reason); } finally { inside--; }
+    }
+    // an event of a WebSocket, after a microtask when it came inside a close()
+    function deliver(f) {
+      if (inside) Promise.resolve().then(f); else f();
+    }
     // the WebSocket, unless closing or closed already
     function shut(r, code, reason) {
       const ws = r.ws;
-      if (!ws || ws.readyState >= 2) return;
-      try { ws.close(code, reason); } catch (e) { try { ws.close(); } catch (e2) { /* closing */ } }
+      if (!ws || r.ended || ws.readyState >= 2) return;
+      try { closeWs(ws, code, reason); } catch (e) { try { closeWs(ws); } catch (e2) { /* closing */ } }
     }
     function urlOf(r) { return r.ws && r.ws.url ? r.ws.url : r.url; }
     function fail(r, kind, message, code, reason) {
@@ -231,9 +247,10 @@ var PharoWebSocket = (() => {
       r.first = r.count = r.queuedBytes = 0;
       r.forgotten = true;
       const ws = r.ws;
-      if (ws && ws.readyState !== 3) {
+      if (ws && !r.ended && ws.readyState !== 3) {
         shut(r, 1000, reason);
-        lingering.add(ws);
+        // (its close event may have come inside that close())
+        if (!r.ended) lingering.add(ws);
       }
     }
 
@@ -326,7 +343,6 @@ var PharoWebSocket = (() => {
       fail(r, 'network', eventMessage(ev));
     }
     function onClose(r, ws, ev) {
-      lingering.delete(ws);
       if (r.ws !== ws || r.forgotten) return;
       if (r.state === CONNECTING) fail(r, 'network', eventMessage(ev));
       else if (r.state === CLOSING && r.closedConnecting) closed(r, 1006, 'closed before it was open', false);
@@ -374,10 +390,14 @@ var PharoWebSocket = (() => {
       }
       r.ws = ws;
       ws.binaryType = 'arraybuffer';
-      ws.addEventListener('open', () => onOpen(r, ws));
-      ws.addEventListener('message', ev => onMessage(r, ws, ev.data));
-      ws.addEventListener('error', ev => onError(r, ws, ev));
-      ws.addEventListener('close', ev => onClose(r, ws, ev));
+      ws.addEventListener('open', () => deliver(() => onOpen(r, ws)));
+      ws.addEventListener('message', ev => deliver(() => onMessage(r, ws, ev.data)));
+      ws.addEventListener('error', ev => deliver(() => onError(r, ws, ev)));
+      ws.addEventListener('close', ev => {
+        r.ended = true;
+        lingering.delete(ws);
+        deliver(() => onClose(r, ws, ev));
+      });
     }
 
     function availability() {
@@ -412,7 +432,7 @@ var PharoWebSocket = (() => {
       open(semState, semRead, semWrite, bytes, maxMessage, maxQueued, timeoutMs) {
         if (gone || open.size + lingering.size >= MAX_OPEN || availability() !== 1) return 0;
         const r = { id: nextId(), sems: [semState, semRead, semWrite], state: CONNECTING, ws: null, url: '',
-          protocol: '', extensions: '', opened: false, info: null, forgotten: false, closedConnecting: false,
+          protocol: '', extensions: '', opened: false, info: null, forgotten: false, closedConnecting: false, ended: false,
           queue: [], first: 0, count: 0, queuedBytes: 0, maxMessage, maxQueued,
           handshakeTimer: null, closeTimer: null, draining: false, lastBuffered: 0, idle: 0 };
         open.set(r.id, r);
@@ -501,7 +521,7 @@ var PharoWebSocket = (() => {
           return 0;
         }
         if (r.ws) {
-          try { r.ws.close(code, reason); } catch (e) { return -2; }
+          try { closeWs(r.ws, code, reason); } catch (e) { return -2; }
         }
         if (r.state === CONNECTING) {
           r.closedConnecting = true;
