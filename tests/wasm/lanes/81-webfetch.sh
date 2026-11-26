@@ -39,22 +39,25 @@
 #   load     tests/load-webfetch.st of the checkout loads the groups Core,
 #            Tests, Zinc and ZincTests with Metacello, and the image is saved;
 #   suite    tests/run-webfetch.st runs the packages WebFetch-Tests and
-#            WebFetch-Zinc-Tests in the node VM, with the live tests: no
-#            failure, no error, and no test skipped but the two classes for
-#            VMs without the plugin, and WebFetchEchoServerTest, which goes to
-#            a public server only when WEB_FETCH_ECHO_SERVER names it;
+#            WebFetch-Zinc-Tests in the node VM, with the live tests (requests,
+#            and event sources over /sse): no failure, no error, and no test
+#            skipped but the two classes for VMs without the plugin, and
+#            WebFetchEchoServerTest, which goes to a public server only when
+#            WEB_FETCH_ECHO_SERVER names it;
 #   suite off  the same with PHARO_WASM_NETWORK=0: no failure, no error, and
 #            the live tests skipped;
 #   suite web  the suite in pharo-web;
-#   suite callback  tests/callback-webfetch.st: requests of the callback and
-#            of other processes while a real FFI callback runs (skipped
-#            without the FFI);
+#   suite callback  tests/callback-webfetch.st: requests and event sources of
+#            the callback and of other processes while a real FFI callback
+#            runs (skipped without the FFI);
 #   snapshot  tests/snapshot-webfetch.st, twice: an image saved while processes
-#            wait for requests goes on, and restarted it signals
-#            WebFetchSessionEnded to each of them, and fetches again.
+#            wait for requests and event sources goes on, and restarted it
+#            signals WebFetchSessionEnded to each of them, and fetches again.
 #
 # Without it these are one skipped check.  The load and the suites are
-# stopped after 600 s each.
+# stopped after 600 s each.  The callback and snapshot scripts say 'N of N'
+# with the N of the checkout, at least those of 65028db of web-fetch.st (9 and
+# 6), so that the VM and web-fetch.st may change in either order.
 #
 # Environment (from make wasm-check): NODE, WASM_DIR, HOST_PHARO, SRCDIR,
 # TEST_DIR, WASM_CHECK_TIMEOUT (see lib/common.sh); and WEB_FETCH_DIR.
@@ -326,6 +329,25 @@ snapshot() {
     echo "$url" >webfetch.lane
     vm st "$WEB_FETCH_DIR/tests/snapshot-webfetch.st"
 }
+# expect_all NAME PREFIX MIN SUFFIX CMD ...: the output of CMD is the one
+# line 'PREFIX<n> of <n>SUFFIX', with n at least MIN, and its status 0
+expect_all() {
+    name=$1; prefix=$2; least=$3; suffix=$4; shift 4
+    run "$name" "$@" || return 0
+    out=$(cat smoke.out)
+    all=${out#"$prefix"}
+    all=${all%%" of "*}
+    if test "$status" -ne 0; then
+	fail "$name" "exit status $status"
+    elif ! is_number "$all" || test "x$out" != "x$prefix$all of $all$suffix"; then
+	fail "$name" "expected '${prefix}N of N$suffix', got '$out'"
+    elif test "$all" -lt "$least"; then
+	fail "$name" "$all checks, expected at least $least"
+    else
+	ok "$name" "$all of $all"
+    fi
+}
+
 # suites_passed NAME AVAILABILITY SKIPPED: both lines of run-webfetch.st have
 # tests, no failure, no error and the availability, and only the classes that
 # match SKIPPED have a test skipped
@@ -374,13 +396,13 @@ if test -f "$loaded/Pharo.image"; then
     fi
     if cached FEATURE_FFI; then
 	fresh suite-callback "$loaded"
-	expect 'suite callback' 'callback: 9 of 9' callback
+	expect_all 'suite callback' 'callback: ' 9 '' callback
     else
 	skip_check 'suite callback' "no FFI: the build has none (WASM_FFI=OFF)"
     fi
     fresh snapshot "$loaded"
     expect 'snapshot, saved' 'saved, the slow request: tick0tick1tick2tick3tick4' snapshot
-    expect 'snapshot, restarted' 'restarted: 6 of 6 WebFetchSessionEnded, open 0, then hello' snapshot
+    expect_all 'snapshot, restarted' 'restarted: ' 6 ' WebFetchSessionEnded, open 0, then hello' snapshot
     rm -rf "$loaded"
 fi
 echo "81-webfetch: $(( $(date +%s) - started )) s"

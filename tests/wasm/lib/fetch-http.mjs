@@ -2,13 +2,47 @@
 //
 //   import { startFetchHttp } from './lib/fetch-http.mjs';
 //   const srv = await startFetchHttp({ host: '127.0.0.1', port: 0, cors: true });
-//   // srv: { url, port, server, requests, get closed(), reset(), close() }
+//   // srv: { url, port, server, requests, get closed(), get timerCount(), reset(), close() }
 //
 // CLI mode (for shell lanes):
 //   node tests/wasm/lib/fetch-http.mjs [--no-cors] [--port PORT]
 // prints the base URL on stdout and serves /_stats[?tag=TEXT] and /_reset control routes.
 // GET /_stats?tag=TEXT filters requests to entries whose url includes TEXT (closed stays the total).
 // The requests log keeps at most the last 5000 entries (MAX_REQUESTS), mutating the same array object.
+//
+// GET /sse?key=K&... is an event stream (text/event-stream; charset=utf-8, its
+// head flushed at once).  The connections of each key are counted from 0
+// (conn; /_reset and reset() start again), and a connection sends a BOM
+// (bom=1), a line 'retry: R' (retry=R), a comment ': conn <conn>', then the
+// events k = Number(Last-Event-ID) + 1, ..., ms apart:
+//
+//   id: <k>
+//   event: tick
+//   data: {"k":<k>,"conn":<conn>,"last":"<the Last-Event-ID, as UTF-8, or empty>"}
+//   data: café ✓ 🙂              (utf8=1)
+//
+// and an empty line.  The parameters, with their defaults:
+//
+//   n=3        events per connection
+//   ms=20      milliseconds between events
+//   until=K    the series ends at the id K: no event after it, and 204 when
+//              Number(Last-Event-ID) >= K, at the request
+//   end=close  after the events: close (the body ends), destroy (ms later the
+//              socket is destroyed: the body breaks), hang (open, silent), or
+//              partial ('id: 99' and 'data: incomplete' without the empty
+//              line, then the end)
+//   ping=0     with end=hang, a comment ': ping' every ping ms
+//   status=200 another status, with {"error":"status <code>"} as application/json
+//   type=      another Content-Type
+//   cc=no-store  the Cache-Control of every answer (max-age%3D60 makes it cacheable)
+//   headDelay=0  milliseconds before the head
+//   eol=lf     the line end: lf, crlf, cr, or mixed (LF, CR, CR LF, in turn:
+//              so a CR is never followed by the LF of an empty line, which
+//              would make one CR LF of the two line ends)
+//   split=1    (implies utf8=1) each event in two writes, ms/2 apart, cut
+//              inside the 2 bytes of the é, or between the CR and the LF of
+//              the first data line in every other event with eol=crlf
+//   size=S     first an event 'big', without id, whose data is S bytes of x
 
 import http from 'node:http';
 import zlib from 'node:zlib';
@@ -26,6 +60,7 @@ export async function startFetchHttp({ host = '127.0.0.1', port = 0, cors = true
   const timers = new Set();
   let closed = 0;
   const flaky = new Map();     // how often /flaky was asked, per ?key=
+  const sse = new Map();       // how often /sse was asked, per ?key=
 
   const corsHeadersFor = (enableCors, extra = {}) => (
     enableCors
@@ -53,6 +88,7 @@ export async function startFetchHttp({ host = '127.0.0.1', port = 0, cors = true
       requests.length = 0;
       closed = 0;
       flaky.clear();
+      sse.clear();
       res.writeHead(204, corsHeadersFor(cors));
       res.end();
       return;
@@ -239,6 +275,93 @@ export async function startFetchHttp({ host = '127.0.0.1', port = 0, cors = true
         res.end('nocors');
         return;
       }
+      case '/sse': {
+        const q = parsed.searchParams;
+        const number = (name, value) => q.has(name) ? Number(q.get(name)) : value;
+        const key = q.get('key') || '', conn = sse.get(key) || 0;
+        sse.set(key, conn + 1);
+        const header = req.headers['last-event-id'];
+        // node takes the bytes of a header as Latin-1
+        const last = header === undefined ? '' : Buffer.from(header, 'latin1').toString('utf8');
+        const from = Number(header) || 0, until = number('until', Infinity);
+        const n = number('n', 3), ms = number('ms', 20), ping = number('ping', 0), status = number('status', 200);
+        const end = q.get('end') || 'close', eol = q.get('eol') || 'lf', cc = q.get('cc') || 'no-store';
+        const split = q.get('split') === '1', utf8 = split || q.get('utf8') === '1', size = number('size', 0);
+        // the timers of this answer, cleared when it closes
+        const own = new Set();
+        const forget = t => { own.delete(t); timers.delete(t); };
+        const later = (f, wait) => {
+          const t = setTimeout(() => { forget(t); f(); }, wait);
+          own.add(t);
+          timers.add(t);
+        };
+        const every = (f, wait) => {
+          const t = setInterval(f, wait);
+          own.add(t);
+          timers.add(t);
+        };
+        res.on('close', () => {
+          for (const t of [...own]) {
+            clearTimeout(t);
+            forget(t);
+          }
+        });
+        let line = 0;
+        const ending = () => eol === 'mixed' ? ['\n', '\r', '\r\n'][line++ % 3] : ({ crlf: '\r\n', cr: '\r' })[eol] || '\n';
+        const lines = list => list.map(each => each + ending()).join('');
+        // the event of the id k, in one or two Buffers
+        const event = (k, j) => {
+          const parts = ['id: ' + k + ending(), 'event: tick' + ending()];
+          const json = 'data: ' + JSON.stringify({ k, conn, last }), jsonEnd = ending();
+          parts.push(json + jsonEnd);
+          if (utf8) parts.push('data: caf\u00e9 \u2713 \u{1f642}' + ending());
+          parts.push(ending());
+          const bytes = Buffer.from(parts.join(''), 'utf8');
+          if (!split) return [bytes];
+          const before = Buffer.byteLength(parts[0] + parts[1]);
+          const at = jsonEnd === '\r\n' && j % 2 === 0
+            ? before + Buffer.byteLength(json) + 1
+            : before + Buffer.byteLength(parts[2]) + Buffer.byteLength('data: caf') + 1;
+          return [bytes.subarray(0, at), bytes.subarray(at)];
+        };
+        const count = Math.max(0, Math.min(n, until - from));
+        const finish = () => {
+          if (end === 'destroy') later(() => req.socket.destroy(), ms);
+          else if (end === 'hang') { if (ping > 0) every(() => res.write(lines([': ping'])), ping); }
+          else if (end === 'partial') res.end(lines(['id: 99', 'data: incomplete']));
+          else res.end();
+        };
+        const send = j => {
+          if (j >= count) return finish();
+          const pieces = event(from + 1 + j, j);
+          res.write(pieces[0]);
+          const rest = () => {
+            if (pieces[1]) res.write(pieces[1]);
+            if (j + 1 < count) later(() => send(j + 1), pieces[1] ? ms - ms / 2 : ms);
+            else finish();
+          };
+          if (pieces[1]) later(rest, ms / 2);
+          else rest();
+        };
+        const answer = () => {
+          if (from >= until) {
+            writeHead(204, { 'Cache-Control': cc });
+            res.end();
+          } else if (status !== 200) {
+            writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': cc });
+            res.end(JSON.stringify({ error: 'status ' + status }));
+          } else {
+            writeHead(200, { 'Content-Type': q.get('type') || 'text/event-stream; charset=utf-8', 'Cache-Control': cc });
+            res.flushHeaders();
+            res.write((q.get('bom') === '1' ? '\ufeff' : '') + (q.has('retry') ? lines(['retry: ' + q.get('retry')]) : '')
+              + lines([': conn ' + conn]) + (size > 0 ? lines(['event: big', 'data: ' + 'x'.repeat(size), '']) : ''));
+            send(0);
+          }
+        };
+        if (number('headDelay', 0) > 0) later(answer, number('headDelay', 0));
+        else answer();
+        return;
+      }
       case '/status': {
         const code = Number(parsed.searchParams.get('code')) || 200;
         writeHead(code, { 'Content-Type': 'text/plain' });
@@ -273,10 +396,12 @@ export async function startFetchHttp({ host = '127.0.0.1', port = 0, cors = true
     server,
     requests,
     get closed() { return closed; },
+    get timerCount() { return timers.size; },
     reset() {
       requests.length = 0;
       closed = 0;
       flaky.clear();
+      sse.clear();
     },
     close() {
       for (const t of timers) {
