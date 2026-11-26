@@ -315,10 +315,12 @@ set(PHARO_WASM_LINK_FLAGS
     -Wl,--fatal-warnings
     -sFORCE_FILESYSTEM=1)
 # The JavaScript of the host services, in both VMs (packaging/emscripten/host):
-# the events that signal the image, then fetch, which signals through them.
+# the events that signal the image, then fetch and the WebSockets, which
+# signal through them.
 set(PHARO_WASM_HOST_SCRIPTS
     ${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/host/host-events.js
-    ${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/host/web-fetch.js)
+    ${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/host/web-fetch.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/packaging/emscripten/host/web-socket.js)
 foreach(script IN LISTS PHARO_WASM_HOST_SCRIPTS)
     list(APPEND PHARO_WASM_LINK_FLAGS --pre-js ${script})
 endforeach()
