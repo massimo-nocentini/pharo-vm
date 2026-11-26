@@ -72,6 +72,7 @@ The settings, all environment variables:
 - `BATTERIES_<KEY>_GROUPS`: its groups, separated by blanks.
 - `BATTERIES_SMOKE`: `basic` (the default) or `native`, below.
 - `BATTERIES_NAME` (the name of the image, `Pharo15-batteries`), `BATTERIES_TIMEOUT` (seconds per run of the VM, 1800), `BATTERIES_ICEBERG_REMOTE` (`httpsUrl`, or `scpUrl` to clone with SSH).
+- `BATTERIES_SCRIPTS`, `BATTERIES_MARK` and `BATTERIES_DEFAULT_NAME`: the directory of another `load.st` and `smoke.st`, the word that begins their lines instead of `Batteries`, and the name of the image when `BATTERIES_NAME` is not set; `packaging/bloc/build.sh` builds the Bloc image so ([Bloc.md](Bloc.md)).
 
 For example, with the checkouts of libpangocairo.st and libpoppler.st next to this repository, and a VM of this repository built in `build/`:
 
