@@ -14,12 +14,16 @@
 #             manifest.libraries;
 #   smoke     packaging/bloc/smoke.st: it draws an element, a Toplo button,
 #             the pane of the welcome window and into a PharoBlocMorphicForm,
-#             and runs the 25 test packages of the image that pass without a
+#             and runs the 23 test packages of the image that pass without a
 #             display (Bloc-Spec2-Tests among them: spaces in Morphic hosts,
 #             whose buffers are PharoBlocMorphicForms here, the VM having no
 #             SurfacePlugin); it must print 'PharoBlocMorphicForm needed:
 #             true' and its last line ending in ' ok', with no FFI callout
-#             failed, adapted or trapped on stderr.
+#             failed or trapped on stderr, and no variadic one refused; it
+#             runs with PHARO_WASM_FFI_TRACE=1, and the check names the
+#             functions whose callouts the VM adapted (integer widths of the
+#             image's declarations, such as those of FreeType for the fonts of
+#             the world, which are not errors).
 #
 # Skipped when the build has no image of id bloc, or no HarfBuzz (WASM_PANGO
 # is off).  The smoke is stopped after 1200 s; the lane prints its time.
@@ -76,7 +80,10 @@ fi
 
 # smoke
 fresh smoke "$image"
-smoke() { limit 1200 "$WASM_DIR/node/pharo" --headless Pharo.image --no-default-preferences st --no-source "$SMOKE"; }
+smoke() (
+    PHARO_WASM_FFI_TRACE=1; export PHARO_WASM_FFI_TRACE
+    limit 1200 "$WASM_DIR/node/pharo" --headless Pharo.image --no-default-preferences st --no-source "$SMOKE"
+)
 if run smoke smoke; then
     summary=$(grep '^Bloc smoke classes ' smoke.out | tail -n 1)
     if test "$status" -ne 0; then
@@ -88,10 +95,11 @@ EOF
 	fail smoke "no summary ending in ok: '$summary'"
     elif ! grep -q '^Bloc smoke: .*PharoBlocMorphicForm needed: true ' smoke.out; then
 	fail smoke "PharoBlocMorphicForm not needed: $(grep 'needed:' smoke.out)"
-    elif grep -Eq 'FFI callout (failed|adapted|trapped)' smoke.err; then
-	fail smoke "FFI callouts on stderr: $(grep -E 'FFI callout' smoke.err | sort -u | head -n 3 | tr '\n' ' ')"
+    elif grep -Eq 'FFI callout (failed|trapped|to a variadic function)' smoke.err; then
+	fail smoke "FFI callouts on stderr: $(grep -E 'FFI callout (failed|trapped|to a variadic)' smoke.err | sort -u | head -n 3 | tr '\n' ' ')"
     else
-	ok smoke "$summary"
+	adapted=$(sed -n 's/^FFI callout adapted: \([^ ]*\).*/\1/p' smoke.err | sort -u | tr '\n' ' ')
+	ok smoke "$summary; adapted: ${adapted:-none}"
     fi
 fi
 

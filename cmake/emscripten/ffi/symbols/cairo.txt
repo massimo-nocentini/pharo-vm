@@ -170,8 +170,8 @@ cairo_status
 cairo_set_source_surface
 cairo_surface_set_mime_data
 #
-# What Alexandrie, the canvas of Bloc (pharo-graphics/Alexandrie, as Toplo's
-# master branch loads it, through AeCairoLibrary, libcairo.so.2), binds beyond
+# What Alexandrie, the canvas of Bloc (pharo-graphics/Alexandrie v2.11.0, as
+# Toplo v0.12.0 loads it, through AeCairoLibrary, libcairo.so.2), binds beyond
 # all the above, so the Bloc image of the site (packaging/bloc)
 cairo_clip_extents
 cairo_clip_preserve
@@ -240,7 +240,10 @@ cairo_pdf_surface_create
 cairo_pdf_surface_set_size
 cairo_pdf_surface_set_page_label
 cairo_pdf_surface_set_metadata
-# unavailable: the Quartz surfaces of macOS (AthensQuartzSurface, and AeCairoQuartzImageSurface of Alexandrie)
+# unavailable: the Quartz surfaces of macOS (AthensQuartzSurface, and AeCairoQuartzSurface of Alexandrie)
 cairo_quartz_surface_create
 cairo_quartz_image_surface_create
 cairo_quartz_image_surface_get_image
+# unavailable: the Win32 surface of Windows (AeCairoWin32Surface of Alexandrie)
+cairo_win32_surface_create_with_dib
+cairo_win32_surface_get_image

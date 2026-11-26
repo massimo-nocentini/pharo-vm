@@ -159,6 +159,6 @@ Bloc v3.1.0, its elements, spaces, layouts and events, with Alexandrie, its canv
 FreeType and HarfBuzz, and Album v0.12.0, its text editor.
 
 In the browser these libraries are compiled into the WebAssembly VM, and a space of Bloc opens
-as a window of the world. This window is a space too: BlSpace new root addChild: ... ; show.
+as a window of the world. This window is a space too: space := BlSpace new. space root addChild: ... . space show.
 The examples below open in the same way; the class side of ToSandBox has many more.'
 ]

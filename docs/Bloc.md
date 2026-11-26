@@ -22,7 +22,7 @@ The site of GitHub Actions offers it as "Pharo 15 (bloc)" (id `bloc`), and the r
 The world page starts the image as it starts any other, and a space of Bloc opens there as a window of the world: `BlMorphicWindowHost` is the host that Bloc prefers when the UI is Morphic and SDL2 is not there, as in the world.
 Two things make it draw:
 
-- The FFI registry of the VM ([WebAssembly.md](WebAssembly.md), The FFI) has the functions that Alexandrie binds: 196 of cairo, 10 of FreeType and 57 of HarfBuzz (of which 62, 4 and 55 only Alexandrie binds), with the placeholders that its library finders look for before they load a library (`libcairo.so.2`, `libfreetype.so.6`, `libharfbuzz.so.0`).
+- The FFI registry of the VM ([WebAssembly.md](WebAssembly.md), The FFI) has the functions that Alexandrie binds: 198 of cairo, 10 of FreeType and 57 of HarfBuzz (of which 62, 4 and 55 only Alexandrie binds), but for the Quartz and Win32 surfaces of macOS and Windows (4 of cairo), the HarfBuzz ones only in a build with `WASM_PANGO=ON`, which builds HarfBuzz (off by default, on for the site of GitHub Actions; Bloc draws without HarfBuzz, which Alexandrie uses for its shaping examples and tests), with the placeholders that its library finders look for before they load a library (`libcairo.so.2`, `libfreetype.so.6`, `libharfbuzz.so.0`).
   The libraries are those of the VM: cairo 1.18.6, FreeType 2.15.0, HarfBuzz 15.2.0, the versions of the native cairo stack ([CairoStack.md](CairoStack.md)).
   An element with a border, a rounded rectangle and a text, and a Toplo button, drawn by `aeAsForm`, have the same pixels in the node VM as natively, with the native cairo stack (60 ms natively, 159 ms in node for the element, at its first drawing).
 - The Morphic host of Bloc keeps two buffers per space, `BlExternalForm`s: manual surfaces of SurfacePlugin over memory outside the image, which cairo draws into and BitBlt copies from through the plugin.
@@ -54,11 +54,11 @@ The load takes about 90 s, the smoke about 2 minutes.
 
 ## Tests
 
-- Lane 83 (`tests/wasm/lanes/83-bloc.sh`), when the build has an image of id `bloc`: the registry and the placeholders, and `smoke.st` on the image in the node VM, where the Morphic hosts of the tests draw into `PharoBlocMorphicForm`s, with no FFI callout failed, adapted or trapped (2 checks, 120 s).
+- Lane 83 (`tests/wasm/lanes/83-bloc.sh`), when the build has an image of id `bloc`: the registry and the placeholders, and `smoke.st` on the image in the node VM, where the Morphic hosts of the tests draw into `PharoBlocMorphicForm`s, with no FFI callout failed or trapped (it names those the VM adapted, `PHARO_WASM_FFI_TRACE=1`) (2 checks, 120 s).
 - `tests/wasm/world.spec.mjs`, with such a site: the world of the image opens the welcome window, which draws a light pane in many colours, and a click on Mini browser opens Toplo's mini browser.
 
 ## Limitations
 
-- Fonts that Alexandrie downloads with Zinc (`AeDownloadedFont`: Noto Color Emoji) are not there in the WebAssembly VM, whose sockets reach no web server (the Bloc image has no WebFetch, [WebFetch.md](WebFetch.md)); the fonts that Alexandrie embeds (Source Sans Pro, Source Code Pro, Inria Serif, Cascadia Code) are.
+- Fonts that Alexandrie downloads with Zinc (`AeDownloadedFont`: Noto Color Emoji, Cascadia Code) are not there in the WebAssembly VM, whose sockets reach no web server (the Bloc image has no WebFetch, [WebFetch.md](WebFetch.md)); the fonts that Alexandrie embeds (Source Sans Pro, Source Code Pro) are. Inria Serif, which its tests use, is a file of the clone of Alexandrie, which the zip has not.
 - A space draws through cairo into the pinned bits of a Form and is copied by BitBlt, in the WebAssembly VM as natively; a larger space costs more of both. Bloc's own animations run in its pulse loop, a process of the image, at the pace that the VM's slices allow.
 - `PharoBloc-Web` replaces a method of Bloc's package BlocHost-Morphic: a new version of Bloc loaded over the image brings Bloc's method back, and the Morphic host fails again in the WebAssembly VM, with the primitive failure of `primCreateManualSurfaceWidth:height:rowPitch:depth:isMSB:`.
