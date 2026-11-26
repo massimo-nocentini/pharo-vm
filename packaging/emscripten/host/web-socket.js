@@ -6,7 +6,8 @@
 // src/emscripten/plugins/WebSocketPlugin.c call its methods.  WebSocket()
 // answers the constructor at each open (globalThis.WebSocket: the guard of
 // vm-worker.js, or a fake of the tests); isBrowser and siteHostname refuse
-// the host of the site (its cookies would go with the handshake); every
+// the hosts of the site's domain (its cookies would go with the handshake,
+// see ofTheSite); every
 // timer is made with the setTimeout given, and unref()'d when it can be (in
 // node: no timer of the service keeps node alive).  Linked after
 // host-events.js, and a plain script as that one: a node test evaluates it
@@ -127,9 +128,10 @@
 //
 //   open      URL, then one offered subprotocol per line.  A CR or a NUL
 //             in it, a URL that is not an absolute ws: or wss: one, or has
-//             a user name, a password or a fragment, a subprotocol that is
-//             no token or offered twice (ignoring case) are refused (kind
-//             request), never changed
+//             a user name, a password or a fragment, in a browser one of a
+//             host of the site's domain, a subprotocol that is no token or
+//             offered twice (ignoring case) are refused (kind request),
+//             never changed
 //   info      in 2 and 3: chosen protocol, extensions, URL; in 4 the same,
 //             then the close code, the reason, 1 when clean or 0
 //   error     in 5: kind, message, chosen protocol, extensions, URL (empty
@@ -151,6 +153,24 @@ var PharoWebSocket = (() => {
   // fatal, and a leading U+FEFF is the image's: kept
   const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
   const HANDSHAKE = 'the handshake failed (no answer, a refusal, or a status other than 101)';
+
+  // Whether the cookies of a site of that hostname may go to host: the same
+  // host, a parent or a subdomain of it, or one with the same last two
+  // labels.  A cookie with a Domain attribute goes to every host of its
+  // registrable domain, which has two labels or more; without the list of
+  // public suffixes the last two stand for it, which refuses too much under
+  // a suffix of two labels (co.uk, github.io).  An IP address only matches
+  // itself.
+  function ofTheSite(host, site) {
+    const h = host.replace(/\.$/, ''), s = site.replace(/\.$/, '');
+    if (!h || !s) return false;
+    if (h === s) return true;
+    const ip = x => x.startsWith('[') || /^[0-9.]+$/.test(x);
+    if (ip(h) || ip(s)) return false;
+    if (h.endsWith('.' + s) || s.endsWith('.' + h)) return true;
+    const last2 = x => x.split('.').slice(-2).join('.');
+    return h.includes('.') && s.includes('.') && last2(h) === last2(s);
+  }
 
   // What went wrong; node tells the cause of an exception, a browser does not
   function describe(e) {
@@ -369,8 +389,8 @@ var PharoWebSocket = (() => {
           if (seen.has(p.toLowerCase())) throw new TypeError('the subprotocol ' + p + ' is offered twice');
           seen.add(p.toLowerCase());
         }
-        if (isBrowser && siteHostname && url.hostname === siteHostname)
-          throw new TypeError('the host of this site is refused: its cookies would be sent');
+        if (isBrowser && siteHostname && ofTheSite(url.hostname, siteHostname))
+          throw new TypeError('a host of the domain of this site is refused: its cookies would be sent');
       } catch (e) {
         fail(r, 'request', describe(e));
         return;

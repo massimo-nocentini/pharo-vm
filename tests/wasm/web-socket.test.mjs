@@ -241,7 +241,7 @@ await check('3 32 open, the 33rd answers 0; ids start at random, wrap at 2^31-1,
   assert(a !== b || a !== make().ws.open(1, 2, 3, rec(URL1), 1, 1, 0), 'random starts');
 });
 
-await check('4 request: http:, a fragment, a user, a CR, protocols alike ignoring case, the constructor\'s exceptions; off; the site\'s own host', async () => {
+await check('4 request: http:, a fragment, a user, a CR, protocols alike ignoring case, the constructor\'s exceptions; off; the hosts of the site\'s domain', async () => {
   let on = true;
   const s = make({ network: () => on });
   const kindOf = async (url, protocols = [], { throws = null, network = true } = {}) => {
@@ -287,13 +287,24 @@ await check('4 request: http:, a fragment, a user, a CR, protocols alike ignorin
   await settle();
   eq(info(t.ws, id).slice(0, 2), ['off', 'network access is off'], 'SecurityError while off');
   eq((await kindOf(URL1, [], { network: false }))[0], 'off', 'off before the constructor');
-  // the site's own host, ignoring the port, only in a browser
-  const b = make({ isBrowser: true, siteHostname: 'pharo.example' });
-  const own = openOn(b, 'wss://pharo.example:8443/ws');
-  const other = openOn(b, 'wss://other.example/ws');
-  await settle();
-  eq(info(b.ws, own).slice(0, 2), ['request', 'the host of this site is refused: its cookies would be sent'], 'own host');
-  eq(state(b.ws, other), 1, 'another host');
+  // the hosts of the site's domain, ignoring the port, only in a browser
+  const refusedFrom = async (site, urls) => {
+    const t = make({ isBrowser: true, siteHostname: site });
+    const ids = urls.map(u => openOn(t, u));
+    await settle();
+    return ids.map(id => state(t.ws, id) === 5 ? info(t.ws, id).slice(0, 2).join(': ') : 'state ' + state(t.ws, id));
+  };
+  const REFUSED = 'request: a host of the domain of this site is refused: its cookies would be sent';
+  const site = ['wss://www.pharo.example:8443/ws', 'ws://WWW.Pharo.Example./', 'wss://api.pharo.example/ws', 'wss://pharo.example/ws',
+    'wss://a.b.pharo.example/ws', 'wss://example/ws'];
+  eq(await refusedFrom('www.pharo.example', site), site.map(() => REFUSED), 'the host, a sibling, the parents, a subdomain');
+  eq(await refusedFrom('www.pharo.example', ['wss://other.example/ws', 'wss://pharo.example.org/ws', 'wss://127.0.0.1/ws', 'wss://localhost/']),
+    ['state 1', 'state 1', 'state 1', 'state 1'], 'other domains');
+  eq(await refusedFrom('localhost', ['ws://localhost:9/', 'ws://a.localhost/', 'ws://127.0.0.1/', 'ws://otherhost/']),
+    [REFUSED, REFUSED, 'state 1', 'state 1'], 'a site of one label: itself and its subdomains');
+  eq(await refusedFrom('127.0.0.1', ['ws://127.0.0.1:81/', 'ws://localhost/', 'ws://10.0.0.1/', 'ws://0.0.1/']),
+    [REFUSED, 'state 1', 'state 1', 'state 1'], 'an IPv4 site: only itself');
+  eq(await refusedFrom('[::1]', ['ws://[::1]:81/', 'ws://[::2]/', 'ws://localhost/']), [REFUSED, 'state 1', 'state 1'], 'an IPv6 site: only itself');
   const n2 = make({ isBrowser: false, siteHostname: 'pharo.example' });
   const nodeId = openOn(n2, 'wss://pharo.example/ws');
   await settle();

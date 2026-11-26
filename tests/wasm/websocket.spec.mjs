@@ -6,8 +6,8 @@
 // the WebSocketPlugin (tests/wasm/st/websocket-spec.st), against the
 // WebSocket endpoints of tests/wasm/lib/fetch-http.mjs (lib/ws-server.mjs),
 // reached as localhost: another origin, and another hostname than the
-// site's 127.0.0.1, so that the refusal of the site's own host does not
-// apply to them.
+// site's 127.0.0.1, so that the refusal of the hosts of the site's domain
+// (an IP address: only itself) does not apply to them.
 //
 // Console: echo of text, binary and 1 MiB; the subprotocol chosen; the
 // Origin of the site and a cookie of localhost (context.addCookies) go with
@@ -276,7 +276,7 @@ await run(async t => {
   await check('Console: the hostname of the site is refused, with any port, and nothing reaches the server', async () => {
     const n = web.ws.length;
     for (const u of [`ws://127.0.0.1:${web.port}/ws/echo`, `ws://127.0.0.1:${site.address().port}/`]) {
-      is(await say(`WSP connect: #own url: '${u}'`), '5|request|the host of this site is refused: its cookies would be sent|||');
+      is(await say(`WSP connect: #own url: '${u}'`), '5|request|a host of the domain of this site is refused: its cookies would be sent|||');
       is(await say('WSP free: #own'), 'released true');
     }
     is(web.ws.length, n, 'connections');

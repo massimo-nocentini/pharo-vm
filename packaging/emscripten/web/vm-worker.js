@@ -231,8 +231,9 @@
 // one that cannot be made (guardWebSocket); those that are open are
 // closed, after the service closed its own.  The worker's own fetches, of
 // the files of the site, are not concerned.  ready.network says what holds
-// when the VM starts.  The WebSocket service refuses the hostname of the
-// site (Module.siteHostname): its cookies would go with the handshake.
+// when the VM starts.  The WebSocket service refuses the hosts of the
+// domain of the site (Module.siteHostname): its cookies would go with the
+// handshake.
 //
 // Git.  init.gitProxy, and later "gitProxy", is the CORS proxy of git's
 // HTTP requests, as the user chose it in Settings (git-proxy.js keeps it):
