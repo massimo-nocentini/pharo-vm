@@ -24,9 +24,10 @@
 // smart-HTTP transport, the world only with a world image.
 //
 // With WEB_FETCH_DIR, a checkout of the package (web-fetch.st): both of its
-// suites run in the Console, with the live tests as in a browser (but those of
-// WebFetchEchoServerTest, which go to a public server, skip), and Stop is also
-// of WebFetch and, in the Console, of a ZnClient on it.
+// suites run in the Console, with the live tests of requests and of event
+// sources as in a browser (but those of WebFetchEchoServerTest, which go to a
+// public server, skip), and Stop is also of WebFetch, of an event source
+// (do:) and, in the Console, of a ZnClient on it.
 //
 // The pages come from a server of the spec, which adds the files above to
 // those of the VM, and not through a route of Playwright: with a route
@@ -365,12 +366,14 @@ await run(async t => {
       }
       assert(lines.filter(l => /^skipped/.test(l)).every(l => /NativeTest|EchoServerTest/.test(l)), 'skipped');
     });
-    await check('the package: the server sees a Stop of WebFetch and of ZnClient end their requests', async () => {
+    await check('the package: the server sees a Stop of WebFetch, of an event source and of ZnClient end their requests', async () => {
+      // (the tags are matched as substrings: stop5 and stop6 are the Notebook's)
       for (const [tag, source] of [['stop2', `WebFetch get: '${B}/hang?stop2'`],
                                    ['stop3', `(WebFetch request: '${B}/endless?stop3') stream: [ :s | [ s next: 100. (Delay forMilliseconds: 1) wait ] repeat ]`],
-                                   ['stop4', `WebFetchZinc install. [ ZnClient new get: '${B}/hang?stop4' ] ensure: [ WebFetchZinc uninstall ]`]])
+                                   ['stop4', `WebFetchZinc install. [ ZnClient new get: '${B}/hang?stop4' ] ensure: [ WebFetchZinc uninstall ]`],
+                                   ['stop-sse', `(WebFetch eventSource: '${B}/sse?end=hang&key=stop-sse') do: [ :e | ]`]])
         await stop(source, tag);
-      is(await ev(page, "'[[' , WebFetchCall openCount printString , ' ' , WebFetchZinc isInstalled printString , ']]'"), '0 false');
+      is(await ev(page, "'[[' , WebFetchCall openCount printString , ' ' , WebFetchEventSource openCount printString , ' ' , WebFetchZinc isInstalled printString , ']]'"), '0 0 false');
     });
   }
 
