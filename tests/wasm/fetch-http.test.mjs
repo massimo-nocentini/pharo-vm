@@ -1,10 +1,12 @@
-// fetch-http.test.mjs - unit tests of fetch-http.mjs: the filter of /_stats, the cap of the log, /flaky, /sse
+// fetch-http.test.mjs - unit tests of fetch-http.mjs: the filter of /_stats, the cap of the log, /flaky, /sse, close()
 //
 // usage: node tests/wasm/fetch-http.test.mjs
 //
 // Starts fetch-http.mjs on an ephemeral local port, checks tag filtering,
-// the closed counter, the MAX_REQUESTS log cap, array identity, /_reset, and
-// the event streams of /sse: their bytes, ids, counters, ends, cuts and timers.
+// the closed counter, the MAX_REQUESTS log cap, array identity, /_reset,
+// the event streams of /sse: their bytes, ids, counters, ends, cuts and
+// timers, and that close() ends with WebSockets open (ws-server.test.mjs
+// checks the WebSocket endpoints themselves).
 
 import http from 'node:http';
 import { startFetchHttp, MAX_REQUESTS } from './lib/fetch-http.mjs';
@@ -263,6 +265,22 @@ try {
     await stream(srv.url, '/sse?key=cc&n=5&ms=1000', { until: () => true });
     for (let i = 0; i < 100 && srv.timerCount !== before; i++) await sleep(10);
     eq(srv.timerCount, before, 'none left of the events not sent');
+  });
+  await check('close() resolves within 1 s with a /ws/deaf socket and a /ws/hang handshake open', async () => {
+    const other = await startFetchHttp({ port: 0 });
+    const deaf = new WebSocket(other.url.replace(/^http:/, 'ws:') + '/ws/deaf');
+    await new Promise((resolve, reject) => { deaf.onopen = resolve; deaf.onclose = () => reject(new Error('no open')); });
+    const hang = new WebSocket(`ws://127.0.0.1:${other.hangPort}/ws/hang`);
+    hang.onerror = () => {};
+    for (let i = 0; i < 100 && !other.ws.some(e => e.hang); i++) await sleep(10);
+    assert(other.ws.some(e => e.hang), 'the hang listener has it');
+    const t0 = performance.now();
+    const closed = await Promise.race([other.close().then(() => true), sleep(1000).then(() => false)]);
+    assert(closed, 'close() still pending after 1 s');
+    const ms = performance.now() - t0;
+    const deafClosed = await Promise.race([new Promise(r => { deaf.onclose = e => r(e.code); }), sleep(1000).then(() => null)]);
+    eq(deafClosed, 1006, 'the client of /ws/deaf sees the end');
+    console.log(`# close() in ${ms.toFixed(0)} ms`);
   });
 } finally {
   agent.destroy();

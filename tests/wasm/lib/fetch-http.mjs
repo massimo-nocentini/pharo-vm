@@ -1,14 +1,22 @@
 // fetch-http.mjs - local HTTP test server for WebFetch lanes and browser specs
 //
 //   import { startFetchHttp } from './lib/fetch-http.mjs';
-//   const srv = await startFetchHttp({ host: '127.0.0.1', port: 0, cors: true });
-//   // srv: { url, port, server, requests, get closed(), get timerCount(), reset(), close() }
+//   const srv = await startFetchHttp({ host: '127.0.0.1', port: 0, cors: true, webSocket: true });
+//   // srv: { url, port, hangPort, server, requests, ws, get closed(), get timerCount(), reset(), close() }
 //
 // CLI mode (for shell lanes):
-//   node tests/wasm/lib/fetch-http.mjs [--no-cors] [--port PORT]
-// prints the base URL on stdout and serves /_stats[?tag=TEXT] and /_reset control routes.
-// GET /_stats?tag=TEXT filters requests to entries whose url includes TEXT (closed stays the total).
+//   node tests/wasm/lib/fetch-http.mjs [--no-cors] [--port PORT] [--hang-port]
+// prints the base URL on stdout (with --hang-port, then a blank and the port of
+// the second listener) and serves /_stats[?tag=TEXT] and /_reset control routes.
+// GET /_stats?tag=TEXT filters requests and ws to entries whose url includes TEXT (closed stays the total).
 // The requests log keeps at most the last 5000 entries (MAX_REQUESTS), mutating the same array object.
+//
+// With webSocket (the default, and the CLI's), the same server has the
+// WebSocket endpoints of lib/ws-server.mjs under /ws/ (their connections in
+// ws of /_stats), and a second listener on hangPort answers nothing (/ws/hang:
+// a handshake that never ends, on a port of its own, since browsers make one
+// handshake at a time to an address).  close() ends the upgraded sockets
+// first, which server.close() would wait for.
 //
 // GET /sse?key=K&... is an event stream (text/event-stream; charset=utf-8, its
 // head flushed at once).  The connections of each key are counted from 0
@@ -47,6 +55,7 @@
 import http from 'node:http';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
+import { attachWebSocket, startHangServer } from './ws-server.mjs';
 
 export const MAX_REQUESTS = 5000;
 
@@ -55,8 +64,9 @@ for (let i = 0; i < PATTERN.length; i++) PATTERN[i] = i & 255;
 
 const GZIP_PAYLOAD = zlib.gzipSync(Buffer.alloc(20000, 'abc'));
 
-export async function startFetchHttp({ host = '127.0.0.1', port = 0, cors = true } = {}) {
+export async function startFetchHttp({ host = '127.0.0.1', port = 0, cors = true, webSocket = true } = {}) {
   const requests = [];
+  const wsLog = [];
   const timers = new Set();
   let closed = 0;
   const flaky = new Map();     // how often /flaky was asked, per ?key=
@@ -79,13 +89,15 @@ export async function startFetchHttp({ host = '127.0.0.1', port = 0, cors = true
     if (pathname === '/_stats' && req.method === 'GET') {
       const tag = parsed.searchParams.get('tag');
       const list = tag ? requests.filter(r => r.url.includes(tag)) : requests;
-      const body = JSON.stringify({ closed, requests: list });
+      const ws = tag ? wsLog.filter(r => r.url.includes(tag)) : wsLog;
+      const body = JSON.stringify({ closed, requests: list, ws });
       res.writeHead(200, corsHeadersFor(cors, { 'Content-Type': 'application/json' }));
       res.end(body);
       return;
     }
     if (pathname === '/_reset' && req.method === 'POST') {
       requests.length = 0;
+      wsLog.length = 0;
       closed = 0;
       flaky.clear();
       sse.clear();
@@ -389,16 +401,21 @@ export async function startFetchHttp({ host = '127.0.0.1', port = 0, cors = true
 
   const addr = server.address();
   const url = `http://${host}:${addr.port}`;
+  const ws = webSocket ? attachWebSocket(server, { log: wsLog }) : null;
+  const hang = webSocket ? await startHangServer({ host, log: wsLog }) : null;
 
   return {
     url,
     port: addr.port,
+    hangPort: hang ? hang.port : null,
     server,
     requests,
+    ws: wsLog,
     get closed() { return closed; },
     get timerCount() { return timers.size; },
     reset() {
       requests.length = 0;
+      wsLog.length = 0;
       closed = 0;
       flaky.clear();
       sse.clear();
@@ -409,10 +426,14 @@ export async function startFetchHttp({ host = '127.0.0.1', port = 0, cors = true
         clearInterval(t);
       }
       timers.clear();
-      return new Promise(resolve => {
-        server.close(() => resolve());
-        server.closeAllConnections();
-      });
+      if (ws) ws.close();
+      return Promise.all([
+        new Promise(resolve => {
+          server.close(() => resolve());
+          server.closeAllConnections();
+        }),
+        hang ? hang.close() : null,
+      ]).then(() => {});
     },
   };
 }
@@ -421,12 +442,14 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const args = process.argv.slice(2);
   let cors = true;
   let port = 0;
+  let hangPort = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--no-cors') cors = false;
+    else if (args[i] === '--hang-port') hangPort = true;
     else if (args[i] === '--port' && i + 1 < args.length) port = Number(args[++i]) || 0;
   }
   const srv = await startFetchHttp({ port, cors });
-  console.log(srv.url);
+  console.log(hangPort ? srv.url + ' ' + srv.hangPort : srv.url);
   const stop = async () => { await srv.close(); process.exit(0); };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
