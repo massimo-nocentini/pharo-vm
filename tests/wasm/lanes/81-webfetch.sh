@@ -40,7 +40,8 @@
 #   suite    tests/run-webfetch.st runs the packages WebFetch-Tests and
 #            WebFetch-Zinc-Tests in the node VM, with the live tests: no
 #            failure, no error, and no test skipped but the two classes for
-#            VMs without the plugin;
+#            VMs without the plugin, and WebFetchEchoServerTest, which goes to
+#            a public server only when WEB_FETCH_ECHO_SERVER names it;
 #   suite off  the same with PHARO_WASM_NETWORK=0: no failure, no error, and
 #            the live tests skipped;
 #   suite web  the suite in pharo-web;
@@ -363,12 +364,12 @@ if run load load; then
 fi
 if test -f "$loaded/Pharo.image"; then
     fresh suite "$loaded"
-    if run suite suite; then suites_passed suite ready 'NativeTest'; fi
+    if run suite suite; then suites_passed suite ready 'NativeTest|EchoServerTest'; fi
     fresh suite-off "$loaded"
-    if run 'suite off' suite_off; then suites_passed 'suite off' off 'NativeTest|LiveTest'; fi
+    if run 'suite off' suite_off; then suites_passed 'suite off' off 'NativeTest|LiveTest|EchoServerTest'; fi
     fresh suite-web "$loaded"
     if run 'suite web' web_run "$(pwd)" "$WEB_FETCH_DIR/tests/run-webfetch.st" suite; then
-	suites_passed 'suite web' ready 'NativeTest'
+	suites_passed 'suite web' ready 'NativeTest|EchoServerTest'
     fi
     if cached FEATURE_FFI; then
 	fresh suite-callback "$loaded"
