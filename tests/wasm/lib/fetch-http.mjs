@@ -14,8 +14,8 @@
 // With webSocket (the default, and the CLI's), the same server has the
 // WebSocket endpoints of lib/ws-server.mjs under /ws/ (their connections in
 // ws of /_stats), and a second listener on hangPort answers nothing (/ws/hang:
-// a handshake that never ends, on a port of its own, since browsers make one
-// handshake at a time to an address).  close() ends the upgraded sockets
+// a handshake that never ends, on a port of its own, since Chromium makes one
+// handshake at a time per address and port).  close() ends the upgraded sockets
 // first, which server.close() would wait for.
 //
 // GET /sse?key=K&... is an event stream (text/event-stream; charset=utf-8, its

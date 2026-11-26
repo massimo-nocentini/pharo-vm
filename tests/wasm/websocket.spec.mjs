@@ -13,7 +13,8 @@
 // Origin of the site and a cookie of localhost (context.addCookies) go with
 // the handshake; the site's own hostname is refused, and nothing reaches the
 // server; a leading BOM, as the browser delivers it; three handshakes to
-// /ws/echo while one to the second port of the server never ends; Stop of a
+// /ws/echo while one to the second port of the server never ends, and
+// whether a second one to that port reaches the server; Stop of a
 // wait for a message, after which the socket goes on; 1500 messages at
 // once, which the Console prints one by one, more than the output that the
 // worker lets wait (1 MiB): the socket ends closed, or failed with overflow,
@@ -38,7 +39,10 @@
 // the server (only WebFetchWebSocketNativeTest and
 // WebFetchWebSocketEchoServerTest skip).
 //
-// Only Chromium is run (BROWSERS); the numbers of the measures are
+// Only Chromium is run: of the browsers that BROWSERS names, the others
+// are skipped, with a line that says so, and with no chromium among them
+// nothing runs.  The cookie check relies on Chromium's rules (Firefox
+// partitions third-party cookies), and the numbers of the measures are
 // Chromium's.
 
 import crypto from 'node:crypto';
@@ -118,6 +122,15 @@ async function startSockets() {
   return { log, port: server.address().port,
            close: () => { for (const s of open) s.destroy(); server.close(); } };
 }
+
+const named = (process.env.BROWSERS || 'chromium').split(',').map(s => s.trim()).filter(Boolean);
+const others = named.filter(name => name !== 'chromium');
+if (others.length) console.log(`# websocket.spec.mjs runs in Chromium only: ${others.join(', ')} skipped`);
+if (!named.includes('chromium')) {
+  console.log('# websocket.spec.mjs: no chromium in BROWSERS, nothing run');
+  process.exit(0);
+}
+process.env.BROWSERS = 'chromium';
 
 await run(async t => {
   const { check, assert, manifest } = t;
@@ -291,7 +304,7 @@ await run(async t => {
     is(await say('WSP free: #bom'), 'released true');
   });
 
-  await check('Console: three handshakes to /ws/echo while one to the second port never ends', async () => {
+  await check('Console: three handshakes to /ws/echo while one to the second port never ends, and a second one to that port', async () => {
     await expecting(SOCKET_ERRORS, async () => {
       is(await say(`WSP open: #hang url: '${hang}' protocols: #() maxQueued: 1000 timeout: 0`), 'opened');
       await waitFor('the hanging handshake', () => logged('/ws/hang').length);
@@ -301,6 +314,11 @@ await run(async t => {
       const m = /^(\d+) #\(2 2 2 1\)$/.exec(said);
       assert(m && Number(m[1]) < 1000, said);
       console.log(`# three handshakes behind a pending one to another port: ${m[1]} ms`);
+      // measured, not checked: does the browser hold back a handshake to the port of a pending one?
+      is(await say(`WSP open: #hang2 url: '${hang}?t=2' protocols: #() maxQueued: 1000 timeout: 0`), 'opened');
+      await new Promise(r => setTimeout(r, 1500));
+      const reached = logged('/ws/hang').length;
+      console.log(`# a second handshake to the port of a pending one, after 1.5 s: ${reached === 2 ? 'it reached the server' : 'held back by the browser'} (${reached} of 2 at the server)`);
       is(await say('WSP freeAll'), 'released all');
     });
   });

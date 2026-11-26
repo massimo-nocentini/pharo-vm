@@ -65,8 +65,9 @@
 //   /ws/refuse?status=403    answers the upgrade with that status
 //
 // The second listener (startHangServer) never answers anything: /ws/hang.
-// Browsers make one handshake at a time to an address, so a hanging one on
-// the main port would hold back the others.
+// Chromium makes one handshake at a time per address and port, so a hanging
+// one on the main port would hold back the others (websocket.spec.mjs
+// measures it); on a port of its own it holds back none of them.
 
 import crypto from 'node:crypto';
 import http from 'node:http';
