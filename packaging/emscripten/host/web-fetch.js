@@ -127,7 +127,14 @@ var PharoWebFetch = (() => {
         // only spaces and tabs, as fetch does: trim() also removes U+00A0,
         // the byte A0 of a value sent as UTF-8 one character a byte (the
         // end of an 'à' in a Last-Event-ID)
-        headers.push([name, line.slice(i + 1).replace(/^[\t ]+|[\t ]+$/g, '')]);
+        const value = line.slice(i + 1).replace(/^[\t ]+|[\t ]+$/g, '');
+        // the fetch of node (undici) refuses a control character other than
+        // a tab, which new Request() and a browser let through (the Fetch
+        // standard refuses only NUL, CR and LF); it would be a network error
+        // after the start, which a source of events retries for ever
+        if (!isBrowser && /[\0-\x08\x0a-\x1f\x7f]/.test(value))
+          throw new TypeError('the value of ' + name + ' has a control character, which the fetch of node refuses');
+        headers.push([name, value]);
       }
       const init = { method: method.toUpperCase(), headers };
       new Request(url.href, Object.assign({ body: body ? new Uint8Array(1) : undefined }, init));

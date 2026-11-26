@@ -4,9 +4,12 @@
 //
 // Evaluates packaging/emscripten/host/host-events.js and web-fetch.js in fresh
 // vm contexts with a fake fetch, and packaging/emscripten/node/node-pump.js
-// with a fake module.  Prints every check and exits 1 on failure.
+// with a fake module; one check asks a local server with the fetch of node,
+// for the bytes that it refuses in a header value.  Prints every check and
+// exits 1 on failure.
 
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
@@ -676,6 +679,46 @@ await check('header values: only spaces and tabs are trimmed', async () => {
   await settle();
   wf.close(id);
   eq(seen, [[['Last-Event-ID', citta], ['X-Tabs', 'x'], ['X-Nbsp', '\u00a0y\u00a0'], ['X-Empty', '']]], 'header values');
+});
+
+// the bytes that the fetch of node 24 (undici) refuses in a header value,
+// beyond NUL, CR and LF, which new Request() refuses
+const nodeRefused = [];
+for (let c = 1; c < 32; c++) if (c !== 9 && c !== 10 && c !== 13) nodeRefused.push(c);
+nodeRefused.push(0x7f);
+
+await check('the fetch of this node refuses those bytes in a header value, and no other', async () => {
+  const server = http.createServer((q, s) => s.end('ok'));
+  await new Promise(f => server.listen(0, '127.0.0.1', f));
+  const url = 'http://127.0.0.1:' + server.address().port + '/';
+  const refused = [];
+  try {
+    for (let c = 1; c < 256; c++) {
+      if (c === 10 || c === 13) continue;
+      try { await (await fetch(url, { headers: [['Last-Event-ID', 'a' + String.fromCharCode(c) + 'b']] })).text(); }
+      catch (e) { refused.push(c); }
+    }
+  } finally { server.close(); }
+  eq(refused, nodeRefused, 'refused bytes');
+});
+
+await check('header values: a control character but a tab is refused in node, not in a browser', async () => {
+  const refused = nodeRefused;
+  for (const isBrowser of [false, true]) {
+    const seen = [];
+    const { wf } = makeFetch({ isBrowser, fetch: async (url, init) => { seen.push(init.headers[0][1]); return fakeResponse(); } });
+    for (const c of [...refused, 9, 0x20, 0x7e, 0x80, 0xa0, 0xff]) {
+      const value = 'a' + String.fromCharCode(c) + 'b';
+      const id = wf.start(1, 'GET\nhttp://x.test/v\nLast-Event-ID: ' + value, null, 1024, 0, 0);
+      await settle();
+      if (!isBrowser && refused.includes(c)) {
+        eq(wf.state(id), 4, 'FAILED for ' + c);
+        eq(readHead(wf, id), 'request\nthe value of Last-Event-ID has a control character, which the fetch of node refuses', 'kind request for ' + c);
+      }
+      wf.close(id);
+    }
+    eq(seen.length, isBrowser ? refused.length + 6 : 6, (isBrowser ? 'a browser' : 'node') + ' fetches');
+  }
 });
 
 await check('flags 2 is the cache mode no-store', async () => {
