@@ -31,6 +31,13 @@
 # The status is 0 when load.st printed 'Batteries loaded ... ok', smoke.st
 # 'Batteries smoke ... ok' and the zip was written, else 1 (2 for a usage
 # error).
+#
+# Another image is built the same way from the load.st and smoke.st of
+# another directory, BATTERIES_SCRIPTS (this one by default), whose lines
+# begin with BATTERIES_MARK instead of Batteries, and named after
+# BATTERIES_DEFAULT_NAME when BATTERIES_NAME is not set: so
+# packaging/bloc/build.sh builds the Bloc image (docs/Bloc.md).  load.st
+# finds its directory in BATTERIES_HOME.
 
 set -u
 
@@ -41,8 +48,9 @@ fi
 VM_DIR=$(cd "$1" && pwd) || exit 2
 IMAGE_ZIP=$2
 OUT=$3
-HERE=$(cd "$(dirname "$0")" && pwd) || exit 2
-NAME=${BATTERIES_NAME:-Pharo15-batteries}
+HERE=$(cd "${BATTERIES_SCRIPTS:-$(dirname "$0")}" && pwd) || exit 2
+MARK=${BATTERIES_MARK:-Batteries}
+NAME=${BATTERIES_NAME:-${BATTERIES_DEFAULT_NAME:-Pharo15-batteries}}
 test -f "$IMAGE_ZIP" || { echo "FAIL: no $IMAGE_ZIP" >&2; exit 1; }
 IMAGE_ZIP=$(cd "$(dirname "$IMAGE_ZIP")" && pwd)/$(basename "$IMAGE_ZIP")
 case $OUT in
@@ -125,7 +133,7 @@ export BATTERIES_HOME
     st --save --quit "$(native "$HERE/load.st")") > "$WORK/load.log" 2>&1
 status=$?
 tr -d '\r' < "$WORK/load.log"
-if test $status -ne 0 || ! tr -d '\r' < "$WORK/load.log" | grep -q '^Batteries loaded .* ok$'; then
+if test $status -ne 0 || ! tr -d '\r' < "$WORK/load.log" | grep -q "^$MARK loaded .* ok\$"; then
     echo "FAIL: load.st, exit status $status ($WORK/load.log)" >&2
     exit 1
 fi
@@ -135,7 +143,7 @@ fi
     st --no-source "$(native "$HERE/smoke.st")") > "$WORK/smoke.log" 2>&1
 status=$?
 tr -d '\r' < "$WORK/smoke.log"
-if test $status -ne 0 || ! tr -d '\r' < "$WORK/smoke.log" | grep -q '^Batteries smoke .* ok$'; then
+if test $status -ne 0 || ! tr -d '\r' < "$WORK/smoke.log" | grep -q "^$MARK smoke .* ok\$"; then
     echo "FAIL: smoke.st, exit status $status ($WORK/smoke.log)" >&2
     exit 1
 fi
