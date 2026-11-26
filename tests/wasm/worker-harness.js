@@ -67,7 +67,10 @@
 // compiles again (case 30).  Whether the image may use the network (31):
 // init.network, the message "network", before ready and while a request is
 // open, and ready.network, with the primitives of the WebFetchPlugin and the
-// server of lib/fetch-http.mjs.
+// server of lib/fetch-http.mjs; and (31b) a WebSocket of the image, with the
+// primitives of the WebSocketPlugin, which "network" off fails with the kind
+// off and closes with 1000 'network access is off' before the guard of the
+// worker closes its sockets.
 // The notebook mode (W-NB1..4, init.mode 'notebook'): the kernel of
 // st/web-notebook.st, its events (output {fd: 3, bytes}), a request posted
 // before ready, Stop, the credit of the events, and a worker that boots the
@@ -1849,6 +1852,58 @@ const manifestFile = name => zlib.gunzipSync(fs.readFileSync(path.join(webDir, m
         await answer(X, 'WFP availability', on ? '1' : '2');
       } finally { await X.close(); }
     }
+    await server.close();
+    current = S;
+  });
+
+  // The primitives of the WebSocketPlugin: WSP, whose open: answers the id
+  // of a socket on the semaphore WSS, and until:on: waits for a state
+  const wsp = "((Object << #WSP slots: { }) package: 'WebSocketLane') install. " +
+    "{ 'availability' -> 'primitiveWebSocketAvailability'. " +
+    "'open: s read: r write: w record: b maxMessage: m maxQueued: q timeout: t' -> 'primitiveWebSocketOpen'. " +
+    "'state: i' -> 'primitiveWebSocketState'. 'info: i' -> 'primitiveWebSocketInfo'. 'receive: i' -> 'primitiveWebSocketReceive'. " +
+    "'send: i bytes: b isText: t' -> 'primitiveWebSocketSend'. 'release: i' -> 'primitiveWebSocketRelease' } " +
+    "do: [ :a | (Smalltalk at: #WSP) class compile: a key , ' <primitive: #' , a value , ' module: #WebSocketPlugin error: ec> ^ { ec }' ]. " +
+    "Smalltalk at: #WSS put: Semaphore new. " +
+    "(Smalltalk at: #WSP) class compile: 'open: url ^ self open: (Smalltalk registerExternalObject: (Smalltalk at: #WSS)) " +
+    "read: (Smalltalk registerExternalObject: Semaphore new) write: (Smalltalk registerExternalObject: Semaphore new) " +
+    "record: url utf8Encoded maxMessage: 1000 maxQueued: 10000 timeout: 10000'. " +
+    "(Smalltalk at: #WSP) class compile: 'until: aBlock on: id | t | t := Time millisecondClockValue. " +
+    "[ (aBlock value: ((self state: id) bitAnd: 7)) or: [ Time millisecondClockValue - t > 10000 ] ] " +
+    "whileFalse: [ (Smalltalk at: #WSS) waitTimeoutMilliseconds: 100 ]. ^ (self state: id) bitAnd: 7'. 0\n";
+  await check('31b the network: a WebSocket of the image fails with off and is closed with 1000 before the guard closes it', async () => {
+    const { startFetchHttp } = await import('./lib/fetch-http.mjs');
+    const server = await startFetchHttp();
+    const answer = async (X, text, want) => {
+      X.send(text + '\n');
+      await X.prompt();
+      assert(X.since() === want + '\nst> ', text + ': ' + JSON.stringify(X.since()) + ', want ' + want);
+    };
+    const url = server.url.replace(/^http:/, 'ws:');
+    const X = session();
+    try {
+      await X.started();
+      X.send(wsp);
+      await X.prompt();
+      await answer(X, 'WSP availability', '1');
+      await answer(X, `Smalltalk at: #WS put: (WSP open: '${url}/ws/echo?31b'). WSP until: [ :s | s >= 2 ] on: (Smalltalk at: #WS)`, '2');
+      await answer(X, "WSP send: (Smalltalk at: #WS) bytes: 'kept' utf8Encoded isText: true. " +
+        "[ ((WSP state: (Smalltalk at: #WS)) >> 3) = 0 ] whileTrue: [ (Delay forMilliseconds: 10) wait ]. #queued", '#queued');
+      X.post({ type: 'network', network: false });
+      const entry = await waitFor('its end', () => server.ws.find(e => e.url === '/ws/echo?31b' && e.ended));
+      assert(entry.code === 1000 && entry.reason === 'network access is off', 'the server got ' + entry.code + ' ' + JSON.stringify(entry.reason));
+      await answer(X, 'WSP until: [ :s | s >= 4 ] on: (Smalltalk at: #WS)', '5');
+      await answer(X, '((WSP info: (Smalltalk at: #WS)) utf8Decoded lines first: 2) , { (WSP receive: (Smalltalk at: #WS)) second utf8Decoded }',
+        "#('off' 'network access is off' 'kept')");
+      await answer(X, 'WSP availability', '2');
+      const n = server.ws.length;
+      await answer(X, `WSP open: '${url}/ws/echo?31b-off'`, "#(#'unsupported operation')");
+      X.post({ type: 'network', network: true });
+      await answer(X, `WSP release: (Smalltalk at: #WS). Smalltalk at: #WS put: (WSP open: '${url}/ws/echo?31b-on'). ` +
+        'WSP until: [ :s | s >= 2 ] on: (Smalltalk at: #WS)', '2');
+      assert(server.ws.length === n + 1 && server.ws[n].url === '/ws/echo?31b-on', 'one more connection: ' + JSON.stringify(server.ws.slice(n)));
+      await answer(X, 'WSP release: (Smalltalk at: #WS)', 'true');
+    } finally { await X.close(); }
     await server.close();
     current = S;
   });

@@ -224,12 +224,15 @@
 // Network.  Whether the code of the image may use the network, as the user
 // chose it in Settings (network-setting.js keeps it): init.network, off only
 // when it is false, and later "network", which holds at once, also before
-// "ready" (it is not queued).  Off, fetch fails (Module.pharoHost: the requests that are open
-// too), git's transport makes no request (Module.hostNetwork), and the
-// WebSocket that Emscripten's sockets use is one that cannot be made
-// (guardWebSocket); those that are open are closed.  The worker's own
-// fetches, of the files of the site, are not concerned.  ready.network says
-// what holds when the VM starts.
+// "ready" (it is not queued).  Off, fetch and the WebSockets of the image
+// fail (Module.pharoHost: the requests and the sockets that are open too,
+// which the service closes with 1000), git's transport makes no request
+// (Module.hostNetwork), and the WebSocket that Emscripten's sockets use is
+// one that cannot be made (guardWebSocket); those that are open are
+// closed, after the service closed its own.  The worker's own fetches, of
+// the files of the site, are not concerned.  ready.network says what holds
+// when the VM starts.  The WebSocket service refuses the hostname of the
+// site (Module.siteHostname): its cookies would go with the handshake.
 //
 // Git.  init.gitProxy, and later "gitProxy", is the CORS proxy of git's
 // HTTP requests, as the user chose it in Settings (git-proxy.js keeps it):
@@ -1134,6 +1137,7 @@ async function boot(m) {
   config.gitHttpCredentials = gitCredentialsOf(m.gitProxy);
   config.onGitHttp = gitHttp;
   config.hostNetwork = network;
+  config.siteHostname = self.location.hostname;
   guardWebSocket();
   const image = DIR + '/' + manifest.image;
   const env = mode === 'console' ? { PHARO_WEB_WORLD_FILE: WORLD_FILE } : {};
@@ -1200,7 +1204,8 @@ async function boot(m) {
 
 // In place of WebSocket, before Emscripten's sockets make any: one that
 // cannot be made while the network is off (they fail with EHOSTUNREACH then).
-// Those open are kept, for setNetwork
+// Those open are kept, for setNetwork.  The WebSocket service of the image
+// (web-socket.js) makes its sockets with it too.
 const sockets = new Set();
 function guardWebSocket() {
   if (typeof self.WebSocket !== 'function') return;
@@ -1214,12 +1219,17 @@ function guardWebSocket() {
   };
 }
 
+// The services of pharoHost first: the WebSockets of the image fail with
+// the kind off and are closed with 1000 'network access is off', and the
+// close() of the guard then finds them closing and does nothing.  The
+// sockets of the guard are closed whether the VM is there or not.
 function setNetwork(on) {
   network = on;
-  if (!on) for (const s of [...sockets]) { try { s.close(); } catch (e) { /* closing */ } }
   const M = drv && drv.module;
-  if (!M) return;
-  if (M.pharoHost) M.pharoHost.setNetwork(on); else M.hostNetwork = on;
+  if (M) {
+    if (M.pharoHost) M.pharoHost.setNetwork(on); else M.hostNetwork = on;
+  }
+  if (!on) for (const s of [...sockets]) { try { s.close(); } catch (e) { /* closing */ } }
 }
 
 // Module.onGitHttp (gitSupport.c): git's smart-HTTP transport made a

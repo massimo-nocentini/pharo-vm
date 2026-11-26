@@ -704,10 +704,12 @@ const blockClass = clean => (clean && newer ? 'CleanBlockClosure' : 'FullBlockCl
   });
 
   await check('30 host events: at an exit and at a crash the services shut down once, and nothing signals any more', async () => {
+    const { startFetchHttp } = await import('./lib/fetch-http.mjs');
+    const server = await startFetchHttp();
     for (const how of ['exit', 'crash']) {
       const X = await session();
       await X.prompt();
-      const host = X.drv.module.pharoHost;
+      const host = X.drv.module.pharoHost, webSocket = X.drv.module.webSocket;
       X.send('Smalltalk registerExternalObject: (Smalltalk at: #HostSemaphore put: Semaphore new)\n');
       await X.prompt();
       const index = parseInt(X.since(), 10), seen = [];
@@ -716,9 +718,14 @@ const blockClass = clean => (clean && newer ? 'CleanBlockClosure' : 'FullBlockCl
                  shutdown() { seen.push('down 1'); throw new Error('injected down'); } });
       host.add({ networkOff() { seen.push('off 2'); }, shutdown() { seen.push('down 2'); } });
       host.setNetwork(false);
-      assert(host.network === false && X.drv.module.webFetch.availability() === 2, 'off');
+      assert(host.network === false && X.drv.module.webFetch.availability() === 2 && webSocket.availability() === 2, 'off');
       host.setNetwork(true);
-      assert(host.network === true && X.drv.module.webFetch.availability() === 1, 'on');
+      assert(host.network === true && X.drv.module.webFetch.availability() === 1 && webSocket.availability() === 1, 'on');
+      // a WebSocket of the service, open at the end: closed with 1000 'the VM ended'
+      const url = server.url.replace(/^http:/, 'ws:') + '/ws/echo?' + how;
+      const id = webSocket.open(index, index + 1000, index + 2000, new TextEncoder().encode(url), 1000, 1000, 0);
+      assert(id > 0, 'open ' + id);
+      await waitFor('the socket open', () => (webSocket.state(id) & 7) === 2, 5000);
       if (how === 'exit') X.send('Smalltalk exit: 5\n');
       else {
         X.crashExpected = true;
@@ -733,7 +740,12 @@ const blockClass = clean => (clean && newer ? 'CleanBlockClosure' : 'FullBlockCl
       assert(host.signal(index) === false, 'no signal after it');
       host.shutdown();
       assert(seen.length === 4, 'once');
+      assert(webSocket.state(id) === -1 && webSocket.open(index, index + 1000, index + 2000, new TextEncoder().encode(url), 1, 1, 0) === 0,
+             'the WebSocket service shut down');
+      const entry = await waitFor('the server sees the end', () => server.ws.find(e => e.url === '/ws/echo?' + how && e.ended), 5000);
+      assert(entry.code === 1000 && entry.reason === 'the VM ended', 'closed with ' + entry.code + ' ' + entry.reason);
     }
+    await server.close();
   });
 
   // the crashes asked for excepted

@@ -1,4 +1,4 @@
-// web-socket.test.mjs - unit tests of web-socket.js, the WebSocket service of the VMs
+// web-socket.test.mjs - unit tests of web-socket.js, the WebSocket service of the VMs, and of the exit guard of node-pump.js
 //
 // usage: node tests/wasm/web-socket.test.mjs
 //
@@ -7,8 +7,9 @@
 // FakeWebSocket (it records the arguments of its constructor, binaryType at
 // the first event, its sends and closes; readyState and bufferedAmount are
 // set by the test; fire(type, init) delivers an event), fake timers (advanced
-// by hand, the pending ones counted) and a signal that records the indexes.
-// Prints every check and exits 1 on failure.
+// by hand, the pending ones counted) and a signal that records the indexes;
+// and packaging/emscripten/node/node-pump.js with a fake module and a fake
+// process.  Prints every check and exits 1 on failure.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,6 +20,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const hostDir = path.join(here, '..', '..', 'packaging', 'emscripten', 'host');
 const hostEventsSrc = fs.readFileSync(path.join(hostDir, 'host-events.js'), 'utf8');
 const webSocketSrc = fs.readFileSync(path.join(hostDir, 'web-socket.js'), 'utf8');
+const nodePumpSrc = fs.readFileSync(path.join(hostDir, '..', 'node', 'node-pump.js'), 'utf8');
 
 const enc = new TextEncoder(), dec = new TextDecoder();
 const MiB = 1024 * 1024;
@@ -719,6 +721,48 @@ await check('21 no method throws for an unknown id; the file declares no binding
   const t = make();
   await opened(t, { timeout: 100 });
   assert(t.timers.made > 0 && t.timers.unrefs === t.timers.made, `${t.timers.unrefs} of ${t.timers.made} unref'd`);
+});
+
+await check('22 node-pump.js: the exit guard only with lingering sockets, unref\'d, exiting with the status once the output is out', async () => {
+  // a VM that ends at its first slice, with these WebSockets lingering
+  const run = async (webSocket, { trap = false, stats = false } = {}) => {
+    const timers = fakeTimers(), log = [];
+    const Module = {
+      pharoHost: { shutdown() { log.push('shutdown'); } },
+      _vm_wakeup_ms: () => 1,
+      _vm_stats() { log.push('stats'); },
+      _vm_resume() {
+        if (trap) throw new Error('trap');
+        throw Object.assign(new Error('exit'), { name: 'ExitStatus' });
+      },
+    };
+    if (webSocket !== undefined) Module.webSocket = { lingering: () => { log.push('lingering'); return webSocket; } };
+    const writer = name => ({ write(text, done) { log.push(name + ' ' + JSON.stringify(text)); if (done) setImmediate(done); } });
+    const proc = {
+      env: stats ? { PHARO_WASM_STATS: '1' } : {}, exitCode: trap ? undefined : 3,
+      stdout: writer('stdout'), stderr: writer('stderr'),
+      exit(code) { log.push('exit ' + code); },
+    };
+    const ctx = vm.createContext({ Module, setImmediate, clearImmediate, clearTimeout: h => timers.clearTimeout(h),
+      setTimeout: (f, ms) => (Number.isFinite(ms) && ms >= 1000 ? timers.setTimeout(f, ms) : setTimeout(f, ms)), process: proc });
+    vm.runInContext(nodePumpSrc, ctx, { filename: 'node-pump.js' });
+    Module.onVMStarted();
+    await settle();
+    const armed = timers.delays();
+    await timers.advance(1500);
+    await settle();
+    return { armed, unrefs: timers.unrefs, log };
+  };
+  const none = await run(undefined);
+  eq([none.armed, none.log], [[], ['shutdown']], 'no service: nothing armed');
+  const zero = await run(0, { stats: true });
+  eq([zero.armed, zero.log], [[], ['shutdown', 'lingering', 'stats', 'stderr "[pharo-wasm] exitGuard=0\\n"']], 'none lingering');
+  const one = await run(1, { stats: true });
+  eq([one.armed, one.unrefs], [[1500], 1], 'one lingering: 1500 ms, unref\'d');
+  eq(one.log, ['shutdown', 'lingering', 'stats', 'stderr "[pharo-wasm] exitGuard=1\\n"', 'stdout ""', 'stderr ""', 'exit 3'],
+    'the output first, then the exit with the status');
+  const trapped = await run(2, { trap: true });
+  eq(trapped.log.slice(-1), ['exit 1'], 'a trap: the status set after the shutdown');
 });
 
 console.log(`${passes} passed, ${failures} failed`);

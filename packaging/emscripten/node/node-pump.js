@@ -10,12 +10,18 @@
 //
 // A host event that signals the image (host-events.js) wakes it: hostWake()
 // runs the next slice at once.  When the VM is gone, however it ended,
-// pharoHost.shutdown() drops what would keep node alive.
+// pharoHost.shutdown() drops what would keep node alive.  All but a
+// WebSocket of node whose peer does not answer its close: it keeps the
+// event loop alive until the peer ends TCP.  When the WebSocket service
+// (web-socket.js) has such lingering sockets after the shutdown, an
+// unref()'d timer exits 1500 ms later with the status of the VM, once
+// stdout and stderr took what was written; a run without one arms nothing.
 //
-// PHARO_WASM_STATS=1 prints the slice counters (_vm_stats) at the end.
-// PHARO_WASM_NETWORK=0 turns the network of the image off (fetch and git): a
-// convenience and no boundary, the sockets, the FFI and the files of the host
-// being there.
+// PHARO_WASM_STATS=1 prints the slice counters (_vm_stats) at the end, and
+// whether that exit guard was armed (exitGuard=1, else 0).
+// PHARO_WASM_NETWORK=0 turns the network of the image off (fetch, the
+// WebSockets of the image and git): a convenience and no boundary, the
+// sockets, the FFI and the files of the host being there.
 
 if (process.env.PHARO_WASM_NETWORK === '0') Module['hostNetwork'] = false;
 
@@ -35,7 +41,17 @@ Module['onVMStarted'] = () => {
     clearImmediate(immediate);
     clearTimeout(timer);
     Module['pharoHost'].shutdown();
-    if (stats) Module['_vm_stats']();
+    const guard = !!Module['webSocket'] && Module['webSocket'].lingering() > 0;
+    if (guard) {
+      const exit = setTimeout(() => {
+        process.stdout.write('', () => process.stderr.write('', () => process.exit(process.exitCode)));
+      }, 1500);
+      exit.unref();
+    }
+    if (stats) {
+      Module['_vm_stats']();
+      process.stderr.write(`[pharo-wasm] exitGuard=${guard ? 1 : 0}\n`);
+    }
   };
   const pump = () => {
     immediate = timer = null;
